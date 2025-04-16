@@ -1,0 +1,34 @@
+[package]
+name = "dart-bp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = { version = "0.8", default-features = false }
+ark-ff = { version = "0.4"}
+ark-ec = { version = "0.4"}
+ark-serialize = { version = "0.4" }
+ark-std = { version = "0.4"}
+ark-crypto-primitives = { version = "0.4", features = ["signature"]}
+digest = "0.10.7"
+blake2 = "0.10"
+rayon = {version = "1.5.3", optional = true}
+dock_crypto_utils = {git = "https://github.com/docknetwork/crypto", default-features = false}
+verifiable_encryption = {git = "https://github.com/docknetwork/crypto", default-features = false}
+equality_across_groups = {git = "https://github.com/docknetwork/crypto", default-features = false}
+schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features = false}
+itertools = "0.12.1"
+bulletproofs = {path = "../../curve-trees/bulletproofs", default-features = false, features = ["std"]}
+curve_tree_relations = {package = "relations", path = "../../curve-trees/relations", default-features = false}
+
+[dev-dependencies]
+criterion = "0.3"
+ark-pallas = "0.4"
+ark-vesta = "0.4"
+ark-secp256k1 = "0.4"
+ark-secq256k1 = "0.4"
+
+[features]
+default = ["asm", "parallel"]
+asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
+parallel = ["rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "bulletproofs/parallel", "curve_tree_relations/parallel", "dock_crypto_utils/parallel", "schnorr_pok/parallel", "verifiable_encryption/parallel", "equality_across_groups/parallel"]
