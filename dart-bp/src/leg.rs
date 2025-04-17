@@ -5,8 +5,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use blake2::Blake2b512;
-use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSError, R1CSProof, Verifier};
+use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
@@ -21,6 +20,7 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use std::ops::Neg;
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Leg<G: AffineRepr> {
@@ -173,7 +173,8 @@ pub fn create_leaf_for_auditor_tree<G: AffineRepr>(
     (auditor_pk + (leaf_comm_key * G::ScalarField::from(asset_id))).into_affine()
 }
 
-/// Create leg and ephemeral keys. Encrypt leg and ephemeral secret key
+/// Create leg and ephemeral keys. Encrypt leg and ephemeral secret key.
+/// Called by venue when it intends to create a settlement.
 pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
     rng: &mut R,
     asset_id: AssetId,
@@ -192,6 +193,7 @@ pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
     DecKey<G>,
     EncKey<G>,
 ) {
+    // Create ephemeral encryption key
     let (sk_e, pk_e) = keygen_enc::<_, G>(rng, g);
     // Create leg and encrypt it for ephemeral pk
     let leg = Leg::new(pk_s.0, pk_r.0, pk_a.0, amount, asset_id);
@@ -234,15 +236,29 @@ pub struct SettlementTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    pub re_randomized_leaf: Affine<G0>,
+    /// Commitment to amount
     pub comm_amount: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of ephemeral secret key in ephemeral public key
+    /// using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_eph_pk: PokDiscreteLog<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to amount is created for using with Bulletproofs
     pub resp_amount: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of randomness in Elgamal encryption of amount.
+    /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_amount_enc_0: PokDiscreteLog<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of ephemeral secret key and amount in Elgamal encryption of amount.
+    /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_amount_enc_1: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of randomness in Elgamal encryption of asset-id.
+    /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_asset_id_enc_0: PokDiscreteLog<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of ephemeral secret key and amount in Elgamal encryption of asset-id.
+    /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_asset_id_enc_1: PokPedersenCommitment<Affine<G0>>,
 }
 
@@ -266,6 +282,7 @@ impl<
         eph_pk: Affine<G0>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
+        // Rest are public parameters
         tree_parameters: &SelRerandParameters<G0, G1>,
         leaf_comm_key: Affine<G0>,
         g: Affine<G0>,
@@ -275,23 +292,7 @@ impl<
         let minus_leaf_comm_key = leaf_comm_key.neg();
         let minus_B_blinding = tree_parameters.even_parameters.pc_gens.B_blinding.neg();
 
-        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> =
-            Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
-
-        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
-
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                tree_parameters,
-                rng,
-            );
-        // path.selected_commitment is the commitment to the coordinates of pk
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, leaf_path, tree_parameters);
 
         let mut leg_instance = vec![];
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
@@ -305,7 +306,7 @@ impl<
         g.serialize_compressed(&mut leg_instance).unwrap();
         h.serialize_compressed(&mut leg_instance).unwrap();
 
-        // TODO: Should i hash comm_amount and re_randomized_path as well?
+        // TODO: Hash comm_amount and re_randomized_path as well
 
         even_prover
             .transcript()
@@ -331,11 +332,21 @@ impl<
         let enc_asset_id_blinding = F0::rand(rng);
 
         let t_eph_pk = PokDiscreteLogProtocol::init(leg_enc_rand.2, r_a_blinding, &g);
-        // Proving that auditor pk is in leaf and auditor pk encryption
+
+        // Proving that auditor pk pk_A, is in leaf and in auditor pk's encryption
+        // leaf = pk_A + (leaf_comm_key * asset_id)
+        // randomized leaf r_leaf = pk_A + (leaf_comm_key * asset_id) + (B_blinding * rerandomization)
+        // Since we have Elgamal encryption of auditor pk as (g * r, (pk_e * r) + pk_A)) as (C0, C1),
+        // we substitute C1 - (pk_e * r) for pk_A in r_leaf to get
+        // r_leaf = C1 - (pk_e * r) + (leaf_comm_key * asset_id) + (B_blinding * rerandomization)
+        // Now r_leaf and C1 is known so we need to prove knowledge of relation
+        // (pk_e * r) + (-leaf_comm_key * asset_id) + (-B_blinding * rerandomization) = C1 - r_leaf
         let t_r_leaf = SchnorrCommitment::new(
             &[eph_pk, minus_leaf_comm_key, minus_B_blinding],
             vec![r_a_blinding, asset_id_blinding, F0::rand(rng)],
         );
+
+        // Proving correctness of amount in the commitment used with Bulletproofs
         let t_amount = PokPedersenCommitmentProtocol::init(
             leg.amount.into(),
             amount_blinding,
@@ -345,6 +356,7 @@ impl<
             &tree_parameters.even_parameters.pc_gens.B_blinding,
         );
 
+        // Proving correctness of Elgamal encryption of amount
         let t_amount_enc_0 = PokDiscreteLogProtocol::init(leg_enc_rand.3, enc_amount_blinding, &g);
         let t_amount_enc_1 = PokPedersenCommitmentProtocol::init(
             leg_enc_rand.3,
@@ -355,6 +367,7 @@ impl<
             &h,
         );
 
+        // Proving correctness of Elgamal encryption of asset-id
         let t_asset_id_enc_0 =
             PokDiscreteLogProtocol::init(leg_enc_rand.4, enc_asset_id_blinding, &g);
         let t_asset_id_enc_1 = PokPedersenCommitmentProtocol::init(
@@ -433,7 +446,6 @@ impl<
                 even_proof,
                 odd_proof,
                 re_randomized_path,
-                re_randomized_leaf,
                 comm_amount,
                 t_r_leaf: t_r_leaf.t,
                 resp_leaf,
@@ -464,20 +476,7 @@ impl<
         let minus_leaf_comm_key = leaf_comm_key.neg();
         let minus_B_blinding = tree_parameters.even_parameters.pc_gens.B_blinding.neg();
 
-        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
-
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
-
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &tree_parameters, &tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &tree_parameters, &tree);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, self.re_randomized_path.clone(), tree, tree_parameters);
 
         let mut leg_instance = vec![];
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
@@ -552,8 +551,9 @@ impl<
             self.resp_eph_pk
                 .verify(&leg_enc.ct_a.eph_pk, &g, &verifier_challenge)
         );
-        // Verify proof of knowledge of leaf commitment and leg encryption
-        let y = (leg_enc.ct_a.encrypted - self.re_randomized_leaf).into_affine();
+
+        // Verify proof of knowledge of opening of leaf commitment and auditor's key encryption (in leg)
+        let y = (leg_enc.ct_a.encrypted - self.re_randomized_path.re_randomized_leaf).into_affine();
         self.resp_leaf
             .is_valid(
                 &[eph_pk, minus_leaf_comm_key, minus_B_blinding],
@@ -615,6 +615,8 @@ impl<
 /// This is the proof for auditor affirm/reject. Report section 5.1.12
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AuditorTxnProof<G: AffineRepr> {
+    /// Commitment to randomness and response for proving knowledge of secret key auditor's public key encryption.
+    /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_enc_pk: PokPedersenCommitment<G>,
 }
 
@@ -739,7 +741,6 @@ impl<G: AffineRepr> AuditorTxnProof<G> {
 pub mod tests {
     use super::*;
     use crate::old::keys::{SigKey, VerKey, keygen_enc, keygen_sig};
-    use ark_ec::CurveGroup;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
@@ -748,10 +749,9 @@ pub mod tests {
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
-    type PallasFr = ark_pallas::Fr;
-    type VestaFr = ark_vesta::Fr;
 
-    /// Generate account signing and encryption keys
+    /// Generate account signing and encryption keys for all sender, receiver, and auditor.
+    /// This is just for testing and in practice, each party generates its own keys.
     pub fn setup_keys<R: RngCore, G: AffineRepr>(
         rng: &mut R,
         g: G,
@@ -779,10 +779,12 @@ pub mod tests {
     #[test]
     fn leg_verification() {
         let mut rng = rand::thread_rng();
-        // TODO: Find the optimum gen length for any circuit
+
+        // Setup begins
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
+        // Create public params (generators, etc)
         let auditor_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
 
@@ -791,6 +793,7 @@ pub mod tests {
         let gen_p_2 = PallasA::rand(&mut rng);
         let leaf_comm_key = PallasA::rand(&mut rng);
 
+        // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (sk_r_e, pk_r_e)),
@@ -799,6 +802,7 @@ pub mod tests {
 
         let asset_id = 1;
 
+        // Auditor key with asset id is added to the tree
         let leaf = create_leaf_for_auditor_tree(asset_id, pk_a.0, leaf_comm_key);
 
         let set = vec![leaf];
@@ -808,6 +812,7 @@ pub mod tests {
             Some(4),
         );
 
+        // Setup ends.
         let amount = 100;
 
         let nonce = b"test-nonce";

@@ -1,13 +1,11 @@
-use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
+use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
-use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use ark_vesta::VestaConfig;
-use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSError, R1CSProof, Verifier};
+use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
@@ -19,7 +17,7 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Neg;
-use std::time::{Duration, Instant};
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -157,6 +155,9 @@ pub const TXN_EVEN_LABEL: &[u8; 14] = b"txn-even-level";
 pub const TXN_CHALLENGE_LABEL: &[u8; 13] = b"txn-challenge";
 pub const TXN_INSTANCE_LABEL: &[u8; 18] = b"txn-extra-instance";
 
+// TODO: A refactoring idea is to create partial Schnorr proofs for generic state. With each state, we have same variables which
+// almost always change and some which always have to be proven equal (unless revelaed).
+
 /// This is the proof for issuer minting asset into account. Report section 5.1.4, called "Increase Asset Supply"
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MintTxnProof<
@@ -168,19 +169,22 @@ pub struct MintTxnProof<
 > {
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
+    /// This contains the old account state, but re-randomized (as re-randomized leaf)
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-    pub comm_bal_new: Affine<G0>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
-    pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of issuer secret key using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_pk: PokDiscreteLog<Affine<G0>>,
 }
 
@@ -206,15 +210,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> (Self, F0) {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
-
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -227,7 +223,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -237,36 +233,22 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                &account_tree_params,
-                rng,
-            );
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
-
         let nullifier = account.nullifier(&g);
 
-        let r_bal_new = F0::rand(rng);
-        let (comm_bal_new, var_bal_new) =
-            even_prover.commit(F0::from(updated_account.balance), r_bal_new);
+        // We don't need to check if the new balance overflows or not as the chain tracks the total supply
+        // (total minted value) and ensures that it is bounded (can be stored in AMOUNT_BITS)
 
-        // new balance does not overflow
-        range_proof(
-            &mut even_prover,
-            var_bal_new.into(),
-            Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
+        // Need to prove that:
+        // 1. sk, asset-id, counter are same in both old and new account commitment
+        // 2. nullifier is correctly formed
+        // 3. sk in account commitment is same as in the issuer's public key
 
         let sk_blinding = F0::rand(rng);
         let counter_blinding = F0::rand(rng);
         let new_balance_blinding = F0::rand(rng);
         let old_rho_blinding = F0::rand(rng);
 
+        // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
             &[
                 account_comm_key[0],
@@ -286,6 +268,7 @@ impl<
             ],
         );
 
+        // Schnorr commitment for proving correctness of new account state which will become new leaf
         let t_acc_new = SchnorrCommitment::new(
             &[
                 account_comm_key[0],
@@ -302,14 +285,7 @@ impl<
                 F0::rand(rng),
             ],
         );
-        let t_new_bal = PokPedersenCommitmentProtocol::init(
-            updated_account.balance.into(),
-            new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_bal_new.into(),
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
+        // Schnorr commitment for proving correctness of nullifier
         let t_null = PokPedersenCommitmentProtocol::init(
             account.sk,
             sk_blinding,
@@ -318,6 +294,7 @@ impl<
             old_rho_blinding,
             &nullifier,
         );
+        // Schnorr commitment for knowledge of secret key in public key
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
 
         let mut prover_transcript = even_prover.transcript();
@@ -327,14 +304,6 @@ impl<
             .unwrap();
         t_acc_new
             .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_new,
-                &mut prover_transcript,
-            )
             .unwrap();
         t_null
             .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
@@ -370,7 +339,6 @@ impl<
                 &prover_challenge,
             )
             .unwrap();
-        let resp_new_bal = t_new_bal.gen_proof(&prover_challenge);
         let resp_null = t_null.gen_proof(&prover_challenge);
         let resp_pk = t_pk.gen_proof(&prover_challenge);
 
@@ -384,16 +352,13 @@ impl<
             Self {
                 odd_proof,
                 even_proof,
-                re_randomized_leaf,
                 re_randomized_path,
                 updated_account_commitment,
-                comm_bal_new,
                 nullifier,
                 t_r_leaf: t_r_leaf.t,
                 t_acc_new: t_acc_new.t,
                 resp_leaf,
                 resp_acc_new,
-                resp_new_bal,
                 resp_null,
                 resp_pk,
             },
@@ -413,10 +378,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -429,7 +391,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -439,26 +401,6 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
-
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
-
-        let var_bal_new = even_verifier.commit(self.comm_bal_new);
-
-        range_proof(
-            &mut even_verifier,
-            var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
         let mut verifier_transcript = even_verifier.transcript();
 
         self.t_r_leaf
@@ -466,14 +408,6 @@ impl<
             .unwrap();
         self.t_acc_new
             .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_new,
-                &mut verifier_transcript,
-            )
             .unwrap();
         self.resp_null
             .challenge_contribution(
@@ -492,7 +426,7 @@ impl<
 
         let asset_id_comm = (account_comm_key[3] * F0::from(asset_id)).into_affine();
 
-        let y = self.re_randomized_leaf - asset_id_comm;
+        let y = self.re_randomized_path.re_randomized_leaf - asset_id_comm;
         self.resp_leaf
             .is_valid(
                 &[
@@ -525,12 +459,6 @@ impl<
             )
             .unwrap();
 
-        assert!(self.resp_new_bal.verify(
-            &self.comm_bal_new,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
         assert!(
             self.resp_null
                 .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
@@ -545,8 +473,6 @@ impl<
             self.resp_leaf.0[1] + (verifier_challenge * F0::from(increase_bal_by)),
             self.resp_acc_new.0[1]
         );
-        // Balance in new account commitment is same as in the new balance commitment
-        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
 
         // Sk and rho match the ones in nullifier
         assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
@@ -580,24 +506,36 @@ pub struct SendTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to old balance is created for using with Bulletproofs
     pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to new balance is created for using with Bulletproofs
     pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to amount is created for using with Bulletproofs
     pub resp_amount: PokPedersenCommitment<Affine<G0>>,
 }
 
@@ -614,7 +552,6 @@ impl<
         asset_id: AssetId,
         amount: Balance,
         sk_e: G0::ScalarField,
-        sk_s: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -626,15 +563,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
-
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -643,7 +572,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -654,18 +583,9 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                &account_tree_params,
-                rng,
-            );
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
-
         let nullifier = account.nullifier(&g);
 
+        // Commit to amount, old and new balance
         // TODO: It makes sense to commit to all these in a single vector commitment
         let r_bal_old = F0::rand(rng);
         let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(account.balance), r_bal_old);
@@ -677,7 +597,7 @@ impl<
         let r_amount = F0::rand(rng);
         let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
 
-        // TODO: Can the following 2 gadgets be combined to reduce 1 constraint?
+        // TODO: Combined the following 2 gadgets reduce 1 constraint
         // old - new balance is correct
         difference(
             &mut even_prover,
@@ -691,14 +611,6 @@ impl<
             &mut even_prover,
             var_bal_new.into(),
             Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-        // amount does not overflow. Question: Don't need that as leg already stores valid amounts.
-        range_proof(
-            &mut even_prover,
-            var_amount.into(),
-            Some(amount),
             AMOUNT_BITS.into(),
         )
         .unwrap();
@@ -805,7 +717,7 @@ impl<
             sk_e,
             sk_e_blinding,
             &leg_enc.ct_s.eph_pk,
-            sk_s,
+            account.sk,
             sk_blinding,
             &g,
         );
@@ -879,7 +791,7 @@ impl<
             )
             .unwrap();
 
-        let prover_challenge = prover_transcript.challenge_scalar::<F0>(b"challenge");
+        let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         // TODO: Eliminate duplicate responses
         let resp_leaf = t_r_leaf
@@ -930,7 +842,6 @@ impl<
                 odd_proof,
                 even_proof,
                 updated_account_commitment,
-                re_randomized_leaf,
                 re_randomized_path,
                 comm_bal_old,
                 comm_bal_new,
@@ -963,10 +874,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -975,7 +883,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -985,16 +893,6 @@ impl<
         even_verifier
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
-
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
 
         let var_bal_old = even_verifier.commit(self.comm_bal_old);
         let var_bal_new = even_verifier.commit(self.comm_bal_new);
@@ -1011,14 +909,6 @@ impl<
         range_proof(
             &mut even_verifier,
             var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_amount.into(),
             None,
             AMOUNT_BITS.into(),
         )
@@ -1090,7 +980,7 @@ impl<
             )
             .unwrap();
 
-        let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(b"challenge");
+        let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
         self.resp_leaf
@@ -1104,7 +994,7 @@ impl<
                     account_comm_key[5],
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
-                &self.re_randomized_leaf,
+                &self.re_randomized_path.re_randomized_leaf,
                 &self.t_r_leaf,
                 &verifier_challenge,
             )
@@ -1225,15 +1115,18 @@ pub struct ReceiveTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
@@ -1262,27 +1155,27 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
+
+        even_prover
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let nullifier = account.nullifier(&g);
-
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                &account_tree_params,
-                rng,
-            );
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
 
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -1437,7 +1330,6 @@ impl<
             Self {
                 odd_proof,
                 even_proof,
-                re_randomized_leaf,
                 re_randomized_path,
                 nullifier,
                 updated_account_commitment,
@@ -1464,20 +1356,25 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        self.updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
 
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
+        even_verifier
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let mut verifier_transcript = even_verifier.transcript();
 
@@ -1527,7 +1424,7 @@ impl<
                     account_comm_key[5],
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
-                &self.re_randomized_leaf,
+                &self.re_randomized_path.re_randomized_leaf,
                 &self.t_r_leaf,
                 &verifier_challenge,
             )
@@ -1616,24 +1513,36 @@ pub struct ClaimReceivedTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to old balance is created for using with Bulletproofs
     pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to new balance is created for using with Bulletproofs
     pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to amount is created for using with Bulletproofs
     pub resp_amount: PokPedersenCommitment<Affine<G0>>,
 }
 
@@ -1662,15 +1571,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
-
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1679,7 +1580,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1692,16 +1593,6 @@ impl<
 
         let nullifier = account.nullifier(&g);
 
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                &account_tree_params,
-                rng,
-            );
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
-
         // TODO: It makes sense to commit to all these in a single vector commitment
         let r_bal_old = F0::rand(rng);
         let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(account.balance), r_bal_old);
@@ -1713,7 +1604,7 @@ impl<
         let r_amount = F0::rand(rng);
         let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
 
-        // TODO: Can the following 2 gadgets be combined to reduce 1 constraint?
+        // TODO: Combine the following 2 gadgets to reduce 1 constraint
         // new - old balance is correct
         difference(
             &mut even_prover,
@@ -1730,19 +1621,11 @@ impl<
             AMOUNT_BITS.into(),
         )
         .unwrap();
-        // amount does not overflow. Question: Don't need that as leg already stores valid amounts.
-        range_proof(
-            &mut even_prover,
-            var_amount.into(),
-            Some(amount),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
 
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id is same in both old and new account commitment
-        // 3. new balance - old balance = amount. Question: Do i need to show old balance > amount as amount is under 48 bit in leg and new balance is being proven under 48-bits
+        // 3. new balance - old balance = amount.
         // 4. amount and asset id are the same as the ones committed in leg
         // 5. old counter - new counter = 1
         // 6. nullifier is created from rho and sk in old account commitment so this sk and rho should be proven equal with other usages of these 2.
@@ -1964,7 +1847,6 @@ impl<
                 odd_proof,
                 even_proof,
                 updated_account_commitment,
-                re_randomized_leaf,
                 re_randomized_path,
                 comm_bal_old,
                 comm_bal_new,
@@ -1997,10 +1879,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2009,7 +1888,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -2019,16 +1898,6 @@ impl<
         even_verifier
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
-
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
 
         let var_bal_old = even_verifier.commit(self.comm_bal_old);
         let var_bal_new = even_verifier.commit(self.comm_bal_new);
@@ -2045,14 +1914,6 @@ impl<
         range_proof(
             &mut even_verifier,
             var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_amount.into(),
             None,
             AMOUNT_BITS.into(),
         )
@@ -2138,7 +1999,7 @@ impl<
                     account_comm_key[5],
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
-                &self.re_randomized_leaf,
+                &self.re_randomized_path.re_randomized_leaf,
                 &self.t_r_leaf,
                 &verifier_challenge,
             )
@@ -2258,24 +2119,36 @@ pub struct SenderReverseTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to old balance is created for using with Bulletproofs
     pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to new balance is created for using with Bulletproofs
     pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to amount is created for using with Bulletproofs
     pub resp_amount: PokPedersenCommitment<Affine<G0>>,
 }
 
@@ -2302,27 +2175,27 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let odd_transcript = MerlinTranscript::new(b"select_and_rerandomize");
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
-        let even_transcript = MerlinTranscript::new(b"select_and_rerandomize");
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
+
+        even_prover
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let nullifier = account.nullifier(&g);
-
-        let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
-            &mut even_prover,
-            &mut odd_prover,
-            &account_tree_params,
-            rng,
-        );
-
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
 
         // TODO: It makes sense to commit to all these in a single vector commitment
         let r_bal_old = F0::rand(rng);
@@ -2335,7 +2208,7 @@ impl<
         let r_amount = F0::rand(rng);
         let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
 
-        // TODO: Can the following 2 gadgets be combined to reduce 1 constraint?
+        // TODO: Combine the following 2 gadgets to reduce 1 constraint
         // new - old balance is correct
         difference(
             &mut even_prover,
@@ -2349,14 +2222,6 @@ impl<
             &mut even_prover,
             var_bal_new.into(),
             Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-        // amount does not overflow. Question: Don't need that as leg already stores valid amounts.
-        range_proof(
-            &mut even_prover,
-            var_amount.into(),
-            Some(amount),
             AMOUNT_BITS.into(),
         )
         .unwrap();
@@ -2576,7 +2441,6 @@ impl<
             Self {
                 even_proof,
                 odd_proof,
-                re_randomized_leaf,
                 re_randomized_path,
                 updated_account_commitment,
                 nullifier,
@@ -2610,20 +2474,25 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(b"select_and_rerandomize");
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(b"select_and_rerandomize");
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        self.updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
 
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
+        even_verifier
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let var_bal_old = even_verifier.commit(self.comm_bal_old);
         let var_bal_new = even_verifier.commit(self.comm_bal_new);
@@ -2640,14 +2509,6 @@ impl<
         range_proof(
             &mut even_verifier,
             var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_amount.into(),
             None,
             AMOUNT_BITS.into(),
         )
@@ -2733,7 +2594,7 @@ impl<
                     account_comm_key[5],
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
-                &self.re_randomized_leaf,
+                &self.re_randomized_path.re_randomized_leaf,
                 &self.t_r_leaf,
                 &verifier_challenge,
             )
@@ -2854,15 +2715,18 @@ pub struct SenderCounterUpdateTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the old account state, but re-randomized
-    pub re_randomized_leaf: Affine<G0>,
     /// This is the commitment to the new account state which will become new leaf
     pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
     pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
     pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
@@ -2891,15 +2755,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover: Prover<_, Affine<G1>> =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
-
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover: Prover<_, Affine<G0>> = Prover::new(
-            &account_tree_params.even_parameters.pc_gens,
-            even_transcript,
-        );
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2908,7 +2764,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -2920,16 +2776,6 @@ impl<
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let nullifier = account.nullifier(&g);
-
-        let (mut re_randomized_path, rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
-                &mut even_prover,
-                &mut odd_prover,
-                &account_tree_params,
-                rng,
-            );
-        // re_randomized_leaf is the commitment to the account state
-        let re_randomized_leaf = re_randomized_path.selected_commitment;
 
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -3085,7 +2931,6 @@ impl<
                 even_proof,
                 odd_proof,
                 re_randomized_path,
-                re_randomized_leaf,
                 updated_account_commitment,
                 nullifier,
                 t_r_leaf: t_r_leaf.t,
@@ -3111,10 +2956,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -3123,7 +2965,7 @@ impl<
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut leg_instance).unwrap();
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -3133,16 +2975,6 @@ impl<
         even_verifier
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let mut re_randomized_path = self.re_randomized_path.clone();
-        account_tree.select_and_rerandomize_verification_commitments(&mut re_randomized_path);
-        let commitments = re_randomized_path.clone();
-
-        // Enforce constraints for odd level
-        commitments.odd_verifier_gadget(&mut odd_verifier, &account_tree_params, &account_tree);
-
-        // Enforce constraints for even level
-        commitments.even_verifier_gadget(&mut even_verifier, &account_tree_params, &account_tree);
 
         let mut verifier_transcript = even_verifier.transcript();
 
@@ -3192,7 +3024,7 @@ impl<
                     account_comm_key[5],
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
-                &self.re_randomized_leaf,
+                &self.re_randomized_path.re_randomized_leaf,
                 &self.t_r_leaf,
                 &verifier_challenge,
             )
@@ -3342,7 +3174,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
             .unwrap();
 
-        let prover_challenge = prover_transcript.challenge_scalar::<G::ScalarField>(b"challenge");
+        let prover_challenge =
+            prover_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let resp_acc = t_acc
             .response(
@@ -3408,7 +3241,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
 
         let verifier_challenge =
-            verifier_transcript.challenge_scalar::<G::ScalarField>(b"challenge");
+            verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
         let y = account_commitment.0.into_group()
@@ -3681,7 +3514,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
 
-        let prover_challenge = prover_transcript.challenge_scalar::<G::ScalarField>(b"challenge");
+        let prover_challenge =
+            prover_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let mut resp_pk_send = BTreeMap::new();
         let mut resp_pk_recv = BTreeMap::new();
@@ -3875,7 +3709,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .unwrap();
 
         let verifier_challenge =
-            verifier_transcript.challenge_scalar::<G::ScalarField>(b"challenge");
+            verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
         let y = account_commitment.0.into_group()
@@ -4005,43 +3839,46 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AMOUNT_BITS;
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, initialize_leg_for_settlement};
     use crate::old::keys::{keygen_enc, keygen_sig};
     use ark_ec::CurveGroup;
-    use ark_ec::short_weierstrass::Affine;
-    use ark_ff::Zero;
-    use ark_pallas::PallasConfig;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
-    use ark_vesta::VestaConfig;
     use blake2::Blake2b512;
-    use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
-    use curve_tree_relations::range_proof::{difference, range_proof};
-    use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-    use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
-    use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment};
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::time::{Duration, Instant};
+    use std::collections::BTreeSet;
+    use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
-    type PallasP = ark_pallas::Projective;
     type PallasA = ark_pallas::Affine;
     type VestaA = ark_vesta::Affine;
-    type PallasFr = ark_pallas::Fr;
-    type VestaFr = ark_vesta::Fr;
+
+    /// Create a new tree and add the given account's commitment to the tree and return the tree
+    /// In future, allow to generate tree many given number of leaves and add the account commitment to a
+    /// random position in tree.
+    fn get_tree_with_account_comm<const L: usize>(account: &AccountState<PallasA>, account_comm_key: &[PallasA], account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
+        let account_comm = account.commit(&account_comm_key);
+
+        // Add account commitment in curve tree
+        let set = vec![account_comm.0];
+        CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            account_tree_params,
+            Some(4),
+        )
+    }
 
     #[test]
     fn register_and_increase_supply_txns() {
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+        // Setup begins
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
+        // Create public params (generators, etc)
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
 
@@ -4051,20 +3888,15 @@ mod tests {
 
         let asset_id = 1;
 
+        // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, gen_p);
+        // Issuer creates account to mint to
+        // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
-        // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnoor protocol
-        let account_comm = account.commit(&account_comm_key);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
-        // Setup ends
+        // Setup ends. Issuer and verifier interaction begins below
 
         let increase_bal_by = 10;
 
@@ -4122,10 +3954,12 @@ mod tests {
     fn send_txn() {
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+        // Setup begins
+
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
+        // Create public params (generators, etc)
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
 
@@ -4135,6 +3969,7 @@ mod tests {
         let leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
+        // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (sk_r_e, pk_r_e)),
@@ -4161,15 +3996,9 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_comm = account.commit(&account_comm_key);
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        // Setup ends. Sender and verifier interaction begins below
 
         let nonce = b"test-nonce";
 
@@ -4185,7 +4014,6 @@ mod tests {
             asset_id,
             amount,
             sk_e.0,
-            sk_s.0,
             leg_enc.clone(),
             &account,
             &updated_account,
@@ -4227,9 +4055,12 @@ mod tests {
     fn receive_txn() {
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+        // Setup beings
+
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
+
+        // Create public params (generators, etc)
 
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
@@ -4240,6 +4071,7 @@ mod tests {
         let leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
+        // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (sk_r_e, pk_r_e)),
@@ -4266,15 +4098,9 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk_r.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_comm = account.commit(&account_comm_key);
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        // Setup ends. Receiver and verifier interaction begins below
 
         let nonce = b"test-nonce";
 
@@ -4330,7 +4156,7 @@ mod tests {
         // This is what report calls txn_cu (counter update) done by receiver
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+        // Setup begins
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
@@ -4369,15 +4195,8 @@ mod tests {
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
-        let account_comm = account.commit(&account_comm_key);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -4435,7 +4254,7 @@ mod tests {
     fn reverse_send_txn() {
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
@@ -4456,8 +4275,6 @@ mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (sk_e, pk_e) = keygen_enc(&mut rng, gen_p_1);
-
         // Venue has successfully created the settlement and leg commitment has been stored on chain
         let (leg, leg_enc, _, _, _, sk_e, pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
             &mut rng,
@@ -4475,15 +4292,8 @@ mod tests {
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
-        let account_comm = account.commit(&account_comm_key);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -4540,7 +4350,7 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
-        // TODO: Find the optimum gen length for any circuit
+
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
@@ -4578,15 +4388,8 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
         account.balance = 50;
         account.counter = 1;
-        let account_comm = account.commit(&account_comm_key);
 
-        // Add account commitment in curve tree
-        let set = vec![account_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            &account_tree_params,
-            Some(4),
-        );
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
