@@ -1,5 +1,18 @@
-use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL};
-use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter};
+//! This file contains the implementation where accounts use the newer. Also, the code for various sender and receiver transactions uses some helper functions.
+//! It uses an abstraction of account state and how it changes in different transactions. Each transaction except minting and PoB involve at most 2 kinds of
+//! state changes: first kind of state change is common, like secret key between 2 account states (of same account) is same, asset-id is same,
+//! counter changes, these are consistent with leaf, etc and then some transactions have an addition state change where the balance is changed like send txn,
+//! claiming receiver funds, etc
+
+use std::collections::{BTreeMap, BTreeSet};
+use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
+use crate::util::{enforce_balance_change_prover, enforce_balance_change_verifier, generate_schnorr_responses_for_balance_change, generate_schnorr_responses_for_common_state_change, generate_schnorr_t_values_for_balance_change, generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover, initialize_curve_tree_verifier};
+use crate::{
+    AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
+    take_challenge_contrib_of_schnorr_t_values_for_balance_change,
+    take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
+    verify_schnorr_for_balance_change, verify_schnorr_for_common_state_change,
+};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
@@ -8,16 +21,13 @@ use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Neg;
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -38,7 +48,7 @@ pub struct AccountStateCommitment<G: AffineRepr>(pub G);
 impl<G: AffineRepr> AccountState<G> {
     pub fn new<R: RngCore>(rng: &mut R, sk: G::ScalarField, asset_id: AssetId) -> Self {
         assert!(asset_id <= MAX_ASSET_ID);
-        let rho = Self::gen_new_rho(rng, &sk);
+        let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
         Self {
             sk,
@@ -71,8 +81,7 @@ impl<G: AffineRepr> AccountState<G> {
         assert!(amount + self.balance <= MAX_AMOUNT);
         let mut new_state = self.clone();
         new_state.balance += amount;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
@@ -81,16 +90,14 @@ impl<G: AffineRepr> AccountState<G> {
         let mut new_state = self.clone();
         new_state.balance -= amount;
         new_state.counter += 1;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
     pub fn get_state_for_receive<R: RngCore>(&self, rng: &mut R) -> Self {
         let mut new_state = self.clone();
         new_state.counter += 1;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
@@ -100,8 +107,7 @@ impl<G: AffineRepr> AccountState<G> {
         let mut new_state = self.clone();
         new_state.balance += amount;
         new_state.counter -= 1;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
@@ -111,8 +117,7 @@ impl<G: AffineRepr> AccountState<G> {
         let mut new_state = self.clone();
         new_state.balance += amount;
         new_state.counter -= 1;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
@@ -125,27 +130,19 @@ impl<G: AffineRepr> AccountState<G> {
         assert!(self.counter >= decrease_counter_by);
         let mut new_state = self.clone();
         new_state.counter -= decrease_counter_by;
-        new_state.rho = new_state.get_new_rho(rng);
-        new_state.randomness = G::ScalarField::rand(rng);
+        new_state.refresh_randomness_for_state_change(rng);
         new_state
     }
 
-    pub fn get_new_rho<R: RngCore>(&self, rng: &mut R) -> G::ScalarField {
-        Self::gen_new_rho(rng, &self.sk)
+    /// Set rho and commitment randomness to new values. Used as each update to the account state
+    /// needs these refreshed.
+    pub fn refresh_randomness_for_state_change<R: RngCore>(&mut self, rng: &mut R) {
+        self.rho = G::ScalarField::rand(rng);
+        self.randomness = G::ScalarField::rand(rng);
     }
 
-    pub fn nullifier(&self, g: &G) -> G {
-        let exp = (self.sk + self.rho).inverse().unwrap();
-        (*g * exp).into()
-    }
-
-    fn gen_new_rho<R: RngCore>(rng: &mut R, sk: &G::ScalarField) -> G::ScalarField {
-        let mut rho = G::ScalarField::rand(rng);
-        let minus_sk = sk.neg();
-        while minus_sk == rho {
-            rho = G::ScalarField::rand(rng);
-        }
-        rho
+    pub fn nullifier(&self, g: G) -> G {
+        (g * self.rho).into()
     }
 }
 
@@ -156,7 +153,7 @@ pub const TXN_CHALLENGE_LABEL: &[u8; 13] = b"txn-challenge";
 pub const TXN_INSTANCE_LABEL: &[u8; 18] = b"txn-extra-instance";
 
 // TODO: A refactoring idea is to create partial Schnorr proofs for generic state. With each state, we have same variables which
-// almost always change and some which always have to be proven equal (unless revelaed).
+// almost always change and some which always have to be proven equal (unless revealed).
 
 /// This is the proof for issuer minting asset into account. Report section 5.1.4, called "Increase Asset Supply"
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -183,7 +180,7 @@ pub struct MintTxnProof<
     /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of issuer secret key using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_pk: PokDiscreteLog<Affine<G0>>,
 }
@@ -210,7 +207,16 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
+
+        let mut prover_transcript = even_prover.transcript();
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -229,11 +235,7 @@ impl<
             .unwrap();
         g.serialize_compressed(&mut extra_instance).unwrap();
 
-        even_prover
-            .transcript()
-            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let nullifier = account.nullifier(&g);
+        prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         // We don't need to check if the new balance overflows or not as the chain tracks the total supply
         // (total minted value) and ensures that it is bounded (can be stored in AMOUNT_BITS)
@@ -247,6 +249,8 @@ impl<
         let counter_blinding = F0::rand(rng);
         let new_balance_blinding = F0::rand(rng);
         let old_rho_blinding = F0::rand(rng);
+
+        let nullifier = account.nullifier(g);
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
@@ -285,19 +289,12 @@ impl<
                 F0::rand(rng),
             ],
         );
+
         // Schnorr commitment for proving correctness of nullifier
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
-        );
+        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &g);
+
         // Schnorr commitment for knowledge of secret key in public key
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
-
-        let mut prover_transcript = even_prover.transcript();
 
         t_r_leaf
             .challenge_contribution(&mut prover_transcript)
@@ -306,7 +303,7 @@ impl<
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
+            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
             .unwrap();
         t_pk.challenge_contribution(&g, &issuer_pk, &mut prover_transcript)
             .unwrap();
@@ -378,7 +375,15 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
+
+        let mut verifier_transcript = even_verifier.transcript();
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -397,11 +402,8 @@ impl<
             .unwrap();
         g.serialize_compressed(&mut extra_instance).unwrap();
 
-        even_verifier
-            .transcript()
+        verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let mut verifier_transcript = even_verifier.transcript();
 
         self.t_r_leaf
             .serialize_compressed(&mut verifier_transcript)
@@ -410,12 +412,7 @@ impl<
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
+            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
             .challenge_contribution(&g, &issuer_pk, &mut verifier_transcript)
@@ -461,7 +458,7 @@ impl<
 
         assert!(
             self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+                .verify(&self.nullifier, &g, &verifier_challenge,)
         );
         assert!(self.resp_pk.verify(&issuer_pk, &g, &verifier_challenge));
 
@@ -474,9 +471,8 @@ impl<
             self.resp_acc_new.0[1]
         );
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[3], self.resp_null.response2);
+        // rho matches the one in nullifier
+        assert_eq!(self.resp_leaf.0[3], self.resp_null.response);
         // Sk in leaf matches the one in public key
         assert_eq!(self.resp_leaf.0[0], self.resp_pk.response);
 
@@ -527,7 +523,7 @@ pub struct SendTxnProof<
     /// The commitment to new balance is created for using with Bulletproofs
     pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
@@ -563,7 +559,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -583,46 +586,29 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(&g);
-
-        // Commit to amount, old and new balance
-        // TODO: It makes sense to commit to all these in a single vector commitment
-        let r_bal_old = F0::rand(rng);
-        let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(account.balance), r_bal_old);
-
-        let r_bal_new = F0::rand(rng);
-        let (comm_bal_new, var_bal_new) =
-            even_prover.commit(F0::from(updated_account.balance), r_bal_new);
-
-        let r_amount = F0::rand(rng);
-        let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
-
-        // TODO: Combined the following 2 gadgets reduce 1 constraint
-        // old - new balance is correct
-        difference(
-            &mut even_prover,
-            var_bal_old.into(),
-            var_bal_new.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-        // new balance does not overflow
-        range_proof(
-            &mut even_prover,
-            var_bal_new.into(),
-            Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id is same in both old and new account commitment
-        // 3. old balance - new balance = amount. Question: Do i need to show old balance > amount as amount is under 48 bit in leg and new balance is being proven under 48-bits
+        // 3. old balance - new balance = amount.
         // 4. amount and asset id are the same as the ones committed in leg
         // 5. new counter - old counter = 1
-        // 6. nullifier is created from rho and sk in old account commitment so this sk and rho should be proven equal with other usages of these 2.
+        // 6. nullifier is created from rho in old account commitment so this rho should be proven equal with other usages of rho.
         // 7. pk in leg has the sk in account commitment
+
+        let (
+            (r_bal_old, comm_bal_old, var_bal_old),
+            (r_bal_new, comm_bal_new, var_bal_new),
+            (r_amount, comm_amount, var_amount),
+        ) = enforce_balance_change_prover(
+            rng,
+            account.balance,
+            updated_account.balance,
+            amount,
+            true,
+            &mut even_prover,
+        );
+
+        let mut prover_transcript = even_prover.transcript();
 
         let sk_blinding = F0::rand(rng);
         let new_counter_blinding = F0::rand(rng);
@@ -633,202 +619,71 @@ impl<
         let old_rho_blinding = F0::rand(rng);
         let sk_e_blinding = F0::rand(rng);
 
-        let t_r_leaf = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-                account_tree_params.even_parameters.pc_gens.B_blinding,
-            ],
-            vec![
+        let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
+            generate_schnorr_t_values_for_common_state_change(
+                rng,
+                asset_id,
+                &leg_enc,
+                account,
+                sk_e,
+                true,
                 sk_blinding,
+                sk_e_blinding,
                 old_balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                old_rho_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_acc_new = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-            ],
-            vec![
-                sk_blinding,
                 new_balance_blinding,
                 new_counter_blinding,
+                old_rho_blinding,
                 asset_id_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_old_bal = PokPedersenCommitmentProtocol::init(
-            account.balance.into(),
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                g,
+                h,
+                &mut prover_transcript
+            );
+
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
+            rng,
+            amount,
+            &leg_enc,
+            account,
+            updated_account,
+            sk_e,
+            sk_e_blinding,
             old_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_bal_old,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-        let t_new_bal = PokPedersenCommitmentProtocol::init(
-            updated_account.balance.into(),
             new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
+            amount_blinding,
+            r_bal_old,
             r_bal_new,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
-        );
-
-        let t_leg_amount = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_amount.eph_pk,
-            F0::from(amount),
-            amount_blinding,
-            &h,
-        );
-        let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_asset_id.eph_pk,
-            F0::from(asset_id),
-            asset_id_blinding,
-            &h,
-        );
-        let t_leg_pk = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_s.eph_pk,
-            account.sk,
-            sk_blinding,
-            &g,
-        );
-        let t_amount = PokPedersenCommitmentProtocol::init(
-            F0::from(amount),
-            amount_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
             r_amount,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
+            &comm_bal_old,
+            &comm_bal_new,
+            &comm_amount,
+            &account_tree_params.even_parameters.pc_gens,
+            h,
+            &mut prover_transcript
         );
-
-        let mut prover_transcript = even_prover.transcript();
-
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_acc_new
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_old,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_new,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
-            .unwrap();
-
-        t_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_amount,
-                &mut prover_transcript,
-            )
-            .unwrap();
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        // TODO: Eliminate duplicate responses
-        let resp_leaf = t_r_leaf
-            .response(
-                &[
-                    account.sk,
-                    account.balance.into(),
-                    account.counter.into(),
-                    account.asset_id.into(),
-                    account.rho,
-                    account.randomness,
-                    rerandomization,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_acc_new = t_acc_new
-            .response(
-                &[
-                    updated_account.sk,
-                    updated_account.balance.into(),
-                    updated_account.counter.into(),
-                    updated_account.asset_id.into(),
-                    updated_account.rho,
-                    updated_account.randomness,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_old_bal = t_old_bal.gen_proof(&prover_challenge);
-        let resp_new_bal = t_new_bal.gen_proof(&prover_challenge);
-        let resp_null = t_null.gen_proof(&prover_challenge);
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
+            account,
+            updated_account,
+            leaf_rerandomization,
+            &t_r_leaf,
+            &t_acc_new,
+            t_null,
+            t_leg_asset_id,
+            t_leg_pk,
+            &prover_challenge
+        );
 
-        let resp_leg_amount = t_leg_amount.clone().gen_proof(&prover_challenge);
-        let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(&prover_challenge);
-        let resp_leg_pk = t_leg_pk.clone().gen_proof(&prover_challenge);
-        let resp_amount = t_amount.clone().gen_proof(&prover_challenge);
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
+            t_old_bal,
+            t_new_bal,
+            t_amount,
+            t_leg_amount,
+            &prover_challenge
+        );
 
         let even_proof = even_prover
             .prove(&account_tree_params.even_parameters.bp_gens)
@@ -874,7 +729,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -894,171 +755,51 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let var_bal_old = even_verifier.commit(self.comm_bal_old);
-        let var_bal_new = even_verifier.commit(self.comm_bal_new);
-        let var_amount = even_verifier.commit(self.comm_amount);
-
-        difference(
+        enforce_balance_change_verifier(
+            self.comm_bal_old,
+            self.comm_bal_new,
+            self.comm_amount,
+            true,
             &mut even_verifier,
-            var_bal_old.into(),
-            var_bal_new.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
+        );
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_old,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_new,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            g,
+            h,
+            verifier_transcript
+        );
 
-        self.resp_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_amount,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        let pc_gens = &account_tree_params.even_parameters.pc_gens;
+        take_challenge_contrib_of_schnorr_t_values_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            g,
+            h,
+            verifier_transcript
+        );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        self.resp_leaf
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                    account_tree_params.even_parameters.pc_gens.B_blinding,
-                ],
-                &self.re_randomized_path.re_randomized_leaf,
-                &self.t_r_leaf,
-                &verifier_challenge,
-            )
-            .unwrap();
-        self.resp_acc_new
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                ],
-                &self.updated_account_commitment.0,
-                &self.t_acc_new,
-                &verifier_challenge,
-            )
-            .unwrap();
-        assert!(self.resp_old_bal.verify(
-            &self.comm_bal_old,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(self.resp_new_bal.verify(
-            &self.comm_bal_new,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(
-            self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+        verify_schnorr_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            account_comm_key,
+            pc_gens,
+            g,
+            h,
+            verifier_challenge
         );
 
-        assert!(self.resp_leg_amount.verify(
-            &leg_enc.ct_amount.encrypted,
-            &leg_enc.ct_amount.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_asset_id.verify(
-            &leg_enc.ct_asset_id.encrypted,
-            &leg_enc.ct_asset_id.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_pk.verify(
-            &leg_enc.ct_s.encrypted,
-            &leg_enc.ct_s.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
-        assert!(self.resp_amount.verify(
-            &self.comm_amount,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge
-        ));
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
 
-        // Sk and asset id in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[3], self.resp_acc_new.0[3]);
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
         // Balance in new account commitment is same as in the new balance commitment
@@ -1069,18 +810,8 @@ impl<
             self.resp_leaf.0[2] + verifier_challenge
         );
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response2);
-
         // Amount in leg is same as amount in commitment
         assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
-
-        // Asset id in leg is same as in account commitment
-        assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
-
-        // sk in account comm matches the one in pk
-        assert_eq!(self.resp_leg_pk.response2, self.resp_leaf.0[0]);
 
         // sk_e matches in all 3 encryptions
         assert_eq!(
@@ -1127,7 +858,7 @@ pub struct ReceiveTxnProof<
     /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
 }
@@ -1155,7 +886,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1175,8 +913,6 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(&g);
-
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id and balance are same in both old and new account commitment
@@ -1192,133 +928,43 @@ impl<
         let old_rho_blinding = F0::rand(rng);
         let sk_e_blinding = F0::rand(rng);
 
-        let t_r_leaf = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-                account_tree_params.even_parameters.pc_gens.B_blinding,
-            ],
-            vec![
-                sk_blinding,
-                balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                old_rho_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_acc_new = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-            ],
-            vec![
-                sk_blinding,
-                balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
-        );
-
-        let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_asset_id.eph_pk,
-            F0::from(asset_id),
-            asset_id_blinding,
-            &h,
-        );
-        let t_leg_pk = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_r.eph_pk,
-            account.sk,
-            sk_blinding,
-            &g,
-        );
-
         let mut prover_transcript = even_prover.transcript();
 
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_acc_new
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
-            .unwrap();
-
-        t_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_r.eph_pk,
-                &g,
-                &leg_enc.ct_r.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
+        let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
+            generate_schnorr_t_values_for_common_state_change(
+                rng,
+                asset_id,
+                &leg_enc,
+                account,
+                sk_e,
+                false,
+                sk_blinding,
+                sk_e_blinding,
+                balance_blinding,
+                balance_blinding,
+                new_counter_blinding,
+                old_rho_blinding,
+                asset_id_blinding,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                g,
+                h,
+                &mut prover_transcript
+            );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        // TODO: Eliminate duplicate responses
-        let resp_leaf = t_r_leaf
-            .response(
-                &[
-                    account.sk,
-                    account.balance.into(),
-                    account.counter.into(),
-                    account.asset_id.into(),
-                    account.rho,
-                    account.randomness,
-                    rerandomization,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_acc_new = t_acc_new
-            .response(
-                &[
-                    updated_account.sk,
-                    updated_account.balance.into(),
-                    updated_account.counter.into(),
-                    updated_account.asset_id.into(),
-                    updated_account.rho,
-                    updated_account.randomness,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_null = t_null.gen_proof(&prover_challenge);
-
-        let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(&prover_challenge);
-        let resp_leg_pk = t_leg_pk.clone().gen_proof(&prover_challenge);
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
+            account,
+            updated_account,
+            leaf_rerandomization,
+            &t_r_leaf,
+            &t_acc_new,
+            t_null,
+            t_leg_asset_id,
+            t_leg_pk,
+            &prover_challenge
+        );
 
         let even_proof = even_prover
             .prove(&account_tree_params.even_parameters.bp_gens)
@@ -1356,7 +1002,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1378,93 +1030,30 @@ impl<
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-
-        self.resp_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_r.eph_pk,
-                &g,
-                &leg_enc.ct_r.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
+            self,
+            leg_enc,
+            false,
+            g,
+            h,
+            verifier_transcript
+        );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        self.resp_leaf
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                    account_tree_params.even_parameters.pc_gens.B_blinding,
-                ],
-                &self.re_randomized_path.re_randomized_leaf,
-                &self.t_r_leaf,
-                &verifier_challenge,
-            )
-            .unwrap();
-        self.resp_acc_new
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                ],
-                &self.updated_account_commitment.0,
-                &self.t_acc_new,
-                &verifier_challenge,
-            )
-            .unwrap();
-        assert!(
-            self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+        let pc_gens = &account_tree_params.even_parameters.pc_gens;
+        verify_schnorr_for_common_state_change!(
+            self,
+            leg_enc,
+            false,
+            account_comm_key,
+            pc_gens,
+            g,
+            h,
+            verifier_challenge
         );
 
-        assert!(self.resp_leg_asset_id.verify(
-            &leg_enc.ct_asset_id.encrypted,
-            &leg_enc.ct_asset_id.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_pk.verify(
-            &leg_enc.ct_r.encrypted,
-            &leg_enc.ct_r.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
-
-        // Sk and asset id in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[3], self.resp_acc_new.0[3]);
         // Balance in leaf (old account) is same as in the updated account commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_acc_new.0[1]);
 
@@ -1474,9 +1063,8 @@ impl<
             self.resp_leaf.0[2] + verifier_challenge
         );
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response2);
+        // rho matches the one in nullifier
+        assert_eq!(self.resp_leaf.0[4], self.resp_null.response);
 
         // Asset id in leg is same as in account commitment
         assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
@@ -1534,7 +1122,7 @@ pub struct ClaimReceivedTxnProof<
     /// The commitment to new balance is created for using with Bulletproofs
     pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
@@ -1559,7 +1147,6 @@ impl<
         asset_id: AssetId,
         amount: Balance,
         sk_e: G0::ScalarField,
-        sk_r: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -1571,7 +1158,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1590,37 +1177,6 @@ impl<
         even_prover
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let nullifier = account.nullifier(&g);
-
-        // TODO: It makes sense to commit to all these in a single vector commitment
-        let r_bal_old = F0::rand(rng);
-        let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(account.balance), r_bal_old);
-
-        let r_bal_new = F0::rand(rng);
-        let (comm_bal_new, var_bal_new) =
-            even_prover.commit(F0::from(updated_account.balance), r_bal_new);
-
-        let r_amount = F0::rand(rng);
-        let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
-
-        // TODO: Combine the following 2 gadgets to reduce 1 constraint
-        // new - old balance is correct
-        difference(
-            &mut even_prover,
-            var_bal_new.into(),
-            var_bal_old.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-        // new balance does not overflow
-        range_proof(
-            &mut even_prover,
-            var_bal_new.into(),
-            Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
 
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -1628,9 +1184,27 @@ impl<
         // 3. new balance - old balance = amount.
         // 4. amount and asset id are the same as the ones committed in leg
         // 5. old counter - new counter = 1
-        // 6. nullifier is created from rho and sk in old account commitment so this sk and rho should be proven equal with other usages of these 2.
+        // 6. nullifier is created from rho in old account commitment so this rho should be proven equal with other usages of rho.
         // 7. pk in leg has the sk in account commitment
 
+        let (
+            (r_bal_old, comm_bal_old, var_bal_old),
+            (r_bal_new, comm_bal_new, var_bal_new),
+            (r_amount, comm_amount, var_amount),
+        ) = enforce_balance_change_prover(
+            rng,
+            account.balance,
+            updated_account.balance,
+            amount,
+            false,
+            &mut even_prover,
+        );
+
+        let mut prover_transcript = even_prover.transcript();
+
+        let mut c = prover_transcript.challenge_scalar::<F0>(b"c");
+        println!("prover c0 {}", c.to_string());
+
         let sk_blinding = F0::rand(rng);
         let new_counter_blinding = F0::rand(rng);
         let old_balance_blinding = F0::rand(rng);
@@ -1640,796 +1214,77 @@ impl<
         let old_rho_blinding = F0::rand(rng);
         let sk_e_blinding = F0::rand(rng);
 
-        let t_r_leaf = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-                account_tree_params.even_parameters.pc_gens.B_blinding,
-            ],
-            vec![
+        let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
+            generate_schnorr_t_values_for_common_state_change(
+                rng,
+                asset_id,
+                &leg_enc,
+                account,
+                sk_e,
+                false,
                 sk_blinding,
+                sk_e_blinding,
                 old_balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                old_rho_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_acc_new = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-            ],
-            vec![
-                sk_blinding,
                 new_balance_blinding,
                 new_counter_blinding,
+                old_rho_blinding,
                 asset_id_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_old_bal = PokPedersenCommitmentProtocol::init(
-            account.balance.into(),
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                g,
+                h,
+                &mut prover_transcript
+            );
+
+        c = prover_transcript.challenge_scalar::<F0>(b"c");
+        println!("prover c1 {}", c.to_string());
+
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
+            rng,
+            amount,
+            &leg_enc,
+            account,
+            updated_account,
+            sk_e,
+            sk_e_blinding,
             old_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_bal_old,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-        let t_new_bal = PokPedersenCommitmentProtocol::init(
-            updated_account.balance.into(),
             new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
+            amount_blinding,
+            r_bal_old,
             r_bal_new,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
-        );
-
-        let t_leg_amount = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_amount.eph_pk,
-            F0::from(amount),
-            amount_blinding,
-            &h,
-        );
-        let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_asset_id.eph_pk,
-            F0::from(asset_id),
-            asset_id_blinding,
-            &h,
-        );
-        let t_leg_pk = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_r.eph_pk,
-            sk_r,
-            sk_blinding,
-            &g,
-        );
-        let t_amount = PokPedersenCommitmentProtocol::init(
-            F0::from(amount),
-            amount_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
             r_amount,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-
-        let mut prover_transcript = even_prover.transcript();
-
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_acc_new
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_old,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_new,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
-            .unwrap();
-
-        t_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_r.eph_pk,
-                &g,
-                &leg_enc.ct_r.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_amount,
-                &mut prover_transcript,
-            )
-            .unwrap();
-
-        let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-
-        // TODO: Eliminate duplicate responses
-        let resp_leaf = t_r_leaf
-            .response(
-                &[
-                    account.sk,
-                    account.balance.into(),
-                    account.counter.into(),
-                    account.asset_id.into(),
-                    account.rho,
-                    account.randomness,
-                    rerandomization,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_acc_new = t_acc_new
-            .response(
-                &[
-                    updated_account.sk,
-                    updated_account.balance.into(),
-                    updated_account.counter.into(),
-                    updated_account.asset_id.into(),
-                    updated_account.rho,
-                    updated_account.randomness,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_old_bal = t_old_bal.gen_proof(&prover_challenge);
-        let resp_new_bal = t_new_bal.gen_proof(&prover_challenge);
-        let resp_null = t_null.gen_proof(&prover_challenge);
-
-        let resp_leg_amount = t_leg_amount.clone().gen_proof(&prover_challenge);
-        let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(&prover_challenge);
-        let resp_leg_pk = t_leg_pk.clone().gen_proof(&prover_challenge);
-        let resp_amount = t_amount.clone().gen_proof(&prover_challenge);
-
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                updated_account_commitment,
-                re_randomized_path,
-                comm_bal_old,
-                comm_bal_new,
-                comm_amount,
-                resp_leaf,
-                resp_acc_new,
-                resp_old_bal,
-                resp_new_bal,
-                resp_null,
-                resp_leg_amount,
-                resp_leg_asset_id,
-                resp_leg_pk,
-                resp_amount,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-            },
-            prover_challenge,
-        )
-    }
-
-    pub fn verify(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
-        prover_challenge: F0,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
-    ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
-
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance).unwrap();
-        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
-        account_comm_key
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
-
-        even_verifier
-            .transcript()
-            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let var_bal_old = even_verifier.commit(self.comm_bal_old);
-        let var_bal_new = even_verifier.commit(self.comm_bal_new);
-        let var_amount = even_verifier.commit(self.comm_amount);
-
-        difference(
-            &mut even_verifier,
-            var_bal_new.into(),
-            var_bal_old.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
-        let mut verifier_transcript = even_verifier.transcript();
-
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_old,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_new,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-
-        self.resp_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_r.eph_pk,
-                &g,
-                &leg_enc.ct_r.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_amount,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-
-        let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
-
-        self.resp_leaf
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                    account_tree_params.even_parameters.pc_gens.B_blinding,
-                ],
-                &self.re_randomized_path.re_randomized_leaf,
-                &self.t_r_leaf,
-                &verifier_challenge,
-            )
-            .unwrap();
-        self.resp_acc_new
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                ],
-                &self.updated_account_commitment.0,
-                &self.t_acc_new,
-                &verifier_challenge,
-            )
-            .unwrap();
-        assert!(self.resp_old_bal.verify(
-            &self.comm_bal_old,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(self.resp_new_bal.verify(
-            &self.comm_bal_new,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(
-            self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
-        );
-
-        assert!(self.resp_leg_amount.verify(
-            &leg_enc.ct_amount.encrypted,
-            &leg_enc.ct_amount.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_asset_id.verify(
-            &leg_enc.ct_asset_id.encrypted,
-            &leg_enc.ct_asset_id.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_pk.verify(
-            &leg_enc.ct_r.encrypted,
-            &leg_enc.ct_r.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
-        assert!(self.resp_amount.verify(
-            &self.comm_amount,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge
-        ));
-
-        // Sk and asset id in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[3], self.resp_acc_new.0[3]);
-        // Balance in leaf (old account) is same as in the old balance commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
-        // Balance in new account commitment is same as in the new balance commitment
-        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
-        // Counter in new account commitment is 1 less than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2] + verifier_challenge,
-            self.resp_leaf.0[2]
-        );
-
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response2);
-
-        // Amount in leg is same as amount in commitment
-        assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
-
-        // Asset id in leg is same as in account commitment
-        assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
-
-        // sk in account comm matches the one in pk
-        assert_eq!(self.resp_leg_pk.response2, self.resp_leaf.0[0]);
-
-        // sk_e matches in all 3 encryptions
-        assert_eq!(
-            self.resp_leg_amount.response1,
-            self.resp_leg_asset_id.response1
-        );
-        assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
-
-        odd_verifier.verify(
-            &self.odd_proof,
-            &account_tree_params.odd_parameters.pc_gens,
-            &account_tree_params.odd_parameters.bp_gens,
-        )?;
-        even_verifier.verify(
-            &self.even_proof,
+            &comm_bal_old,
+            &comm_bal_new,
+            &comm_amount,
             &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct SenderReverseTxnProof<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> {
-    pub even_proof: R1CSProof<Affine<G0>>,
-    pub odd_proof: R1CSProof<Affine<G1>>,
-    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-    pub comm_bal_old: Affine<G0>,
-    pub comm_bal_new: Affine<G0>,
-    pub comm_amount: Affine<G0>,
-    pub nullifier: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
-    pub t_r_leaf: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_new: Affine<G0>,
-    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
-    pub resp_leaf: SchnorrResponse<Affine<G0>>,
-    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
-    pub resp_acc_new: SchnorrResponse<Affine<G0>>,
-    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to old balance is created for using with Bulletproofs
-    pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to new balance is created for using with Bulletproofs
-    pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to amount is created for using with Bulletproofs
-    pub resp_amount: PokPedersenCommitment<Affine<G0>>,
-}
-
-impl<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> SenderReverseTxnProof<L, F0, F1, G0, G1>
-{
-    pub fn new<R: RngCore>(
-        rng: &mut R,
-        amount: Balance,
-        sk_e: G0::ScalarField,
-        leg_enc: LegEncryption<Affine<G0>>,
-        account: &AccountState<Affine<G0>>,
-        updated_account: &AccountState<Affine<G0>>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
-    ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
-
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance).unwrap();
-        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        updated_account_commitment
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
-        account_comm_key
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
-
-        even_prover
-            .transcript()
-            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
-
-        let nullifier = account.nullifier(&g);
-
-        // TODO: It makes sense to commit to all these in a single vector commitment
-        let r_bal_old = F0::rand(rng);
-        let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(account.balance), r_bal_old);
-
-        let r_bal_new = F0::rand(rng);
-        let (comm_bal_new, var_bal_new) =
-            even_prover.commit(F0::from(updated_account.balance), r_bal_new);
-
-        let r_amount = F0::rand(rng);
-        let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
-
-        // TODO: Combine the following 2 gadgets to reduce 1 constraint
-        // new - old balance is correct
-        difference(
-            &mut even_prover,
-            var_bal_new.into(),
-            var_bal_old.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-        // new balance does not overflow
-        range_proof(
-            &mut even_prover,
-            var_bal_new.into(),
-            Some(updated_account.balance),
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
-
-        let sk_blinding = F0::rand(rng);
-        let new_counter_blinding = F0::rand(rng);
-        let old_balance_blinding = F0::rand(rng);
-        let new_balance_blinding = F0::rand(rng);
-        let asset_id_blinding = F0::rand(rng);
-        let amount_blinding = F0::rand(rng);
-        let old_rho_blinding = F0::rand(rng);
-        let sk_e_blinding = F0::rand(rng);
-
-        let t_r_leaf = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-                account_tree_params.even_parameters.pc_gens.B_blinding,
-            ],
-            vec![
-                sk_blinding,
-                old_balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                old_rho_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_acc_new = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-            ],
-            vec![
-                sk_blinding,
-                new_balance_blinding,
-                new_counter_blinding,
-                asset_id_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_old_bal = PokPedersenCommitmentProtocol::init(
-            account.balance.into(),
-            old_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_bal_old,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-        let t_new_bal = PokPedersenCommitmentProtocol::init(
-            updated_account.balance.into(),
-            new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_bal_new,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
+            h,
+            &mut prover_transcript
         );
 
-        let t_leg_amount = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_amount.eph_pk,
-            F0::from(amount),
-            amount_blinding,
-            &h,
-        );
-        let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_asset_id.eph_pk,
-            F0::from(account.asset_id),
-            asset_id_blinding,
-            &h,
-        );
-        let t_leg_pk = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_s.eph_pk,
-            account.sk,
-            sk_blinding,
-            &g,
-        );
-        let t_amount = PokPedersenCommitmentProtocol::init(
-            F0::from(amount),
-            amount_blinding,
-            &account_tree_params.even_parameters.pc_gens.B,
-            r_amount,
-            F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-        );
-
-        let mut prover_transcript = even_prover.transcript();
-
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_acc_new
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_old,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_bal_new,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
-            .unwrap();
-
-        t_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &comm_amount,
-                &mut prover_transcript,
-            )
-            .unwrap();
+        c = prover_transcript.challenge_scalar::<F0>(b"c");
+        println!("prover c2 {}", c.to_string());
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        // TODO: Eliminate duplicate responses
-        let resp_leaf = t_r_leaf
-            .response(
-                &[
-                    account.sk,
-                    account.balance.into(),
-                    account.counter.into(),
-                    account.asset_id.into(),
-                    account.rho,
-                    account.randomness,
-                    rerandomization,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_acc_new = t_acc_new
-            .response(
-                &[
-                    updated_account.sk,
-                    updated_account.balance.into(),
-                    updated_account.counter.into(),
-                    updated_account.asset_id.into(),
-                    updated_account.rho,
-                    updated_account.randomness,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_old_bal = t_old_bal.gen_proof(&prover_challenge);
-        let resp_new_bal = t_new_bal.gen_proof(&prover_challenge);
-        let resp_null = t_null.gen_proof(&prover_challenge);
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
+            account,
+            updated_account,
+            leaf_rerandomization,
+            &t_r_leaf,
+            &t_acc_new,
+            t_null,
+            t_leg_asset_id,
+            t_leg_pk,
+            &prover_challenge
+        );
 
-        let resp_leg_amount = t_leg_amount.clone().gen_proof(&prover_challenge);
-        let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(&prover_challenge);
-        let resp_leg_pk = t_leg_pk.clone().gen_proof(&prover_challenge);
-        let resp_amount = t_amount.clone().gen_proof(&prover_challenge);
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
+            t_old_bal,
+            t_new_bal,
+            t_amount,
+            t_leg_amount,
+            &prover_challenge
+        );
 
         let even_proof = even_prover
             .prove(&account_tree_params.even_parameters.bp_gens)
@@ -2439,11 +1294,10 @@ impl<
             .unwrap();
         (
             Self {
-                even_proof,
                 odd_proof,
-                re_randomized_path,
+                even_proof,
                 updated_account_commitment,
-                nullifier,
+                re_randomized_path,
                 comm_bal_old,
                 comm_bal_new,
                 comm_amount,
@@ -2456,6 +1310,7 @@ impl<
                 resp_leg_asset_id,
                 resp_leg_pk,
                 resp_amount,
+                nullifier,
                 t_r_leaf: t_r_leaf.t,
                 t_acc_new: t_acc_new.t,
             },
@@ -2494,171 +1349,59 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let var_bal_old = even_verifier.commit(self.comm_bal_old);
-        let var_bal_new = even_verifier.commit(self.comm_bal_new);
-        let var_amount = even_verifier.commit(self.comm_amount);
-
-        difference(
+        enforce_balance_change_verifier(
+            self.comm_bal_old,
+            self.comm_bal_new,
+            self.comm_amount,
+            false,
             &mut even_verifier,
-            var_bal_new.into(),
-            var_bal_old.into(),
-            var_amount.into(),
-        )
-        .unwrap();
-
-        range_proof(
-            &mut even_verifier,
-            var_bal_new.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )
-        .unwrap();
+        );
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_old_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_old,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_new_bal
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_bal_new,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        let mut c = verifier_transcript.challenge_scalar::<F0>(b"c");
+        println!("verifier c0 {}", c.to_string());
 
-        self.resp_leg_amount
-            .challenge_contribution(
-                &leg_enc.ct_amount.eph_pk,
-                &h,
-                &leg_enc.ct_amount.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_amount
-            .challenge_contribution(
-                &account_tree_params.even_parameters.pc_gens.B,
-                &account_tree_params.even_parameters.pc_gens.B_blinding,
-                &self.comm_amount,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
+            self,
+            leg_enc,
+            false,
+            g,
+            h,
+            verifier_transcript
+        );
+
+        c = verifier_transcript.challenge_scalar::<F0>(b"c");
+        println!("verifier c1 {}", c.to_string());
+
+        let pc_gens = &account_tree_params.even_parameters.pc_gens;
+        take_challenge_contrib_of_schnorr_t_values_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            g,
+            h,
+            verifier_transcript
+        );
+
+        c = verifier_transcript.challenge_scalar::<F0>(b"c");
+        println!("verifier c2 {}", c.to_string());
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        self.resp_leaf
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                    account_tree_params.even_parameters.pc_gens.B_blinding,
-                ],
-                &self.re_randomized_path.re_randomized_leaf,
-                &self.t_r_leaf,
-                &verifier_challenge,
-            )
-            .unwrap();
-        self.resp_acc_new
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                ],
-                &self.updated_account_commitment.0,
-                &self.t_acc_new,
-                &verifier_challenge,
-            )
-            .unwrap();
-        assert!(self.resp_old_bal.verify(
-            &self.comm_bal_old,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(self.resp_new_bal.verify(
-            &self.comm_bal_new,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ));
-        assert!(
-            self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+        verify_schnorr_for_common_state_change!(
+            self,
+            leg_enc,
+            false,
+            account_comm_key,
+            pc_gens,
+            g,
+            h,
+            verifier_challenge
         );
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
 
-        assert!(self.resp_leg_amount.verify(
-            &leg_enc.ct_amount.encrypted,
-            &leg_enc.ct_amount.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_asset_id.verify(
-            &leg_enc.ct_asset_id.encrypted,
-            &leg_enc.ct_asset_id.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_pk.verify(
-            &leg_enc.ct_s.encrypted,
-            &leg_enc.ct_s.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
-        assert!(self.resp_amount.verify(
-            &self.comm_amount,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge
-        ));
-
-        // Sk and asset id in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[3], self.resp_acc_new.0[3]);
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
         // Balance in new account commitment is same as in the new balance commitment
@@ -2669,18 +1412,8 @@ impl<
             self.resp_leaf.0[2]
         );
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response2);
-
         // Amount in leg is same as amount in commitment
         assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
-
-        // Asset id in leg is same as in account commitment
-        assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
-
-        // sk in account comm matches the one in pk
-        assert_eq!(self.resp_leg_pk.response2, self.resp_leaf.0[0]);
 
         // sk_e matches in all 3 encryptions
         assert_eq!(
@@ -2727,7 +1460,7 @@ pub struct SenderCounterUpdateTxnProof<
     /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
     pub resp_acc_new: SchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
-    pub resp_null: PokPedersenCommitment<Affine<G0>>,
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
     pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
 }
@@ -2755,7 +1488,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2775,8 +1508,6 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(&g);
-
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id and balance are same in both old and new account commitment
@@ -2792,133 +1523,43 @@ impl<
         let old_rho_blinding = F0::rand(rng);
         let sk_e_blinding = F0::rand(rng);
 
-        let t_r_leaf = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-                account_tree_params.even_parameters.pc_gens.B_blinding,
-            ],
-            vec![
-                sk_blinding,
-                balance_blinding,
-                counter_blinding,
-                asset_id_blinding,
-                old_rho_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_acc_new = SchnorrCommitment::new(
-            &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[3],
-                account_comm_key[4],
-                account_comm_key[5],
-            ],
-            vec![
-                sk_blinding,
-                balance_blinding,
-                counter_blinding,
-                asset_id_blinding,
-                F0::rand(rng),
-                F0::rand(rng),
-            ],
-        );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            old_rho_blinding,
-            &nullifier,
-        );
-
-        let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_asset_id.eph_pk,
-            F0::from(asset_id),
-            asset_id_blinding,
-            &h,
-        );
-        let t_leg_pk = PokPedersenCommitmentProtocol::init(
-            sk_e,
-            sk_e_blinding,
-            &leg_enc.ct_s.eph_pk,
-            account.sk,
-            sk_blinding,
-            &g,
-        );
-
         let mut prover_transcript = even_prover.transcript();
 
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_acc_new
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
-            .unwrap();
-
-        t_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
+        let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
+            generate_schnorr_t_values_for_common_state_change(
+                rng,
+                asset_id,
+                &leg_enc,
+                account,
+                sk_e,
+                true,
+                sk_blinding,
+                sk_e_blinding,
+                balance_blinding,
+                balance_blinding,
+                counter_blinding,
+                old_rho_blinding,
+                asset_id_blinding,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                g,
+                h,
+                &mut prover_transcript
+            );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        // TODO: Eliminate duplicate responses
-        let resp_leaf = t_r_leaf
-            .response(
-                &[
-                    account.sk,
-                    account.balance.into(),
-                    account.counter.into(),
-                    account.asset_id.into(),
-                    account.rho,
-                    account.randomness,
-                    rerandomization,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_acc_new = t_acc_new
-            .response(
-                &[
-                    updated_account.sk,
-                    updated_account.balance.into(),
-                    updated_account.counter.into(),
-                    updated_account.asset_id.into(),
-                    updated_account.rho,
-                    updated_account.randomness,
-                ],
-                &prover_challenge,
-            )
-            .unwrap();
-        let resp_null = t_null.gen_proof(&prover_challenge);
-
-        let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(&prover_challenge);
-        let resp_leg_pk = t_leg_pk.clone().gen_proof(&prover_challenge);
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
+            account,
+            updated_account,
+            leaf_rerandomization,
+            &t_r_leaf,
+            &t_acc_new,
+            t_null,
+            t_leg_asset_id,
+            t_leg_pk,
+            &prover_challenge
+        );
 
         let even_proof = even_prover
             .prove(&account_tree_params.even_parameters.bp_gens)
@@ -2926,6 +1567,7 @@ impl<
         let odd_proof = odd_prover
             .prove(&account_tree_params.odd_parameters.bp_gens)
             .unwrap();
+
         (
             Self {
                 even_proof,
@@ -2978,93 +1620,30 @@ impl<
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_null
-            .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
-                &g,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-
-        self.resp_leg_asset_id
-            .challenge_contribution(
-                &leg_enc.ct_asset_id.eph_pk,
-                &h,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_leg_pk
-            .challenge_contribution(
-                &leg_enc.ct_s.eph_pk,
-                &g,
-                &leg_enc.ct_s.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            g,
+            h,
+            verifier_transcript
+        );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        self.resp_leaf
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                    account_tree_params.even_parameters.pc_gens.B_blinding,
-                ],
-                &self.re_randomized_path.re_randomized_leaf,
-                &self.t_r_leaf,
-                &verifier_challenge,
-            )
-            .unwrap();
-        self.resp_acc_new
-            .is_valid(
-                &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[3],
-                    account_comm_key[4],
-                    account_comm_key[5],
-                ],
-                &self.updated_account_commitment.0,
-                &self.t_acc_new,
-                &verifier_challenge,
-            )
-            .unwrap();
-        assert!(
-            self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+        let pc_gens = &account_tree_params.even_parameters.pc_gens;
+        verify_schnorr_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            account_comm_key,
+            pc_gens,
+            g,
+            h,
+            verifier_challenge
         );
 
-        assert!(self.resp_leg_asset_id.verify(
-            &leg_enc.ct_asset_id.encrypted,
-            &leg_enc.ct_asset_id.eph_pk,
-            &h,
-            &verifier_challenge
-        ));
-        assert!(self.resp_leg_pk.verify(
-            &leg_enc.ct_s.encrypted,
-            &leg_enc.ct_s.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
-
-        // Sk and asset id in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[3], self.resp_acc_new.0[3]);
         // Balance in leaf (old account) is same as in the updated account commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_acc_new.0[1]);
 
@@ -3074,18 +1653,324 @@ impl<
             self.resp_leaf.0[2]
         );
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_leaf.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response2);
 
-        // Asset id in leg is same as in account commitment
-        assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
+        odd_verifier.verify(
+            &self.odd_proof,
+            &account_tree_params.odd_parameters.pc_gens,
+            &account_tree_params.odd_parameters.bp_gens,
+        )?;
+        even_verifier.verify(
+            &self.even_proof,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+        )?;
+        Ok(())
+    }
+}
 
-        // sk in account comm matches the one in pk
-        assert_eq!(self.resp_leg_pk.response2, self.resp_leaf.0[0]);
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct SenderReverseTxnProof<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> {
+    pub even_proof: R1CSProof<Affine<G0>>,
+    pub odd_proof: R1CSProof<Affine<G1>>,
+    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    /// This is the commitment to the new account state which will become new leaf
+    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+    pub comm_bal_old: Affine<G0>,
+    pub comm_bal_new: Affine<G0>,
+    pub comm_amount: Affine<G0>,
+    pub nullifier: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
+    pub t_r_leaf: Affine<G0>,
+    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
+    pub t_acc_new: Affine<G0>,
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
+    pub resp_leaf: SchnorrResponse<Affine<G0>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
+    pub resp_acc_new: SchnorrResponse<Affine<G0>>,
+    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
+    pub resp_null: PokDiscreteLog<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to old balance is created for using with Bulletproofs
+    pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to new balance is created for using with Bulletproofs
+    pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
+    pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
+    pub resp_leg_asset_id: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
+    pub resp_leg_pk: PokPedersenCommitment<Affine<G0>>,
+    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// The commitment to amount is created for using with Bulletproofs
+    pub resp_amount: PokPedersenCommitment<Affine<G0>>,
+}
 
-        // sk_e matches in both encryptions
-        assert_eq!(self.resp_leg_pk.response1, self.resp_leg_asset_id.response1);
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> SenderReverseTxnProof<L, F0, F1, G0, G1>
+{
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        amount: Balance,
+        sk_e: G0::ScalarField,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: &[Affine<G0>],
+        g: Affine<G0>,
+        h: Affine<G0>,
+    ) -> (Self, F0) {
+        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
+
+        even_prover
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+
+        let (
+            (r_bal_old, comm_bal_old, var_bal_old),
+            (r_bal_new, comm_bal_new, var_bal_new),
+            (r_amount, comm_amount, var_amount),
+        ) = enforce_balance_change_prover(
+            rng,
+            account.balance,
+            updated_account.balance,
+            amount,
+            false,
+            &mut even_prover,
+        );
+
+        let mut prover_transcript = even_prover.transcript();
+
+        let sk_blinding = F0::rand(rng);
+        let new_counter_blinding = F0::rand(rng);
+        let old_balance_blinding = F0::rand(rng);
+        let new_balance_blinding = F0::rand(rng);
+        let asset_id_blinding = F0::rand(rng);
+        let amount_blinding = F0::rand(rng);
+        let old_rho_blinding = F0::rand(rng);
+        let sk_e_blinding = F0::rand(rng);
+
+        let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
+            generate_schnorr_t_values_for_common_state_change(
+                rng,
+                account.asset_id,
+                &leg_enc,
+                account,
+                sk_e,
+                true,
+                sk_blinding,
+                sk_e_blinding,
+                old_balance_blinding,
+                new_balance_blinding,
+                new_counter_blinding,
+                old_rho_blinding,
+                asset_id_blinding,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                g,
+                h,
+                &mut prover_transcript
+            );
+
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
+            rng,
+            amount,
+            &leg_enc,
+            account,
+            updated_account,
+            sk_e,
+            sk_e_blinding,
+            old_balance_blinding,
+            new_balance_blinding,
+            amount_blinding,
+            r_bal_old,
+            r_bal_new,
+            r_amount,
+            &comm_bal_old,
+            &comm_bal_new,
+            &comm_amount,
+            &account_tree_params.even_parameters.pc_gens,
+            h,
+            &mut prover_transcript
+        );
+
+        let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
+            account,
+            updated_account,
+            leaf_rerandomization,
+            &t_r_leaf,
+            &t_acc_new,
+            t_null,
+            t_leg_asset_id,
+            t_leg_pk,
+            &prover_challenge
+        );
+
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
+            t_old_bal,
+            t_new_bal,
+            t_amount,
+            t_leg_amount,
+            &prover_challenge
+        );
+
+        let even_proof = even_prover
+            .prove(&account_tree_params.even_parameters.bp_gens)
+            .unwrap();
+        let odd_proof = odd_prover
+            .prove(&account_tree_params.odd_parameters.bp_gens)
+            .unwrap();
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                updated_account_commitment,
+                re_randomized_path,
+                comm_bal_old,
+                comm_bal_new,
+                comm_amount,
+                resp_leaf,
+                resp_acc_new,
+                resp_old_bal,
+                resp_new_bal,
+                resp_null,
+                resp_leg_amount,
+                resp_leg_asset_id,
+                resp_leg_pk,
+                resp_amount,
+                nullifier,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+            },
+            prover_challenge,
+        )
+    }
+
+    pub fn verify(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &CurveTree<L, 1, G0, G1>,
+        prover_challenge: F0,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: &[Affine<G0>],
+        g: Affine<G0>,
+        h: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
+        self.updated_account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        // TODO: Uncomment
+        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+        h.serialize_compressed(&mut extra_instance).unwrap();
+
+        even_verifier
+            .transcript()
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+
+        enforce_balance_change_verifier(
+            self.comm_bal_old,
+            self.comm_bal_new,
+            self.comm_amount,
+            false,
+            &mut even_verifier,
+        );
+
+        let mut verifier_transcript = even_verifier.transcript();
+
+        take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            g,
+            h,
+            verifier_transcript
+        );
+
+        let pc_gens = &account_tree_params.even_parameters.pc_gens;
+        take_challenge_contrib_of_schnorr_t_values_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            g,
+            h,
+            verifier_transcript
+        );
+
+        let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        assert_eq!(verifier_challenge, prover_challenge);
+
+        verify_schnorr_for_common_state_change!(
+            self,
+            leg_enc,
+            true,
+            account_comm_key,
+            pc_gens,
+            g,
+            h,
+            verifier_challenge
+        );
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
+
+        // Balance in leaf (old account) is same as in the old balance commitment
+        assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
+        // Balance in new account commitment is same as in the new balance commitment
+        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
+        // Counter in new account commitment is 1 less than the one in the leaf commitment
+        assert_eq!(
+            self.resp_acc_new.0[2] + verifier_challenge,
+            self.resp_leaf.0[2]
+        );
+
+        // Amount in leg is same as amount in commitment
+        assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
+
+        // sk_e matches in all 3 encryptions
+        assert_eq!(
+            self.resp_leg_amount.response1,
+            self.resp_leg_asset_id.response1
+        );
+        assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
         odd_verifier.verify(
             &self.odd_proof,
@@ -3107,7 +1992,7 @@ pub struct PobWithAuditorProof<G: AffineRepr> {
     nullifier: G,
     t_acc: G,
     pub resp_acc: SchnorrResponse<G>,
-    pub resp_null: PokPedersenCommitment<G>,
+    pub resp_null: PokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
 }
 
@@ -3142,7 +2027,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(&g);
+        let nullifier = account.nullifier(g);
 
         let sk_blinding = G::ScalarField::rand(rng);
         let rho_blinding = G::ScalarField::rand(rng);
@@ -3155,21 +2040,15 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            rho_blinding,
-            &nullifier,
-        );
+        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &g);
+
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
 
         t_acc
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
+            .challenge_contribution( &g, &nullifier, &mut prover_transcript)
             .unwrap();
         t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
             .unwrap();
@@ -3230,9 +2109,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
         self.resp_null
             .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
                 &g,
+                &self.nullifier,
                 &mut verifier_transcript,
             )
             .unwrap();
@@ -3246,8 +2124,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
-                + account_comm_key[2] * G::ScalarField::from(counter)
-                + account_comm_key[3] * G::ScalarField::from(asset_id));
+            + account_comm_key[2] * G::ScalarField::from(counter)
+            + account_comm_key[3] * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
@@ -3262,13 +2140,12 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
         assert!(
             self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+                .verify(&self.nullifier, &g,  &verifier_challenge,)
         );
         assert!(self.resp_pk.verify(&pk, &g, &verifier_challenge));
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_acc.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_acc.0[1], self.resp_null.response2);
+        // rho matches the one in nullifier
+        assert_eq!(self.resp_acc.0[1], self.resp_null.response);
         // Sk in account matches the one in public key
         assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
         Ok(())
@@ -3281,7 +2158,7 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     nullifier: G,
     t_acc: G,
     pub resp_acc: SchnorrResponse<G>,
-    pub resp_null: PokPedersenCommitment<G>,
+    pub resp_null: PokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
     pub t_sent_amount: G,
     pub t_recv_amount: G,
@@ -3368,7 +2245,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(&g);
+        let nullifier = account.nullifier(g);
 
         let sk_blinding = G::ScalarField::rand(rng);
         let rho_blinding = G::ScalarField::rand(rng);
@@ -3405,14 +2282,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
-        let t_null = PokPedersenCommitmentProtocol::init(
-            account.sk,
-            sk_blinding,
-            &nullifier,
-            account.rho,
-            rho_blinding,
-            &nullifier,
-        );
+        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &g);
         // To prove secret key in account state is same as in public key
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
 
@@ -3466,7 +2336,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&nullifier, &nullifier, &g, &mut prover_transcript)
+            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
             .unwrap();
         t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
             .unwrap();
@@ -3650,9 +2520,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .unwrap();
         self.resp_null
             .challenge_contribution(
-                &self.nullifier,
-                &self.nullifier,
                 &g,
+                &self.nullifier,
                 &mut verifier_transcript,
             )
             .unwrap();
@@ -3714,8 +2583,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
-                + account_comm_key[2] * G::ScalarField::from(counter)
-                + account_comm_key[3] * G::ScalarField::from(asset_id));
+            + account_comm_key[2] * G::ScalarField::from(counter)
+            + account_comm_key[3] * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
@@ -3730,7 +2599,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .unwrap();
         assert!(
             self.resp_null
-                .verify(&g, &self.nullifier, &self.nullifier, &verifier_challenge,)
+                .verify(&self.nullifier, &g, &verifier_challenge,)
         );
         assert!(self.resp_pk.verify(&pk, &g, &verifier_challenge));
 
@@ -3786,9 +2655,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             )
             .unwrap();
 
-        // Sk and rho match the ones in nullifier
-        assert_eq!(self.resp_acc.0[0], self.resp_null.response1);
-        assert_eq!(self.resp_acc.0[1], self.resp_null.response2);
+        // rho matches the one in nullifier
+        assert_eq!(self.resp_acc.0[1], self.resp_null.response);
         // Sk in account matches the one in public key
         assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
 
@@ -3847,8 +2715,8 @@ mod tests {
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
-    use std::collections::BTreeSet;
     use std::time::Instant;
+    use SenderReverseTxnProof;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -3858,7 +2726,11 @@ mod tests {
     /// Create a new tree and add the given account's commitment to the tree and return the tree
     /// In future, allow to generate tree many given number of leaves and add the account commitment to a
     /// random position in tree.
-    fn get_tree_with_account_comm<const L: usize>(account: &AccountState<PallasA>, account_comm_key: &[PallasA], account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
+    fn get_tree_with_account_comm<const L: usize>(
+        account: &AccountState<PallasA>,
+        account_comm_key: &[PallasA],
+        account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>,
+    ) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
         let account_comm = account.commit(&account_comm_key);
 
         // Add account commitment in curve tree
@@ -3894,7 +2766,8 @@ mod tests {
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Issuer and verifier interaction begins below
 
@@ -3996,7 +2869,8 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Sender and verifier interaction begins below
 
@@ -4098,7 +2972,8 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk_r.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Receiver and verifier interaction begins below
 
@@ -4212,101 +3087,6 @@ mod tests {
             asset_id,
             amount,
             sk_e.0,
-            sk_r.0,
-            leg_enc.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            nonce,
-            &account_tree_params,
-            &account_comm_key,
-            gen_p_1,
-            gen_p_2,
-        );
-
-        let prover_time = clock.elapsed();
-
-        let clock = Instant::now();
-        proof
-            .verify(
-                leg_enc,
-                &account_tree,
-                prover_challenge,
-                nonce,
-                &account_tree_params,
-                &account_comm_key,
-                gen_p_1,
-                gen_p_2,
-            )
-            .unwrap();
-
-        let verifier_time = clock.elapsed();
-
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
-        );
-    }
-
-    #[test]
-    fn reverse_send_txn() {
-        let mut rng = rand::thread_rng();
-
-
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
-
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
-
-        // TODO: Generate by hashing public string
-        let gen_p_1 = PallasA::rand(&mut rng);
-        let gen_p_2 = PallasA::rand(&mut rng);
-        let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
-
-        let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
-        ) = setup_keys(&mut rng, gen_p_1);
-
-        let asset_id = 1;
-        let amount = 100;
-
-        // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, _, _, _, sk_e, pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
-            &mut rng,
-            asset_id,
-            amount,
-            (pk_s.0, pk_s_e.0),
-            (pk_r.0, pk_r_e.0),
-            (pk_a.0, pk_a_e.0),
-            gen_p_1,
-            gen_p_2,
-        );
-
-        // Sender account
-        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
-        // Assume that account had some balance and it had sent the send transaction to increase its counter
-        account.balance = 200;
-        account.counter += 1;
-
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
-
-        let nonce = b"test-nonce";
-
-        let clock = Instant::now();
-        let updated_account = account.get_state_for_reversing_send(&mut rng, amount);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
-
-        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
-
-        let (proof, prover_challenge) = SenderReverseTxnProof::new(
-            &mut rng,
-            amount,
-            sk_e.0,
             leg_enc.clone(),
             &account,
             &updated_account,
@@ -4402,6 +3182,100 @@ mod tests {
         let (proof, prover_challenge) = SenderCounterUpdateTxnProof::new(
             &mut rng,
             asset_id,
+            sk_e.0,
+            leg_enc.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            nonce,
+            &account_tree_params,
+            &account_comm_key,
+            gen_p_1,
+            gen_p_2,
+        );
+
+        let prover_time = clock.elapsed();
+
+        let clock = Instant::now();
+        proof
+            .verify(
+                leg_enc,
+                &account_tree,
+                prover_challenge,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                gen_p_1,
+                gen_p_2,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        println!("total proof size = {}", proof.compressed_size());
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}",
+            prover_time, verifier_time
+        );
+    }
+
+    #[test]
+    fn reverse_send_txn() {
+        let mut rng = rand::thread_rng();
+
+
+        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 8;
+
+        let account_tree_params =
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+
+        // TODO: Generate by hashing public string
+        let gen_p_1 = PallasA::rand(&mut rng);
+        let gen_p_2 = PallasA::rand(&mut rng);
+        let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
+
+        let (
+            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
+            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
+            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+        ) = setup_keys(&mut rng, gen_p_1);
+
+        let asset_id = 1;
+        let amount = 100;
+
+        // Venue has successfully created the settlement and leg commitment has been stored on chain
+        let (leg, leg_enc, _, _, _, sk_e, pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
+            &mut rng,
+            asset_id,
+            amount,
+            (pk_s.0, pk_s_e.0),
+            (pk_r.0, pk_r_e.0),
+            (pk_a.0, pk_a_e.0),
+            gen_p_1,
+            gen_p_2,
+        );
+
+        // Sender account
+        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
+        // Assume that account had some balance and it had sent the send transaction to increase its counter
+        account.balance = 200;
+        account.counter += 1;
+
+        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+
+        let nonce = b"test-nonce";
+
+        let clock = Instant::now();
+        let updated_account = account.get_state_for_reversing_send(&mut rng, amount);
+        let updated_account_comm = updated_account.commit(&account_comm_key);
+
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+
+        let (proof, prover_challenge) = SenderReverseTxnProof::new(
+            &mut rng,
+            amount,
             sk_e.0,
             leg_enc.clone(),
             &account,
