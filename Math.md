@@ -173,6 +173,104 @@ Now $g, h, V, C_i, D_i$ are public and knowledge of $sk_i$ can be proven using s
 
 ---------------------------
 
+**New construction for supporting auditor and mediator**
+
+$pk_a, pk_m$ are auditor's encryption and mediator's public key respectively 
+
+$leaf' = pk_a.h^{at}$
+
+Auditor tree leaf is $ Leaf = pk_a.pk_m.h^{at}$ (This probably isnt correct as its a commitment to $pk_a.pk_m$ and not to each of them individually)
+
+Ephemeral secret key encryption
+
+$X_s = pk_s^k, X_r = pk_r^k, X_a = pk_a^k, X_m = pk_m^k, Y = g^k.h^m$
+
+$Z = Y - X_s^{sk_s} = Y - X_r^{sk_r} = Y - X_a^{sk_a} = Y - X_a^{sk_m} = g^k$
+
+$h^m = Y - Z$
+
+Ephemeral keypair $sk_e = Hash(Y - Z), pk_e = g^{sk_e}$ 
+
+Leg encryption corresponding to mediator $(g^r, pk_e^r.pk_m)$
+
+Elgamal commitments to $pk_a, pk_m$ as $Com_{pk_a} = (g^{r_1}, W^{r_1}.pk_a) = (E_0, E_1)$ and $Com_{pk_m} = (g^{r_2}, W^{r_2}.pk_m) = (F_0, F_1)$ where W is a random group element whose discrete log with other group elements is not known.
+
+Now $pk_a = E_1.W^{-r_1}$ and $pk_m = F_1.W^{-r_2}$.
+
+Substituting for $pk_m$, we get $Leaf = pk_a.F_1.W^{-r_2}.h^a$. Now $pk_a = Leaf.F_1^{-1}.W^{r_2}.h^{-a}$.   
+Similarly $pk_m = Leaf.E_1^{-1}.W^{r_1}.h^{-a}$.
+
+
+-------------------------------------------
+
+
+$g, pk_a, pk_m \in G_q, sk_a \in Z_q$
+
+$pk_a = g^{sk_a}$
+
+$pk_a = (pk_a.x, pk_a.y)$
+
+$pk_m = (pk_m.x, pk_m.y)$
+
+$pk_a.x, pk_a.y, pk_m.x, pk_m.y \in Z_p$
+
+$Leaf = PedCom_{NH}(pk_a.x, pk_a.y, pk_m.x, pk_m.y, at)$
+
+$Leaf \in G_p$
+
+$X_a = pk_a^k$, $X_a \in G_q$
+
+$X_a^{k^{-1}} = pk_a$
+
+
+1. CDLS allows to prove $j.s = u$ given commitment to j's, s's, and u's coordinates.
+
+2. CDLS allows to prove $j^t = y$ given commitment to y's coordinates and commitment to t.
+
+
+Mediator in Leg: $(g^r, pk_e^r.pk_m)$
+
+
+$T = pk_e^r.pk_m$, $T.pk_e^{-r} = pk_m$
+
+Now use CDLS's sum of points and scalar multiplication protocol to prove $T.pk_e^{-r} = pk_m$. 
+First scalar mult. protocol to prove $pk_e^{-r} = J$. Now use the sum protocol to prove $T.J = pk_m$
+
+--------------------------------
+
+Twisted Elgamal ciphertext for auditor $(X_A = pk_A^k, Y = g^k.h^m)$
+
+$j_0, j_1, j_2, j_3, B$ are public generators
+
+In case of auditor
+   
+- Leaf $leaf = j_1^{at}.pk_A$ (role is 0 here)
+
+- Rerandomized leaf $leaf_r = j_1^{at}.pk_A.B^t$
+ 
+
+$leaf_r.j_1^{-at}.B^{-t} = pk_A$
+
+Substituting for $pk_A$ in $X_A$ above
+
+${leaf_r.j_1^{-at}.B^{-t}} ^ k = X_A$
+
+Need to prove relation: $leaf_r^k.(j_1^{-1})^{at.k}.B^{-t.k} = X_A$
+
+The idea is to create 3 elements as $K_1 = j_2^k.j_3^{r_k}, K_2 = j_2^{at}.j_3^{r_{at}}, K_3 = j_2^{at.k}.j_3^{at.r_k}$, 
+prove the product relation between these 3 while proving that exponent of $j_2$ in $K_3$ is same as 
+the exponent of $j_1^{-1}$ in $X_A$, the exponent of $j_2$ in $K_1$ is same as the exponent of $leaf_r$ in $X_A$ and similarly 
+for $at$.   
+Note that $K_3$ is intentionally created as $K_1^{at}$ for efficiency.
+
+So the 5 relations that need to proven (for auditor only)
+1. $leaf_r^k.(j_1^{-1})^{at.k}.B^{-t.k} = X_A$
+2. $K_1 = j_2^k.j_3^{r_k}$
+3. $K_2 = j_2^{at}.j_3^{r_{at}}$
+4. $K_3 = j_2^{at.k}.j_3^{at.r_k}$
+5. $K_3 = K_1^{at}$
+
+---------------------------------------
 
 
 $$ g * v_0 + g_1 * v_1  $$

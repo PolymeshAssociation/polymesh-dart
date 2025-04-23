@@ -103,9 +103,9 @@ pub fn enforce_balance_change_prover<
     has_balance_decreased: bool,
     even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
 ) -> (
-    (F0, Affine<G0>, Variable<F0>),
-    (F0, Affine<G0>, Variable<F0>),
-    (F0, Affine<G0>, Variable<F0>),
+    (F0, Affine<G0>),
+    (F0, Affine<G0>),
+    (F0, Affine<G0>),
 ) {
     // Commit to amount, old and new balance
     // TODO: It makes sense to commit to all these in a single vector commitment
@@ -147,9 +147,9 @@ pub fn enforce_balance_change_prover<
     )
     .unwrap();
     (
-        (r_bal_old, comm_bal_old, var_bal_old),
-        (r_bal_new, comm_bal_new, var_bal_new),
-        (r_amount, comm_amount, var_amount),
+        (r_bal_old, comm_bal_old),
+        (r_bal_new, comm_bal_new),
+        (r_amount, comm_amount),
     )
 }
 

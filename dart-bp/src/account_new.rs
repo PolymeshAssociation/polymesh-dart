@@ -207,7 +207,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
                 rng,
                 TXN_EVEN_LABEL,
@@ -559,7 +559,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
                 rng,
                 TXN_EVEN_LABEL,
@@ -596,9 +596,9 @@ impl<
         // 7. pk in leg has the sk in account commitment
 
         let (
-            (r_bal_old, comm_bal_old, var_bal_old),
-            (r_bal_new, comm_bal_new, var_bal_new),
-            (r_amount, comm_amount, var_amount),
+            (r_bal_old, comm_bal_old),
+            (r_bal_new, comm_bal_new),
+            (r_amount, comm_amount),
         ) = enforce_balance_change_prover(
             rng,
             account.balance,
@@ -729,7 +729,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
             self.re_randomized_path.clone(),
@@ -886,7 +886,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
                 rng,
                 TXN_EVEN_LABEL,
@@ -1002,7 +1002,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
             self.re_randomized_path.clone(),
@@ -1158,7 +1158,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1188,9 +1188,9 @@ impl<
         // 7. pk in leg has the sk in account commitment
 
         let (
-            (r_bal_old, comm_bal_old, var_bal_old),
-            (r_bal_new, comm_bal_new, var_bal_new),
-            (r_amount, comm_amount, var_amount),
+            (r_bal_old, comm_bal_old),
+            (r_bal_new, comm_bal_new),
+            (r_amount, comm_amount),
         ) = enforce_balance_change_prover(
             rng,
             account.balance,
@@ -1329,7 +1329,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1488,7 +1488,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1598,7 +1598,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1735,7 +1735,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, mut odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1756,9 +1756,9 @@ impl<
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         let (
-            (r_bal_old, comm_bal_old, var_bal_old),
-            (r_bal_new, comm_bal_new, var_bal_new),
-            (r_amount, comm_amount, var_amount),
+            (r_bal_old, comm_bal_old),
+            (r_bal_new, comm_bal_new),
+            (r_amount, comm_amount),
         ) = enforce_balance_change_prover(
             rng,
             account.balance,
@@ -1888,7 +1888,7 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1989,8 +1989,8 @@ impl<
 /// This is the proof for doing proof of balance with an auditor. Report section 5.1.10, fig 8
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAuditorProof<G: AffineRepr> {
-    nullifier: G,
-    t_acc: G,
+    pub nullifier: G,
+    pub t_acc: G,
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
@@ -2155,8 +2155,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 /// This is the proof for doing proof of balance with an arbitrary party. Report section 5.1.11, fig 10
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAnyoneProof<G: AffineRepr> {
-    nullifier: G,
-    t_acc: G,
+    pub nullifier: G,
+    pub t_acc: G,
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
@@ -2853,14 +2853,15 @@ mod tests {
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, leg_enc_rand, eph_sk_enc, eph_sk_enc_rand, sk_e, pk_e) =
+        let (leg, leg_enc, leg_enc_rand, _, _, sk_e, pk_e) =
             initialize_leg_for_settlement::<_, _, Blake2b512>(
                 &mut rng,
                 asset_id,
                 amount,
                 (pk_s.0, pk_s_e.0),
                 (pk_r.0, pk_r_e.0),
-                (pk_a.0, pk_a_e.0),
+                Some((pk_a.0, pk_a_e.0)),
+                None,
                 gen_p_1,
                 gen_p_2,
             );
@@ -2956,14 +2957,15 @@ mod tests {
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, leg_enc_rand, eph_sk_enc, eph_sk_enc_rand, sk_e, pk_e) =
+        let (leg, leg_enc, leg_enc_rand, _, _, sk_e, pk_e) =
             initialize_leg_for_settlement::<_, _, Blake2b512>(
                 &mut rng,
                 asset_id,
                 amount,
                 (pk_s.0, pk_s_e.0),
                 (pk_r.0, pk_r_e.0),
-                (pk_a.0, pk_a_e.0),
+                Some((pk_a.0, pk_a_e.0)),
+                None,
                 gen_p_1,
                 gen_p_2,
             );
@@ -3060,7 +3062,8 @@ mod tests {
             amount,
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
-            (pk_a.0, pk_a_e.0),
+            Some((pk_a.0, pk_a_e.0)),
+            None,
             gen_p_1,
             gen_p_2,
         );
@@ -3159,7 +3162,8 @@ mod tests {
             amount,
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
-            (pk_a.0, pk_a_e.0),
+            Some((pk_a.0, pk_a_e.0)),
+                None,
             gen_p_1,
             gen_p_2,
         );
@@ -3252,7 +3256,8 @@ mod tests {
             amount,
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
-            (pk_a.0, pk_a_e.0),
+            Some((pk_a.0, pk_a_e.0)),
+                None,
             gen_p_1,
             gen_p_2,
         );
@@ -3395,11 +3400,11 @@ mod tests {
             let leg = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                Leg::new(pk_other.0, pk.0, pk_a.0, amount, asset_id)
+                Leg::new(pk_other.0, pk.0, Some(pk_a.0), amount, asset_id)
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                Leg::new(pk.0, pk_other.0, pk_a.0, amount, asset_id)
+                Leg::new(pk.0, pk_other.0, Some(pk_a.0), amount, asset_id)
             };
             let (leg_enc, enc_rands) = leg.encrypt(&mut rng, &pk_e.0, gen_p_1, gen_p_2);
             legs.push((leg, leg_enc, enc_rands));
