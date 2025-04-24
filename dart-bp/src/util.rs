@@ -5,7 +5,7 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, Variable, Verifier};
-use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -68,7 +68,7 @@ pub fn initialize_curve_tree_verifier<
     even_label: &'static [u8],
     odd_label: &'static [u8],
     mut re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    tree_root: &CurveTree<L, 1, G0, G1>,
+    tree_root: &Root<L, 1, G0, G1>,
     tree_parameters: &SelRerandParameters<G0, G1>,
 ) -> (
     Verifier<MerlinTranscript, Affine<G0>>,
@@ -79,13 +79,14 @@ pub fn initialize_curve_tree_verifier<
     let odd_transcript = MerlinTranscript::new(odd_label);
     let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
-    tree_root.add_root_to_randomized_path(&mut re_randomized_path);
+    // tree_root.add_root_to_randomized_path(&mut re_randomized_path);
+    re_randomized_path.add_root(tree_root);
 
     // Enforce constraints for odd level
-    re_randomized_path.odd_verifier_gadget(&mut odd_verifier, &tree_parameters, &tree_root);
+    re_randomized_path.odd_verifier_gadget(tree_root, &mut odd_verifier, &tree_parameters);
 
     // Enforce constraints for even level
-    re_randomized_path.even_verifier_gadget(&mut even_verifier, &tree_parameters, &tree_root);
+    re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
 
     (even_verifier, odd_verifier)
 }

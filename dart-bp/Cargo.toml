@@ -9,7 +9,6 @@ ark-ff = { version = "0.4"}
 ark-ec = { version = "0.4"}
 ark-serialize = { version = "0.4" }
 ark-std = { version = "0.4"}
-ark-crypto-primitives = { version = "0.4", features = ["signature"]}
 digest = "0.10.7"
 blake2 = "0.10"
 rayon = {version = "1.5.3", optional = true}
@@ -17,9 +16,13 @@ dock_crypto_utils = {git = "https://github.com/docknetwork/crypto", default-feat
 verifiable_encryption = {git = "https://github.com/docknetwork/crypto", default-features = false}
 equality_across_groups = {git = "https://github.com/docknetwork/crypto", default-features = false}
 schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features = false}
-itertools = "0.12.1"
+
+# Curve tree dependencies
 bulletproofs = {path = "../../curve-trees/bulletproofs", default-features = false, features = ["std"]}
 curve_tree_relations = {package = "relations", path = "../../curve-trees/relations", default-features = false}
+# If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
+#bulletproofs = {git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly", default-features = false, features = ["std"]}
+#curve_tree_relations = {package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly", default-features = false}
 
 [dev-dependencies]
 criterion = "0.3"

@@ -6,7 +6,7 @@ use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use digest::Digest;
@@ -120,6 +120,7 @@ impl<G: AffineRepr> Leg<G> {
 }
 
 impl<G: AffineRepr> EphemeralSkEncryption<G> {
+    /// `pk_a_m` is the encryption key of the mediator or the auditor
     pub fn new<R: RngCore, D: FullDigest>(
         rng: &mut R,
         pk_s: G,
@@ -128,6 +129,10 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         g: G,
         h: G,
     ) -> (Self, G::ScalarField, DecKey<G>, EncKey<G>) {
+        // Use twisted-Elgamal encryption.
+        // Generate random k and then [(pk_s * k), (pk_r * k), (pk_a_m * k), (g*k + h*pre_sk_e)]
+        // Hash h*pre_sk_e to get the ephemeral secret key sk_e, ephemeral public key is g*sk_e
+
         let k = G::ScalarField::rand(rng);
         let pre_sk_e = G::ScalarField::rand(rng);
         let h_p = h * pre_sk_e;
@@ -336,6 +341,8 @@ impl<
     // NOTE: This pattern assumes that this is the only proof being created. But an alternative and maybe better pattern
     // is to assume that other proofs will be created along this and `Self::new` should accept transcript which are being shared
     // by other proofs. Also, this could take a randomized mult-checker which is shared by others.
+    /// `eph_sk_enc_rand` is the randomness created during twisted-Elgamal encryption of ephemeral secret key
+    /// and `eph_pk` is the ephemeral public key
     pub fn new<R: RngCore>(
         rng: &mut R,
         leg: Leg<Affine<G0>>,
@@ -656,7 +663,7 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         eph_sk_enc: EphemeralSkEncryption<Affine<G0>>,
         eph_pk: Affine<G0>,
-        tree: &CurveTree<L, 1, G0, G1>,
+        tree_root: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G0, G1>,
@@ -676,7 +683,7 @@ impl<
         let minus_leaf_comm_key = leaf_comm_key[1].neg();
         let minus_B_blinding = tree_parameters.even_parameters.pc_gens.B_blinding.neg();
 
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, self.re_randomized_path.clone(), tree, tree_parameters);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, self.re_randomized_path.clone(), tree_root, tree_parameters);
 
         let mut leg_instance = vec![];
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
@@ -1129,6 +1136,9 @@ pub mod tests {
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
+        // Verifier gets the root of the tree
+        let root = asset_tree.root_node();
+
         let (proof, prover_challenge) = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
@@ -1155,7 +1165,7 @@ pub mod tests {
                 leg_enc.clone(),
                 eph_sk_enc.clone(),
                 pk_e.0,
-                &asset_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &asset_tree_params,
@@ -1257,6 +1267,9 @@ pub mod tests {
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
+        // Verifier gets the root of the tree
+        let root = asset_tree.root_node();
+
         let (proof, prover_challenge) = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
@@ -1283,7 +1296,7 @@ pub mod tests {
                 leg_enc.clone(),
                 eph_sk_enc.clone(),
                 pk_e.0,
-                &asset_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &asset_tree_params,

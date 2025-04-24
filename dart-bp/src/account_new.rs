@@ -19,7 +19,7 @@ use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
@@ -368,7 +368,7 @@ impl<
         issuer_pk: Affine<G0>,
         asset_id: AssetId,
         increase_bal_by: Balance,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -721,7 +721,7 @@ impl<
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -994,7 +994,7 @@ impl<
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -1321,7 +1321,7 @@ impl<
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -1590,7 +1590,7 @@ impl<
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -1668,6 +1668,7 @@ impl<
     }
 }
 
+/// Used by sender to reverse his "send" txn and take back his funds
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct SenderReverseTxnProof<
     const L: usize,
@@ -1880,7 +1881,7 @@ impl<
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        account_tree: &CurveTree<L, 1, G0, G1>,
+        account_tree: &Root<L, 1, G0, G1>,
         prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -2782,6 +2783,9 @@ mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        // Verifier gets the root of the tree
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = MintTxnProof::new(
             &mut rng,
             pk_i.0,
@@ -2805,7 +2809,7 @@ mod tests {
                 pk_i.0,
                 asset_id,
                 increase_bal_by,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
@@ -2884,6 +2888,8 @@ mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = SendTxnProof::new(
             &mut rng,
             asset_id,
@@ -2907,7 +2913,7 @@ mod tests {
         proof
             .verify(
                 leg_enc,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
@@ -2987,6 +2993,8 @@ mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = ReceiveTxnProof::new(
             &mut rng,
             asset_id,
@@ -3009,7 +3017,7 @@ mod tests {
         proof
             .verify(
                 leg_enc,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
@@ -3085,6 +3093,8 @@ mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = ClaimReceivedTxnProof::new(
             &mut rng,
             asset_id,
@@ -3108,7 +3118,7 @@ mod tests {
         proof
             .verify(
                 leg_enc,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
@@ -3183,6 +3193,8 @@ mod tests {
         let updated_account_comm = updated_account.commit(&account_comm_key);
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = SenderCounterUpdateTxnProof::new(
             &mut rng,
             asset_id,
@@ -3205,7 +3217,7 @@ mod tests {
         proof
             .verify(
                 leg_enc,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
@@ -3278,6 +3290,8 @@ mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, prover_challenge) = SenderReverseTxnProof::new(
             &mut rng,
             amount,
@@ -3300,7 +3314,7 @@ mod tests {
         proof
             .verify(
                 leg_enc,
-                &account_tree,
+                &root,
                 prover_challenge,
                 nonce,
                 &account_tree_params,
