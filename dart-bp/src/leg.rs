@@ -20,6 +20,7 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use std::ops::Neg;
+use std::time::{Duration, Instant};
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use dock_crypto_utils::hashing_utils::hash_to_field;
 use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
@@ -713,11 +714,14 @@ impl<
 
         let mut verifier_transcript = even_verifier.transcript();
 
+        let mut dur = Duration::default();
+        let mut size = 0;
         if is_mediator_present {
             self.resp_eph_pk.as_ref().unwrap()
                 .challenge_contribution(&g, &leg_enc.ct_m.as_ref().unwrap().eph_pk, &mut verifier_transcript)
                 .unwrap();
         } else {
+            let clock = Instant::now();
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
             aud_proofs.K_1.serialize_compressed(&mut verifier_transcript).unwrap();
             aud_proofs.K_2.serialize_compressed(&mut verifier_transcript).unwrap();
@@ -753,6 +757,8 @@ impl<
                     &mut verifier_transcript,
                 )
                 .unwrap();
+            dur += clock.elapsed();
+            size = aud_proofs.compressed_size();
         }
         self.t_r_leaf
             .serialize_compressed(&mut verifier_transcript)
@@ -809,6 +815,7 @@ impl<
                 )
                 .unwrap();
         } else {
+            let clock = Instant::now();
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
             self.resp_leaf
                 .is_valid(
@@ -841,6 +848,7 @@ impl<
                 &aud_proofs.K_1,
                 &verifier_challenge,
             ));
+            dur += clock.elapsed();
         }
 
         assert!(self.resp_amount.verify(
@@ -899,6 +907,7 @@ impl<
             &tree_parameters.odd_parameters.pc_gens,
             &tree_parameters.odd_parameters.bp_gens,
         )?;
+        println!("Time and size: {:?}, {}", dur, size);
         Ok(())
     }
 }

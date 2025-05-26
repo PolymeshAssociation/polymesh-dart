@@ -12,10 +12,10 @@ $h, h_i, j, k \in G_q$
 
 Keys
 $$
-pk_e = h * sk_e \\
-pk_a = h * sk_a \\
-pk_s = h * sk_s \\
-pk_r = h * sk_r \\
+pk_e = h * sk_e \\\
+pk_a = h * sk_a \\\
+pk_s = h * sk_s \\\
+pk_r = h * sk_r \\\
 $$
 
 $pk_e$ is the ephemeral key freshly created for each settlement 
@@ -185,11 +185,9 @@ Ephemeral secret key encryption
 
 $X_s = pk_s^k, X_r = pk_r^k, X_a = pk_a^k, X_m = pk_m^k, Y = g^k.h^m$
 
-$Z = Y - X_s^{sk_s} = Y - X_r^{sk_r} = Y - X_a^{sk_a} = Y - X_a^{sk_m} = g^k$
+$Z = Y - X_s^{sk_s} = Y - X_r^{sk_r} = Y - X_a^{sk_a} = Y - X_a^{sk_m} = h^m$
 
-$h^m = Y - Z$
-
-Ephemeral keypair $sk_e = Hash(Y - Z), pk_e = g^{sk_e}$ 
+Ephemeral keypair $sk_e = Hash(Z), pk_e = g^{sk_e}$ 
 
 Leg encryption corresponding to mediator $(g^r, pk_e^r.pk_m)$
 
@@ -223,9 +221,9 @@ $X_a = pk_a^k$, $X_a \in G_q$
 $X_a^{k^{-1}} = pk_a$
 
 
-1. CDLS allows to prove $j.s = u$ given commitment to j's, s's, and u's coordinates.
+1. CDLS allows to prove $j.s = u$ given commitment to $j$'s, $s$'s, and $u$'s coordinates.
 
-2. CDLS allows to prove $j^t = y$ given commitment to y's coordinates and commitment to t.
+2. CDLS allows to prove $j^t = y$ given commitment to $y$'s coordinates and commitment to $t$.
 
 
 Mediator in Leg: $(g^r, pk_e^r.pk_m)$
@@ -253,7 +251,7 @@ $leaf_r.j_1^{-at}.B^{-t} = pk_A$
 
 Substituting for $pk_A$ in $X_A$ above
 
-${leaf_r.j_1^{-at}.B^{-t}} ^ k = X_A$
+$(leaf_r.j_1^{-at}.B^{-t}) ^ k = X_A$
 
 Need to prove relation: $leaf_r^k.(j_1^{-1})^{at.k}.B^{-t.k} = X_A$
 
@@ -263,15 +261,153 @@ the exponent of $j_1^{-1}$ in $X_A$, the exponent of $j_2$ in $K_1$ is same as t
 for $at$.   
 Note that $K_3$ is intentionally created as $K_1^{at}$ for efficiency.
 
-So the 5 relations that need to proven (for auditor only)
+So the 5 relations that need to be proven (for auditor only)
 1. $leaf_r^k.(j_1^{-1})^{at.k}.B^{-t.k} = X_A$
 2. $K_1 = j_2^k.j_3^{r_k}$
 3. $K_2 = j_2^{at}.j_3^{r_{at}}$
 4. $K_3 = j_2^{at.k}.j_3^{at.r_k}$
 5. $K_3 = K_1^{at}$
 
----------------------------------------
 
+
+--------------------
+
+
+**Proposal for multiple auditors/mediators**
+
+Leaf for asset metadata: $leaf_{at} = j_0^{at}.j_1^{auditor-count}.j_2^{mediator-count}$
+
+Leaf for the $i$-th auditor/mediator: $leaf_{at_i} = j_0^{at}.j_1^{role}.j_2^{i}.j_3^{pk}$ ($i$ can probably be removed but there might be cases where auditor/mediator needs to prove that each $i$ is different in zero-knowledge)
+
+
+Assume single auditor/mediator for now whose public key is $pk_A$. Sender and receiver keys are $pk_s, pk_r$ respectively. 
+
+
+Leg encryption:
+
+1. Create random $r_1, r_2, r_3, r_4$ (Created with DH with sender and receiver public keys, described later).
+2. Now venue uses twisted DH for encrypting leg - 
+   1. $D_{s_i} = {pk_s}^{r_i}$, $D_{r_i} = {pk_r}^{r_i}$, $D_{A_i} = {pk_A}^{r_i}$.
+   2. $C_s =g^{r_1}.pk_s$, $C_r =g^{r_2}.pk_r$, $C_v =g^{r_3}.h^v$, $C_{at} =g^{r_4}.h^{at}$ 
+3. Venue proves that $pk_A$ in each $D_{A_i}$ is correct for the asset type in $C_{at}$ when asset has auditor. For mediator, proving for single is sufficient. (more on what do when multiple later). Both of these involve membership proofs in accumulator as well.
+
+Decryption follows from the usual twisted Elgamal decryption.
+
+Venue picks random $y$ and adds these to txn: $F_s = pk_s^y, F_r = pk_r^y$. Sender and receiver now create $r_i = Hash(g^y || i)$. 
+
+Scan alg: As sender can receiver can learn what $at$ is without knowing auditor key, they first learn $at$ and then query chain for that $at$'s auditor/mediator public keys.Auditor/mediator use $D_{A_4}, C{at}$ to learn if settlement involves them.
+
+Sender and receiver during their affirmations prove the knowledge of secret key in $C_s, C_r$ respectively.
+
+Mediator while accepting/rejecting proves that $(C_{at}.h^{-at})^{sk_A} = D_{A_4}$, since $C_{at}.h^{-at} = g^{r_4}$
+
+
+In case of say $n$ mediators/auditors, venue will create $n$ $D_{A_i}$ such as for the $j$-th mediator/auditor, the $j$-th $D_{A_i}$ = $D_{A_{j, i}} = {pk_{A_j}}^{r_i}$. Venue will prove correctness of all $D_{A_{j, 4}}$ for $j$ mediators. In case of say $n$ auditors, venue has to prove correctness of $D_{A_{j, i}}$ for all $i, j$. Both of these involve membership proofs in accumulator as well and since we have many membership proofs, we can batch them.
+
+$j$-th mediator will prove the correctness of $D_{A_{j, 4}}$ during accepting/rejecting as above. It will also point to the $D_{A_{j, 4}}$ its proving about so chain can track how many mediators have approved. The exact strategy might change depending on how many mediators need to accept/reject when multiple mediators. An optimization for scan alg. is to always palce $D_{A_{j, i}}$ in the order of $j$ like $D_{A_{0, i}}$, $D_{A_{1, i}}$, ... so that auditor/mediator knows which $D_{A_{j, i}}$ to try. This is done by venue proving this using the index field $i$ in the lesf.
+
+We can also handle cases when asset has both say $n$ auditors and $m$ mediators by similar strategy as above.
+
+-------------------------------
+
+Leaf $leaf = j_0^{at}.j_1^{role}.j_2^{index}.j_3^{pk.x}.j_4^{pk.y}$
+
+
+--------------------------------------------------
+
+
+$pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
+
+Need to prove 4 relations: $D_{A_1} = {pk_A}^{r_1}$, $D_{A_2} = {pk_A}^{r_2}$, $D_{A_3} = {pk_A}^{r_3}$, $D_{A_4} = {pk_A}^{r_4}$
+
+Prover picks a random value $u_1$ by hashing the proof transcript and set $u_2 = u^2, u_3 = u^3$. Both prover and verifier generate these independently. 
+
+Now prover combines above 4 relations into 1 by using a random linear combination:
+
+$D_{A_1}.{D_{A_2}}^{u_1}.{D_{A_3}}^{u_2}.{D_{A_4}}^{u_3} = {pk_A}^{r_1}.{pk_A}^{r_2.u_1}.{pk_A}^{r_3.u_2}.{pk_A}^{r_4.u_3}$
+
+$D_{A_1}.{D_{A_2}}^{u_1}.{D_{A_3}}^{u_2}.{D_{A_4}}^{u_3} = {pk_A}^{r_1 + r_2.u_1 + r_3.u_2 + r_4.u_3}$
+
+Let $z = r_1 + r_2.u_1 + r_3.u_2 + r_4.u_3$. 
+
+Prover generates $T_1 = g^{u_1}, T_2 = g^{u_2}, T_3 = g^{u_3}$ where $g$ is a totally new generator and shares $g^z$
+
+Both prover and verifier have: $D_{A_i}, T_i, g, u_i, leaf_r, j_1, B, g^z$ 
+
+Prover's secret: $r_i, z, at, t, pk_A$
+
+Need to prove these:
+
+1. $D_{A_1}.{D_{A_2}}^{u_1}.{D_{A_3}}^{u_2}.{D_{A_4}}^{u_3} = (leaf_r.j_1^{-at}.B^{-t})^z = leaf_r^z.(j_1^{-1})^{at.z}.(B^{-1})^{t.z}$
+2. $g^z = g^{r_1}.T_1^{r_2}.T_2^{r_3}.T_3^{r_4} \equiv g^{r_1}.T_1^{r_2}.T_2^{r_3}.T_3^{r_4}.(g^{-1})^z = 1$
+
+For 1, the proving cost is 8G + 7F, 10M and verification cost is 16M
+
+For 2, proving cost is G (for $g^z$) + G + 4F, 5M, verification cost is 5M (not 6M because 1 in RHS)
+
+Total proving cost is 10G + 11F, 15M, verification cost is 21M
+
+---------------------------------------------------
+
+$pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
+
+Need to prove 4 relations: $D_{A_1} = {pk_A}^{r_1}$, $D_{A_2} = {pk_A}^{r_2}$, $D_{A_3} = {pk_A}^{r_3}$, $D_{A_4} = {pk_A}^{r_4}$
+
+Applying protocol in Fig 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf), with correction to the typo in last statement
+
+1. Prover picks random $r$ and creates $x = leaf_r^r.j_1^{-at.r}.B^{-t.r}$ along with a proof $\pi$ of the correct exponents, using the protocol for product relation.
+2. Prover generates challenge $e$ by hashing transcript.
+3. Prover generates response $s = r + \sum{r_i.e^i}$ and sends $x, s$ it to verifier
+4. Verifier first checks $\pi$ and then checks if ${leaf_r.j_1^{-at}.B^{-t}}$
+
+$(leaf_r.j_1.B)^s = leaf_r^{k + \sum{r_i.c^i}}.j_1^{k + \sum{r_i.c^i}}.B^{k + \sum{r_i.c^i}} = leaf_r^k.j_1^k.B^k . leaf_r^{\sum{r_i.c^i}}.j_1^{\sum{r_i.c^i}}.B^{\sum{r_i.c^i}} = leaf_r^k.j_1^k.B^k . leaf_r$
+
+$com(pk_A) = (E0, E1) =(g^v, W^v.pk_A), pk_A = E1.W^{-v}$
+
+
+$D_{A_1} = ({leaf_r.j_1^{-at}.B^{-t}})^{r_1} = leaf_r^{r_1}.j^{-at.r_1}.B^{-t.r_1}$
+
+$U_1 = g^{at.r_1}$
+
+-------------------------------------------------------
+
+$pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
+
+Need to prove 4 relations: $D_{A_1} = {pk_A}^{r_1}$, $D_{A_2} = {pk_A}^{r_2}$, $D_{A_3} = {pk_A}^{r_3}$, $D_{A_4} = {pk_A}^{r_4}$
+
+Multiplying these 4 gives 
+
+$pk_A^{r_1 + r_2 + r_3 + r_4} = D_{A_1}.D_{A_2}.D_{A_3}.D_{A_4}$
+
+Let $z = r_1 + r_2 + r_3 + r_4$
+
+Now prove these 2 relations:
+
+1. $leaf_r^z.j_1^{-at.z}.B^{-t.z} = D_{A_1}.D_{A_2}.D_{A_3}.D_{A_4}$
+
+2. $g^z = g^{r_1}.g^{r_2}.g^{r_3}.g^{r_4} => g^{r_1}.g^{r_2}.g^{r_3}.g^{r_4}.(g^{-1})^z = 1$
+
+For 1, the proving cost is 8G + 8F + 3F, 11M + 3M = 8G + 11F, 14M and verification cost is 16M + 3M = 19M
+
+For 2, the proving cost is G, M (since responses for $z$ and $r_i$ are already sent in 1) and verification cost is 5M
+
+-----------------------------------------------------------------
+
+Proving knowledge of $sk_e$ in $pk_e = g^{sk_e}$. Decompose $sk_e$ into $b$ bit chunks and do twisted Elgamal encryption of each chunk. 
+
+Chunk $i$ = $(pk_s^{r_i}, pk_r^{r_i}, pk_A^{r_i}, g^{r_i}.h^{sk_{e,i}})$
+
+Since Elgamal is homomorphic, chunks can be multiplied after raising to appropriate power. Let $B_i$ be the appropriate power. Combining all the chunks, we get:
+
+$\prod{(g^{r_i}.h^{sk_{e,i}})^{B_i}} = g^{\sum{B_i * r_i}}.h^{sk_e}$
+
+Now with a sigma protocol, we can prove that $sk_e$ is same as in $pk_e$
+
+There is a proof associated with each chunk proving $r_i$ is same in all 4 elements in the chunk but the overall proof should be smaller and efficient than using generic ZKP. Decryption is expensive but its done off chain so maybe acceptable.
+
+Value of $b$ in practice is either 32, 40, 48. 
+
+-----------------------------------------------
 
 $$ g * v_0 + g_1 * v_1  $$
 

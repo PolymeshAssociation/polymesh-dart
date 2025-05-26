@@ -27,7 +27,6 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use std::ops::Neg;
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -155,6 +154,147 @@ pub const TXN_INSTANCE_LABEL: &[u8; 18] = b"txn-extra-instance";
 // TODO: A refactoring idea is to create partial Schnorr proofs for generic state. With each state, we have same variables which
 // almost always change and some which always have to be proven equal (unless revealed).
 
+/// This is the proof for user registering its public key for an asset. Report section 5.1.3, called "Account Registration"
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct RegTxnProof<G: AffineRepr> {
+    pub t_acc: G,
+    pub resp_acc: SchnorrResponse<G>,
+    pub resp_pk: PokDiscreteLog<G>,
+}
+
+impl<G: AffineRepr> RegTxnProof<G> {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        pk: G,
+        account: &AccountState<G>,
+        account_commitment: AccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: &[G],
+        g: G,
+    ) -> (Self, G::ScalarField) {
+        assert_eq!(account.balance, 0);
+        assert_eq!(account.counter, 0);
+
+        // Need to prove that:
+        // 1. sk used in commitment is for the registering pk
+        // 2. balance is 0
+        // 3. counter is 0
+
+        let mut prover_transcript = MerlinTranscript::new(b"test");
+
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        account.asset_id.serialize_compressed(&mut extra_instance).unwrap();
+        account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        pk.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+
+        prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+
+        let sk_blinding = G::ScalarField::rand(rng);
+
+        let t_acc = SchnorrCommitment::new(
+            &[
+                account_comm_key[0],
+                account_comm_key[4],
+                account_comm_key[5],
+            ],
+            vec![sk_blinding, G::ScalarField::rand(rng), G::ScalarField::rand(rng)],
+        );
+
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
+
+        t_acc
+            .challenge_contribution(&mut prover_transcript)
+            .unwrap();
+        t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
+            .unwrap();
+
+        let prover_challenge =
+            prover_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        let resp_acc = t_acc
+            .response(
+                &[account.sk, account.rho, account.randomness],
+                &prover_challenge,
+            )
+            .unwrap();
+        let resp_pk = t_pk.gen_proof(&prover_challenge);
+        (
+            Self {
+                t_acc: t_acc.t,
+                resp_acc,
+                resp_pk,
+            },
+            prover_challenge,
+        )
+    }
+
+    pub fn verify(
+        &self,
+        pk: &G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        prover_challenge: G::ScalarField,
+        nonce: &[u8],
+        account_comm_key: &[G],
+        g: G,
+    ) -> Result<(), R1CSError> {
+        let mut verifier_transcript = MerlinTranscript::new(b"test");
+
+        let mut extra_instance = vec![];
+        nonce.serialize_compressed(&mut extra_instance).unwrap();
+        asset_id.serialize_compressed(&mut extra_instance).unwrap();
+        account_commitment
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        pk.serialize_compressed(&mut extra_instance).unwrap();
+        account_comm_key
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        g.serialize_compressed(&mut extra_instance).unwrap();
+
+        verifier_transcript
+            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+
+        self.t_acc
+            .serialize_compressed(&mut verifier_transcript)
+            .unwrap();
+        self.resp_pk
+            .challenge_contribution(&g, pk, &mut verifier_transcript)
+            .unwrap();
+
+        let verifier_challenge =
+            verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        assert_eq!(verifier_challenge, prover_challenge);
+
+        let y = account_commitment.0.into_group() - account_comm_key[3] * G::ScalarField::from(asset_id);
+        self.resp_acc
+            .is_valid(
+                &[
+                    account_comm_key[0],
+                    account_comm_key[4],
+                    account_comm_key[5],
+                ],
+                &y.into_affine(),
+                &self.t_acc,
+                &verifier_challenge,
+            )
+            .unwrap();
+
+        assert!(self.resp_pk.verify(pk, &g, &verifier_challenge));
+
+        // Sk in account matches the one in public key
+        assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
+        Ok(())
+    }
+}
+
 /// This is the proof for issuer minting asset into account. Report section 5.1.4, called "Increase Asset Supply"
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MintTxnProof<
@@ -196,7 +336,6 @@ impl<
     pub fn new<R: RngCore>(
         rng: &mut R,
         issuer_pk: Affine<G0>,
-        asset_id: AssetId,
         increase_bal_by: Balance,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -207,6 +346,8 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+        
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
                 rng,
@@ -221,7 +362,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         issuer_pk.serialize_compressed(&mut extra_instance).unwrap();
-        asset_id.serialize_compressed(&mut extra_instance).unwrap();
+        account.asset_id.serialize_compressed(&mut extra_instance).unwrap();
         increase_bal_by
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -243,7 +384,7 @@ impl<
         // Need to prove that:
         // 1. sk, asset-id, counter are same in both old and new account commitment
         // 2. nullifier is correctly formed
-        // 3. sk in account commitment is same as in the issuer's public key
+        // 3. sk in account commitment is the same as in the issuer's public key
 
         let sk_blinding = F0::rand(rng);
         let counter_blinding = F0::rand(rng);
@@ -490,9 +631,9 @@ impl<
     }
 }
 
-/// This is the proof for send txn. Report section 5.1.7
+/// This is the proof for "send" txn. Report section 5.1.7
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct SendTxnProof<
+pub struct AffirmAsSenderTxnProof<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
@@ -541,11 +682,10 @@ impl<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> SendTxnProof<L, F0, F1, G0, G1>
+> AffirmAsSenderTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        asset_id: AssetId,
         amount: Balance,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -559,6 +699,8 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
                 rng,
@@ -622,7 +764,7 @@ impl<
         let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
             generate_schnorr_t_values_for_common_state_change(
                 rng,
-                asset_id,
+                account.asset_id,
                 &leg_enc,
                 account,
                 sk_e,
@@ -836,7 +978,7 @@ impl<
 
 /// This is the proof for receive txn. Report section 5.1.8
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct ReceiveTxnProof<
+pub struct AffirmAsReceiverTxnProof<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
@@ -869,11 +1011,10 @@ impl<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> ReceiveTxnProof<L, F0, F1, G0, G1>
+> AffirmAsReceiverTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        asset_id: AssetId,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
         account: &AccountState<Affine<G0>>,
@@ -886,6 +1027,8 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
                 rng,
@@ -933,7 +1076,7 @@ impl<
         let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
             generate_schnorr_t_values_for_common_state_change(
                 rng,
-                asset_id,
+                account.asset_id,
                 &leg_enc,
                 account,
                 sk_e,
@@ -1144,7 +1287,6 @@ impl<
 {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        asset_id: AssetId,
         amount: Balance,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1158,6 +1300,8 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
@@ -1217,7 +1361,7 @@ impl<
         let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
             generate_schnorr_t_values_for_common_state_change(
                 rng,
-                asset_id,
+                account.asset_id,
                 &leg_enc,
                 account,
                 sk_e,
@@ -1475,7 +1619,6 @@ impl<
 {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        asset_id: AssetId,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
         account: &AccountState<Affine<G0>>,
@@ -1488,6 +1631,8 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
@@ -1528,7 +1673,7 @@ impl<
         let (nullifier, t_r_leaf, t_acc_new, t_null, t_leg_asset_id, t_leg_pk) =
             generate_schnorr_t_values_for_common_state_change(
                 rng,
-                asset_id,
+                account.asset_id,
                 &leg_enc,
                 account,
                 sk_e,
@@ -2763,9 +2908,35 @@ mod tests {
 
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, gen_p);
+
         // Issuer creates account to mint to
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
+        let account_comm = account.commit(&account_comm_key);
+
+        let nonce = b"test-nonce-0";
+
+        let (reg_proof, prover_challenge) = RegTxnProof::new(
+            &mut rng,
+            pk_i.0,
+            &account,
+            account_comm.clone(),
+            nonce,
+            &account_comm_key,
+            gen_p,
+        );
+
+        reg_proof
+            .verify(
+                &pk_i.0,
+                asset_id,
+                &account_comm,
+                prover_challenge,
+                nonce,
+                &account_comm_key,
+                gen_p,
+            )
+            .unwrap();
 
         let account_tree =
             get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
@@ -2789,7 +2960,6 @@ mod tests {
         let (proof, prover_challenge) = MintTxnProof::new(
             &mut rng,
             pk_i.0,
-            asset_id,
             increase_bal_by,
             &account,
             &updated_account,
@@ -2890,9 +3060,8 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = SendTxnProof::new(
+        let (proof, prover_challenge) = AffirmAsSenderTxnProof::new(
             &mut rng,
-            asset_id,
             amount,
             sk_e.0,
             leg_enc.clone(),
@@ -2995,9 +3164,8 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = ReceiveTxnProof::new(
+        let (proof, prover_challenge) = AffirmAsReceiverTxnProof::new(
             &mut rng,
-            asset_id,
             sk_e.0,
             leg_enc.clone(),
             &account,
@@ -3097,7 +3265,6 @@ mod tests {
 
         let (proof, prover_challenge) = ClaimReceivedTxnProof::new(
             &mut rng,
-            asset_id,
             amount,
             sk_e.0,
             leg_enc.clone(),
@@ -3197,7 +3364,6 @@ mod tests {
 
         let (proof, prover_challenge) = SenderCounterUpdateTxnProof::new(
             &mut rng,
-            asset_id,
             sk_e.0,
             leg_enc.clone(),
             &account,
