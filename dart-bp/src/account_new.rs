@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
-use crate::util::{enforce_balance_change_prover, enforce_balance_change_verifier, generate_schnorr_responses_for_balance_change, generate_schnorr_responses_for_common_state_change, generate_schnorr_t_values_for_balance_change, generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover, initialize_curve_tree_verifier};
+use crate::util::{enforce_balance_change_prover, enforce_balance_change_verifier, generate_schnorr_responses_for_balance_change, generate_schnorr_responses_for_common_state_change, generate_schnorr_t_values_for_balance_change, generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover, initialize_curve_tree_verifier, prove, verify};
 use crate::{
     AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
     take_challenge_contrib_of_schnorr_t_values_for_balance_change,
@@ -480,12 +480,8 @@ impl<
         let resp_null = t_null.gen_proof(&prover_challenge);
         let resp_pk = t_pk.gen_proof(&prover_challenge);
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+
         (
             Self {
                 odd_proof,
@@ -617,17 +613,7 @@ impl<
         // Sk in leaf matches the one in public key
         assert_eq!(self.resp_leaf.0[0], self.resp_pk.response);
 
-        even_verifier.verify(
-            &self.even_proof,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-        )?;
-        odd_verifier.verify(
-            &self.odd_proof,
-            &account_tree_params.odd_parameters.pc_gens,
-            &account_tree_params.odd_parameters.bp_gens,
-        )?;
-        Ok(())
+        verify(even_verifier, odd_verifier, &self.even_proof, &self.odd_proof, &account_tree_params)
     }
 }
 
@@ -827,12 +813,7 @@ impl<
             &prover_challenge
         );
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
         (
             Self {
@@ -962,16 +943,7 @@ impl<
         );
         assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
-        odd_verifier.verify(
-            &self.odd_proof,
-            &account_tree_params.odd_parameters.pc_gens,
-            &account_tree_params.odd_parameters.bp_gens,
-        )?;
-        even_verifier.verify(
-            &self.even_proof,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-        )?;
+        verify(even_verifier, odd_verifier, &self.even_proof, &self.odd_proof, &account_tree_params)?;
         Ok(())
     }
 }
@@ -1109,12 +1081,8 @@ impl<
             &prover_challenge
         );
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+
         (
             Self {
                 odd_proof,
@@ -1430,12 +1398,8 @@ impl<
             &prover_challenge
         );
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+
         (
             Self {
                 odd_proof,
@@ -1706,12 +1670,7 @@ impl<
             &prover_challenge
         );
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
         (
             Self {
@@ -1881,6 +1840,8 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
+        assert_eq!(account.asset_id, updated_account.asset_id);
+        
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
 
         let mut extra_instance = vec![];
@@ -1991,12 +1952,8 @@ impl<
             &prover_challenge
         );
 
-        let even_proof = even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens)
-            .unwrap();
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+
         (
             Self {
                 odd_proof,
@@ -2344,7 +2301,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // 1. sk used in commitment is for the revealed pk
         // 2. counter equals number of leg encryptions
         // 3. pk has the respective role in each leg
-        // 4. asset is the given one in all legs
+        // 4. asset-id is the given one in all legs
         // 5. sum of amounts in pending send txns equals the given public value
         // 6. sum of amounts in pending receive txns equals the given public value
         // 7. nullifier is created from rho and sk in account commitment
@@ -2432,7 +2389,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // To prove secret key in account state is same as in public key
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
 
-        for i in 0..num_pending_txns as usize {
+        for i in 0..num_pending_txns {
             let sk_e_blinding = G::ScalarField::rand(rng);
 
             let t_leg_asset_id = PokDiscreteLogProtocol::init(
@@ -2487,7 +2444,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
             .unwrap();
 
-        for i in 0..num_pending_txns as usize {
+        for i in 0..num_pending_txns {
             let y = legs[i].1.ct_asset_id.encrypted.into_group() - h_at;
             t_asset_id[i]
                 .challenge_contribution(
@@ -2751,7 +2708,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let mut y_recv = G::Group::zero();
         let mut y_sent = G::Group::zero();
-        for i in 0..num_pending_txns as usize {
+        for i in 0..num_pending_txns {
             // TODO: This `y` is already computed above so avoid
             let y = legs[i].ct_asset_id.encrypted.into_group() - h_at;
             assert!(self.resp_asset_id[i].verify(
@@ -2893,8 +2850,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Setup begins
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         // Create public params (generators, etc)
         let account_tree_params =
@@ -3003,8 +2960,8 @@ mod tests {
 
         // Setup begins
 
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         // Create public params (generators, etc)
         let account_tree_params =
@@ -3107,8 +3064,8 @@ mod tests {
 
         // Setup beings
 
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         // Create public params (generators, etc)
 
@@ -3210,8 +3167,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Setup begins
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
@@ -3311,8 +3268,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
 
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
@@ -3407,8 +3364,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
 
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
 
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
@@ -3553,7 +3510,7 @@ mod tests {
 
         let asset_id = 1;
 
-        let num_pending_txns = 10;
+        let num_pending_txns = 80;
 
         let (sk, pk) = keygen_sig(&mut rng, gen_p_1);
         // Account exists with some balance and pending txns

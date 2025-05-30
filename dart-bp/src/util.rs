@@ -4,15 +4,14 @@ use crate::{AMOUNT_BITS, AssetId, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use bulletproofs::PedersenGens;
-use bulletproofs::r1cs::{ConstraintSystem, Prover, Variable, Verifier};
-use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
+use bulletproofs::r1cs::{Prover, R1CSError, R1CSProof, Verifier};
+use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use dock_crypto_utils::transcript::{MerlinTranscript};
 use rand::RngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use std::borrow::BorrowMut;
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
 /// Also re-randomizes the path and enforces the corresponding constraints. Returns the even prover,
@@ -79,15 +78,29 @@ pub fn initialize_curve_tree_verifier<
     let odd_transcript = MerlinTranscript::new(odd_label);
     let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
-    // tree_root.add_root_to_randomized_path(&mut re_randomized_path);
     re_randomized_path.add_root(tree_root);
+    
+    #[cfg(feature = "parallel")]
+    rayon::join(
+        || {
+            // Enforce constraints for odd level
+            re_randomized_path.odd_verifier_gadget(tree_root, &mut odd_verifier, &tree_parameters);
+        },
+        || {
+            // Enforce constraints for even level
+            re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
+        }
+    );
+    
+    #[cfg(not(feature = "parallel"))]
+    {
+        // Enforce constraints for odd level
+        re_randomized_path.odd_verifier_gadget(tree_root, &mut odd_verifier, &tree_parameters);
 
-    // Enforce constraints for odd level
-    re_randomized_path.odd_verifier_gadget(tree_root, &mut odd_verifier, &tree_parameters);
-
-    // Enforce constraints for even level
-    re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
-
+        // Enforce constraints for even level
+        re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
+    }
+    
     (even_verifier, odd_verifier)
 }
 
@@ -494,4 +507,89 @@ pub fn generate_schnorr_responses_for_balance_change<F0: PrimeField, G0: SWCurve
     let resp_amount = t_amount.clone().gen_proof(prover_challenge);
     let resp_leg_amount = t_leg_amount.clone().gen_proof(prover_challenge);
     (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount)
+}
+
+pub fn prove<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_prover: Prover<MerlinTranscript, Affine<G0>>,
+    odd_prover: Prover<MerlinTranscript, Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
+
+    #[cfg(feature = "parallel")]
+    let (even_proof, odd_proof) = rayon::join(
+        || {
+            even_prover
+                .prove(&tree_params.even_parameters.bp_gens)
+        },
+        || {
+            odd_prover
+                .prove(&tree_params.odd_parameters.bp_gens)
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_proof, odd_proof) = (
+        even_prover
+            .prove(&account_tree_params.even_parameters.bp_gens),
+        odd_prover
+            .prove(&account_tree_params.odd_parameters.bp_gens),
+    );
+
+    let (even_proof, odd_proof) = (even_proof?, odd_proof?);
+    Ok((even_proof, odd_proof))
+}
+
+pub fn verify<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    even_proof: &R1CSProof<Affine<G0>>,
+    odd_proof: &R1CSProof<Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+)  -> Result<(), R1CSError> {
+
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            even_verifier.verify(
+                even_proof,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+            )
+        },
+        || {
+            odd_verifier.verify(
+                odd_proof,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) =
+        (even_verifier.verify(
+            &self.even_proof,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+        ),
+        odd_verifier.verify(
+            &self.odd_proof,
+            &account_tree_params.odd_parameters.pc_gens,
+            &account_tree_params.odd_parameters.bp_gens,
+        ));
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
 }

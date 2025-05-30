@@ -1,4 +1,4 @@
-use crate::old::keys::{DecKey, EncKey, keygen_enc};
+use crate::old::keys::{DecKey, EncKey};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -6,10 +6,9 @@ use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
-use digest::Digest;
 use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::elgamal::{Ciphertext};
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
@@ -23,7 +22,7 @@ use std::ops::Neg;
 use std::time::{Duration, Instant};
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use dock_crypto_utils::hashing_utils::hash_to_field;
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove};
 
 pub const SK_EPH_GEN_LABEL: &[u8; 20] = b"ephemeral-secret-key";
 
@@ -106,6 +105,8 @@ impl<G: AffineRepr> Leg<G> {
         };
         let r4 = G::ScalarField::rand(rng);
         let r5 = G::ScalarField::rand(rng);
+
+        // TODO: This is not constant time. Fix
         let v = (h * G::ScalarField::from(self.amount)).into_affine();
         let asset_id = (h * G::ScalarField::from(self.asset_id)).into_affine();
         // TODO: Use new_given_randomness_and_window_tables
@@ -631,14 +632,9 @@ impl<
         let resp_amount_enc_1 = t_amount_enc_1.clone().gen_proof(&prover_challenge);
         let resp_asset_id_enc_0 = t_asset_id_enc_0.clone().gen_proof(&prover_challenge);
         let resp_asset_id_enc_1 = t_asset_id_enc_1.clone().gen_proof(&prover_challenge);
-
-        let even_proof = even_prover
-            .prove(&tree_parameters.even_parameters.bp_gens)
-            .unwrap();
-        let odd_proof = odd_prover
-            .prove(&tree_parameters.odd_parameters.bp_gens)
-            .unwrap();
-
+        
+        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &tree_parameters).unwrap();
+        
         (
             Self {
                 even_proof,
@@ -1088,8 +1084,8 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         // Setup begins
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 64;
 
         // Create public params (generators, etc)
         let asset_tree_params =
@@ -1119,7 +1115,7 @@ pub mod tests {
         let asset_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
             &set,
             &asset_tree_params,
-            Some(4),
+            Some(2),
         );
 
         // Setup ends.
@@ -1190,7 +1186,7 @@ pub mod tests {
         assert!(proof.resp_eph_pk.is_some());
         assert!(proof.auditor_enc_proofs.is_none());
 
-        println!("total proof size = {}", proof.compressed_size());
+        println!("total proof size = {}", proof.compressed_size() + leg_enc.compressed_size() + eph_sk_enc.compressed_size() + pk_e.0.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time, verifier_time
@@ -1219,8 +1215,8 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         // Setup begins
-        const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 8;
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 1024;
 
         // Create public params (generators, etc)
         let asset_tree_params =
@@ -1250,7 +1246,7 @@ pub mod tests {
         let asset_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
             &set,
             &asset_tree_params,
-            Some(4),
+            Some(2),
         );
 
         // Setup ends.
