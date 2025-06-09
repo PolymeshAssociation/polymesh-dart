@@ -1,6 +1,9 @@
 //! This file contains the implementation where accounts use DY-PRF. Also, the code for various sender and receiver transactions is more verbose.
 
-use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL};
+use crate::leg::{
+    Leg, LegEncryption, LegEncryptionRandomness, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL,
+};
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -8,7 +11,9 @@ use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{
+    CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath,
+};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -19,7 +24,6 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Neg;
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier};
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -212,7 +216,14 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -380,7 +391,13 @@ impl<
         account_comm_key: &[Affine<G0>],
         g: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -565,7 +582,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -876,7 +900,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1157,7 +1187,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1358,7 +1395,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1572,7 +1615,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1880,7 +1930,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2176,7 +2232,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2475,7 +2538,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2756,7 +2825,14 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> (Self, F0) {
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2957,7 +3033,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -3859,7 +3941,11 @@ pub mod tests {
     /// Create a new tree and add the given account's commitment to the tree and return the tree
     /// In future, allow to generate tree many given number of leaves and add the account commitment to a
     /// random position in tree.
-    fn get_tree_with_account_comm<const L: usize>(account: &AccountState<PallasA>, account_comm_key: &[PallasA], account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
+    fn get_tree_with_account_comm<const L: usize>(
+        account: &AccountState<PallasA>,
+        account_comm_key: &[PallasA],
+        account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>,
+    ) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
         let account_comm = account.commit(&account_comm_key);
 
         // Add account commitment in curve tree
@@ -3895,7 +3981,8 @@ pub mod tests {
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Issuer and verifier interaction begins below
 
@@ -4000,7 +4087,8 @@ pub mod tests {
         let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Sender and verifier interaction begins below
 
@@ -4105,7 +4193,8 @@ pub mod tests {
         let mut account = AccountState::new(&mut rng, sk_r.0, asset_id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         // Setup ends. Receiver and verifier interaction begins below
 
@@ -4206,7 +4295,8 @@ pub mod tests {
         account.balance = 200;
         account.counter += 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -4265,7 +4355,6 @@ pub mod tests {
     fn reverse_send_txn() {
         let mut rng = rand::thread_rng();
 
-
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
@@ -4294,7 +4383,7 @@ pub mod tests {
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
             Some((pk_a.0, pk_a_e.0)),
-                None,
+            None,
             gen_p_1,
             gen_p_2,
         );
@@ -4305,7 +4394,8 @@ pub mod tests {
         account.balance = 200;
         account.counter += 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -4364,7 +4454,6 @@ pub mod tests {
 
         let mut rng = rand::thread_rng();
 
-
         const NUM_GENS: usize = 1 << 11; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 8;
 
@@ -4394,7 +4483,7 @@ pub mod tests {
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
             Some((pk_a.0, pk_a_e.0)),
-                None,
+            None,
             gen_p_1,
             gen_p_2,
         );
@@ -4404,7 +4493,8 @@ pub mod tests {
         account.balance = 50;
         account.counter = 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 

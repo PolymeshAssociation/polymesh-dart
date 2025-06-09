@@ -4,9 +4,15 @@
 //! counter changes, these are consistent with leaf, etc and then some transactions have an addition state change where the balance is changed like send txn,
 //! claiming receiver funds, etc
 
-use std::collections::{BTreeMap, BTreeSet};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
-use crate::util::{enforce_balance_change_prover, enforce_balance_change_verifier, generate_schnorr_responses_for_balance_change, generate_schnorr_responses_for_common_state_change, generate_schnorr_t_values_for_balance_change, generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover, initialize_curve_tree_verifier, prove, verify};
+use crate::util::{
+    enforce_balance_change_prover, enforce_balance_change_verifier,
+    generate_schnorr_responses_for_balance_change,
+    generate_schnorr_responses_for_common_state_change,
+    generate_schnorr_t_values_for_balance_change,
+    generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover,
+    initialize_curve_tree_verifier, prove, verify,
+};
 use crate::{
     AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
     take_challenge_contrib_of_schnorr_t_values_for_balance_change,
@@ -19,7 +25,9 @@ use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{
+    CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath,
+};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
@@ -27,6 +35,7 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -184,7 +193,10 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
-        account.asset_id.serialize_compressed(&mut extra_instance).unwrap();
+        account
+            .asset_id
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
         account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -204,7 +216,11 @@ impl<G: AffineRepr> RegTxnProof<G> {
                 account_comm_key[4],
                 account_comm_key[5],
             ],
-            vec![sk_blinding, G::ScalarField::rand(rng), G::ScalarField::rand(rng)],
+            vec![
+                sk_blinding,
+                G::ScalarField::rand(rng),
+                G::ScalarField::rand(rng),
+            ],
         );
 
         let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
@@ -273,7 +289,8 @@ impl<G: AffineRepr> RegTxnProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        let y = account_commitment.0.into_group() - account_comm_key[3] * G::ScalarField::from(asset_id);
+        let y = account_commitment.0.into_group()
+            - account_comm_key[3] * G::ScalarField::from(asset_id);
         self.resp_acc
             .is_valid(
                 &[
@@ -347,7 +364,7 @@ impl<
         g: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
-        
+
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
                 rng,
@@ -362,7 +379,10 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         issuer_pk.serialize_compressed(&mut extra_instance).unwrap();
-        account.asset_id.serialize_compressed(&mut extra_instance).unwrap();
+        account
+            .asset_id
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
         increase_bal_by
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -613,7 +633,13 @@ impl<
         // Sk in leaf matches the one in public key
         assert_eq!(self.resp_leaf.0[0], self.resp_pk.response);
 
-        verify(even_verifier, odd_verifier, &self.even_proof, &self.odd_proof, &account_tree_params)
+        verify(
+            even_verifier,
+            odd_verifier,
+            &self.even_proof,
+            &self.odd_proof,
+            &account_tree_params,
+        )
     }
 }
 
@@ -723,18 +749,15 @@ impl<
         // 6. nullifier is created from rho in old account commitment so this rho should be proven equal with other usages of rho.
         // 7. pk in leg has the sk in account commitment
 
-        let (
-            (r_bal_old, comm_bal_old),
-            (r_bal_new, comm_bal_new),
-            (r_amount, comm_amount),
-        ) = enforce_balance_change_prover(
-            rng,
-            account.balance,
-            updated_account.balance,
-            amount,
-            true,
-            &mut even_prover,
-        );
+        let ((r_bal_old, comm_bal_old), (r_bal_new, comm_bal_new), (r_amount, comm_amount)) =
+            enforce_balance_change_prover(
+                rng,
+                account.balance,
+                updated_account.balance,
+                amount,
+                true,
+                &mut even_prover,
+            );
 
         let mut prover_transcript = even_prover.transcript();
 
@@ -766,52 +789,55 @@ impl<
                 &account_tree_params.even_parameters.pc_gens,
                 g,
                 h,
-                &mut prover_transcript
+                &mut prover_transcript,
             );
 
-        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
-            rng,
-            amount,
-            &leg_enc,
-            account,
-            updated_account,
-            sk_e,
-            sk_e_blinding,
-            old_balance_blinding,
-            new_balance_blinding,
-            amount_blinding,
-            r_bal_old,
-            r_bal_new,
-            r_amount,
-            &comm_bal_old,
-            &comm_bal_new,
-            &comm_amount,
-            &account_tree_params.even_parameters.pc_gens,
-            h,
-            &mut prover_transcript
-        );
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) =
+            generate_schnorr_t_values_for_balance_change(
+                rng,
+                amount,
+                &leg_enc,
+                account,
+                updated_account,
+                sk_e,
+                sk_e_blinding,
+                old_balance_blinding,
+                new_balance_blinding,
+                amount_blinding,
+                r_bal_old,
+                r_bal_new,
+                r_amount,
+                &comm_bal_old,
+                &comm_bal_new,
+                &comm_amount,
+                &account_tree_params.even_parameters.pc_gens,
+                h,
+                &mut prover_transcript,
+            );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
-            account,
-            updated_account,
-            leaf_rerandomization,
-            &t_r_leaf,
-            &t_acc_new,
-            t_null,
-            t_leg_asset_id,
-            t_leg_pk,
-            &prover_challenge
-        );
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) =
+            generate_schnorr_responses_for_common_state_change(
+                account,
+                updated_account,
+                leaf_rerandomization,
+                &t_r_leaf,
+                &t_acc_new,
+                t_null,
+                t_leg_asset_id,
+                t_leg_pk,
+                &prover_challenge,
+            );
 
-        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
-            t_old_bal,
-            t_new_bal,
-            t_amount,
-            t_leg_amount,
-            &prover_challenge
-        );
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) =
+            generate_schnorr_responses_for_balance_change(
+                t_old_bal,
+                t_new_bal,
+                t_amount,
+                t_leg_amount,
+                &prover_challenge,
+            );
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
@@ -943,7 +969,13 @@ impl<
         );
         assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
-        verify(even_verifier, odd_verifier, &self.even_proof, &self.odd_proof, &account_tree_params)?;
+        verify(
+            even_verifier,
+            odd_verifier,
+            &self.even_proof,
+            &self.odd_proof,
+            &account_tree_params,
+        )?;
         Ok(())
     }
 }
@@ -1064,22 +1096,23 @@ impl<
                 &account_tree_params.even_parameters.pc_gens,
                 g,
                 h,
-                &mut prover_transcript
+                &mut prover_transcript,
             );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
-            account,
-            updated_account,
-            leaf_rerandomization,
-            &t_r_leaf,
-            &t_acc_new,
-            t_null,
-            t_leg_asset_id,
-            t_leg_pk,
-            &prover_challenge
-        );
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) =
+            generate_schnorr_responses_for_common_state_change(
+                account,
+                updated_account,
+                leaf_rerandomization,
+                &t_r_leaf,
+                &t_acc_new,
+                t_null,
+                t_leg_asset_id,
+                t_leg_pk,
+                &prover_challenge,
+            );
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
@@ -1270,7 +1303,14 @@ impl<
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
-        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1299,18 +1339,15 @@ impl<
         // 6. nullifier is created from rho in old account commitment so this rho should be proven equal with other usages of rho.
         // 7. pk in leg has the sk in account commitment
 
-        let (
-            (r_bal_old, comm_bal_old),
-            (r_bal_new, comm_bal_new),
-            (r_amount, comm_amount),
-        ) = enforce_balance_change_prover(
-            rng,
-            account.balance,
-            updated_account.balance,
-            amount,
-            false,
-            &mut even_prover,
-        );
+        let ((r_bal_old, comm_bal_old), (r_bal_new, comm_bal_new), (r_amount, comm_amount)) =
+            enforce_balance_change_prover(
+                rng,
+                account.balance,
+                updated_account.balance,
+                amount,
+                false,
+                &mut even_prover,
+            );
 
         let mut prover_transcript = even_prover.transcript();
 
@@ -1345,58 +1382,61 @@ impl<
                 &account_tree_params.even_parameters.pc_gens,
                 g,
                 h,
-                &mut prover_transcript
+                &mut prover_transcript,
             );
 
         c = prover_transcript.challenge_scalar::<F0>(b"c");
         println!("prover c1 {}", c.to_string());
 
-        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
-            rng,
-            amount,
-            &leg_enc,
-            account,
-            updated_account,
-            sk_e,
-            sk_e_blinding,
-            old_balance_blinding,
-            new_balance_blinding,
-            amount_blinding,
-            r_bal_old,
-            r_bal_new,
-            r_amount,
-            &comm_bal_old,
-            &comm_bal_new,
-            &comm_amount,
-            &account_tree_params.even_parameters.pc_gens,
-            h,
-            &mut prover_transcript
-        );
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) =
+            generate_schnorr_t_values_for_balance_change(
+                rng,
+                amount,
+                &leg_enc,
+                account,
+                updated_account,
+                sk_e,
+                sk_e_blinding,
+                old_balance_blinding,
+                new_balance_blinding,
+                amount_blinding,
+                r_bal_old,
+                r_bal_new,
+                r_amount,
+                &comm_bal_old,
+                &comm_bal_new,
+                &comm_amount,
+                &account_tree_params.even_parameters.pc_gens,
+                h,
+                &mut prover_transcript,
+            );
 
         c = prover_transcript.challenge_scalar::<F0>(b"c");
         println!("prover c2 {}", c.to_string());
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
-            account,
-            updated_account,
-            leaf_rerandomization,
-            &t_r_leaf,
-            &t_acc_new,
-            t_null,
-            t_leg_asset_id,
-            t_leg_pk,
-            &prover_challenge
-        );
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) =
+            generate_schnorr_responses_for_common_state_change(
+                account,
+                updated_account,
+                leaf_rerandomization,
+                &t_r_leaf,
+                &t_acc_new,
+                t_null,
+                t_leg_asset_id,
+                t_leg_pk,
+                &prover_challenge,
+            );
 
-        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
-            t_old_bal,
-            t_new_bal,
-            t_amount,
-            t_leg_amount,
-            &prover_challenge
-        );
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) =
+            generate_schnorr_responses_for_balance_change(
+                t_old_bal,
+                t_new_bal,
+                t_amount,
+                t_leg_amount,
+                &prover_challenge,
+            );
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
@@ -1437,7 +1477,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1597,7 +1643,14 @@ impl<
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
-        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1653,22 +1706,23 @@ impl<
                 &account_tree_params.even_parameters.pc_gens,
                 g,
                 h,
-                &mut prover_transcript
+                &mut prover_transcript,
             );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
-            account,
-            updated_account,
-            leaf_rerandomization,
-            &t_r_leaf,
-            &t_acc_new,
-            t_null,
-            t_leg_asset_id,
-            t_leg_pk,
-            &prover_challenge
-        );
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) =
+            generate_schnorr_responses_for_common_state_change(
+                account,
+                updated_account,
+                leaf_rerandomization,
+                &t_r_leaf,
+                &t_acc_new,
+                t_null,
+                t_leg_asset_id,
+                t_leg_pk,
+                &prover_challenge,
+            );
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
@@ -1702,7 +1756,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1756,7 +1816,6 @@ impl<
             self.resp_acc_new.0[2] + verifier_challenge,
             self.resp_leaf.0[2]
         );
-
 
         odd_verifier.verify(
             &self.odd_proof,
@@ -1841,8 +1900,15 @@ impl<
         h: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
-        
-        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) = initialize_curve_tree_prover(rng, TXN_EVEN_LABEL, TXN_ODD_LABEL, leaf_path, account_tree_params);
+
+        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                TXN_EVEN_LABEL,
+                TXN_ODD_LABEL,
+                leaf_path,
+                account_tree_params,
+            );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -1862,18 +1928,15 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let (
-            (r_bal_old, comm_bal_old),
-            (r_bal_new, comm_bal_new),
-            (r_amount, comm_amount),
-        ) = enforce_balance_change_prover(
-            rng,
-            account.balance,
-            updated_account.balance,
-            amount,
-            false,
-            &mut even_prover,
-        );
+        let ((r_bal_old, comm_bal_old), (r_bal_new, comm_bal_new), (r_amount, comm_amount)) =
+            enforce_balance_change_prover(
+                rng,
+                account.balance,
+                updated_account.balance,
+                amount,
+                false,
+                &mut even_prover,
+            );
 
         let mut prover_transcript = even_prover.transcript();
 
@@ -1905,52 +1968,55 @@ impl<
                 &account_tree_params.even_parameters.pc_gens,
                 g,
                 h,
-                &mut prover_transcript
+                &mut prover_transcript,
             );
 
-        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
-            rng,
-            amount,
-            &leg_enc,
-            account,
-            updated_account,
-            sk_e,
-            sk_e_blinding,
-            old_balance_blinding,
-            new_balance_blinding,
-            amount_blinding,
-            r_bal_old,
-            r_bal_new,
-            r_amount,
-            &comm_bal_old,
-            &comm_bal_new,
-            &comm_amount,
-            &account_tree_params.even_parameters.pc_gens,
-            h,
-            &mut prover_transcript
-        );
+        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) =
+            generate_schnorr_t_values_for_balance_change(
+                rng,
+                amount,
+                &leg_enc,
+                account,
+                updated_account,
+                sk_e,
+                sk_e_blinding,
+                old_balance_blinding,
+                new_balance_blinding,
+                amount_blinding,
+                r_bal_old,
+                r_bal_new,
+                r_amount,
+                &comm_bal_old,
+                &comm_bal_new,
+                &comm_amount,
+                &account_tree_params.even_parameters.pc_gens,
+                h,
+                &mut prover_transcript,
+            );
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) = generate_schnorr_responses_for_common_state_change(
-            account,
-            updated_account,
-            leaf_rerandomization,
-            &t_r_leaf,
-            &t_acc_new,
-            t_null,
-            t_leg_asset_id,
-            t_leg_pk,
-            &prover_challenge
-        );
+        let (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk) =
+            generate_schnorr_responses_for_common_state_change(
+                account,
+                updated_account,
+                leaf_rerandomization,
+                &t_r_leaf,
+                &t_acc_new,
+                t_null,
+                t_leg_asset_id,
+                t_leg_pk,
+                &prover_challenge,
+            );
 
-        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
-            t_old_bal,
-            t_new_bal,
-            t_amount,
-            t_leg_amount,
-            &prover_challenge
-        );
+        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) =
+            generate_schnorr_responses_for_balance_change(
+                t_old_bal,
+                t_new_bal,
+                t_amount,
+                t_leg_amount,
+                &prover_challenge,
+            );
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
@@ -1991,7 +2057,13 @@ impl<
         g: Affine<G0>,
         h: Affine<G0>,
     ) -> Result<(), R1CSError> {
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(TXN_EVEN_LABEL, TXN_ODD_LABEL, self.re_randomized_path.clone(), account_tree, account_tree_params);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            TXN_EVEN_LABEL,
+            TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            account_tree,
+            account_tree_params,
+        );
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2151,7 +2223,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution( &g, &nullifier, &mut prover_transcript)
+            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
             .unwrap();
         t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
             .unwrap();
@@ -2211,11 +2283,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(
-                &g,
-                &self.nullifier,
-                &mut verifier_transcript,
-            )
+            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
             .challenge_contribution(&g, &pk, &mut verifier_transcript)
@@ -2227,8 +2295,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
-            + account_comm_key[2] * G::ScalarField::from(counter)
-            + account_comm_key[3] * G::ScalarField::from(asset_id));
+                + account_comm_key[2] * G::ScalarField::from(counter)
+                + account_comm_key[3] * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
@@ -2243,7 +2311,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
         assert!(
             self.resp_null
-                .verify(&self.nullifier, &g,  &verifier_challenge,)
+                .verify(&self.nullifier, &g, &verifier_challenge,)
         );
         assert!(self.resp_pk.verify(&pk, &g, &verifier_challenge));
 
@@ -2622,11 +2690,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(
-                &g,
-                &self.nullifier,
-                &mut verifier_transcript,
-            )
+            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
             .challenge_contribution(&g, &pk, &mut verifier_transcript)
@@ -2686,8 +2750,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
-            + account_comm_key[2] * G::ScalarField::from(counter)
-            + account_comm_key[3] * G::ScalarField::from(asset_id));
+                + account_comm_key[2] * G::ScalarField::from(counter)
+                + account_comm_key[3] * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
@@ -2813,13 +2877,13 @@ mod tests {
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, initialize_leg_for_settlement};
     use crate::old::keys::{keygen_enc, keygen_sig};
+    use SenderReverseTxnProof;
     use ark_ec::CurveGroup;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use std::time::Instant;
-    use SenderReverseTxnProof;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -3207,7 +3271,8 @@ mod tests {
         account.balance = 200;
         account.counter += 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -3267,7 +3332,6 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
-
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
 
@@ -3297,7 +3361,7 @@ mod tests {
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
             Some((pk_a.0, pk_a_e.0)),
-                None,
+            None,
             gen_p_1,
             gen_p_2,
         );
@@ -3307,7 +3371,8 @@ mod tests {
         account.balance = 50;
         account.counter = 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
@@ -3363,7 +3428,6 @@ mod tests {
     fn reverse_send_txn() {
         let mut rng = rand::thread_rng();
 
-
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
 
@@ -3392,7 +3456,7 @@ mod tests {
             (pk_s.0, pk_s_e.0),
             (pk_r.0, pk_r_e.0),
             Some((pk_a.0, pk_a_e.0)),
-                None,
+            None,
             gen_p_1,
             gen_p_2,
         );
@@ -3403,7 +3467,8 @@ mod tests {
         account.balance = 200;
         account.counter += 1;
 
-        let account_tree = get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+        let account_tree =
+            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 

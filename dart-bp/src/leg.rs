@@ -1,4 +1,5 @@
 use crate::old::keys::{DecKey, EncKey};
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -10,7 +11,9 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndReran
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::aliases::FullDigest;
-use dock_crypto_utils::elgamal::{Ciphertext};
+use dock_crypto_utils::commitment::PedersenCommitmentKey;
+use dock_crypto_utils::elgamal::Ciphertext;
+use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
@@ -20,9 +23,6 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use std::ops::Neg;
 use std::time::{Duration, Instant};
-use dock_crypto_utils::commitment::PedersenCommitmentKey;
-use dock_crypto_utils::hashing_utils::hash_to_field;
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove};
 
 pub const SK_EPH_GEN_LABEL: &[u8; 20] = b"ephemeral-secret-key";
 
@@ -99,8 +99,7 @@ impl<G: AffineRepr> Leg<G> {
             let r3 = G::ScalarField::rand(rng);
             let ct_m = Ciphertext::new_given_randomness(&pk_m, &r3, pk_e, &g);
             (Some(r3), Some(ct_m))
-        }
-        else {
+        } else {
             (None, None)
         };
         let r4 = G::ScalarField::rand(rng);
@@ -144,7 +143,9 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         let key_m_a = (pk_a_m * k).into_affine();
 
         let mut h_p_bytes = vec![];
-        h_p.into_affine().serialize_uncompressed(&mut h_p_bytes).unwrap();
+        h_p.into_affine()
+            .serialize_uncompressed(&mut h_p_bytes)
+            .unwrap();
         let sk_e = hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes);
         let pk_e = (g * sk_e).into_affine();
         (
@@ -156,7 +157,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
             },
             k,
             DecKey(sk_e),
-            EncKey(pk_e)
+            EncKey(pk_e),
         )
     }
 
@@ -168,7 +169,10 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         self.decrypt::<D>(sk, self.key_r)
     }
 
-    pub fn decrypt_for_mediator_or_auditor<D: FullDigest>(&self, sk: G::ScalarField) -> G::ScalarField {
+    pub fn decrypt_for_mediator_or_auditor<D: FullDigest>(
+        &self,
+        sk: G::ScalarField,
+    ) -> G::ScalarField {
         self.decrypt::<D>(sk, self.key_m_a)
     }
 
@@ -212,7 +216,13 @@ pub fn create_leaf_for_asset_tree<G: AffineRepr>(
 ) -> G {
     // TODO: Add version and leaf_comm_key should have another generator
     assert!(leaf_comm_key.len() >= 2);
-    (if is_mediator {leaf_comm_key[0] } else {G::zero()} + (leaf_comm_key[1] * G::ScalarField::from(asset_id)) + pk).into_affine()
+    (if is_mediator {
+        leaf_comm_key[0]
+    } else {
+        G::zero()
+    } + (leaf_comm_key[1] * G::ScalarField::from(asset_id))
+        + pk)
+        .into_affine()
 }
 
 /// Create leg and ephemeral keys. Encrypt leg and ephemeral secret key.
@@ -271,7 +281,6 @@ pub const MEDIATOR_TXN_ACCEPT_RESPONSE: &[u8; 6] = b"accept";
 pub const MEDIATOR_TXN_REJECT_RESPONSE: &[u8; 6] = b"reject";
 pub const MEDIATOR_TXN_CHALLENGE_LABEL: &[u8; 22] = b"mediator-txn-challenge";
 pub const MEDIATOR_TXN_INSTANCE_LABEL: &[u8; 27] = b"mediator-txn-extra-instance";
-
 
 /// Proofs when the asset has an auditor.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -364,16 +373,26 @@ impl<
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
     ) -> (
         Self,
-        F0 // outputting challenge just for debugging
+        F0, // outputting challenge just for debugging
     ) {
-        assert!((leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some()) || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some()));
+        assert!(
+            (leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some())
+                || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some())
+        );
 
         let is_mediator_present = leg_enc.ct_m.is_some();
 
         let minus_leaf_comm_key = leaf_comm_key[1].neg();
         let minus_B_blinding = tree_parameters.even_parameters.pc_gens.B_blinding.neg();
 
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) = initialize_curve_tree_prover(rng, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, leaf_path, tree_parameters);
+        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+            initialize_curve_tree_prover(
+                rng,
+                SETTLE_TXN_EVEN_LABEL,
+                SETTLE_TXN_ODD_LABEL,
+                leaf_path,
+                tree_parameters,
+            );
 
         let mut leg_instance = vec![];
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
@@ -466,7 +485,11 @@ impl<
             let k_times_asset_id_blinding = F0::rand(rng);
 
             let t_r_leaf = SchnorrCommitment::new(
-                &[re_randomized_path.re_randomized_leaf, minus_leaf_comm_key, minus_B_blinding],
+                &[
+                    re_randomized_path.re_randomized_leaf,
+                    minus_leaf_comm_key,
+                    minus_B_blinding,
+                ],
                 vec![k_blinding, k_times_asset_id_blinding, F0::rand(rng)],
             );
 
@@ -474,18 +497,42 @@ impl<
             let r_asset_id = F0::rand(rng);
             let K_1 = ped_comm_key.commit(&eph_sk_enc_rand, &r_k);
             let K_2 = ped_comm_key.commit(&at, &r_asset_id);
-            let K_3 = ped_comm_key.commit(&(at * eph_sk_enc_rand), &(at *  r_k));
+            let K_3 = ped_comm_key.commit(&(at * eph_sk_enc_rand), &(at * r_k));
 
             debug_assert_eq!((K_1 * at).into_affine(), K_3);
 
-            let t_K_1 = PokPedersenCommitmentProtocol::init(eph_sk_enc_rand, k_blinding, &ped_comm_key.g, r_k, F0::rand(rng), &ped_comm_key.h);
-            let t_K_2 = PokPedersenCommitmentProtocol::init(at, asset_id_blinding, &ped_comm_key.g, r_asset_id, F0::rand(rng), &ped_comm_key.h);
-            let t_K_3 = PokPedersenCommitmentProtocol::init(at * eph_sk_enc_rand, k_times_asset_id_blinding, &ped_comm_key.g, at *  r_k, F0::rand(rng), &ped_comm_key.h);
+            let t_K_1 = PokPedersenCommitmentProtocol::init(
+                eph_sk_enc_rand,
+                k_blinding,
+                &ped_comm_key.g,
+                r_k,
+                F0::rand(rng),
+                &ped_comm_key.h,
+            );
+            let t_K_2 = PokPedersenCommitmentProtocol::init(
+                at,
+                asset_id_blinding,
+                &ped_comm_key.g,
+                r_asset_id,
+                F0::rand(rng),
+                &ped_comm_key.h,
+            );
+            let t_K_3 = PokPedersenCommitmentProtocol::init(
+                at * eph_sk_enc_rand,
+                k_times_asset_id_blinding,
+                &ped_comm_key.g,
+                at * r_k,
+                F0::rand(rng),
+                &ped_comm_key.h,
+            );
             let t_K_3_K_1 = PokDiscreteLogProtocol::init(at, asset_id_blinding, &K_1);
 
-            (t_r_leaf, None, Some((K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1)))
+            (
+                t_r_leaf,
+                None,
+                Some((K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1)),
+            )
         };
-
 
         // Proving correctness of amount in the commitment used with Bulletproofs
         let t_amount = PokPedersenCommitmentProtocol::init(
@@ -523,11 +570,18 @@ impl<
         let mut prover_transcript = even_prover.transcript();
 
         if is_mediator_present {
-            t_eph_pk.as_ref().unwrap()
-                .challenge_contribution(&g, &leg_enc.ct_m.as_ref().unwrap().eph_pk, &mut prover_transcript)
+            t_eph_pk
+                .as_ref()
+                .unwrap()
+                .challenge_contribution(
+                    &g,
+                    &leg_enc.ct_m.as_ref().unwrap().eph_pk,
+                    &mut prover_transcript,
+                )
                 .unwrap();
         } else {
-            let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) = for_auditor_enc_proofs.as_ref().unwrap();
+            let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) =
+                for_auditor_enc_proofs.as_ref().unwrap();
             K_1.serialize_compressed(&mut prover_transcript).unwrap();
             K_2.serialize_compressed(&mut prover_transcript).unwrap();
             K_3.serialize_compressed(&mut prover_transcript).unwrap();
@@ -556,11 +610,7 @@ impl<
                 )
                 .unwrap();
             t_K_3_K_1
-                .challenge_contribution(
-                    &K_1,
-                    &K_3,
-                    &mut prover_transcript,
-                )
+                .challenge_contribution(&K_1, &K_3, &mut prover_transcript)
                 .unwrap();
         }
         t_r_leaf
@@ -603,11 +653,19 @@ impl<
         let (resp_leaf, resp_eph_pk, auditor_enc_proofs) = if is_mediator_present {
             let resp_leaf = t_r_leaf
                 .response(
-                    &[leg_enc_rand.2.unwrap(), leg.asset_id.into(), rerandomization],
+                    &[
+                        leg_enc_rand.2.unwrap(),
+                        leg.asset_id.into(),
+                        rerandomization,
+                    ],
                     &prover_challenge,
                 )
                 .unwrap();
-            (resp_leaf, Some(t_eph_pk.unwrap().gen_proof(&prover_challenge)), None)
+            (
+                resp_leaf,
+                Some(t_eph_pk.unwrap().gen_proof(&prover_challenge)),
+                None,
+            )
         } else {
             let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) = for_auditor_enc_proofs.unwrap();
             let proofs = AuditorEncProofs {
@@ -621,7 +679,11 @@ impl<
             };
             let resp_leaf = t_r_leaf
                 .response(
-                    &[eph_sk_enc_rand, at * eph_sk_enc_rand, rerandomization * eph_sk_enc_rand],
+                    &[
+                        eph_sk_enc_rand,
+                        at * eph_sk_enc_rand,
+                        rerandomization * eph_sk_enc_rand,
+                    ],
                     &prover_challenge,
                 )
                 .unwrap();
@@ -632,9 +694,9 @@ impl<
         let resp_amount_enc_1 = t_amount_enc_1.clone().gen_proof(&prover_challenge);
         let resp_asset_id_enc_0 = t_asset_id_enc_0.clone().gen_proof(&prover_challenge);
         let resp_asset_id_enc_1 = t_asset_id_enc_1.clone().gen_proof(&prover_challenge);
-        
+
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &tree_parameters).unwrap();
-        
+
         (
             Self {
                 even_proof,
@@ -680,7 +742,13 @@ impl<
         let minus_leaf_comm_key = leaf_comm_key[1].neg();
         let minus_B_blinding = tree_parameters.even_parameters.pc_gens.B_blinding.neg();
 
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL, self.re_randomized_path.clone(), tree_root, tree_parameters);
+        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
+            SETTLE_TXN_EVEN_LABEL,
+            SETTLE_TXN_ODD_LABEL,
+            self.re_randomized_path.clone(),
+            tree_root,
+            tree_parameters,
+        );
 
         let mut leg_instance = vec![];
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
@@ -713,16 +781,32 @@ impl<
         let mut dur = Duration::default();
         let mut size = 0;
         if is_mediator_present {
-            self.resp_eph_pk.as_ref().unwrap()
-                .challenge_contribution(&g, &leg_enc.ct_m.as_ref().unwrap().eph_pk, &mut verifier_transcript)
+            self.resp_eph_pk
+                .as_ref()
+                .unwrap()
+                .challenge_contribution(
+                    &g,
+                    &leg_enc.ct_m.as_ref().unwrap().eph_pk,
+                    &mut verifier_transcript,
+                )
                 .unwrap();
         } else {
             let clock = Instant::now();
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
-            aud_proofs.K_1.serialize_compressed(&mut verifier_transcript).unwrap();
-            aud_proofs.K_2.serialize_compressed(&mut verifier_transcript).unwrap();
-            aud_proofs.K_3.serialize_compressed(&mut verifier_transcript).unwrap();
-            aud_proofs.resp_K_1
+            aud_proofs
+                .K_1
+                .serialize_compressed(&mut verifier_transcript)
+                .unwrap();
+            aud_proofs
+                .K_2
+                .serialize_compressed(&mut verifier_transcript)
+                .unwrap();
+            aud_proofs
+                .K_3
+                .serialize_compressed(&mut verifier_transcript)
+                .unwrap();
+            aud_proofs
+                .resp_K_1
                 .challenge_contribution(
                     &ped_comm_key.g,
                     &ped_comm_key.h,
@@ -730,7 +814,8 @@ impl<
                     &mut verifier_transcript,
                 )
                 .unwrap();
-            aud_proofs.resp_K_2
+            aud_proofs
+                .resp_K_2
                 .challenge_contribution(
                     &ped_comm_key.g,
                     &ped_comm_key.h,
@@ -738,7 +823,8 @@ impl<
                     &mut verifier_transcript,
                 )
                 .unwrap();
-            aud_proofs.resp_K_3
+            aud_proofs
+                .resp_K_3
                 .challenge_contribution(
                     &ped_comm_key.g,
                     &ped_comm_key.h,
@@ -746,12 +832,9 @@ impl<
                     &mut verifier_transcript,
                 )
                 .unwrap();
-            aud_proofs.resp_K_3_K_1
-                .challenge_contribution(
-                    &aud_proofs.K_1,
-                    &aud_proofs.K_3,
-                    &mut verifier_transcript,
-                )
+            aud_proofs
+                .resp_K_3_K_1
+                .challenge_contribution(&aud_proofs.K_1, &aud_proofs.K_3, &mut verifier_transcript)
                 .unwrap();
             dur += clock.elapsed();
             size = aud_proofs.compressed_size();
@@ -796,12 +879,15 @@ impl<
 
         if is_mediator_present {
             let ct_m = leg_enc.ct_m.as_ref().unwrap();
-            assert!(
-                self.resp_eph_pk.as_ref().unwrap()
-                    .verify(&ct_m.eph_pk, &g, &verifier_challenge)
-            );
+            assert!(self.resp_eph_pk.as_ref().unwrap().verify(
+                &ct_m.eph_pk,
+                &g,
+                &verifier_challenge
+            ));
             // Verify proof of knowledge of opening of leaf commitment and mediator's key encryption (in leg)
-            let y = (ct_m.encrypted - self.re_randomized_path.re_randomized_leaf + leaf_comm_key[0]).into_affine();
+            let y = (ct_m.encrypted - self.re_randomized_path.re_randomized_leaf
+                + leaf_comm_key[0])
+                .into_affine();
             self.resp_leaf
                 .is_valid(
                     &[eph_pk, minus_leaf_comm_key, minus_B_blinding],
@@ -815,7 +901,11 @@ impl<
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
             self.resp_leaf
                 .is_valid(
-                    &[self.re_randomized_path.re_randomized_leaf, minus_leaf_comm_key, minus_B_blinding],
+                    &[
+                        self.re_randomized_path.re_randomized_leaf,
+                        minus_leaf_comm_key,
+                        minus_B_blinding,
+                    ],
                     &eph_sk_enc.key_m_a,
                     &self.t_r_leaf,
                     &verifier_challenge,
@@ -879,7 +969,10 @@ impl<
         assert_eq!(self.resp_amount.response1, self.resp_amount_enc_1.response2);
         if is_mediator_present {
             // enc randomness is same in leaf as in auditor pk encryption
-            assert_eq!(self.resp_leaf.0[0], self.resp_eph_pk.as_ref().unwrap().response);
+            assert_eq!(
+                self.resp_leaf.0[0],
+                self.resp_eph_pk.as_ref().unwrap().response
+            );
             // Asset id is same
             assert_eq!(self.resp_leaf.0[1], self.resp_asset_id_enc_1.response2);
         } else {
@@ -887,8 +980,14 @@ impl<
             // Enc randomness for twisted Elgamal is same
             assert_eq!(self.resp_leaf.0[0], aud_proofs.resp_K_1.response1);
             // Asset id is same
-            assert_eq!(self.resp_asset_id_enc_1.response2, aud_proofs.resp_K_2.response1);
-            assert_eq!(self.resp_asset_id_enc_1.response2, aud_proofs.resp_K_3_K_1.response);
+            assert_eq!(
+                self.resp_asset_id_enc_1.response2,
+                aud_proofs.resp_K_2.response1
+            );
+            assert_eq!(
+                self.resp_asset_id_enc_1.response2,
+                aud_proofs.resp_K_3_K_1.response
+            );
             // Product of enc randomness and asset id is same
             assert_eq!(self.resp_leaf.0[1], aud_proofs.resp_K_3.response1);
         }
@@ -944,12 +1043,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             &g,
         );
         t_enc_pk
-            .challenge_contribution(
-                &ct_m.eph_pk,
-                &g,
-                &ct_m.encrypted,
-                &mut prover_transcript,
-            )
+            .challenge_contribution(&ct_m.eph_pk, &g, &ct_m.encrypted, &mut prover_transcript)
             .unwrap();
 
         // Hash the mediator's response
@@ -996,12 +1090,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let mut verifier_transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
         self.resp_enc_pk
-            .challenge_contribution(
-                &ct_m.eph_pk,
-                &g,
-                &ct_m.encrypted,
-                &mut verifier_transcript,
-            )
+            .challenge_contribution(&ct_m.eph_pk, &g, &ct_m.encrypted, &mut verifier_transcript)
             .unwrap();
 
         // Verifier should also hash the mediator's response
@@ -1029,12 +1118,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        assert!(self.resp_enc_pk.verify(
-            &ct_m.encrypted,
-            &ct_m.eph_pk,
-            &g,
-            &verifier_challenge
-        ));
+        assert!(
+            self.resp_enc_pk
+                .verify(&ct_m.encrypted, &ct_m.eph_pk, &g, &verifier_challenge)
+        );
         Ok(())
     }
 }
@@ -1109,7 +1196,11 @@ pub mod tests {
 
         // Mediator key with asset id is added to the tree
         let leaf = create_leaf_for_asset_tree(asset_id, pk_m.0, true, &leaf_comm_key);
-        assert_eq!(leaf, (leaf_comm_key[0] + (leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_m.0).into_affine());
+        assert_eq!(
+            leaf,
+            (leaf_comm_key[0] + (leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_m.0)
+                .into_affine()
+        );
 
         let set = vec![leaf];
         let asset_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -1159,7 +1250,7 @@ pub mod tests {
             &leaf_comm_key,
             gen_p_1,
             gen_p_2,
-            &comm_key
+            &comm_key,
         );
 
         let prover_time = clock.elapsed();
@@ -1177,7 +1268,7 @@ pub mod tests {
                 &leaf_comm_key,
                 gen_p_1,
                 gen_p_2,
-                &comm_key
+                &comm_key,
             )
             .unwrap();
 
@@ -1186,7 +1277,13 @@ pub mod tests {
         assert!(proof.resp_eph_pk.is_some());
         assert!(proof.auditor_enc_proofs.is_none());
 
-        println!("total proof size = {}", proof.compressed_size() + leg_enc.compressed_size() + eph_sk_enc.compressed_size() + pk_e.0.compressed_size());
+        println!(
+            "total proof size = {}",
+            proof.compressed_size()
+                + leg_enc.compressed_size()
+                + eph_sk_enc.compressed_size()
+                + pk_e.0.compressed_size()
+        );
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time, verifier_time
@@ -1240,7 +1337,10 @@ pub mod tests {
 
         // Auditor key with asset id is added to the tree
         let leaf = create_leaf_for_asset_tree(asset_id, pk_a_e.0, false, &leaf_comm_key);
-        assert_eq!(leaf, ((leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_a_e.0).into_affine());
+        assert_eq!(
+            leaf,
+            ((leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_a_e.0).into_affine()
+        );
 
         let set = vec![leaf];
         let asset_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -1290,7 +1390,7 @@ pub mod tests {
             &leaf_comm_key,
             gen_p_1,
             gen_p_2,
-            &comm_key
+            &comm_key,
         );
 
         let prover_time = clock.elapsed();
@@ -1308,7 +1408,7 @@ pub mod tests {
                 &leaf_comm_key,
                 gen_p_1,
                 gen_p_2,
-                &comm_key
+                &comm_key,
             )
             .unwrap();
 

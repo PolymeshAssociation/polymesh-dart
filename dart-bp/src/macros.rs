@@ -1,20 +1,20 @@
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change {
     ($self: ident, $leg_enc: ident, $is_sender: expr, $g: ident, $h: ident, $verifier_transcript: ident) => {
-        $self.t_r_leaf
+        $self
+            .t_r_leaf
             .serialize_compressed(&mut $verifier_transcript)
             .unwrap();
-        $self.t_acc_new
+        $self
+            .t_acc_new
             .serialize_compressed(&mut $verifier_transcript)
             .unwrap();
-        $self.resp_null
-            .challenge_contribution(
-                &$g,
-                &$self.nullifier,
-                &mut $verifier_transcript,
-            )
+        $self
+            .resp_null
+            .challenge_contribution(&$g, &$self.nullifier, &mut $verifier_transcript)
             .unwrap();
-        $self.resp_leg_asset_id
+        $self
+            .resp_leg_asset_id
             .challenge_contribution(
                 &$leg_enc.ct_asset_id.eph_pk,
                 &$h,
@@ -22,11 +22,20 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
                 &mut $verifier_transcript,
             )
             .unwrap();
-        $self.resp_leg_pk
+        $self
+            .resp_leg_pk
             .challenge_contribution(
-                if $is_sender {&$leg_enc.ct_s.eph_pk} else {&$leg_enc.ct_r.eph_pk},
+                if $is_sender {
+                    &$leg_enc.ct_s.eph_pk
+                } else {
+                    &$leg_enc.ct_r.eph_pk
+                },
                 &$g,
-                if $is_sender {&$leg_enc.ct_s.encrypted} else {&$leg_enc.ct_r.encrypted},
+                if $is_sender {
+                    &$leg_enc.ct_s.encrypted
+                } else {
+                    &$leg_enc.ct_r.encrypted
+                },
                 &mut $verifier_transcript,
             )
             .unwrap();
@@ -36,7 +45,8 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
     ($self: ident, $leg_enc: ident, $pc_gens: path, $g: ident, $h: ident, $verifier_transcript: ident) => {
-        $self.resp_old_bal
+        $self
+            .resp_old_bal
             .challenge_contribution(
                 &$pc_gens.B,
                 &$pc_gens.B_blinding,
@@ -44,7 +54,8 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
                 &mut $verifier_transcript,
             )
             .unwrap();
-        $self.resp_new_bal
+        $self
+            .resp_new_bal
             .challenge_contribution(
                 &$pc_gens.B,
                 &$pc_gens.B_blinding,
@@ -52,7 +63,8 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
                 &mut $verifier_transcript,
             )
             .unwrap();
-        $self.resp_amount
+        $self
+            .resp_amount
             .challenge_contribution(
                 &$pc_gens.B,
                 &$pc_gens.B_blinding,
@@ -60,7 +72,8 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
                 &mut $verifier_transcript,
             )
             .unwrap();
-        $self.resp_leg_amount
+        $self
+            .resp_leg_amount
             .challenge_contribution(
                 &$leg_enc.ct_amount.eph_pk,
                 &$h,
@@ -68,13 +81,14 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
                 &mut $verifier_transcript,
             )
             .unwrap();
-    }
+    };
 }
 
 #[macro_export]
 macro_rules! verify_schnorr_for_common_state_change {
     ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $pc_gens: path, $g: ident, $h: ident, $verifier_challenge: ident) => {
-        $self.resp_leaf
+        $self
+            .resp_leaf
             .is_valid(
                 &[
                     $account_comm_key[0],
@@ -90,7 +104,8 @@ macro_rules! verify_schnorr_for_common_state_change {
                 &$verifier_challenge,
             )
             .unwrap();
-        $self.resp_acc_new
+        $self
+            .resp_acc_new
             .is_valid(
                 &[
                     $account_comm_key[0],
@@ -106,7 +121,8 @@ macro_rules! verify_schnorr_for_common_state_change {
             )
             .unwrap();
         assert!(
-            $self.resp_null
+            $self
+                .resp_null
                 .verify(&$self.nullifier, &$g, &$verifier_challenge,)
         );
         assert!($self.resp_leg_asset_id.verify(
@@ -116,8 +132,16 @@ macro_rules! verify_schnorr_for_common_state_change {
             &$verifier_challenge
         ));
         assert!($self.resp_leg_pk.verify(
-            if $is_sender {&$leg_enc.ct_s.encrypted} else {&$leg_enc.ct_r.encrypted},
-            if $is_sender {&$leg_enc.ct_s.eph_pk} else { &$leg_enc.ct_r.eph_pk },
+            if $is_sender {
+                &$leg_enc.ct_s.encrypted
+            } else {
+                &$leg_enc.ct_r.encrypted
+            },
+            if $is_sender {
+                &$leg_enc.ct_s.eph_pk
+            } else {
+                &$leg_enc.ct_r.eph_pk
+            },
             &$g,
             &$verifier_challenge
         ));
@@ -134,7 +158,7 @@ macro_rules! verify_schnorr_for_common_state_change {
 
         // sk in account comm matches the one in pk
         assert_eq!($self.resp_leg_pk.response2, $self.resp_leaf.0[0]);
-    }
+    };
 }
 
 #[macro_export]
@@ -165,5 +189,5 @@ macro_rules! verify_schnorr_for_balance_change {
             &$h,
             &$verifier_challenge
         ));
-    }
+    };
 }

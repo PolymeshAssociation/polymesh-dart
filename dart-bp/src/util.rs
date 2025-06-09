@@ -8,9 +8,11 @@ use bulletproofs::r1cs::{Prover, R1CSError, R1CSProof, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
-use dock_crypto_utils::transcript::{MerlinTranscript};
+use dock_crypto_utils::transcript::MerlinTranscript;
 use rand::RngCore;
-use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
+use schnorr_pok::discrete_log::{
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
@@ -79,7 +81,7 @@ pub fn initialize_curve_tree_verifier<
     let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
     re_randomized_path.add_root(tree_root);
-    
+
     #[cfg(feature = "parallel")]
     rayon::join(
         || {
@@ -88,10 +90,14 @@ pub fn initialize_curve_tree_verifier<
         },
         || {
             // Enforce constraints for even level
-            re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
-        }
+            re_randomized_path.even_verifier_gadget(
+                tree_root,
+                &mut even_verifier,
+                &tree_parameters,
+            );
+        },
     );
-    
+
     #[cfg(not(feature = "parallel"))]
     {
         // Enforce constraints for odd level
@@ -100,7 +106,7 @@ pub fn initialize_curve_tree_verifier<
         // Enforce constraints for even level
         re_randomized_path.even_verifier_gadget(tree_root, &mut even_verifier, &tree_parameters);
     }
-    
+
     (even_verifier, odd_verifier)
 }
 
@@ -116,11 +122,7 @@ pub fn enforce_balance_change_prover<
     amount: Balance,
     has_balance_decreased: bool,
     even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
-) -> (
-    (F0, Affine<G0>),
-    (F0, Affine<G0>),
-    (F0, Affine<G0>),
-) {
+) -> ((F0, Affine<G0>), (F0, Affine<G0>), (F0, Affine<G0>)) {
     // Commit to amount, old and new balance
     // TODO: It makes sense to commit to all these in a single vector commitment
     let r_bal_old = F0::rand(rng);
@@ -323,9 +325,17 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         .unwrap();
     t_leg_pk
         .challenge_contribution(
-            if is_sender { &leg_enc.ct_s.eph_pk } else { &leg_enc.ct_r.eph_pk },
+            if is_sender {
+                &leg_enc.ct_s.eph_pk
+            } else {
+                &leg_enc.ct_r.eph_pk
+            },
             &g,
-            if is_sender { &leg_enc.ct_s.encrypted } else { &leg_enc.ct_r.encrypted },
+            if is_sender {
+                &leg_enc.ct_s.encrypted
+            } else {
+                &leg_enc.ct_r.encrypted
+            },
             &mut prover_transcript,
         )
         .unwrap();
@@ -371,7 +381,6 @@ pub fn generate_schnorr_t_values_for_balance_change<
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
 ) {
-
     // Schnorr commitment for proving knowledge of old account balance
     let t_old_bal = PokPedersenCommitmentProtocol::init(
         account.balance.into(),
@@ -449,7 +458,10 @@ pub fn generate_schnorr_t_values_for_balance_change<
 }
 
 /// Generate responses (Schnorr step 3) for state change excluding changes related to amount and balances
-pub fn generate_schnorr_responses_for_common_state_change<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0>>(
+pub fn generate_schnorr_responses_for_common_state_change<
+    F0: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0>,
+>(
     account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     leaf_rerandomization: F0,
@@ -459,7 +471,13 @@ pub fn generate_schnorr_responses_for_common_state_change<F0: PrimeField, G0: SW
     t_leg_asset_id: PokPedersenCommitmentProtocol<Affine<G0>>,
     t_leg_pk: PokPedersenCommitmentProtocol<Affine<G0>>,
     prover_challenge: &F0,
-) -> (SchnorrResponse<Affine<G0>>, SchnorrResponse<Affine<G0>>, PokDiscreteLog<Affine<G0>>, PokPedersenCommitment<Affine<G0>>, PokPedersenCommitment<Affine<G0>>) {
+) -> (
+    SchnorrResponse<Affine<G0>>,
+    SchnorrResponse<Affine<G0>>,
+    PokDiscreteLog<Affine<G0>>,
+    PokPedersenCommitment<Affine<G0>>,
+    PokPedersenCommitment<Affine<G0>>,
+) {
     // TODO: Eliminate duplicate responses
     let resp_leaf = t_r_leaf
         .response(
@@ -491,17 +509,31 @@ pub fn generate_schnorr_responses_for_common_state_change<F0: PrimeField, G0: SW
     let resp_null = t_null.gen_proof(prover_challenge);
     let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(prover_challenge);
     let resp_leg_pk = t_leg_pk.clone().gen_proof(prover_challenge);
-    (resp_leaf, resp_acc_new, resp_null, resp_leg_asset_id, resp_leg_pk)
+    (
+        resp_leaf,
+        resp_acc_new,
+        resp_null,
+        resp_leg_asset_id,
+        resp_leg_pk,
+    )
 }
 
 /// Generate responses (Schnorr step 3) for state change just related to amount and balances
-pub fn generate_schnorr_responses_for_balance_change<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0>>(
+pub fn generate_schnorr_responses_for_balance_change<
+    F0: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0>,
+>(
     t_old_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
     t_new_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
     t_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
     t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
     prover_challenge: &F0,
-) -> (PokPedersenCommitment<Affine<G0>>, PokPedersenCommitment<Affine<G0>>, PokPedersenCommitment<Affine<G0>>, PokPedersenCommitment<Affine<G0>>) {
+) -> (
+    PokPedersenCommitment<Affine<G0>>,
+    PokPedersenCommitment<Affine<G0>>,
+    PokPedersenCommitment<Affine<G0>>,
+    PokPedersenCommitment<Affine<G0>>,
+) {
     let resp_old_bal = t_old_bal.gen_proof(prover_challenge);
     let resp_new_bal = t_new_bal.gen_proof(prover_challenge);
     let resp_amount = t_amount.clone().gen_proof(prover_challenge);
@@ -519,25 +551,16 @@ pub fn prove<
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
-
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
-        || {
-            even_prover
-                .prove(&tree_params.even_parameters.bp_gens)
-        },
-        || {
-            odd_prover
-                .prove(&tree_params.odd_parameters.bp_gens)
-        },
+        || even_prover.prove(&tree_params.even_parameters.bp_gens),
+        || odd_prover.prove(&tree_params.odd_parameters.bp_gens),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_proof, odd_proof) = (
-        even_prover
-            .prove(&account_tree_params.even_parameters.bp_gens),
-        odd_prover
-            .prove(&account_tree_params.odd_parameters.bp_gens),
+        even_prover.prove(&account_tree_params.even_parameters.bp_gens),
+        odd_prover.prove(&account_tree_params.odd_parameters.bp_gens),
     );
 
     let (even_proof, odd_proof) = (even_proof?, odd_proof?);
@@ -555,8 +578,7 @@ pub fn verify<
     even_proof: &R1CSProof<Affine<G0>>,
     odd_proof: &R1CSProof<Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
-)  -> Result<(), R1CSError> {
-
+) -> Result<(), R1CSError> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {
@@ -576,8 +598,8 @@ pub fn verify<
     );
 
     #[cfg(not(feature = "parallel"))]
-    let (even_res, odd_res) =
-        (even_verifier.verify(
+    let (even_res, odd_res) = (
+        even_verifier.verify(
             &self.even_proof,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -586,7 +608,8 @@ pub fn verify<
             &self.odd_proof,
             &account_tree_params.odd_parameters.pc_gens,
             &account_tree_params.odd_parameters.bp_gens,
-        ));
+        ),
+    );
 
     even_res?;
     odd_res?;

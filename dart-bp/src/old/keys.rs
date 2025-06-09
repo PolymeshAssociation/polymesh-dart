@@ -1,7 +1,7 @@
+use ark_ec::short_weierstrass::Affine;
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ec::short_weierstrass::{Affine, };
 use ark_std::UniformRand;
-use equality_across_groups::ec::commitments::{SWPoint};
+use equality_across_groups::ec::commitments::SWPoint;
 use rand::RngCore;
 
 /*pub struct VerKey<PK: SWPoint>(pub Affine<PK>);
