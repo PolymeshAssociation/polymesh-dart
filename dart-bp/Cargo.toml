@@ -32,6 +32,11 @@ ark-secp256k1 = "0.4"
 ark-secq256k1 = "0.4"
 
 [features]
-default = ["asm", "parallel"]
+default = ["std", "asm", "parallel"]
+
+std = [
+    "bulletproofs/std",
+]
+
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
 parallel = ["rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "bulletproofs/parallel", "curve_tree_relations/parallel", "dock_crypto_utils/parallel", "schnorr_pok/parallel", "verifiable_encryption/parallel", "equality_across_groups/parallel"]
