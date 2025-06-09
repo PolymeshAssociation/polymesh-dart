@@ -13,8 +13,8 @@ members = [
 bulletproofs = { path = "../curve-trees/bulletproofs" }
 curve_tree_relations = { package = "relations", path = "../curve-trees/relations" }
 # If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-#bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly" }
-#curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly" }
+#bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
+#curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 
 [workspace.dependencies]
 dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }

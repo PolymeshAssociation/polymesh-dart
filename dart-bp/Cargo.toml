@@ -21,8 +21,8 @@ schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features =
 bulletproofs = {path = "../../curve-trees/bulletproofs", default-features = false, features = ["std"]}
 curve_tree_relations = {package = "relations", path = "../../curve-trees/relations", default-features = false}
 # If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-#bulletproofs = {git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly", default-features = false, features = ["std"]}
-#curve_tree_relations = {package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "poly", default-features = false}
+#bulletproofs = {git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh", default-features = false, features = ["std"]}
+#curve_tree_relations = {package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh", default-features = false}
 
 [dev-dependencies]
 criterion = "0.3"
