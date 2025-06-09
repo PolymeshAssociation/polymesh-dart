@@ -2,14 +2,12 @@
 
 pub mod account_new;
 pub mod account_old;
+pub mod keys;
 pub mod leg;
 pub mod macros;
-pub mod old;
 pub mod util;
 
-pub use dart_common::{
-   AssetId, Balance, PendingTxnCounter, AMOUNT_BITS, MAX_AMOUNT, MAX_ASSET_ID,
-};
+pub use dart_common::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter};
 
 // TODO: The ephemeral public key created during instance should be added to the transcript.
 

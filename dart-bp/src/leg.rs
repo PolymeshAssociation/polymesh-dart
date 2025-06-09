@@ -1,4 +1,4 @@
-use crate::old::keys::{DecKey, EncKey};
+use crate::keys::{DecKey, EncKey};
 use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -1129,7 +1129,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::old::keys::{SigKey, VerKey, keygen_enc, keygen_sig};
+    use crate::keys::{SigKey, VerKey, keygen_enc, keygen_sig};
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
@@ -1187,9 +1187,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_m, pk_m), (sk_m_e, pk_m_e)),
+            ((_sk_s, pk_s), (sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (sk_r_e, pk_r_e)),
+            ((_sk_m, pk_m), (sk_m_e, pk_m_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
@@ -1328,9 +1328,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((_sk_s, pk_s), (sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (sk_r_e, pk_r_e)),
+            ((_sk_a, _pk_a), (sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
@@ -1450,16 +1450,16 @@ pub mod tests {
         let gen_p_2 = PallasA::rand(&mut rng);
 
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, leg_enc_rand, _, _, sk_e, pk_e) =
+        let (_leg, leg_enc, _leg_enc_rand, _, _, sk_e, pk_e) =
             initialize_leg_for_settlement::<_, _, Blake2b512>(
                 &mut rng,
                 asset_id,

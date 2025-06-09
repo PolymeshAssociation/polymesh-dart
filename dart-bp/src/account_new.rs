@@ -21,13 +21,11 @@ use crate::{
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::{Field, PrimeField, Zero};
+use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{
-    CurveTree, Root, SelRerandParameters, SelectAndRerandomizePath,
-};
+use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
@@ -2874,11 +2872,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, initialize_leg_for_settlement};
-    use crate::old::keys::{keygen_enc, keygen_sig};
     use SenderReverseTxnProof;
-    use ark_ec::CurveGroup;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -2888,7 +2885,6 @@ mod tests {
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
-    type VestaA = ark_vesta::Affine;
 
     /// Create a new tree and add the given account's commitment to the tree and return the tree
     /// In future, allow to generate tree many given number of leaves and add the account commitment to a
@@ -3034,21 +3030,21 @@ mod tests {
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
         let gen_p_2 = PallasA::rand(&mut rng);
-        let leaf_comm_key = PallasA::rand(&mut rng);
+        let _leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, leg_enc_rand, _, _, sk_e, pk_e) =
+        let (_leg, leg_enc, _leg_enc_rand, _, _, sk_e, _pk_e) =
             initialize_leg_for_settlement::<_, _, Blake2b512>(
                 &mut rng,
                 asset_id,
@@ -3139,21 +3135,21 @@ mod tests {
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
         let gen_p_2 = PallasA::rand(&mut rng);
-        let leaf_comm_key = PallasA::rand(&mut rng);
+        let _leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, leg_enc_rand, _, _, sk_e, pk_e) =
+        let (_leg, leg_enc, _leg_enc_rand, _, _, sk_e, _pk_e) =
             initialize_leg_for_settlement::<_, _, Blake2b512>(
                 &mut rng,
                 asset_id,
@@ -3240,20 +3236,20 @@ mod tests {
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
         let gen_p_2 = PallasA::rand(&mut rng);
-        let leaf_comm_key = PallasA::rand(&mut rng);
+        let _leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, _, _, _, sk_e, pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
+        let (_leg, leg_enc, _, _, _, sk_e, _pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
             &mut rng,
             asset_id,
             amount,
@@ -3341,13 +3337,13 @@ mod tests {
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
         let gen_p_2 = PallasA::rand(&mut rng);
-        let leaf_comm_key = PallasA::rand(&mut rng);
+        let _leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
@@ -3440,16 +3436,16 @@ mod tests {
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         let (
-            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
-            ((sk_a, pk_a), (sk_a_e, pk_a_e)),
+            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, gen_p_1);
 
         let asset_id = 1;
         let amount = 100;
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let (leg, leg_enc, _, _, _, sk_e, pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
+        let (_leg, leg_enc, _, _, _, sk_e, _pk_e) = initialize_leg_for_settlement::<_, _, Blake2b512>(
             &mut rng,
             asset_id,
             amount,
@@ -3584,8 +3580,8 @@ mod tests {
         account.counter = num_pending_txns;
         let account_comm = account.commit(&account_comm_key);
 
-        let (sk_other, pk_other) = keygen_sig(&mut rng, gen_p_1);
-        let (sk_a, pk_a) = keygen_sig(&mut rng, gen_p_1);
+        let (_sk_other, pk_other) = keygen_sig(&mut rng, gen_p_1);
+        let (_sk_a, pk_a) = keygen_sig(&mut rng, gen_p_1);
 
         // Create some legs as pending transfers
         let mut legs = vec![];
