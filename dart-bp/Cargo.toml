@@ -4,32 +4,31 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rand = { version = "0.8", default-features = false }
-ark-ff = { version = "0.4"}
-ark-ec = { version = "0.4"}
-ark-serialize = { version = "0.4" }
-ark-std = { version = "0.4"}
-digest = "0.10.7"
-blake2 = "0.10"
-rayon = {version = "1.5.3", optional = true}
-dock_crypto_utils = {git = "https://github.com/docknetwork/crypto", default-features = false}
-verifiable_encryption = {git = "https://github.com/docknetwork/crypto", default-features = false}
-equality_across_groups = {git = "https://github.com/docknetwork/crypto", default-features = false}
-schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features = false}
+dart-common = { workspace = true, default-features = false }
+
+rand = { workspace = true, default-features = false }
+ark-ff = { workspace = true }
+ark-ec = { workspace = true }
+ark-serialize = { workspace = true }
+ark-std = { workspace = true }
+digest = { workspace = true }
+blake2 = { workspace = true }
+rayon = { workspace = true, optional = true }
+dock_crypto_utils = { workspace = true, default-features = false }
+verifiable_encryption = { workspace = true, default-features = false }
+equality_across_groups = { workspace = true, default-features = false }
+schnorr_pok = { workspace = true, default-features = false }
 
 # Curve tree dependencies
-bulletproofs = {path = "../../curve-trees/bulletproofs", default-features = false, features = ["std"]}
-curve_tree_relations = {package = "relations", path = "../../curve-trees/relations", default-features = false}
-# If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-#bulletproofs = {git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh", default-features = false, features = ["std"]}
-#curve_tree_relations = {package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh", default-features = false}
+bulletproofs = { workspace = true, default-features = false }
+curve_tree_relations = { workspace = true, default-features = false }
 
 [dev-dependencies]
-criterion = "0.3"
-ark-pallas = "0.4"
-ark-vesta = "0.4"
-ark-secp256k1 = "0.4"
-ark-secq256k1 = "0.4"
+criterion = { workspace = true }
+ark-pallas = { workspace = true }
+ark-vesta = { workspace = true }
+ark-secp256k1 = { workspace = true }
+ark-secq256k1 = { workspace = true }
 
 [features]
 default = ["std", "asm", "parallel"]

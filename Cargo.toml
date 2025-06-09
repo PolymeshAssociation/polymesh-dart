@@ -6,6 +6,7 @@ edition = "2024"
 [workspace]
 members = [
     "dart-bp",
+    "dart-common",
 ]
 
 [patch.crates-io]
@@ -18,6 +19,7 @@ curve_tree_relations = { package = "relations", path = "../curve-trees/relations
 
 [workspace.dependencies]
 dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
+dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
 
 rand = { version = "0.8", default-features = false }
 ark-ff = { version = "0.4", default-features = false }
@@ -34,7 +36,14 @@ schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features =
 
 # Curve tree dependencies
 bulletproofs = { version = "2.0.0", default-features = false }
-curve_tree_relations = { version = "0.1.0", default-features = false }
+curve_tree_relations = { version = "0.1.0", package = "relations", default-features = false }
+
+# Dev dependencies
+criterion = "0.3"
+ark-pallas = "0.4"
+ark-vesta = "0.4"
+ark-secp256k1 = "0.4"
+ark-secq256k1 = "0.4"
 
 [dependencies]
 dart-bp = { workspace = true, default-features = false }
