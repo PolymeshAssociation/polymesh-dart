@@ -21,7 +21,12 @@ curve_tree_relations = { package = "relations", path = "../curve-trees/relations
 dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
 dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
 
+# Common
 rand = { version = "0.8", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+lazy_static = { version = "1.5.0", default-features = false }
+
 ark-ff = { version = "0.4", default-features = false }
 ark-ec = { version = "0.4", default-features = false }
 ark-serialize = { version = "0.4", default-features = false }
@@ -46,12 +51,53 @@ ark-secp256k1 = "0.4"
 ark-secq256k1 = "0.4"
 
 [dependencies]
-dart-bp = { workspace = true, default-features = false }
+# common dependencies
+dart-common = { workspace = true, default-features = false }
+rand = { workspace = true, default-features = false }
+rand_core = { workspace = true, default-features = false }
+rand_chacha = { workspace = true, default-features = false }
+digest = { workspace = true }
+blake2 = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+# dart-bp dependencies
+dart-bp = { workspace = true, default-features = false, optional = true }
+ark-ff = { workspace = true, optional = true }
+ark-ec = { workspace = true, optional = true }
+ark-serialize = { workspace = true, optional = true }
+ark-std = { workspace = true, optional = true }
+dock_crypto_utils = { workspace = true, default-features = false, optional = true }
+schnorr_pok = { workspace = true, default-features = false, optional = true }
+ark-pallas = { workspace = true, optional = true }
+ark-vesta = { workspace = true, optional = true }
+ark-secp256k1 = { workspace = true, optional = true }
+ark-secq256k1 = { workspace = true, optional = true }
+
+# Curve tree BP dependencies
+bulletproofs = { workspace = true, default-features = false, optional = true }
+curve_tree_relations = { workspace = true, default-features = false, optional = true }
+lazy_static = { workspace = true, default-features = false }
 
 [features]
-default = ["std", "asm", "parallel"]
+default = ["std", "asm", "parallel", "backend_bp"]
 
-std = ["dart-bp/std"]
+backend_bp = [
+    "dart-bp",
+    "ark-ff",
+    "ark-ec",
+    "ark-serialize",
+    "ark-std",
+    "dock_crypto_utils",
+    "schnorr_pok",
+    "bulletproofs",
+    "curve_tree_relations",
+    "ark-pallas",
+    "ark-vesta",
+    "ark-secp256k1",
+    "ark-secq256k1",
+]
 
-asm = ["dart-bp/asm"]
-parallel = ["dart-bp/parallel"]
+std = ["dart-bp?/std"]
+
+asm = ["dart-bp?/asm"]
+parallel = ["dart-bp?/parallel"]
