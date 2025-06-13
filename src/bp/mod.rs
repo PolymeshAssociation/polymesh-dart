@@ -10,6 +10,7 @@ use dart_bp::{
     keys as bp_keys,
 };
 use digest::Digest as _;
+use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use rand::{RngCore, SeedableRng as _};
 
 use crate::*;
@@ -17,9 +18,10 @@ use crate::*;
 pub mod curve_tree;
 use curve_tree::*;
 
-pub type PallasParameters = ark_pallas::PallasConfig;
-pub type VestaParameters = ark_vesta::VestaConfig;
-pub type PallasA = ark_pallas::Affine;
+pub(crate) type PallasParameters = ark_pallas::PallasConfig;
+pub(crate) type VestaParameters = ark_vesta::VestaConfig;
+pub(crate) type PallasA = ark_pallas::Affine;
+pub(crate) type PallasScalar = <PallasA as AffineRepr>::ScalarField;
 
 type BPAccountState = bp_account::AccountState<PallasA>;
 type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
@@ -39,8 +41,10 @@ pub struct DartBPGenerators {
     pub pk_acct_g: PallasA,
     pub pk_enc_g: PallasA,
     pub account_comm_g: [PallasA; 6],
+    pub asset_comm_g: [PallasA; 2],
     pub leg_g: PallasA,
     pub leg_h: PallasA,
+    pub ped_comm_key: PedersenCommitmentKey<PallasA>,
 }
 
 impl DartBPGenerators {
@@ -65,14 +69,27 @@ impl DartBPGenerators {
             PallasA::rand(&mut rng), // field: random value s
         ];
 
+        let asset_comm_g = [
+            PallasA::rand(&mut rng), // field: is_mediator (1 for true, 0 for false)
+            PallasA::rand(&mut rng), // field: asset_id
+        ];
+
         let leg_g = PallasA::rand(&mut rng);
         let leg_h = PallasA::rand(&mut rng);
-        Self { pk_acct_g, pk_enc_g, account_comm_g, leg_g, leg_h }
+
+        let ped_comm_key = PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"polymesh-dart-comm-key");
+
+        Self { pk_acct_g, pk_enc_g, account_comm_g, asset_comm_g, leg_g, leg_h, ped_comm_key }
     }
 
     /// Returns the generators for account state commitments.
     pub fn account_comm_g(&self) -> &[PallasA] {
         &self.account_comm_g
+    }
+
+    /// Returns the generators for asset state commitments.
+    pub fn asset_comm_g(&self) -> &[PallasA] {
+        &self.asset_comm_g
     }
 }
 
@@ -278,7 +295,7 @@ impl AccountAssetState {
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 pub struct AccountAssetRegistrationProof {
     proof: bp_account::RegTxnProof<PallasA>,
-    challenge: <PallasA as AffineRepr>::ScalarField,
+    challenge: PallasScalar,
 }
 
 impl AccountAssetRegistrationProof {
@@ -321,24 +338,24 @@ impl AccountAssetRegistrationProof {
 }
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-pub struct AssetMintingProof<const L: usize> {
+pub struct AssetMintingProof {
     // Public inputs.
     pk: AccountPublicKey,
     asset_id: AssetId,
     amount: Balance,
-    root: CurveTreeRoot<L>,
+    root: CurveTreeRoot<ACCOUNT_TREE_L>,
 
     // proof
-    proof: bp_account::MintTxnProof<L, <PallasParameters as CurveConfig>::ScalarField, <VestaParameters as CurveConfig>::ScalarField, PallasParameters, VestaParameters>,
-    challenge: <PallasA as AffineRepr>::ScalarField,
+    proof: bp_account::MintTxnProof<ACCOUNT_TREE_L, <PallasParameters as CurveConfig>::ScalarField, <VestaParameters as CurveConfig>::ScalarField, PallasParameters, VestaParameters>,
+    challenge: PallasScalar,
 }
 
-impl<const L: usize> AssetMintingProof<L> {
+impl AssetMintingProof {
     /// Generate a new asset minting proof.
     pub fn new(
         rng: &mut impl RngCore,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
         amount: Balance,
     ) -> Self {
         // Generate a new minting state for the account asset.
@@ -374,7 +391,7 @@ impl<const L: usize> AssetMintingProof<L> {
         }
     }
 
-    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<L>) -> bool {
+    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
@@ -439,11 +456,11 @@ impl Leg {
     pub fn encrypt<R: RngCore>(
         &self,
         rng: &mut R,
-        ephemeral_key: bp_leg::EphemeralSkEncryption<PallasA>,
-        pk_e: &PallasA,
-    ) -> LegEncrypted {
-        let (leg_enc, _) = self.0.encrypt(rng, pk_e, DART_GENS.leg_g, DART_GENS.leg_h);
-        LegEncrypted { leg_enc, ephemeral_key }
+        ephemeral_key: EphemeralSkEncryption,
+        pk_e: &EncryptionPublicKey,
+    ) -> (LegEncrypted, LegEncryptionRandomness) {
+        let (leg_enc, leg_enc_rand) = self.0.encrypt(rng, &pk_e.0.0, DART_GENS.leg_g, DART_GENS.leg_h);
+        (LegEncrypted { leg_enc, ephemeral_key }, LegEncryptionRandomness(leg_enc_rand))
     }
 
     pub fn sender(&self) -> AccountPublicKey {
@@ -493,10 +510,11 @@ impl LegBuilder {
         }
     }
 
-    pub fn encryt<R: RngCore>(
+    pub fn encryt_and_prove<R: RngCore>(
         &self,
         rng: &mut R,
-    ) -> LegEncrypted {
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
+    ) -> SettlementLegProof {
         let (mediator_enc, mediator_acct) = self.mediator.get_keys();
         let leg = Leg::new(
             self.sender.acct,
@@ -505,23 +523,140 @@ impl LegBuilder {
             self.asset_id,
             self.amount,
         );
-        let (ephemeral_key, _eph_ek_enc_r, _sk_e, pk_e) =
-            bp_leg::EphemeralSkEncryption::new::<_, Blake2b512>(rng, self.sender.enc.0.0, self.receiver.enc.0.0, mediator_enc.0.0, DART_GENS.leg_g, DART_GENS.leg_h);
-        leg.encrypt(rng, ephemeral_key, &pk_e.0)
+        let (ephemeral_key, eph_rand, pk_e) = EphemeralSkEncryption::new(
+            rng,
+            self.sender.enc,
+            self.receiver.enc,
+            mediator_enc,
+        );
+        let (leg_enc, leg_enc_rand) = leg.encrypt(rng, ephemeral_key, &pk_e);
+
+        let leg_proof = SettlementLegProof::new(
+            rng,
+            leg,
+            leg_enc,
+            &leg_enc_rand,
+            eph_rand,
+            pk_e,
+            mediator_acct,
+            asset_tree,
+        );
+
+        leg_proof
     }
 }
 
+pub struct SettlementLegProof {
+    leg_enc: LegEncrypted,
+    pk_e: EncryptionPublicKey,
+    root: CurveTreeRoot<ASSET_TREE_L>,
+
+    proof: bp_leg::SettlementTxnProof<ASSET_TREE_L, <PallasParameters as CurveConfig>::ScalarField, <VestaParameters as CurveConfig>::ScalarField, PallasParameters, VestaParameters>,
+    challenge: PallasScalar,
+}
+
+impl SettlementLegProof {
+    pub(crate) fn new(
+        rng: &mut impl RngCore,
+        leg: Leg,
+        leg_enc: LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
+        eph_rand: PallasScalar,
+        pk_e: EncryptionPublicKey,
+        mediator: Option<AccountPublicKey>,
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
+    ) -> Self {
+        let asset_leaf = Default::default();
+        let asset_path = asset_tree
+            .get_path_to_leaf(asset_leaf)
+            .expect("Failed to get path to leg commitment");
+
+        let (proof, challenge) = bp_leg::SettlementTxnProof::new(
+            rng,
+            leg.0,
+            leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
+            leg_enc.ephemeral_key.0.clone(),
+            eph_rand,
+            pk_e.0.0,
+            mediator.map(|m| m.0.0),
+            asset_path,
+
+            b"test-nonce-0",
+            asset_tree.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+            &DART_GENS.ped_comm_key,
+        );
+
+        Self {
+            leg_enc,
+            pk_e,
+            root: asset_tree.root_node(),
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(
+        &self,
+        asset_tree: &impl ValidateCurveTreeRoot<ASSET_TREE_L>,
+    ) -> bool {
+        // Validate the root of the curve tree.
+        if !asset_tree.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        self.proof.verify(
+            self.leg_enc.leg_enc.clone(),
+            self.leg_enc.ephemeral_key.0.clone(),
+            self.pk_e.0.0,
+            &self.root,
+            self.challenge,
+            b"test-nonce-0",
+            asset_tree.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+            &DART_GENS.ped_comm_key,
+        ).is_ok()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EphemeralSkEncryption(
+    bp_leg::EphemeralSkEncryption<PallasA>,
+);
+
+impl EphemeralSkEncryption {
+    pub(crate) fn new<R: RngCore>(
+        rng: &mut R,
+        sender: EncryptionPublicKey,
+        receiver: EncryptionPublicKey,
+        mediator: EncryptionPublicKey,
+    ) -> (Self, PallasScalar, EncryptionPublicKey) {
+        let (ephemeral_key, eph_key_rand, _sk_e, pk_e) =
+            bp_leg::EphemeralSkEncryption::new::<_, Blake2b512>(rng, sender.0.0, receiver.0.0, mediator.0.0, DART_GENS.leg_g, DART_GENS.leg_h);
+        (Self(ephemeral_key), eph_key_rand, EncryptionPublicKey(pk_e))
+    }
+}
+
+pub struct LegEncryptionRandomness(
+    bp_leg::LegEncryptionRandomness<PallasA>,
+);
+
 pub struct LegEncrypted {
     leg_enc: bp_leg::LegEncryption<PallasA>,
-    ephemeral_key: bp_leg::EphemeralSkEncryption<PallasA>,
+    ephemeral_key: EphemeralSkEncryption,
 }
 
 impl LegEncrypted {
     pub fn decrypt(&self, role: LegRole, sk: &EncryptionSecretKey) -> Leg {
         let sk_e = match role {
-            LegRole::Sender => self.ephemeral_key.decrypt_for_sender::<Blake2b512>(sk.0.0),
-            LegRole::Receiver => self.ephemeral_key.decrypt_for_receiver::<Blake2b512>(sk.0.0),
-            LegRole::Auditor | LegRole::Mediator => self.ephemeral_key.decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
+            LegRole::Sender => self.ephemeral_key.0.decrypt_for_sender::<Blake2b512>(sk.0.0),
+            LegRole::Receiver => self.ephemeral_key.0.decrypt_for_receiver::<Blake2b512>(sk.0.0),
+            LegRole::Auditor | LegRole::Mediator => self.ephemeral_key.0.decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
         };
         let leg = self.leg_enc.decrypt(&sk_e, DART_GENS.leg_h);
         Leg(leg)
