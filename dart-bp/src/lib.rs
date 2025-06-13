@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
-pub mod account_new;
-pub mod account_old;
+pub mod account;
 pub mod keys;
 pub mod leg;
 pub mod macros;
