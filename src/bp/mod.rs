@@ -1,4 +1,4 @@
-use ark_ec::AffineRepr;
+use ark_ec::{AffineRepr, CurveConfig};
 use ark_ff::UniformRand as _;
 use blake2::Blake2s256;
 
@@ -11,9 +11,12 @@ use rand::{RngCore, SeedableRng as _};
 
 use crate::*;
 
-type PallasParameters = ark_pallas::PallasConfig;
-type VestaParameters = ark_vesta::VestaConfig;
-type PallasA = ark_pallas::Affine;
+pub mod curve_tree;
+use curve_tree::*;
+
+pub type PallasParameters = ark_pallas::PallasConfig;
+pub type VestaParameters = ark_vesta::VestaConfig;
+pub type PallasA = ark_pallas::Affine;
 
 type BPAccountState = bp_account::AccountState<PallasA>;
 type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
@@ -49,12 +52,12 @@ impl DartBPGenerators {
         let pk_enc_g = PallasA::rand(&mut rng);
 
         let account_comm_g = [
-            PallasA::rand(&mut rng),
-            PallasA::rand(&mut rng),
-            PallasA::rand(&mut rng),
-            PallasA::rand(&mut rng),
-            PallasA::rand(&mut rng),
-            PallasA::rand(&mut rng),
+            PallasA::rand(&mut rng), // field: sk -- TODO: Shouldn't this generator be the same `pk_acct_g`?
+            PallasA::rand(&mut rng), // field: finalized balance.
+            PallasA::rand(&mut rng), // field: counter
+            PallasA::rand(&mut rng), // field: asset_id
+            PallasA::rand(&mut rng), // field: random value rho
+            PallasA::rand(&mut rng), // field: random value s
         ];
         Self { pk_acct_g, pk_enc_g, account_comm_g }
     }
@@ -140,18 +143,11 @@ impl AccountKeys {
         &self,
         asset_id: AssetId,
     ) -> AccountAssetState {
-        let current_state = self.acct.account_state(&mut rand::thread_rng(), asset_id);
-        let current_state_commitment = current_state.commitment();
-        AccountAssetState {
-            account: *self,
-            asset_id,
-            current_state,
-            current_state_commitment,
-            current_tx_id: 0,
-        }
+        AccountAssetState::new(&mut rand::thread_rng(), self, asset_id)
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountState(BPAccountState);
 
 impl AccountState {
@@ -168,6 +164,7 @@ pub struct AccountAssetState {
     pub current_state: AccountState,
     pub current_state_commitment: AccountStateCommitment,
     pub current_tx_id: u64,
+    pub pending_state: Option<AccountState>,
 }
 
 impl AccountAssetState {
@@ -184,6 +181,33 @@ impl AccountAssetState {
             current_state,
             current_state_commitment,
             current_tx_id: 0,
+            pending_state: None,
+        }
+    }
+
+    pub fn mint<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        amount: Balance,
+    ) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    fn _set_pending_state(&mut self, state: AccountState) {
+        self.pending_state = Some(state);
+    }
+
+    pub fn commit_pending_state(&mut self) -> bool {
+        match self.pending_state.take() {
+            Some(pending_state) => {
+                self.current_state = pending_state;
+                self.current_state_commitment = self.current_state.commitment();
+                self.current_tx_id += 1;
+                true
+            }
+            None => false,
         }
     }
 }
@@ -227,6 +251,79 @@ impl AccountAssetRegistrationProof {
             &account_commitment.0,
             self.challenge,
             b"test-nonce-0",
+            &DART_GENS.account_comm_g(),
+            DART_GENS.pk_acct_g,
+        ).is_ok()
+    }
+}
+
+/// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
+pub struct AssetMintingProof<const L: usize> {
+    // Public inputs.
+    pk: AccountPublicKey,
+    asset_id: AssetId,
+    amount: Balance,
+    root: CurveTreeRoot<L>,
+
+    // proof
+    proof: bp_account::MintTxnProof<L, <PallasParameters as CurveConfig>::ScalarField, <VestaParameters as CurveConfig>::ScalarField, PallasParameters, VestaParameters>,
+    challenge: <PallasA as AffineRepr>::ScalarField,
+}
+
+impl<const L: usize> AssetMintingProof<L> {
+    /// Generate a new asset minting proof.
+    pub fn new(
+        rng: &mut impl RngCore,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<L>,
+        amount: Balance,
+    ) -> Self {
+        // Generate a new minting state for the account asset.
+        let mint_account_state = account_asset.mint(rng, amount);
+        let mint_account_commitment = mint_account_state.commitment();
+
+        let pk = account_asset.account.acct.public;
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let (proof, challenge) = bp_account::MintTxnProof::new(
+            rng,
+            pk.0.0,
+            amount,
+            current_account_state,
+            &mint_account_state.0,
+            mint_account_commitment.0,
+            current_account_path,
+            b"test-nonce-0",
+            tree_lookup.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.pk_acct_g,
+        );
+        Self {
+            pk,
+            asset_id: account_asset.asset_id,
+            amount,
+            proof, challenge, root
+        }
+    }
+
+    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        self.proof.verify(
+            self.pk.0.0,
+            self.asset_id,
+            self.amount,
+            &self.root,
+            self.challenge,
+            b"test-nonce-0",
+            tree_roots.params(),
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
         ).is_ok()
