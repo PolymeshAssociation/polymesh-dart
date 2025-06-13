@@ -1,5 +1,5 @@
 use crate::keys::{DecKey, EncKey};
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove};
+use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove, verify};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -992,15 +992,12 @@ impl<
             assert_eq!(self.resp_leaf.0[1], aud_proofs.resp_K_3.response1);
         }
 
-        even_verifier.verify(
+        verify(
+            even_verifier,
+            odd_verifier,
             &self.even_proof,
-            &tree_parameters.even_parameters.pc_gens,
-            &tree_parameters.even_parameters.bp_gens,
-        )?;
-        odd_verifier.verify(
             &self.odd_proof,
-            &tree_parameters.odd_parameters.pc_gens,
-            &tree_parameters.odd_parameters.bp_gens,
+            &tree_parameters,
         )?;
         println!("Time and size: {:?}, {}", dur, size);
         Ok(())
@@ -1417,7 +1414,13 @@ pub mod tests {
         assert!(proof.resp_eph_pk.is_none());
         assert!(proof.auditor_enc_proofs.is_some());
 
-        println!("total proof size = {}", proof.compressed_size());
+        println!(
+            "total proof size = {}",
+            proof.compressed_size()
+                + leg_enc.compressed_size()
+                + eph_sk_enc.compressed_size()
+                + pk_e.0.compressed_size()
+        );
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time, verifier_time

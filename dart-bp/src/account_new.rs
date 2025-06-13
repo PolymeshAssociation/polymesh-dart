@@ -2926,6 +2926,7 @@ mod tests {
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, gen_p);
 
+        let clock = Instant::now();
         // Issuer creates account to mint to
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
@@ -2943,6 +2944,9 @@ mod tests {
             gen_p,
         );
 
+        let prover_time = clock.elapsed();
+
+        let clock = Instant::now();
         reg_proof
             .verify(
                 &pk_i.0,
@@ -2954,6 +2958,15 @@ mod tests {
                 gen_p,
             )
             .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        println!("For reg. txn");
+        println!("total proof size = {}", reg_proof.compressed_size());
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}",
+            prover_time, verifier_time
+        );
 
         let account_tree =
             get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
@@ -3007,6 +3020,7 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
+        println!("For mint txn");
         println!("total proof size = {}", proof.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",

@@ -348,6 +348,7 @@ For 2, proving cost is G (for $g^z$) + G + 4F, 5M, verification cost is 5M (not 
 Total proving cost is 10G + 11F, 15M, verification cost is 21M
 
 ---------------------------------------------------
+Failed attempt
 
 $pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
 
@@ -358,7 +359,7 @@ Applying protocol in Fig 2 of [this paper](https://iacr.org/archive/asiacrypt200
 1. Prover picks random $r$ and creates $x = leaf_r^r.j_1^{-at.r}.B^{-t.r}$ along with a proof $\pi$ of the correct exponents, using the protocol for product relation.
 2. Prover generates challenge $e$ by hashing transcript.
 3. Prover generates response $s = r + \sum{r_i.e^i}$ and sends $x, s$ it to verifier
-4. Verifier first checks $\pi$ and then checks if ${leaf_r.j_1^{-at}.B^{-t}}$
+4. Verifier first checks $\pi$ and then checks if ${leaf_r.j_1^{-at}.B^{-t}}$ ???
 
 $(leaf_r.j_1.B)^s = leaf_r^{k + \sum{r_i.c^i}}.j_1^{k + \sum{r_i.c^i}}.B^{k + \sum{r_i.c^i}} = leaf_r^k.j_1^k.B^k . leaf_r^{\sum{r_i.c^i}}.j_1^{\sum{r_i.c^i}}.B^{\sum{r_i.c^i}} = leaf_r^k.j_1^k.B^k . leaf_r$
 
@@ -367,9 +368,39 @@ $com(pk_A) = (E0, E1) =(g^v, W^v.pk_A), pk_A = E1.W^{-v}$
 
 $D_{A_1} = ({leaf_r.j_1^{-at}.B^{-t}})^{r_1} = leaf_r^{r_1}.j^{-at.r_1}.B^{-t.r_1}$
 
-$U_1 = g^{at.r_1}$
+$U_1 = g^{at.r_1}$ ......??
 
 -------------------------------------------------------
+
+Working attempt
+
+$pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
+
+Need to prove 4 relations: $D_{A_1} = {pk_A}^{r_1}$, $D_{A_2} = {pk_A}^{r_2}$, $D_{A_3} = {pk_A}^{r_3}$, $D_{A_4} = {pk_A}^{r_4}$
+
+Applying protocol in Fig 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf), with correction to the typo in last statement
+
+1. Prover picks random $u_1, u_2, u_3$ and creates $x = leaf_r^{u_1}.j_1^{u_2}.B^{u_3}$.
+2. Prover generates challenge $e$ by hashing transcript.
+3. Prover generates response $s_1 = u_1 + \sum{r_i.e^i}, s_2 = u_2 + (-at).\sum{r_i.e^i}, s_3 = u_3 + (-t).\sum{r_i.e^i}$ and sends $x, s_1, s_2, s_3$ it to verifier
+4. Verifier checks if $leaf_r^{s_1}.j_1^{s_2}.B^{s_3} = x . \prod_i{D_{A_i}^{e_i}}$
+
+$leaf_r^{s_1}.j_1^{s_2}.B^{s_3} = leaf_r^{u_1}.leaf_r^{\sum{r_i.e^i}}.j_1^{u_2}.j_1^{(-at).\sum{r_i.e^i}}.B^{u_3}.B^{-t.\sum{r_i.e^i}}$
+
+$ = leaf_r^{u_1}.j_1^{u_2}.B^{u_3} . leaf_r^{\sum{r_i.e^i}}.j_1^{(-at).\sum{r_i.e^i}}.B^{-t.\sum{r_i.e^i}}$
+
+$i$ goes from 1 to 4 so expanding above
+
+$leaf_r^{u_1}.j_1^{u_2}.B^{u_3} . leaf_r^{r_1.e + r_2.e^2 + r_3.e^3 + r_4.e^4} . (j_1^{-at})^{r_1.e + r_2.e^2 + r_3.e^3 + r_4.e^4} . (B^{-t})^{r_1.e + r_2.e^2 + r_3.e^3 + r_4.e^4}$
+
+$ = x . (((leaf_r.j_1^{-at}.B^{-t})^{r_1})^e . (((leaf_r.j_1^{-at}.B^{-t})^{r_2})^{e^2} . (((leaf_r.j_1^{-at}.B^{-t})^{r_3})^{e^3} . (((leaf_r.j_1^{-at}.B^{-t})^{r_4})^{e^4}$
+
+$ = x . D_{A_1}^e . D_{A_2}^{e^2} . D_{A_3}^{e^3} . D_{A_4}^{e^4}$
+
+What if venue didn't create $s$ properly, like while creating $s_2$, don't include $at$? 
+
+------------------------------------------------------------------
+
 
 $pk_A$ in terms of randomized leaf: $pk_A = leaf_r.j_1^{-at}.B^{-t}$
 
@@ -393,6 +424,44 @@ For 2, the proving cost is G, M (since responses for $z$ and $r_i$ are already s
 
 -----------------------------------------------------------------
 
+Per asset data = $A = [j_0^{at}.j_1^m.j_2^n, j_0^{role}.j_1^i.pk_i....] = [j_0^{at}.j_1^m.j_2^n, j_0^{role}.j_1^1.pk_1, j_0^{role}.j_1^2.pk_2, ..., j_0^{role}.j_1^{m+n}.pk_{m+n}]$ where $m, n$ are number of mediators and auditors respectively. Asset can have both auditors and mediators.
+
+Leaf of asset tree = $L = PedCom(A[0].x, A[1].x, A[2].x, ..., A[m+n+1].x)$
+
+$L \in H, A \in G^{m+n+1}$ where $G, H$ are groups on the 2 different curves which form a 2-cycle.
+
+High level idea: Venue first proves about each item in $A$ and then the commitment $L$ is formed from x-coordinates from items of $A$
+
+Details:
+
+1. Re-randomize $A$ to $A_r$ such that $A_r[i] = A[i].B^{r_i}$ so $A_r = [j_0^{at}.j_1^m.j_2^n.B^{r_0}, j_0^{role}.j_1^1.pk_1.B^{r_1}, j_0^{role}.j_1^2.pk_2.B^{r_2}, ..., j_0^{role}.j_1^{m+n}.pk_{m+n}.B^{r_{m+n}}]$. The verifier gets $A_r$
+2. Prove that each $A[i]$ lies on the curve.
+3. Prove that each $A_r[i] = A[i].B^{r_i}$
+
+-----------------------------------------------------------
+
+Per asset data = $A = (at.j_0 + m.j_1 + n.j_2, role.j_0 + 1.j_1 + pk_1, ..., role.j_0 + (m+n).j_1 + pk_{m+n})$
+where $m, n$ are the number of mediators and auditors. Asset can have both.
+
+Leaf of asset tree = $L = PedCom(A[0].x, A[1].x, ..., A[m+n+1].x)$
+
+$L \in H, A \in G^{m+n+1}$ where $G, H$ are groups on two different curves forming a 2-cycle.
+
+High level idea: Venue first proves about each item in $A$, then commitment $L$ is formed from x-coordinates of $A$'s elements.
+
+Details:
+1. Re-randomize $A$ to $A_r$: such that $A_r[i] = A[i] + r_i.B$.
+   So $A_r = (at.j_0 + m.j_1 + n.j_2 + r_0.B, ..., role.j_0 + (m+n).j_1 + pk_{m+n} + r_{m+n}.B)$.
+   The verifier gets $A_r$
+
+2. Prove each $A[i]$ lies on the curve
+
+3. Prove each $A_r[i] = A[i] + r_i.B$
+
+
+------------------------------
+
+
 Proving knowledge of $sk_e$ in $pk_e = g^{sk_e}$. Decompose $sk_e$ into $b$ bit chunks and do twisted Elgamal encryption of each chunk. 
 
 Chunk $i$ = $(pk_s^{r_i}, pk_r^{r_i}, pk_A^{r_i}, g^{r_i}.h^{sk_{e,i}})$
@@ -405,7 +474,17 @@ Now with a sigma protocol, we can prove that $sk_e$ is same as in $pk_e$
 
 There is a proof associated with each chunk proving $r_i$ is same in all 4 elements in the chunk but the overall proof should be smaller and efficient than using generic ZKP. Decryption is expensive but its done off chain so maybe acceptable.
 
-Value of $b$ in practice is either 32, 40, 48. 
+Value of $b$ in practice is either 32, 40, 48 so for 256-bit $sk_e$, number of chunks is 8, 7 and 6 respectively. 
+
+Each chunk $sk_{e,i}$ must be proved in range $[0, 2^b)$ else the encryptor can make the decryption impractical. To see why range proof is needed, consider a simplified case 
+where $b = 1$ and $sk_e$ has 2 bits, i.e. $sk_e \in [0, 4)$. Now the relevant parts of the 2 chiphertexts (1 per chunk) are $g^{r_0}.h^{sk_{e,0}}, g^{r_1}.h^{sk_{e,1}}$.  
+When these are combined as mentioned above, the result is $g^{r_0}.h^{sk_{e,0}}.(g^{r_1}.h^{sk_{e,1}})^2 = g^{r_0 + 2r_1}.h^{sk_{e,0} + 2sk_{e,1}}$. 
+For the correctness of encryption (which is enforced by above sigma protocol) $(sk_{e,0} + 2sk_{e,1}) \% 4$ must equal $sk_e$ meaning $sk_{e,0} + 2sk_{e,1} = 4z + sk_e$ for some integer $z$ which can be much larger than 4.  
+Now, if $sk_e$ is 1, the honest encryptor will choose $sk_{e,0} = 1, sk_{e,1} = 0$ which satisfies above equation but a malicious encryptor can also choose $sk_{e,0} = 201, sk_{e,1} = 100$
+which satisfies the above equation but is much harder to decrypt.
+
+So in general, working in mod $p$, the $sk_{e, i}$ need to satisfy the equation $(\sum{B_i * sk_{e, i}}) \% p = sk_e$ which implies $\sum{B_i * sk_{e, i}} = p.z + sk_e$ for some integer $z$ which can be much greater than $p$ and thus 
+each $sk_{e, i}$ can be chosen to be much larger than $2^b$. To prevent this each $sk_{e, i}$ must be proven in range $[0, 2^b)$
 
 -----------------------------------------------
 
