@@ -98,6 +98,7 @@ impl<const L: usize> ProverCurveTree<L> {
             gens_length,
             gens_length,
         );
+        // TODO: Needs to be filled or recreated from onchain state.
         let lean_tree = LeanCurveTree::<L, PallasParameters, VestaParameters>::new(
             height,
             &params,

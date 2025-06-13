@@ -1,6 +1,6 @@
 use ark_ec::{AffineRepr, CurveConfig};
 use ark_ff::UniformRand as _;
-use blake2::Blake2s256;
+use blake2::{Blake2b512, Blake2s256};
 
 use dart_bp::{
     account as bp_account,
@@ -37,6 +37,8 @@ pub struct DartBPGenerators {
     pub pk_acct_g: PallasA,
     pub pk_enc_g: PallasA,
     pub account_comm_g: [PallasA; 6],
+    pub leg_g: PallasA,
+    pub leg_h: PallasA,
 }
 
 impl DartBPGenerators {
@@ -53,14 +55,17 @@ impl DartBPGenerators {
         let pk_enc_g = PallasA::rand(&mut rng);
 
         let account_comm_g = [
-            PallasA::rand(&mut rng), // field: sk -- TODO: Shouldn't this generator be the same `pk_acct_g`?
+            PallasA::rand(&mut rng), // field: sk -- TODO: Change this generator be the same `pk_acct_g`?
             PallasA::rand(&mut rng), // field: finalized balance.
             PallasA::rand(&mut rng), // field: counter
             PallasA::rand(&mut rng), // field: asset_id
             PallasA::rand(&mut rng), // field: random value rho
             PallasA::rand(&mut rng), // field: random value s
         ];
-        Self { pk_acct_g, pk_enc_g, account_comm_g }
+
+        let leg_g = PallasA::rand(&mut rng);
+        let leg_h = PallasA::rand(&mut rng);
+        Self { pk_acct_g, pk_enc_g, account_comm_g, leg_g, leg_h }
     }
 
     /// Returns the generators for account state commitments.
@@ -118,6 +123,12 @@ impl AccountKeyPair {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AccountPublicKeys {
+    pub enc: EncryptionPublicKey,
+    pub acct: AccountPublicKey,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AccountKeys {
     pub enc: EncryptionKeyPair,
     pub acct: AccountKeyPair,
@@ -145,6 +156,14 @@ impl AccountKeys {
         asset_id: AssetId,
     ) -> AccountAssetState {
         AccountAssetState::new(&mut rand::thread_rng(), self, asset_id)
+    }
+
+    /// Returns the public keys for the account.
+    pub fn public_keys(&self) -> AccountPublicKeys {
+        AccountPublicKeys {
+            enc: self.enc.public,
+            acct: self.acct.public,
+        }
     }
 }
 
@@ -328,5 +347,120 @@ impl<const L: usize> AssetMintingProof<L> {
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
         ).is_ok()
+    }
+}
+
+/// Represents the auditor or mediator in a leg of the Dart BP protocol.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AuditorOrMediator {
+    Mediator(AccountPublicKeys),
+    Auditor(EncryptionPublicKey),
+}
+
+impl AuditorOrMediator {
+    pub fn get_keys(&self) -> (EncryptionPublicKey, Option<AccountPublicKey>) {
+        match self {
+            AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct)),
+            AuditorOrMediator::Auditor(pk) => (*pk, None),
+        }
+    }
+}
+
+pub enum LegRole {
+    Sender,
+    Receiver,
+    Auditor,
+    Mediator,
+}
+
+pub struct Leg(bp_leg::Leg<PallasA>);
+
+impl Leg {
+    pub fn new(
+        sender: AccountPublicKey,
+        receiver: AccountPublicKey,
+        mediator: Option<AccountPublicKey>,
+        asset_id: AssetId,
+        amount: Balance
+    ) -> Self {
+        let leg = bp_leg::Leg::new(
+            sender.0.0,
+            receiver.0.0,
+            mediator.map(|m| m.0.0),
+            amount,
+            asset_id,
+        );
+        Self(leg)
+    }
+
+    pub fn encrypt<R: RngCore>(
+        &self,
+        rng: &mut R,
+        ephemeral_key: bp_leg::EphemeralSkEncryption<PallasA>,
+        pk_e: &PallasA,
+    ) -> LegEncrypted {
+        let (leg_enc, _) = self.0.encrypt(rng, pk_e, DART_GENS.leg_g, DART_GENS.leg_h);
+        LegEncrypted { leg_enc, ephemeral_key }
+    }
+}
+
+pub struct LegBuilder {
+    sender: AccountPublicKeys,
+    receiver: AccountPublicKeys,
+    asset_id: AssetId,
+    amount: Balance,
+    mediator: AuditorOrMediator,
+}
+
+impl LegBuilder {
+    /// Creates a new leg with the given sender, receiver, asset ID, amount, and optional mediator.
+    pub fn new(
+        sender: AccountPublicKeys,
+        receiver: AccountPublicKeys,
+        asset_id: AssetId,
+        amount: Balance,
+        mediator: AuditorOrMediator,
+    ) -> Self {
+        Self {
+            sender,
+            receiver,
+            asset_id,
+            amount,
+            mediator,
+        }
+    }
+
+    pub fn encryt<R: RngCore>(
+        &self,
+        rng: &mut R,
+    ) -> LegEncrypted {
+        let (mediator_enc, mediator_acct) = self.mediator.get_keys();
+        let leg = Leg::new(
+            self.sender.acct,
+            self.receiver.acct,
+            mediator_acct,
+            self.asset_id,
+            self.amount,
+        );
+        let (ephemeral_key, _eph_ek_enc_r, _sk_e, pk_e) =
+            bp_leg::EphemeralSkEncryption::new::<_, Blake2b512>(rng, self.sender.enc.0.0, self.receiver.enc.0.0, mediator_enc.0.0, DART_GENS.leg_g, DART_GENS.leg_h);
+        leg.encrypt(rng, ephemeral_key, &pk_e.0)
+    }
+}
+
+pub struct LegEncrypted {
+    leg_enc: bp_leg::LegEncryption<PallasA>,
+    ephemeral_key: bp_leg::EphemeralSkEncryption<PallasA>,
+}
+
+impl LegEncrypted {
+    pub fn decrypt(&self, role: LegRole, sk: &EncryptionSecretKey) -> Leg {
+        let sk_e = match role {
+            LegRole::Sender => self.ephemeral_key.decrypt_for_sender::<Blake2b512>(sk.0.0),
+            LegRole::Receiver => self.ephemeral_key.decrypt_for_receiver::<Blake2b512>(sk.0.0),
+            LegRole::Auditor | LegRole::Mediator => self.ephemeral_key.decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
+        };
+        let leg = self.leg_enc.decrypt(&sk_e, DART_GENS.leg_h);
+        Leg(leg)
     }
 }
