@@ -1,4 +1,4 @@
-use crate::account_new::AccountState;
+use crate::account::AccountState;
 use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};

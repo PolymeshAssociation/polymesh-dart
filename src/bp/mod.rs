@@ -3,7 +3,8 @@ use ark_ff::UniformRand as _;
 use blake2::Blake2s256;
 
 use dart_bp::{
-    account_new as bp_account,
+    account as bp_account,
+    leg as bp_leg,
     keys as bp_keys,
 };
 use digest::Digest as _;
