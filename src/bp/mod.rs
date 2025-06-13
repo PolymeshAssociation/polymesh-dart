@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ark_ec::{AffineRepr, CurveConfig};
 use ark_ff::UniformRand as _;
 use blake2::{Blake2b512, Blake2s256};
@@ -74,7 +76,48 @@ impl DartBPGenerators {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub trait AccountLookup {
+    /// Get the encryption public key for the account.
+    fn get_account_enc_pk(&self, account: &AccountPublicKey) -> Option<EncryptionPublicKey>;
+
+    /// Get the account public key for the given encryption public key.
+    fn get_account(&self, enc_pk: &EncryptionPublicKey) -> Option<AccountPublicKey>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AccountLookupMap {
+    enc_to_acct: HashMap<EncryptionPublicKey, AccountPublicKey>,
+    acct_to_enc: HashMap<AccountPublicKey, EncryptionPublicKey>,
+}
+
+impl AccountLookup for AccountLookupMap {
+    fn get_account_enc_pk(&self, account: &AccountPublicKey) -> Option<EncryptionPublicKey> {
+        self.acct_to_enc.get(account).copied()
+    }
+
+    fn get_account(&self, enc_pk: &EncryptionPublicKey) -> Option<AccountPublicKey> {
+        self.enc_to_acct.get(enc_pk).copied()
+    }
+}
+
+impl AccountLookupMap {
+    pub fn new() -> Self {
+        Self {
+            enc_to_acct: HashMap::new(),
+            acct_to_enc: HashMap::new(),
+        }
+    }
+
+    /// Register an account's encryption public key and account public key in the lookup map.
+    pub fn register_account_keys(&mut self, account_pk_keys: &AccountPublicKeys) {
+        self.enc_to_acct
+            .insert(account_pk_keys.enc, account_pk_keys.acct);
+        self.acct_to_enc
+            .insert(account_pk_keys.acct, account_pk_keys.enc);
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EncryptionPublicKey(bp_keys::EncKey<PallasA>);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -94,7 +137,7 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AccountPublicKey(bp_keys::VerKey<PallasA>);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -122,7 +165,7 @@ impl AccountKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
@@ -401,6 +444,26 @@ impl Leg {
     ) -> LegEncrypted {
         let (leg_enc, _) = self.0.encrypt(rng, pk_e, DART_GENS.leg_g, DART_GENS.leg_h);
         LegEncrypted { leg_enc, ephemeral_key }
+    }
+
+    pub fn sender(&self) -> AccountPublicKey {
+        AccountPublicKey(bp_keys::VerKey(self.0.pk_s))
+    }
+
+    pub fn receiver(&self) -> AccountPublicKey {
+        AccountPublicKey(bp_keys::VerKey(self.0.pk_r))
+    }
+
+    pub fn mediator(&self) -> Option<AccountPublicKey> {
+        self.0.pk_m.map(|m| AccountPublicKey(bp_keys::VerKey(m)))
+    }
+
+    pub fn asset_id(&self) -> AssetId {
+        self.0.asset_id
+    }
+
+    pub fn amount(&self) -> Balance {
+        self.0.amount
     }
 }
 
