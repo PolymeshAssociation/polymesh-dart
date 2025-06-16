@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use curve_tree_relations::curve_tree::{SelRerandParameters, Root};
+use curve_tree_relations::curve_tree::{CurveTree, Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::lean_curve_tree::LeanCurveTree;
 use curve_tree_relations::partial_curve_tree::PartialCurveTree;
@@ -35,6 +35,88 @@ pub trait ValidateCurveTreeRoot<const L: usize> {
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
+}
+
+/// A Full Curve Tree that support both insertion and updates.
+pub struct FullCurveTree<const L: usize> {
+    tree: CurveTree<L, 1, PallasParameters, VestaParameters>,
+    height: usize,
+    leaves: Vec<PallasA>,
+    length: usize,
+    params: CurveTreeParameters,
+}
+
+impl<const L: usize> FullCurveTree<L> {
+    /// Creates a new instance of `FullCurveTree` with the given height and generators length.
+    pub fn new_with_capacity(cap: usize, height: usize, gens_length: usize) -> Self {
+        let params = SelRerandParameters::new(
+            gens_length,
+            gens_length,
+        );
+        let leaves = (0..cap).map(|_| PallasA::zero()).collect::<Vec<_>>();
+        Self {
+            tree: CurveTree::from_leaves(&leaves,& params, Some(height)),
+            leaves,
+            length: 0,
+            height,
+            params,
+        }
+    }
+
+    /// Insert a new leaf into the curve tree.
+    pub fn insert(&mut self, leaf: PallasA) -> Result<usize> {
+        let leaf_index = self.length;
+        self.update(leaf, leaf_index)?;
+
+        self.length += 1;
+
+        Ok(leaf_index)
+    }
+
+    /// Updates an existing leaf in the curve tree.
+    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<()> {
+        let cap = self.leaves.len();
+        if leaf_index >= cap {
+            self.grow(leaf_index);
+        }
+
+        match self.leaves.get_mut(leaf_index) {
+            Some(old_leaf) => {
+                *old_leaf = leaf;
+            }
+            None => {
+                return Err(Error::LeafNotFound(leaf));
+            }
+        }
+        self.tree.update_leaf(leaf_index, 0, leaf, &self.params);
+        Ok(())
+    }
+
+    /// Grows the leaves vector to accommodate more leaves.
+    pub fn grow(&mut self, last_leaf_index: usize) {
+        if last_leaf_index < self.leaves.len() {
+            return;
+        }
+        let new_cap = (last_leaf_index + L - 1) / L;
+        self.leaves.resize(new_cap, PallasA::zero());
+        let new_tree = CurveTree::from_leaves(&self.leaves,& self.params, Some(self.height));
+        self.tree = new_tree;
+    }
+
+    /// Returns the path to a leaf in the curve tree by its index.
+    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>> {
+        Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
+    }
+
+    /// Returns the parameters of the curve tree.
+    pub fn params(&self) -> &CurveTreeParameters {
+        &self.params
+    }
+
+    /// Get the root node of the curve tree.
+    pub fn root_node(&self) -> CurveTreeRoot<L> {
+        self.tree.root_node()
+    }
 }
 
 /// A Curve Tree for the Verifier in the Dart BP protocol.
