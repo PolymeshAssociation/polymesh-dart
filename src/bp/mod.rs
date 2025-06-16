@@ -586,6 +586,36 @@ impl AuditorOrMediator {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SettlementRef {
+    /// ID based reference.
+    ID(u64),
+    /// Hash based reference.
+    Hash([u8; 32]),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LegRef {
+    /// The settlement reference.
+    pub settlement: SettlementRef,
+    /// The leg ID within the settlement.
+    pub leg_id: u64,
+}
+
+impl LegRef {
+    pub fn new(settlement: SettlementRef, leg_id: u64) -> Self {
+        Self {
+            settlement,
+            leg_id,
+        }
+    }
+
+    /// The settlement/leg context to tie proofs to a leg.
+    pub fn context(&self) -> String {
+        format!("{:?}-{}", self.settlement, self.leg_id)
+    }
+}
+
 pub enum LegRole {
     Sender,
     Receiver,
@@ -718,7 +748,6 @@ impl LegBuilder {
 /// that the correct auditor/mediator for the asset is included in the leg.
 pub struct SettlementLegProof {
     leg_enc: LegEncrypted,
-    pk_e: EncryptionPublicKey,
     root: CurveTreeRoot<ASSET_TREE_L>,
 
     proof: bp_leg::SettlementTxnProof<
@@ -766,7 +795,6 @@ impl SettlementLegProof {
 
         Self {
             leg_enc,
-            pk_e,
             root: asset_tree.root_node(),
 
             proof,
@@ -779,11 +807,12 @@ impl SettlementLegProof {
         if !asset_tree.validate_root(&self.root).is_ok() {
             return false;
         }
+        let pk_e = self.leg_enc.ephemeral_key.pk_e;
         self.proof
             .verify(
                 self.leg_enc.leg_enc.clone(),
                 self.leg_enc.ephemeral_key.enc.clone(),
-                self.pk_e.0.0,
+                pk_e.0.0,
                 &self.root,
                 self.challenge,
                 b"test-nonce-0",
@@ -866,23 +895,6 @@ impl LegEncrypted {
     }
 }
 
-pub struct LegRef {
-    pub settlement_id: u64,
-    pub leg_id: u64,
-}
-
-impl LegRef {
-    pub fn new(settlement_id: u64, leg_id: u64) -> Self {
-        Self {
-            settlement_id,
-            leg_id,
-        }
-    }
-
-    pub fn context(&self) -> String {
-        format!("{}-{}", self.settlement_id, self.leg_id)
-    }
-}
 
 /// The sender affirmation proof in the Dart BP protocol.
 pub struct SenderAffirmationProof {
