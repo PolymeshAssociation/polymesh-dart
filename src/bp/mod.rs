@@ -5,7 +5,7 @@ use ark_ff::UniformRand as _;
 use blake2::{Blake2b512, Blake2s256};
 
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use digest::{Digest as _};
+use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
 use rand::{RngCore, SeedableRng as _};
@@ -271,7 +271,11 @@ impl AccountAssetState {
         state
     }
 
-    pub fn get_sender_affirm_state<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
+    pub fn get_sender_affirm_state<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        amount: Balance,
+    ) -> AccountState {
         let state = AccountState(self.current_state.0.get_state_for_send(rng, amount));
         self._set_pending_state(state.clone());
         state
@@ -283,20 +287,40 @@ impl AccountAssetState {
         state
     }
 
-    pub fn get_state_for_claiming_received<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
-        let state = AccountState(self.current_state.0.get_state_for_claiming_received(rng, amount));
+    pub fn get_state_for_claiming_received<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        amount: Balance,
+    ) -> AccountState {
+        let state = AccountState(
+            self.current_state
+                .0
+                .get_state_for_claiming_received(rng, amount),
+        );
         self._set_pending_state(state.clone());
         state
     }
 
-    pub fn get_state_for_reversing_send<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
-        let state = AccountState(self.current_state.0.get_state_for_reversing_send(rng, amount));
+    pub fn get_state_for_reversing_send<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        amount: Balance,
+    ) -> AccountState {
+        let state = AccountState(
+            self.current_state
+                .0
+                .get_state_for_reversing_send(rng, amount),
+        );
         self._set_pending_state(state.clone());
         state
     }
 
     pub fn get_state_for_decreasing_counter<R: RngCore>(&mut self, rng: &mut R) -> AccountState {
-        let state = AccountState(self.current_state.0.get_state_for_decreasing_counter(rng, None));
+        let state = AccountState(
+            self.current_state
+                .0
+                .get_state_for_decreasing_counter(rng, None),
+        );
         self._set_pending_state(state.clone());
         state
     }
@@ -372,7 +396,11 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_L, ASSET_TREE_HEIGHT as usize, ACCOUNT_TREE_GENS),
+            tree: FullCurveTree::new_with_capacity(
+                ASSET_TREE_L,
+                ASSET_TREE_HEIGHT as usize,
+                ACCOUNT_TREE_GENS,
+            ),
             assets: IndexMap::new(),
         })
     }
@@ -685,7 +713,7 @@ impl LegBuilder {
 }
 
 /// The proof for a settlement leg in the Dart BP protocol.
-/// 
+///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
 pub struct SettlementLegProof {
@@ -907,7 +935,11 @@ impl SenderAffirmationProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
@@ -988,7 +1020,11 @@ impl ReceiverAffirmationProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
@@ -1071,7 +1107,11 @@ impl ReceiverClaimProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
@@ -1152,7 +1192,11 @@ impl SenderCounterUpdateProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
@@ -1235,7 +1279,11 @@ impl SenderReversalProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root).is_ok() {
             return false;
