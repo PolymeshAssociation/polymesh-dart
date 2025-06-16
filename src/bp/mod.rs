@@ -751,7 +751,7 @@ impl SettlementLegProof {
             leg.0,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            leg_enc.ephemeral_key.0.clone(),
+            leg_enc.ephemeral_key.enc.clone(),
             eph_rand,
             pk_e.0.0,
             mediator.map(|m| m.0.0),
@@ -782,7 +782,7 @@ impl SettlementLegProof {
         self.proof
             .verify(
                 self.leg_enc.leg_enc.clone(),
-                self.leg_enc.ephemeral_key.0.clone(),
+                self.leg_enc.ephemeral_key.enc.clone(),
                 self.pk_e.0.0,
                 &self.root,
                 self.challenge,
@@ -798,7 +798,10 @@ impl SettlementLegProof {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EphemeralSkEncryption(bp_leg::EphemeralSkEncryption<PallasA>);
+pub struct EphemeralSkEncryption {
+    enc: bp_leg::EphemeralSkEncryption<PallasA>,
+    pk_e: EncryptionPublicKey,
+}
 
 impl EphemeralSkEncryption {
     pub(crate) fn new<R: RngCore>(
@@ -816,7 +819,15 @@ impl EphemeralSkEncryption {
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             );
-        (Self(ephemeral_key), eph_key_rand, EncryptionPublicKey(pk_e))
+        let pk_e = EncryptionPublicKey(pk_e);
+        (
+            Self {
+                enc: ephemeral_key,
+                pk_e,
+            },
+            eph_key_rand,
+            pk_e,
+        )
     }
 }
 
@@ -833,15 +844,15 @@ impl LegEncrypted {
         let sk_e = match role {
             LegRole::Sender => self
                 .ephemeral_key
-                .0
+                .enc
                 .decrypt_for_sender::<Blake2b512>(sk.0.0),
             LegRole::Receiver => self
                 .ephemeral_key
-                .0
+                .enc
                 .decrypt_for_receiver::<Blake2b512>(sk.0.0),
             LegRole::Auditor | LegRole::Mediator => self
                 .ephemeral_key
-                .0
+                .enc
                 .decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
         };
         EncryptionSecretKey(bp_keys::DecKey(sk_e))
@@ -1299,6 +1310,68 @@ impl SenderReversalProof {
                 &DART_GENS.asset_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
+            )
+            .is_ok()
+    }
+}
+
+/// Mediator affirmation proof in the Dart BP protocol.
+pub struct MediatorAffirmationProof {
+    pub leg_ref: LegRef,
+    pub accept: bool,
+    // TODO: Remove.
+    mediator_pk: AccountPublicKey,
+
+    proof: bp_leg::MediatorTxnProof<PallasA>,
+    challenge: PallasScalar,
+}
+
+impl MediatorAffirmationProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        eph_sk: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        mediator: AccountKeyPair,
+        accept: bool,
+    ) -> Self {
+        let ctx = leg_ref.context();
+        let eph_pk = leg_enc.ephemeral_key.pk_e;
+        let (proof, challenge) = bp_leg::MediatorTxnProof::new(
+            rng,
+            leg_enc.leg_enc.clone(),
+            eph_sk.0.0,
+            eph_pk.0.0,
+            mediator.secret.0.0,
+            mediator.public.0.0,
+            accept,
+            ctx.as_bytes(),
+            DART_GENS.leg_g,
+        );
+
+        Self {
+            leg_ref,
+            accept,
+            mediator_pk: mediator.public,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted) -> bool {
+        let ctx = self.leg_ref.context();
+        let eph_pk = leg_enc.ephemeral_key.pk_e;
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                eph_pk.0.0,
+                // TODO: remove `mediator_pk` as a public input.
+                self.mediator_pk.0.0,
+                self.accept,
+                self.challenge,
+                ctx.as_bytes(),
+                DART_GENS.leg_g,
             )
             .is_ok()
     }
