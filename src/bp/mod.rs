@@ -5,7 +5,7 @@ use ark_ff::UniformRand as _;
 use blake2::{Blake2b512, Blake2s256};
 
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use digest::Digest as _;
+use digest::{Digest as _};
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
 use rand::{RngCore, SeedableRng as _};
@@ -267,6 +267,36 @@ impl AccountAssetState {
 
     pub fn mint<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
         let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    pub fn get_sender_affirm_state<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_send(rng, amount));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    pub fn get_receiver_affirm_state<R: RngCore>(&mut self, rng: &mut R) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_receive(rng));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    pub fn get_state_for_claiming_received<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_claiming_received(rng, amount));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    pub fn get_state_for_reversing_send<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_reversing_send(rng, amount));
+        self._set_pending_state(state.clone());
+        state
+    }
+
+    pub fn get_state_for_decreasing_counter<R: RngCore>(&mut self, rng: &mut R) -> AccountState {
+        let state = AccountState(self.current_state.0.get_state_for_decreasing_counter(rng, None));
         self._set_pending_state(state.clone());
         state
     }
@@ -535,6 +565,7 @@ pub enum LegRole {
     Mediator,
 }
 
+/// The decrypted leg details in the Dart BP protocol.
 pub struct Leg(bp_leg::Leg<PallasA>);
 
 impl Leg {
@@ -594,6 +625,7 @@ impl Leg {
     }
 }
 
+/// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
 pub struct LegBuilder {
     sender: AccountPublicKeys,
     receiver: AccountPublicKeys,
@@ -652,6 +684,10 @@ impl LegBuilder {
     }
 }
 
+/// The proof for a settlement leg in the Dart BP protocol.
+/// 
+/// This is to prove that the leg includes the correct encryption of the leg details and
+/// that the correct auditor/mediator for the asset is included in the leg.
 pub struct SettlementLegProof {
     leg_enc: LegEncrypted,
     pk_e: EncryptionPublicKey,
@@ -758,13 +794,14 @@ impl EphemeralSkEncryption {
 
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasA>);
 
+/// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 pub struct LegEncrypted {
     leg_enc: bp_leg::LegEncryption<PallasA>,
     ephemeral_key: EphemeralSkEncryption,
 }
 
 impl LegEncrypted {
-    pub fn decrypt(&self, role: LegRole, sk: &EncryptionSecretKey) -> Leg {
+    pub fn decrypt_sk_e(&self, role: LegRole, sk: &EncryptionSecretKey) -> EncryptionSecretKey {
         let sk_e = match role {
             LegRole::Sender => self
                 .ephemeral_key
@@ -779,7 +816,442 @@ impl LegEncrypted {
                 .0
                 .decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
         };
-        let leg = self.leg_enc.decrypt(&sk_e, DART_GENS.leg_h);
+        EncryptionSecretKey(bp_keys::DecKey(sk_e))
+    }
+
+    /// Decrypts the leg using the provided secret key and role.
+    pub fn decrypt(&self, role: LegRole, sk: &EncryptionSecretKey) -> Leg {
+        let sk_e = self.decrypt_sk_e(role, sk);
+        let leg = self.leg_enc.decrypt(&sk_e.0.0, DART_GENS.leg_h);
         Leg(leg)
+    }
+}
+
+pub struct LegRef {
+    pub settlement_id: u64,
+    pub leg_id: u64,
+}
+
+impl LegRef {
+    pub fn new(settlement_id: u64, leg_id: u64) -> Self {
+        Self {
+            settlement_id,
+            leg_id,
+        }
+    }
+
+    pub fn context(&self) -> String {
+        format!("{}-{}", self.settlement_id, self.leg_id)
+    }
+}
+
+/// The sender affirmation proof in the Dart BP protocol.
+pub struct SenderAffirmationProof {
+    pub leg_ref: LegRef,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+
+    proof: bp_account::AffirmAsSenderTxnProof<
+        ACCOUNT_TREE_L,
+        <PallasParameters as CurveConfig>::ScalarField,
+        <VestaParameters as CurveConfig>::ScalarField,
+        PallasParameters,
+        VestaParameters,
+    >,
+    challenge: PallasScalar,
+}
+
+impl SenderAffirmationProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        amount: Balance,
+        sk_e: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+    ) -> Self {
+        // Generate a new account state for the sender affirmation.
+        let new_account_state = account_asset.mint(rng, amount);
+        let new_account_commitment = new_account_state.commitment();
+
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let ctx = leg_ref.context();
+        let (proof, challenge) = bp_account::AffirmAsSenderTxnProof::new(
+            rng,
+            amount,
+            sk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            &current_account_state,
+            &new_account_state.0,
+            new_account_commitment.0,
+            current_account_path,
+            ctx.as_bytes(),
+            tree_lookup.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        );
+
+        Self {
+            leg_ref,
+            root,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        let ctx = self.leg_ref.context();
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                &self.root,
+                self.challenge,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                &DART_GENS.asset_comm_g(),
+                DART_GENS.leg_g,
+                DART_GENS.leg_h,
+            )
+            .is_ok()
+    }
+}
+
+/// The receiver affirmation proof in the Dart BP protocol.
+pub struct ReceiverAffirmationProof {
+    pub leg_ref: LegRef,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+
+    proof: bp_account::AffirmAsReceiverTxnProof<
+        ACCOUNT_TREE_L,
+        <PallasParameters as CurveConfig>::ScalarField,
+        <VestaParameters as CurveConfig>::ScalarField,
+        PallasParameters,
+        VestaParameters,
+    >,
+    challenge: PallasScalar,
+}
+
+impl ReceiverAffirmationProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        sk_e: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+    ) -> Self {
+        // Generate a new account state for the receiver affirmation.
+        let new_account_state = account_asset.get_receiver_affirm_state(rng);
+        let new_account_commitment = new_account_state.commitment();
+
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let ctx = leg_ref.context();
+        let (proof, challenge) = bp_account::AffirmAsReceiverTxnProof::new(
+            rng,
+            sk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            &current_account_state,
+            &new_account_state.0,
+            new_account_commitment.0,
+            current_account_path,
+            ctx.as_bytes(),
+            tree_lookup.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        );
+
+        Self {
+            leg_ref,
+            root,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        let ctx = self.leg_ref.context();
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                &self.root,
+                self.challenge,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                &DART_GENS.asset_comm_g(),
+                DART_GENS.leg_g,
+                DART_GENS.leg_h,
+            )
+            .is_ok()
+    }
+}
+
+/// The proof for claiming received assets in the Dart BP protocol.
+pub struct ReceiverClaimProof {
+    pub leg_ref: LegRef,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+
+    proof: bp_account::ClaimReceivedTxnProof<
+        ACCOUNT_TREE_L,
+        <PallasParameters as CurveConfig>::ScalarField,
+        <VestaParameters as CurveConfig>::ScalarField,
+        PallasParameters,
+        VestaParameters,
+    >,
+    challenge: PallasScalar,
+}
+
+impl ReceiverClaimProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        amount: Balance,
+        sk_e: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+    ) -> Self {
+        // Generate a new account state for claiming received assets.
+        let new_account_state = account_asset.get_state_for_claiming_received(rng, amount);
+        let new_account_commitment = new_account_state.commitment();
+
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let ctx = leg_ref.context();
+        let (proof, challenge) = bp_account::ClaimReceivedTxnProof::new(
+            rng,
+            amount,
+            sk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            &current_account_state,
+            &new_account_state.0,
+            new_account_commitment.0,
+            current_account_path,
+            ctx.as_bytes(),
+            tree_lookup.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        );
+
+        Self {
+            leg_ref,
+            root,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        let ctx = self.leg_ref.context();
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                &self.root,
+                self.challenge,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                &DART_GENS.asset_comm_g(),
+                DART_GENS.leg_g,
+                DART_GENS.leg_h,
+            )
+            .is_ok()
+    }
+}
+
+/// Sender counter update proof in the Dart BP protocol.
+pub struct SenderCounterUpdateProof {
+    pub leg_ref: LegRef,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+
+    proof: bp_account::SenderCounterUpdateTxnProof<
+        ACCOUNT_TREE_L,
+        <PallasParameters as CurveConfig>::ScalarField,
+        <VestaParameters as CurveConfig>::ScalarField,
+        PallasParameters,
+        VestaParameters,
+    >,
+    challenge: PallasScalar,
+}
+
+impl SenderCounterUpdateProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        sk_e: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+    ) -> Self {
+        // Generate a new account state for decreasing the counter.
+        let new_account_state = account_asset.get_state_for_decreasing_counter(rng);
+        let new_account_commitment = new_account_state.commitment();
+
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let ctx = leg_ref.context();
+        let (proof, challenge) = bp_account::SenderCounterUpdateTxnProof::new(
+            rng,
+            sk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            &current_account_state,
+            &new_account_state.0,
+            new_account_commitment.0,
+            current_account_path,
+            ctx.as_bytes(),
+            tree_lookup.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        );
+
+        Self {
+            leg_ref,
+            root,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        let ctx = self.leg_ref.context();
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                &self.root,
+                self.challenge,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                &DART_GENS.asset_comm_g(),
+                DART_GENS.leg_g,
+                DART_GENS.leg_h,
+            )
+            .is_ok()
+    }
+}
+
+/// Sender reversal proof in the Dart BP protocol.
+pub struct SenderReversalProof {
+    pub leg_ref: LegRef,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+
+    proof: bp_account::SenderReverseTxnProof<
+        ACCOUNT_TREE_L,
+        <PallasParameters as CurveConfig>::ScalarField,
+        <VestaParameters as CurveConfig>::ScalarField,
+        PallasParameters,
+        VestaParameters,
+    >,
+    challenge: PallasScalar,
+}
+
+impl SenderReversalProof {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        leg_ref: LegRef,
+        amount: Balance,
+        sk_e: EncryptionSecretKey,
+        leg_enc: &LegEncrypted,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+    ) -> Self {
+        // Generate a new account state for reversing the send.
+        let new_account_state = account_asset.get_state_for_reversing_send(rng, amount);
+        let new_account_commitment = new_account_state.commitment();
+
+        let current_account_state = &account_asset.current_state.0;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
+            .expect("Failed to get path to current account state commitment");
+
+        let root = tree_lookup.root_node();
+
+        let ctx = leg_ref.context();
+        let (proof, challenge) = bp_account::SenderReverseTxnProof::new(
+            rng,
+            amount,
+            sk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            &current_account_state,
+            &new_account_state.0,
+            new_account_commitment.0,
+            current_account_path,
+            ctx.as_bytes(),
+            tree_lookup.params(),
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        );
+
+        Self {
+            leg_ref,
+            root,
+
+            proof,
+            challenge,
+        }
+    }
+
+    pub fn verify(&self, leg_enc: &LegEncrypted, tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !tree_roots.validate_root(&self.root).is_ok() {
+            return false;
+        }
+        let ctx = self.leg_ref.context();
+        self.proof
+            .verify(
+                leg_enc.leg_enc.clone(),
+                &self.root,
+                self.challenge,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                &DART_GENS.asset_comm_g(),
+                DART_GENS.leg_g,
+                DART_GENS.leg_h,
+            )
+            .is_ok()
     }
 }
