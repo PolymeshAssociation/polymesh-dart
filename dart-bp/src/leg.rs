@@ -1019,7 +1019,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         eph_sk: G::ScalarField,
         eph_pk: G,
         mediator_sk: G::ScalarField,
-        mediator_pk: G,
         accept: bool,
         nonce: &[u8],
         g: G,
@@ -1055,9 +1054,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let mut extra_instance = vec![];
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
         eph_pk.serialize_compressed(&mut extra_instance).unwrap();
-        mediator_pk
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         g.serialize_compressed(&mut extra_instance).unwrap();
 
@@ -1075,7 +1071,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         &self,
         leg_enc: LegEncryption<G>,
         eph_pk: G,
-        mediator_pk: G,
         accept: bool,
         prover_challenge: G::ScalarField,
         nonce: &[u8],
@@ -1102,9 +1097,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let mut extra_instance = vec![];
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
         eph_pk.serialize_compressed(&mut extra_instance).unwrap();
-        mediator_pk
-            .serialize_compressed(&mut extra_instance)
-            .unwrap();
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         g.serialize_compressed(&mut extra_instance).unwrap();
 
@@ -1487,7 +1479,6 @@ pub mod tests {
             sk_e.0,
             pk_e.0,
             sk_a.0,
-            pk_a.0,
             accept,
             nonce,
             gen_p_1,
@@ -1500,7 +1491,6 @@ pub mod tests {
             .verify(
                 leg_enc.clone(),
                 pk_e.0,
-                pk_a.0,
                 accept,
                 prover_challenge,
                 nonce,
