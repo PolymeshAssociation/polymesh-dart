@@ -31,10 +31,45 @@ pub trait CurveTreeLookup<const L: usize> {
 /// This allows verifying proofs against older tree roots.
 pub trait ValidateCurveTreeRoot<const L: usize> {
     /// Validates the root of the curve tree.
-    fn validate_root(&self, root: &CurveTreeRoot<L>) -> Result<()>;
+    fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool;
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
+}
+
+pub struct RootHistory<const L: usize> {
+    roots: Vec<CurveTreeRoot<L>>,
+    history_length: usize,
+    params: CurveTreeParameters,
+}
+
+impl<const L: usize> RootHistory<L> {
+    /// Creates a new instance of `RootHistory` with the given history length and parameters.
+    pub fn new(history_length: usize, params: &CurveTreeParameters) -> Self {
+        Self {
+            roots: Vec::with_capacity(history_length),
+            history_length,
+            params: params.clone(),
+        }
+    }
+
+    /// Adds a new root to the history.
+    pub fn add_root(&mut self, root: CurveTreeRoot<L>) {
+        if self.roots.len() >= self.history_length {
+            self.roots.remove(0);
+        }
+        self.roots.push(root);
+    }
+}
+
+impl<const L: usize> ValidateCurveTreeRoot<L> for &RootHistory<L> {
+    fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool {
+        self.roots.contains(root)
+    }
+
+    fn params(&self) -> &CurveTreeParameters {
+        &self.params
+    }
 }
 
 /// A Full Curve Tree that support both insertion and updates.
@@ -198,7 +233,7 @@ impl<const L: usize> ProverCurveTree<L> {
     }
 }
 
-impl<const L: usize> CurveTreeLookup<L> for ProverCurveTree<L> {
+impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     fn get_path_to_leaf_index(&self, leaf_index: u64) -> Result<CurveTreePath<L>> {
         Ok(self.partial_tree.get_path_to_leaf(leaf_index)?)
     }

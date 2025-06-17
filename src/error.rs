@@ -12,4 +12,8 @@ pub enum Error {
     /// Leaf not found in the curve tree.
     #[error("Leaf not found in the curve tree: {0:?}")]
     LeafNotFound(ark_pallas::Affine),
+
+    /// Account/Encryption public key already exists.
+    #[error("Account/Encryption public key already exists.")]
+    AccountPublicKeyExists,
 }

@@ -131,6 +131,19 @@ impl AccountLookupMap {
         }
     }
 
+    pub fn ensure_unregistered(
+        &self,
+        keys: &AccountPublicKeys,
+    ) -> Result<()> {
+        if self.enc_to_acct.contains_key(&keys.enc) {
+            return Err(Error::AccountPublicKeyExists);
+        }
+        if self.acct_to_enc.contains_key(&keys.acct) {
+            return Err(Error::AccountPublicKeyExists);
+        }
+        Ok(())
+    }
+
     /// Register an account's encryption public key and account public key in the lookup map.
     pub fn register_account_keys(&mut self, account_pk_keys: &AccountPublicKeys) {
         self.enc_to_acct
@@ -218,8 +231,8 @@ impl AccountKeys {
     }
 
     /// Initializes a new asset state for the account.
-    pub fn init_asset_state(&self, asset_id: AssetId) -> AccountAssetState {
-        AccountAssetState::new(&mut rand::thread_rng(), self, asset_id)
+    pub fn init_asset_state<R: RngCore>(&self, rng: &mut R, asset_id: AssetId) -> AccountAssetState {
+        AccountAssetState::new(rng, self, asset_id)
     }
 
     /// Returns the public keys for the account.
@@ -238,10 +251,17 @@ impl AccountState {
     pub fn commitment(&self) -> AccountStateCommitment {
         AccountStateCommitment(self.0.commit(&DART_GENS.account_comm_g()))
     }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.0.nullifier(DART_GENS.pk_acct_g))
+    }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AccountStateNullifier(pub PallasA);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccountStateCommitment(BPAccountStateCommitment);
+pub struct AccountStateCommitment(pub BPAccountStateCommitment);
 
 pub struct AccountAssetState {
     pub account: AccountKeys,
@@ -385,7 +405,7 @@ impl AssetState {
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
 #[derive(Clone, Debug, Default)]
-pub struct AssetStateCommitment(PallasA);
+pub struct AssetStateCommitment(pub PallasA);
 
 /// Represents a tree of asset states in the Dart BP protocol.
 pub struct AssetCurveTree {
@@ -458,7 +478,7 @@ impl AccountAssetRegistrationProof {
         account: &AccountKeys,
         asset_id: AssetId,
     ) -> (Self, AccountAssetState) {
-        let account_state = account.init_asset_state(asset_id);
+        let account_state = account.init_asset_state(rng, asset_id);
         let account_state_commitment = account_state.current_state_commitment.clone();
         let (proof, challenge) = bp_account::RegTxnProof::new(
             rng,
@@ -502,6 +522,8 @@ pub struct AssetMintingProof {
     pub asset_id: AssetId,
     pub amount: Balance,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     // proof
     proof: bp_account::MintTxnProof<
@@ -521,16 +543,18 @@ impl AssetMintingProof {
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
         amount: Balance,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new minting state for the account asset.
         let mint_account_state = account_asset.mint(rng, amount);
         let mint_account_commitment = mint_account_state.commitment();
 
         let pk = account_asset.account.acct.public;
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+            .get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node();
 
@@ -540,26 +564,30 @@ impl AssetMintingProof {
             amount,
             current_account_state,
             &mint_account_state.0,
-            mint_account_commitment.0,
+            mint_account_commitment.0.clone(),
             current_account_path,
             b"test-nonce-0",
             tree_lookup.params(),
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
         );
-        Self {
+        Ok(Self {
             pk,
             asset_id: account_asset.asset_id,
             amount,
+            root,
+            nullifier,
+            account_state_commitment: mint_account_commitment,
+
             proof,
             challenge,
-            root,
-        }
+        })
     }
 
     pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         self.proof
@@ -586,6 +614,14 @@ pub enum AuditorOrMediator {
 }
 
 impl AuditorOrMediator {
+    pub fn mediator(pk: &AccountPublicKeys) -> Self {
+        Self::Mediator(*pk)
+    }
+
+    pub fn auditor(pk: &EncryptionPublicKey) -> Self {
+        Self::Auditor(*pk)
+    }
+
     pub fn get_keys(&self) -> (EncryptionPublicKey, Option<AccountPublicKey>) {
         match self {
             AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct)),
@@ -812,7 +848,8 @@ impl SettlementLegProof {
 
     pub fn verify(&self, asset_tree: &impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
         // Validate the root of the curve tree.
-        if !asset_tree.validate_root(&self.root).is_ok() {
+        if !asset_tree.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
@@ -908,6 +945,8 @@ impl LegEncrypted {
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::AffirmAsSenderTxnProof<
         ACCOUNT_TREE_L,
@@ -934,6 +973,9 @@ impl SenderAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -948,7 +990,7 @@ impl SenderAffirmationProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -960,6 +1002,8 @@ impl SenderAffirmationProof {
         Self {
             leg_ref,
             root,
+            nullifier,
+            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
@@ -972,7 +1016,8 @@ impl SenderAffirmationProof {
         tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -995,6 +1040,8 @@ impl SenderAffirmationProof {
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::AffirmAsReceiverTxnProof<
         ACCOUNT_TREE_L,
@@ -1020,6 +1067,9 @@ impl ReceiverAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1033,7 +1083,7 @@ impl ReceiverAffirmationProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1045,6 +1095,8 @@ impl ReceiverAffirmationProof {
         Self {
             leg_ref,
             root,
+            nullifier,
+            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
@@ -1057,7 +1109,8 @@ impl ReceiverAffirmationProof {
         tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -1080,6 +1133,8 @@ impl ReceiverAffirmationProof {
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::ClaimReceivedTxnProof<
         ACCOUNT_TREE_L,
@@ -1106,6 +1161,9 @@ impl ReceiverClaimProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1120,7 +1178,7 @@ impl ReceiverClaimProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1132,6 +1190,8 @@ impl ReceiverClaimProof {
         Self {
             leg_ref,
             root,
+            nullifier,
+            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
@@ -1144,7 +1204,8 @@ impl ReceiverClaimProof {
         tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -1167,6 +1228,8 @@ impl ReceiverClaimProof {
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::SenderCounterUpdateTxnProof<
         ACCOUNT_TREE_L,
@@ -1192,6 +1255,9 @@ impl SenderCounterUpdateProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1205,7 +1271,7 @@ impl SenderCounterUpdateProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1217,6 +1283,8 @@ impl SenderCounterUpdateProof {
         Self {
             leg_ref,
             root,
+            nullifier,
+            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
@@ -1229,7 +1297,8 @@ impl SenderCounterUpdateProof {
         tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -1252,6 +1321,8 @@ impl SenderCounterUpdateProof {
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub nullifier: AccountStateNullifier,
+    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::SenderReverseTxnProof<
         ACCOUNT_TREE_L,
@@ -1278,6 +1349,9 @@ impl SenderReversalProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
+        let nullifier = account_asset
+            .current_state
+            .nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1292,7 +1366,7 @@ impl SenderReversalProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1304,6 +1378,8 @@ impl SenderReversalProof {
         Self {
             leg_ref,
             root,
+            nullifier,
+            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
@@ -1316,7 +1392,8 @@ impl SenderReversalProof {
         tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root).is_ok() {
+        if !tree_roots.validate_root(&self.root) {
+            log::error!("Invalid root for asset minting proof");
             return false;
         }
         let ctx = self.leg_ref.context();
