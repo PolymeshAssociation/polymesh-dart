@@ -1331,8 +1331,6 @@ impl SenderReversalProof {
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,
-    // TODO: Remove.
-    mediator_pk: AccountPublicKey,
 
     proof: bp_leg::MediatorTxnProof<PallasA>,
     challenge: PallasScalar,
@@ -1344,7 +1342,7 @@ impl MediatorAffirmationProof {
         leg_ref: LegRef,
         eph_sk: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
-        mediator: AccountKeyPair,
+        mediator_sk: AccountSecretKey,
         accept: bool,
     ) -> Self {
         let ctx = leg_ref.context();
@@ -1354,8 +1352,7 @@ impl MediatorAffirmationProof {
             leg_enc.leg_enc.clone(),
             eph_sk.0.0,
             eph_pk.0.0,
-            mediator.secret.0.0,
-            mediator.public.0.0,
+            mediator_sk.0.0,
             accept,
             ctx.as_bytes(),
             DART_GENS.leg_g,
@@ -1364,7 +1361,6 @@ impl MediatorAffirmationProof {
         Self {
             leg_ref,
             accept,
-            mediator_pk: mediator.public,
 
             proof,
             challenge,
@@ -1378,8 +1374,6 @@ impl MediatorAffirmationProof {
             .verify(
                 leg_enc.leg_enc.clone(),
                 eph_pk.0.0,
-                // TODO: remove `mediator_pk` as a public input.
-                self.mediator_pk.0.0,
                 self.accept,
                 self.challenge,
                 ctx.as_bytes(),
