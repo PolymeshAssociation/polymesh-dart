@@ -240,6 +240,7 @@ impl AccountState {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountStateCommitment(BPAccountStateCommitment);
 
 pub struct AccountAssetState {
@@ -442,6 +443,10 @@ impl AssetCurveTree {
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 pub struct AccountAssetRegistrationProof {
+    pub account: AccountPublicKey,
+    pub account_state_commitment: AccountStateCommitment,
+    pub asset_id: AssetId,
+
     proof: bp_account::RegTxnProof<PallasA>,
     challenge: PallasScalar,
 }
@@ -454,30 +459,33 @@ impl AccountAssetRegistrationProof {
         asset_id: AssetId,
     ) -> (Self, AccountAssetState) {
         let account_state = account.init_asset_state(asset_id);
+        let account_state_commitment = account_state.current_state_commitment.clone();
         let (proof, challenge) = bp_account::RegTxnProof::new(
             rng,
             account.acct.public.0.0,
             &account_state.current_state.0,
-            account_state.current_state_commitment.0.clone(),
+            account_state_commitment.0.clone(),
             b"test-nonce-0",
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
         );
-        (Self { proof, challenge }, account_state)
+        (Self {
+            account: account.acct.public,
+            account_state_commitment,
+            asset_id,
+            proof, challenge
+        }, account_state)
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
     pub fn verify(
         &self,
-        pk: &AccountPublicKey,
-        asset_id: AssetId,
-        account_commitment: &AccountStateCommitment,
     ) -> bool {
         self.proof
             .verify(
-                &pk.0.0,
-                asset_id,
-                &account_commitment.0,
+                &self.account.0.0,
+                self.asset_id,
+                &self.account_state_commitment.0,
                 self.challenge,
                 b"test-nonce-0",
                 &DART_GENS.account_comm_g(),
@@ -490,10 +498,10 @@ impl AccountAssetRegistrationProof {
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
 pub struct AssetMintingProof {
     // Public inputs.
-    pk: AccountPublicKey,
-    asset_id: AssetId,
-    amount: Balance,
-    root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub pk: AccountPublicKey,
+    pub asset_id: AssetId,
+    pub amount: Balance,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
 
     // proof
     proof: bp_account::MintTxnProof<
