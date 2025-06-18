@@ -28,10 +28,11 @@ fn test_minting_asset() -> Result<()> {
     chain.register_account(mediator, mediator_keys.public_keys())?;
     chain.register_account(investor1, investor1_keys.public_keys())?;
 
+    let asset_mediator = AuditorOrMediator::mediator(&mediator_keys.public_keys());
     // Create a Dart asset with the issuer as the owner and the mediator as the auditor.
     let asset_details = chain.create_dart_asset(
         issuer,
-        AuditorOrMediator::mediator(&mediator_keys.public_keys()),
+        asset_mediator,
     )?;
     let asset_id = asset_details.asset_id;
 
@@ -56,6 +57,13 @@ fn test_minting_asset() -> Result<()> {
     )?;
     chain.mint_assets(issuer, proof)?;
     issuer_account.commit_pending_state();
+
+    // Create a settlement to transfer some assets from the issuer to the investor.
+    let settlement = SettlementBuilder::new(b"Test")
+        .leg(LegBuilder { sender: issuer_keys.public_keys(), receiver: investor1_keys.public_keys(), asset_id, amount: 500, mediator: asset_mediator })
+        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+    // Submit the settlement.
+    chain.create_settlement(issuer, settlement)?;
 
     Ok(())
 }

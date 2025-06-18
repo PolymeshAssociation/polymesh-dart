@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Result, anyhow};
+use dart_common::{SettlementId, SETTLEMENT_MAX_LEGS};
 
 use std::collections::{HashMap, HashSet};
 
@@ -45,9 +46,66 @@ impl DartAssetDetails {
     pub fn asset_state(&self) -> AssetState {
         let (is_mediator, pk) = match &self.auditor {
             AuditorOrMediator::Auditor(pk) => (false, pk.clone()),
-            AuditorOrMediator::Mediator(pk) => (true, pk.enc.clone()),
+            AuditorOrMediator::Mediator(pk) => {
+                // HACK: Shouldn't we be using the mediator's encryption key here?
+                (true, pk.acct.into())
+                //(true, pk.enc.clone())
+            },
         };
         AssetState::new(self.asset_id, is_mediator, pk)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AffirmationStatus {
+    Pending,
+    Affirmed,
+    Rejected,
+    Finalized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DartSettlementLeg {
+    pub enc: LegEncrypted,
+    pub sender: AffirmationStatus,
+    pub receiver: AffirmationStatus,
+    pub pending_mediator_affirmations: u8,
+    pub status: SettlementStatus,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SettlementStatus {
+    Pending,
+    Executed,
+    Rejected,
+    Finalized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DartSettlement {
+    pub id: SettlementId,
+    pub legs: Vec<DartSettlementLeg>,
+    pub status: SettlementStatus,
+}
+
+impl DartSettlement {
+    pub fn from_proof(id: SettlementId, proof: SettlementProof) -> Self {
+        let legs = proof
+            .legs
+            .into_iter()
+            .map(|leg| DartSettlementLeg {
+                enc: leg.leg_enc,
+                sender: AffirmationStatus::Pending,
+                receiver: AffirmationStatus::Pending,
+                pending_mediator_affirmations: leg.mediators,
+                status: SettlementStatus::Pending,
+            })
+            .collect();
+        Self {
+            id,
+            legs,
+            status: SettlementStatus::Pending,
+        }
     }
 }
 
@@ -72,6 +130,10 @@ pub struct DartChainState {
 
     /// Also build the prover account tree for testing purposes.
     prover_account_tree: ProverCurveTree<ACCOUNT_TREE_L>,
+
+    /// Settlements in the chain state.
+    settlements: HashMap<SettlementId, DartSettlement>,
+    next_settlement_id: SettlementId,
 }
 
 impl DartChainState {
@@ -95,6 +157,9 @@ impl DartChainState {
             account_nullifiers: HashSet::new(),
 
             prover_account_tree: ProverCurveTree::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
+
+            settlements: HashMap::new(),
+            next_settlement_id: 0,
         })
     }
 
@@ -310,5 +375,36 @@ impl DartChainState {
         self._add_nullifier(proof.nullifier);
 
         Ok(())
+    }
+
+    pub fn create_settlement(
+        &mut self,
+        caller: &SignerAddress,
+        proof: SettlementProof,
+    ) -> Result<SettlementId> {
+        self.ensure_caller(caller)?;
+
+        // Ensure the settlement has a valid number of legs.
+        if proof.legs.is_empty() || proof.legs.len() > SETTLEMENT_MAX_LEGS as usize {
+            return Err(anyhow!(
+                "Settlement must have between 1 and {} legs",
+                SETTLEMENT_MAX_LEGS
+            ));
+        }
+
+        // verify the settlement proof.
+        if !proof.verify(&self.asset_roots) {
+            return Err(anyhow!("Invalid settlement proof"));
+        }
+
+        // Allocate a new settlement ID.
+        let settlement_id = self.next_settlement_id;
+        self.next_settlement_id += 1;
+
+        // Save the settlement.
+        let settlement = DartSettlement::from_proof(settlement_id, proof);
+        self.settlements.insert(settlement_id, settlement);
+
+        Ok(settlement_id)
     }
 }

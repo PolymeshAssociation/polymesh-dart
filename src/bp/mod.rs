@@ -8,7 +8,7 @@ use bounded_collections::{BoundedVec, ConstU32};
 use codec::Encode;
 
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use dart_common::{MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS};
+use dart_common::{LegId, SettlementId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS};
 use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
@@ -156,6 +156,12 @@ impl AccountLookupMap {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EncryptionPublicKey(bp_keys::EncKey<PallasA>);
+
+impl From<AccountPublicKey> for EncryptionPublicKey {
+    fn from(account_pk: AccountPublicKey) -> Self {
+        EncryptionPublicKey(bp_keys::EncKey(account_pk.0.0))
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EncryptionSecretKey(bp_keys::DecKey<PallasA>);
@@ -639,7 +645,7 @@ impl AuditorOrMediator {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SettlementRef {
     /// ID based reference.
-    ID(u64),
+    ID(SettlementId),
     /// Hash based reference.
     Hash([u8; 32]),
 }
@@ -649,11 +655,11 @@ pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
     /// The leg ID within the settlement.
-    pub leg_id: u64,
+    pub leg_id: LegId,
 }
 
 impl LegRef {
-    pub fn new(settlement: SettlementRef, leg_id: u64) -> Self {
+    pub fn new(settlement: SettlementRef, leg_id: LegId) -> Self {
         Self { settlement, leg_id }
     }
 
@@ -828,19 +834,20 @@ impl SettlementBuilder {
 
         let legs =
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        Ok(SettlementProof { memo, legs, root })
+        Ok(SettlementProof { memo, root, legs })
     }
 }
 
+#[derive(Clone)]
 pub struct SettlementProof {
     memo: BoundedVec<u8, ConstU32<MEMO_MAX_LENGTH>>,
     root: CurveTreeRoot<ASSET_TREE_L>,
 
-    legs: BoundedVec<SettlementLegProof, ConstU32<SETTLEMENT_MAX_LEGS>>,
+    pub legs: BoundedVec<SettlementLegProof, ConstU32<SETTLEMENT_MAX_LEGS>>,
 }
 
 impl SettlementProof {
-    pub fn verify(&self, asset_tree: &impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
+    pub fn verify(&self, asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
         // Validate the root of the curve tree.
         if !asset_tree.validate_root(&self.root) {
             log::error!("Invalid root for settlement proof");
@@ -862,8 +869,10 @@ impl SettlementProof {
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
+#[derive(Clone)]
 pub struct SettlementLegProof {
-    leg_enc: LegEncrypted,
+    pub leg_enc: LegEncrypted,
+    pub mediators: u8,
 
     proof: bp_leg::SettlementTxnProof<
         ASSET_TREE_L,
@@ -911,6 +920,7 @@ impl SettlementLegProof {
 
         Self {
             leg_enc,
+            mediators: mediator.map_or(0, |_| 1),
 
             proof,
             challenge,
@@ -924,6 +934,7 @@ impl SettlementLegProof {
         params: &CurveTreeParameters,
     ) -> bool {
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
+        eprintln!("Verify leg: {:?}", self.leg_enc.leg_enc);
         self.proof
             .verify(
                 self.leg_enc.leg_enc.clone(),
@@ -979,6 +990,7 @@ impl EphemeralSkEncryption {
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasA>);
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LegEncrypted {
     leg_enc: bp_leg::LegEncryption<PallasA>,
     ephemeral_key: EphemeralSkEncryption,
@@ -1081,7 +1093,7 @@ impl SenderAffirmationProof {
     pub fn verify(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
@@ -1172,7 +1184,7 @@ impl ReceiverAffirmationProof {
     pub fn verify(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
@@ -1265,7 +1277,7 @@ impl ReceiverClaimProof {
     pub fn verify(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
@@ -1356,7 +1368,7 @@ impl SenderCounterUpdateProof {
     pub fn verify(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
@@ -1449,7 +1461,7 @@ impl SenderReversalProof {
     pub fn verify(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: &impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {

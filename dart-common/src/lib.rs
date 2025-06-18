@@ -2,6 +2,9 @@ pub type AssetId = u32;
 pub type Balance = u64;
 pub type PendingTxnCounter = u16;
 
+pub type SettlementId = u64;
+pub type LegId = u8;
+
 pub const AMOUNT_BITS: u16 = 48;
 
 pub const MAX_AMOUNT: u64 = (1 << AMOUNT_BITS) - 1;
