@@ -4,7 +4,11 @@ use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::UniformRand as _;
 use blake2::{Blake2b512, Blake2s256};
 
+use bounded_collections::{BoundedVec, ConstU32};
+use codec::Encode;
+
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
+use dart_common::{MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS};
 use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
@@ -131,10 +135,7 @@ impl AccountLookupMap {
         }
     }
 
-    pub fn ensure_unregistered(
-        &self,
-        keys: &AccountPublicKeys,
-    ) -> Result<()> {
+    pub fn ensure_unregistered(&self, keys: &AccountPublicKeys) -> Result<()> {
         if self.enc_to_acct.contains_key(&keys.enc) {
             return Err(Error::AccountPublicKeyExists);
         }
@@ -231,7 +232,11 @@ impl AccountKeys {
     }
 
     /// Initializes a new asset state for the account.
-    pub fn init_asset_state<R: RngCore>(&self, rng: &mut R, asset_id: AssetId) -> AccountAssetState {
+    pub fn init_asset_state<R: RngCore>(
+        &self,
+        rng: &mut R,
+        asset_id: AssetId,
+    ) -> AccountAssetState {
         AccountAssetState::new(rng, self, asset_id)
     }
 
@@ -477,6 +482,7 @@ impl AccountAssetRegistrationProof {
         rng: &mut impl RngCore,
         account: &AccountKeys,
         asset_id: AssetId,
+        ctx: &[u8],
     ) -> (Self, AccountAssetState) {
         let account_state = account.init_asset_state(rng, asset_id);
         let account_state_commitment = account_state.current_state_commitment.clone();
@@ -485,29 +491,31 @@ impl AccountAssetRegistrationProof {
             account.acct.public.0.0,
             &account_state.current_state.0,
             account_state_commitment.0.clone(),
-            b"test-nonce-0",
+            ctx,
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
         );
-        (Self {
-            account: account.acct.public,
-            account_state_commitment,
-            asset_id,
-            proof, challenge
-        }, account_state)
+        (
+            Self {
+                account: account.acct.public,
+                account_state_commitment,
+                asset_id,
+                proof,
+                challenge,
+            },
+            account_state,
+        )
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
-    pub fn verify(
-        &self,
-    ) -> bool {
+    pub fn verify(&self, ctx: &[u8]) -> bool {
         self.proof
             .verify(
                 &self.account.0.0,
                 self.asset_id,
                 &self.account_state_commitment.0,
                 self.challenge,
-                b"test-nonce-0",
+                ctx,
                 &DART_GENS.account_comm_g(),
                 DART_GENS.pk_acct_g,
             )
@@ -550,11 +558,9 @@ impl AssetMintingProof {
 
         let pk = account_asset.account.acct.public;
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let nullifier = account_asset.current_state.nullifier();
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node();
 
@@ -566,7 +572,7 @@ impl AssetMintingProof {
             &mint_account_state.0,
             mint_account_commitment.0.clone(),
             current_account_path,
-            b"test-nonce-0",
+            b"",
             tree_lookup.params(),
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
@@ -597,7 +603,7 @@ impl AssetMintingProof {
                 self.amount,
                 &self.root,
                 self.challenge,
-                b"test-nonce-0",
+                b"",
                 tree_roots.params(),
                 &DART_GENS.account_comm_g(),
                 DART_GENS.pk_acct_g,
@@ -648,10 +654,7 @@ pub struct LegRef {
 
 impl LegRef {
     pub fn new(settlement: SettlementRef, leg_id: u64) -> Self {
-        Self {
-            settlement,
-            leg_id,
-        }
+        Self { settlement, leg_id }
     }
 
     /// The settlement/leg context to tie proofs to a leg.
@@ -729,11 +732,11 @@ impl Leg {
 
 /// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
 pub struct LegBuilder {
-    sender: AccountPublicKeys,
-    receiver: AccountPublicKeys,
-    asset_id: AssetId,
-    amount: Balance,
-    mediator: AuditorOrMediator,
+    pub sender: AccountPublicKeys,
+    pub receiver: AccountPublicKeys,
+    pub asset_id: AssetId,
+    pub amount: Balance,
+    pub mediator: AuditorOrMediator,
 }
 
 impl LegBuilder {
@@ -755,8 +758,9 @@ impl LegBuilder {
     }
 
     pub fn encryt_and_prove<R: RngCore>(
-        &self,
+        self,
         rng: &mut R,
+        ctx: &[u8],
         asset_tree: &AssetCurveTree,
     ) -> SettlementLegProof {
         let (mediator_enc, mediator_acct) = self.mediator.get_keys();
@@ -779,10 +783,78 @@ impl LegBuilder {
             eph_rand,
             pk_e,
             mediator_acct,
+            ctx,
             asset_tree,
         );
 
         leg_proof
+    }
+}
+
+pub struct SettlementBuilder {
+    memo: Vec<u8>,
+    legs: Vec<LegBuilder>,
+}
+
+impl SettlementBuilder {
+    pub fn new(memo: &[u8]) -> Self {
+        Self {
+            memo: memo.to_vec(),
+            legs: Vec::new(),
+        }
+    }
+
+    pub fn leg(mut self, leg: LegBuilder) -> Self {
+        self.legs.push(leg);
+        self
+    }
+
+    pub fn encryt_and_prove<R: RngCore>(
+        self,
+        rng: &mut R,
+        asset_tree: &AssetCurveTree,
+    ) -> Result<SettlementProof> {
+        let memo = BoundedVec::try_from(self.memo)
+            .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        let root = asset_tree.root_node();
+
+        let mut legs = Vec::with_capacity(self.legs.len());
+
+        for (idx, leg_builder) in self.legs.into_iter().enumerate() {
+            let ctx = (&memo, idx as u8).encode();
+            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, asset_tree);
+            legs.push(leg_proof);
+        }
+
+        let legs =
+            BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        Ok(SettlementProof { memo, legs, root })
+    }
+}
+
+pub struct SettlementProof {
+    memo: BoundedVec<u8, ConstU32<MEMO_MAX_LENGTH>>,
+    root: CurveTreeRoot<ASSET_TREE_L>,
+
+    legs: BoundedVec<SettlementLegProof, ConstU32<SETTLEMENT_MAX_LEGS>>,
+}
+
+impl SettlementProof {
+    pub fn verify(&self, asset_tree: &impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
+        // Validate the root of the curve tree.
+        if !asset_tree.validate_root(&self.root) {
+            log::error!("Invalid root for settlement proof");
+            return false;
+        }
+        let params = asset_tree.params();
+        for (idx, leg) in self.legs.iter().enumerate() {
+            let ctx = (&self.memo, idx as u8).encode();
+            if !leg.verify(&ctx, &self.root, params) {
+                log::error!("Invalid leg proof in settlement proof");
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -792,7 +864,6 @@ impl LegBuilder {
 /// that the correct auditor/mediator for the asset is included in the leg.
 pub struct SettlementLegProof {
     leg_enc: LegEncrypted,
-    root: CurveTreeRoot<ASSET_TREE_L>,
 
     proof: bp_leg::SettlementTxnProof<
         ASSET_TREE_L,
@@ -813,6 +884,7 @@ impl SettlementLegProof {
         eph_rand: PallasScalar,
         pk_e: EncryptionPublicKey,
         mediator: Option<AccountPublicKey>,
+        ctx: &[u8],
         asset_tree: &AssetCurveTree,
     ) -> Self {
         let asset_path = asset_tree
@@ -829,7 +901,7 @@ impl SettlementLegProof {
             pk_e.0.0,
             mediator.map(|m| m.0.0),
             asset_path,
-            b"test-nonce-0",
+            ctx,
             asset_tree.params(),
             &DART_GENS.asset_comm_g(),
             DART_GENS.leg_g,
@@ -839,29 +911,28 @@ impl SettlementLegProof {
 
         Self {
             leg_enc,
-            root: asset_tree.root_node(),
 
             proof,
             challenge,
         }
     }
 
-    pub fn verify(&self, asset_tree: &impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
-        // Validate the root of the curve tree.
-        if !asset_tree.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
-            return false;
-        }
+    pub fn verify(
+        &self,
+        ctx: &[u8],
+        root: &CurveTreeRoot<ASSET_TREE_L>,
+        params: &CurveTreeParameters,
+    ) -> bool {
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
         self.proof
             .verify(
                 self.leg_enc.leg_enc.clone(),
                 self.leg_enc.ephemeral_key.enc.clone(),
                 pk_e.0.0,
-                &self.root,
+                &root,
                 self.challenge,
-                b"test-nonce-0",
-                asset_tree.params(),
+                ctx,
+                params,
                 &DART_GENS.asset_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
@@ -940,7 +1011,6 @@ impl LegEncrypted {
     }
 }
 
-
 /// The sender affirmation proof in the Dart BP protocol.
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
@@ -973,9 +1043,7 @@ impl SenderAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
+        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1067,9 +1135,7 @@ impl ReceiverAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
+        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1161,9 +1227,7 @@ impl ReceiverClaimProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
+        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1255,9 +1319,7 @@ impl SenderCounterUpdateProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
+        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1349,9 +1411,7 @@ impl SenderReversalProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset
-            .current_state
-            .nullifier();
+        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");

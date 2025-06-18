@@ -30,6 +30,13 @@ thiserror = { version = "2", default-features = false }
 indexmap = { version = "2.9.0", default-features = false }
 log = { version = "0.4.27", default-features = false }
 
+# Substrate/SCALE deps.
+bounded-collections = { version = "0.1.4", default-features = false }
+codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false, features = [
+  "derive",
+  "max-encoded-len",
+] }
+
 ark-ff = { version = "0.4", default-features = false }
 ark-ec = { version = "0.4", default-features = false }
 ark-serialize = { version = "0.4", default-features = false }
@@ -66,6 +73,10 @@ lazy_static = { workspace = true, default-features = false }
 thiserror = { workspace = true, default-features = false }
 indexmap = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
+
+# Substrate/SCALE deps.
+bounded-collections = { workspace = true, default-features = false }
+codec = { workspace = true, default-features = false }
 
 # dart-bp dependencies
 dart-bp = { workspace = true, default-features = false, optional = true }
@@ -111,6 +122,8 @@ std = [
      "dart-bp?/std",
 		 "thiserror/std",
      "indexmap/std",
+     "bounded-collections/std",
+     "codec/std",
 ]
 
 asm = ["dart-bp?/asm"]

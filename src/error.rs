@@ -16,4 +16,8 @@ pub enum Error {
     /// Account/Encryption public key already exists.
     #[error("Account/Encryption public key already exists.")]
     AccountPublicKeyExists,
+
+    /// Bounded container size limit exceeded.
+    #[error("Bounded container size limit exceeded.")]
+    BoundedContainerSizeLimitExceeded,
 }

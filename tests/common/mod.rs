@@ -1,14 +1,23 @@
 #![allow(dead_code)]
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use std::collections::{HashMap, HashSet};
 
-use dart::{curve_tree::{ProverCurveTree, RootHistory, VerifierCurveTree}, *};
+use dart::{
+    curve_tree::{ProverCurveTree, RootHistory, VerifierCurveTree},
+    *,
+};
 
 /// A fake "Substrate" signer address for testing purposes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SignerAddress(pub String);
+
+impl SignerAddress {
+    pub fn ctx(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignerState {
@@ -106,7 +115,8 @@ impl DartChainState {
         if self.signers.contains_key(&address) {
             return Err(anyhow!("Signer already exists: {}", name));
         }
-        self.signers.insert(address.clone(), SignerState { nonce: 0 });
+        self.signers
+            .insert(address.clone(), SignerState { nonce: 0 });
         Ok(address)
     }
 
@@ -126,23 +136,37 @@ impl DartChainState {
         Ok(())
     }
 
-    pub fn register_account(&mut self, caller: &SignerAddress, keys: AccountPublicKeys) -> Result<()> {
+    pub fn register_account(
+        &mut self,
+        caller: &SignerAddress,
+        keys: AccountPublicKeys,
+    ) -> Result<()> {
         self.ensure_caller(caller)?;
 
         self.accounts.ensure_unregistered(&keys)?;
 
         self.accounts.register_account_keys(&keys);
-        self.account_owners.insert(keys.acct.clone(), caller.clone());
+        self.account_owners
+            .insert(keys.acct.clone(), caller.clone());
 
         Ok(())
     }
 
-    pub fn ensure_account_owner(&self, caller: &SignerAddress, account: &AccountPublicKey) -> Result<()> {
+    pub fn ensure_account_owner(
+        &self,
+        caller: &SignerAddress,
+        account: &AccountPublicKey,
+    ) -> Result<()> {
         self.ensure_caller(caller)?;
 
         if let Some(owner) = self.account_owners.get(account) {
             if owner != caller {
-                return Err(anyhow!("Account {:?} is owned by {:?}, not {:?}", account, owner, caller));
+                return Err(anyhow!(
+                    "Account {:?} is owned by {:?}, not {:?}",
+                    account,
+                    owner,
+                    caller
+                ));
             }
         } else {
             return Err(anyhow!("Account {:?} is not registered", account));
@@ -151,7 +175,11 @@ impl DartChainState {
         Ok(())
     }
 
-    pub fn create_dart_asset(&mut self, caller: &SignerAddress, auditor: AuditorOrMediator) -> Result<DartAssetDetails> {
+    pub fn create_dart_asset(
+        &mut self,
+        caller: &SignerAddress,
+        auditor: AuditorOrMediator,
+    ) -> Result<DartAssetDetails> {
         self.ensure_caller(caller)?;
 
         let asset_id = self.next_asset_id;
@@ -167,17 +195,26 @@ impl DartChainState {
     }
 
     pub fn ensure_asset_exists(&self, asset_id: AssetId) -> Result<&DartAssetDetails> {
-        self.asset_details.get(&asset_id).ok_or_else(|| {
-            anyhow!("Asset ID {} does not exist", asset_id)
-        })
+        self.asset_details
+            .get(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} does not exist", asset_id))
     }
 
-    pub fn ensure_asset_owner(&mut self, caller: &SignerAddress, asset_id: AssetId) -> Result<&mut DartAssetDetails> {
-        let asset_details = self.asset_details.get_mut(&asset_id).ok_or_else(|| {
-            anyhow!("Asset ID {} does not exist", asset_id)
-        })?;
+    pub fn ensure_asset_owner(
+        &mut self,
+        caller: &SignerAddress,
+        asset_id: AssetId,
+    ) -> Result<&mut DartAssetDetails> {
+        let asset_details = self
+            .asset_details
+            .get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} does not exist", asset_id))?;
         if &asset_details.owner != caller {
-            return Err(anyhow!("Caller {:?} is not the owner of asset ID {}", caller, asset_id));
+            return Err(anyhow!(
+                "Caller {:?} is not the owner of asset ID {}",
+                caller,
+                asset_id
+            ));
         }
         Ok(asset_details)
     }
@@ -207,19 +244,30 @@ impl DartChainState {
         self.account_roots.add_root(self.account_tree.root_node());
     }
 
-    pub fn initialize_account_asset(&mut self, caller: &SignerAddress, proof: AccountAssetRegistrationProof) -> Result<()> {
+    pub fn initialize_account_asset(
+        &mut self,
+        caller: &SignerAddress,
+        proof: AccountAssetRegistrationProof,
+    ) -> Result<()> {
         self.ensure_caller(caller)?;
         self.ensure_account_owner(caller, &proof.account)?;
         self.ensure_asset_exists(proof.asset_id)?;
 
         // Ensure the account has not already been initialized with the asset.
         if !self.account_assets.insert((proof.account, proof.asset_id)) {
-            return Err(anyhow!("Account {:?} is already initialized with an asset", proof.account));
+            return Err(anyhow!(
+                "Account {:?} is already initialized with an asset",
+                proof.account
+            ));
         }
 
         // Verify the proof for the account and asset.
-        if !proof.verify() {
-            return Err(anyhow!("Invalid proof for account {:?} and asset ID {}", proof.account, proof.asset_id));
+        if !proof.verify(caller.ctx()) {
+            return Err(anyhow!(
+                "Invalid proof for account {:?} and asset ID {}",
+                proof.account,
+                proof.asset_id
+            ));
         }
 
         // Add the account state commitment to the account tree.
@@ -234,10 +282,15 @@ impl DartChainState {
         // Update the asset total supply.
         {
             let asset_details = self.ensure_asset_owner(caller, proof.asset_id)?;
-            let new_total_supply = asset_details.total_supply.checked_add(proof.amount)
+            let new_total_supply = asset_details
+                .total_supply
+                .checked_add(proof.amount)
                 .ok_or_else(|| anyhow!("Total supply overflow for asset ID {}", proof.asset_id))?;
             if new_total_supply > MAX_AMOUNT {
-                return Err(anyhow!("Total supply exceeds maximum amount for asset ID {}", proof.asset_id));
+                return Err(anyhow!(
+                    "Total supply exceeds maximum amount for asset ID {}",
+                    proof.asset_id
+                ));
             }
             asset_details.total_supply = new_total_supply;
         }
@@ -246,7 +299,10 @@ impl DartChainState {
 
         // Verify the minting proof.
         if !proof.verify(&self.account_roots) {
-            return Err(anyhow!("Invalid minting proof for asset ID {}", proof.asset_id));
+            return Err(anyhow!(
+                "Invalid minting proof for asset ID {}",
+                proof.asset_id
+            ));
         }
 
         // Add the new account state commitment to the account tree.

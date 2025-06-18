@@ -15,3 +15,6 @@ pub const ACCOUNT_TREE_GENS: usize = 1 << 12;
 pub const ASSET_TREE_L: usize = 64;
 pub const ASSET_TREE_HEIGHT: u8 = 4;
 pub const ASSET_TREE_GENS: usize = 1 << 13;
+
+pub const MEMO_MAX_LENGTH: u32 = 256;
+pub const SETTLEMENT_MAX_LEGS: u32 = 16;
