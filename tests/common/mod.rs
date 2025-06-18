@@ -6,7 +6,7 @@ use dart_common::{SettlementId, SETTLEMENT_MAX_LEGS};
 use std::collections::{HashMap, HashSet};
 
 use dart::{
-    curve_tree::{ProverCurveTree, RootHistory, VerifierCurveTree},
+    curve_tree::{ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree},
     *,
 };
 
@@ -64,13 +64,214 @@ pub enum AffirmationStatus {
     Finalized,
 }
 
+impl AffirmationStatus {
+    pub fn apply(self, other: AffirmationStatus) -> Result<AffirmationStatus> {
+        use AffirmationStatus::*;
+        match (self, other) {
+            (Pending, Pending) => Ok(Pending),
+            (Pending, Affirmed) => Ok(Pending),
+            (Pending, Rejected) => Ok(Rejected),
+            (Pending, Finalized) => {
+                Err(anyhow!("Cannot have a pending and finalized affirmation status at the same time in a settlement leg"))
+            },
+
+            (Affirmed, Pending) => Ok(Pending),
+            (Affirmed, Affirmed) => Ok(Affirmed),
+            (Affirmed, Rejected) => Ok(Rejected),
+            (Affirmed, Finalized) => Ok(Affirmed),
+
+            (Rejected, Pending) => Ok(Rejected),
+            (Rejected, Affirmed) => Ok(Rejected),
+            (Rejected, Rejected) => Ok(Rejected),
+            (Rejected, Finalized) => {
+                Err(anyhow!("Cannot have a rejected and finalized affirmation status at the same time in a settlement leg"))
+            },
+
+            (Finalized, Pending) => {
+                Err(anyhow!("Cannot have a pending and finalized affirmation status at the same time in a settlement leg"))
+            },
+            (Finalized, Affirmed) => Ok(Affirmed),
+            (Finalized, Rejected) => {
+                Err(anyhow!("Cannot have a rejected and finalized affirmation status at the same time in a settlement leg"))
+            },
+            (Finalized, Finalized) => Ok(Finalized),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DartSettlementLeg {
     pub enc: LegEncrypted,
     pub sender: AffirmationStatus,
     pub receiver: AffirmationStatus,
-    pub pending_mediator_affirmations: u8,
-    pub status: SettlementStatus,
+    pub mediator: Option<AffirmationStatus>,
+    pub status: AffirmationStatus,
+}
+
+impl DartSettlementLeg {
+    /// Try to update the status of the leg based on the current sender, receiver, and mediator statuses.
+    fn update_status(&mut self) -> Result<()> {
+        let mut affirmation = self.sender.apply(self.receiver)?;
+        if let Some(mediator) = self.mediator {
+            affirmation = affirmation.apply(mediator)?;
+        }
+        self.status = affirmation;
+        Ok(())
+    }
+
+    pub fn reject(&mut self) -> Result<()> {
+        if self.status == AffirmationStatus::Finalized {
+            return Err(anyhow!("Cannot reject a finalized leg"));
+        }
+        self.status = AffirmationStatus::Rejected;
+        Ok(())
+    }
+
+    /// Verify a sender affirmation proof for this leg.
+    pub fn sender_affirmation(
+        &mut self,
+        proof: &SenderAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.sender != AffirmationStatus::Pending {
+            return Err(anyhow!("Sender has already affirmed this leg"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc, tree_roots) {
+            return Err(anyhow!("Invalid sender affirmation proof"));
+        }
+
+        // Update the leg's status.
+        self.sender = AffirmationStatus::Affirmed;
+        self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify a receiver affirmation proof for this leg.
+    pub fn receiver_affirmation(
+        &mut self,
+        proof: &ReceiverAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.receiver != AffirmationStatus::Pending {
+            return Err(anyhow!("Receiver has already affirmed this leg"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc, tree_roots) {
+            return Err(anyhow!("Invalid receiver affirmation proof"));
+        }
+
+        // Update the leg's status.
+        self.receiver = AffirmationStatus::Affirmed;
+        self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify a mediator affirmation proof for this leg.
+    pub fn mediator_affirmation(
+        &mut self,
+        proof: &MediatorAffirmationProof,
+    ) -> Result<()> {
+        if self.mediator.is_none() {
+            return Err(anyhow!("Leg does not require a mediator affirmation"));
+        }
+        if self.mediator != Some(AffirmationStatus::Pending) {
+            return Err(anyhow!("Mediator has already affirmed this leg"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc) {
+            return Err(anyhow!("Invalid mediator affirmation proof"));
+        }
+
+        // Update the leg's mediator status based on the proof.
+        if proof.accept {
+            self.mediator = Some(AffirmationStatus::Affirmed);
+        } else {
+            self.mediator = Some(AffirmationStatus::Rejected);
+        }
+        self.update_status()?;
+        Ok(())
+    }
+
+    /// Verify the sender's counter update proof for this leg.
+    /// 
+    /// The sender is only allowed to submit this proof if the settlement has been executed.
+    pub fn sender_counter_update(
+        &mut self,
+        proof: &SenderCounterUpdateProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.sender != AffirmationStatus::Affirmed {
+            return Err(anyhow!("The sender's status must still be in the affirmed state to update the counter"));
+        }
+        if self.status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Leg must be affirmed before counter update"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc, tree_roots) {
+            return Err(anyhow!("Invalid sender counter update proof"));
+        }
+
+        // Update the leg's status.
+        self.sender = AffirmationStatus::Finalized;
+        self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify the sender's Reversal proof for this leg.
+    /// 
+    /// The sender is only allowed to submit this proof if the settlement has been rejected.
+    pub fn sender_reversal(
+        &mut self,
+        proof: &SenderReversalProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.sender != AffirmationStatus::Affirmed {
+            return Err(anyhow!("The sender's status must still be in the affirmed state to reverse"));
+        }
+        if self.status != AffirmationStatus::Rejected {
+            return Err(anyhow!("Leg must be rejected before reversal"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc, tree_roots) {
+            return Err(anyhow!("Invalid sender reversal proof"));
+        }
+
+        // Update the leg's status.
+        self.sender = AffirmationStatus::Finalized;
+        self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify the receiver's claim proof for this leg.
+    /// 
+    /// The receiver is only allowed to submit this proof if the settlement has been executed.
+    pub fn receiver_claim(
+        &mut self,
+        proof: &ReceiverClaimProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.receiver != AffirmationStatus::Affirmed {
+            return Err(anyhow!("The receiver's status must still be in the affirmed state to claim"));
+        }
+        if self.status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Leg must be affirmed before claim"));
+        }
+        // verify the proof.
+        if !proof.verify(&self.enc, tree_roots) {
+            return Err(anyhow!("Invalid receiver claim proof"));
+        }
+
+        // Update the leg's status.
+        self.receiver = AffirmationStatus::Finalized;
+        self.update_status()?;
+
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -97,8 +298,8 @@ impl DartSettlement {
                 enc: leg.leg_enc,
                 sender: AffirmationStatus::Pending,
                 receiver: AffirmationStatus::Pending,
-                pending_mediator_affirmations: leg.mediators,
-                status: SettlementStatus::Pending,
+                mediator: leg.has_mediator.then_some(AffirmationStatus::Pending),
+                status: AffirmationStatus::Pending,
             })
             .collect();
         Self {
@@ -106,6 +307,184 @@ impl DartSettlement {
             legs,
             status: SettlementStatus::Pending,
         }
+    }
+
+    /// Ensure the settlement is in a pending state.
+    pub fn ensure_pending(&self) -> Result<()> {
+        if self.status != SettlementStatus::Pending {
+            return Err(anyhow!("Settlement is not in a pending state"));
+        }
+        Ok(())
+    }
+
+    /// Verify a sender affirmation proof for a specific leg in the settlement.
+    pub fn sender_affirmation(
+        &mut self,
+        proof: &SenderAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.sender_affirmation(proof, tree_roots)?;
+
+        // If the sender has affirmed, update the status of the settlement.
+        self.update_status()?;
+        Ok(())
+    }
+
+    /// Verify a receiver affirmation proof for a specific leg in the settlement.
+    pub fn receiver_affirmation(
+        &mut self,
+        proof: &ReceiverAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.receiver_affirmation(proof, tree_roots)?;
+
+        // If the receiver has affirmed, update the status of the settlement.
+        self.update_status()?;
+        Ok(())
+    }
+
+    /// Verify a mediator affirmation proof for a specific leg in the settlement.
+    pub fn mediator_affirmation(
+        &mut self,
+        proof: &MediatorAffirmationProof,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.mediator_affirmation(proof)?;
+
+        if proof.accept {
+            // If the mediator has accepted, update the status of the settlement.
+            self.update_status()?;
+        } else {
+            // If the mediator has rejected, set the settlement status to rejected.
+            self.reject_all_legs()?;
+        }
+        Ok(())
+    }
+
+    /// Verify the sender's counter update proof for a specific leg in the settlement.
+    pub fn sender_counter_update(
+        &mut self,
+        proof: &SenderCounterUpdateProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.status != SettlementStatus::Executed {
+            return Err(anyhow!("Settlement must be executed before sender counter update"));
+        }
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.sender_counter_update(proof, tree_roots)?;
+
+        // If the sender has finalized the leg, update the status of the settlement.
+        self.update_status()?;
+        Ok(())
+    }
+
+    /// Verify the sender's reversal proof for a specific leg in the settlement.
+    pub fn sender_reversal(
+        &mut self,
+        proof: &SenderReversalProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.status != SettlementStatus::Rejected {
+            return Err(anyhow!("Settlement must be rejected before sender reversal"));
+        }
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.sender_reversal(proof, tree_roots)?;
+
+        // If the sender has finalized the leg, update the status of the settlement.
+        self.update_status()?;
+        Ok(())
+    }
+
+    /// Verify the receiver's claim proof for a specific leg in the settlement.
+    pub fn receiver_claim(
+        &mut self,
+        proof: &ReceiverClaimProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<()> {
+        if self.status != SettlementStatus::Executed {
+            return Err(anyhow!("Settlement must be executed before receiver claim"));
+        }
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.receiver_claim(proof, tree_roots)?;
+
+        // If the receiver has finalized the leg, update the status of the settlement.
+        self.update_status()?;
+        Ok(())
+    }
+
+    fn update_status(&mut self) -> Result<()> {
+        match self.status {
+            SettlementStatus::Pending => {
+                // If the settlement is pending, check if all legs are affirmed.
+                for leg in &self.legs {
+                    if leg.status != AffirmationStatus::Affirmed {
+                        return Ok(()); // Still pending
+                    }
+                }
+                // If all legs are affirmed, update the settlement status to executed.
+                self.status = SettlementStatus::Executed;
+            },
+            SettlementStatus::Executed | SettlementStatus::Rejected => {
+                // If the settlement is in the executed or rejected state,
+                // check if all legs are finalized.
+                for leg in &self.legs {
+                    if leg.status != AffirmationStatus::Finalized {
+                        return Ok(()); // Still not finalized
+                    }
+                }
+                // If all legs are finalized, update the settlement status to finalized.
+                self.status = SettlementStatus::Finalized;
+            },
+            SettlementStatus::Finalized => {
+                // If the settlement is already finalized, do nothing.
+                return Ok(());
+            },
+        }
+        Ok(())
+    }
+
+    fn reject_all_legs(&mut self) -> Result<()> {
+        // Reject all legs in the settlement.
+        for leg in &mut self.legs {
+            leg.reject()?;
+        }
+        self.status = SettlementStatus::Rejected;
+        Ok(())
     }
 }
 
@@ -360,7 +739,9 @@ impl DartChainState {
             asset_details.total_supply = new_total_supply;
         }
 
-        self.ensure_nullifier_unique(&proof.nullifier)?;
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
 
         // Verify the minting proof.
         if !proof.verify(&self.account_roots) {
@@ -371,8 +752,8 @@ impl DartChainState {
         }
 
         // Add the new account state commitment to the account tree.
-        self._add_account_commitment(proof.account_state_commitment)?;
-        self._add_nullifier(proof.nullifier);
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
 
         Ok(())
     }
@@ -406,5 +787,184 @@ impl DartChainState {
         self.settlements.insert(settlement_id, settlement);
 
         Ok(settlement_id)
+    }
+
+    /// Query an encrypted settlement leg by reference.
+    pub fn get_settlement_leg(
+        &self,
+        leg_ref: &LegRef,
+    ) -> Result<&DartSettlementLeg> {
+        let settlement_id = leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+        let leg_id = leg_ref.leg_id() as usize;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Get the leg.
+        settlement.legs.get(leg_id)
+            .ok_or_else(|| anyhow!("Leg index {} out of bounds for settlement ID {}", leg_id, settlement_id))
+    }
+
+    /// Verify a sender affirmation proof for a settlement leg.
+    pub fn sender_affirmation(&mut self, caller: &SignerAddress, proof: SenderAffirmationProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the sender affirmation proof and update the settlement status.
+        settlement.sender_affirmation(&proof, &self.account_roots)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a receiver affirmation proof for a settlement leg.
+    pub fn receiver_affirmation(&mut self, caller: &SignerAddress, proof: ReceiverAffirmationProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the receiver affirmation proof and update the settlement status.
+        settlement.receiver_affirmation(&proof, &self.account_roots)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a mediator affirmation proof for a specific leg in the settlement.
+    pub fn mediator_affirmation(&mut self, caller: &SignerAddress, proof: MediatorAffirmationProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the mediator affirmation proof and update the settlement status.
+        settlement.mediator_affirmation(&proof)?;
+
+        Ok(())
+    }
+
+    /// Verify a sender counter update proof for a settlement leg.
+    pub fn sender_counter_update(&mut self, caller: &SignerAddress, proof: SenderCounterUpdateProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the sender counter update proof and update the settlement status.
+        settlement.sender_counter_update(&proof, &self.account_roots)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a sender reversal proof for a settlement leg.
+    pub fn sender_reversal(&mut self, caller: &SignerAddress, proof: SenderReversalProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the sender reversal proof and update the settlement status.
+        settlement.sender_reversal(&proof, &self.account_roots)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a receiver claim proof for a settlement leg.
+    pub fn receiver_claim(&mut self, caller: &SignerAddress, proof: ReceiverClaimProof) -> Result<()> {
+        self.ensure_caller(caller)?;
+        let settlement_id = proof.leg_ref.settlement_id().ok_or(
+            anyhow!("Leg reference does not contain a settlement ID")
+        )?;
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_id)
+            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+
+        // Verify the receiver claim proof and update the settlement status.
+        settlement.receiver_claim(&proof, &self.account_roots)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
     }
 }

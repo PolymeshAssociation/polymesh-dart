@@ -58,12 +58,97 @@ fn test_minting_asset() -> Result<()> {
     chain.mint_assets(issuer, proof)?;
     issuer_account.commit_pending_state();
 
+    chain.push_tree_roots();
+
     // Create a settlement to transfer some assets from the issuer to the investor.
     let settlement = SettlementBuilder::new(b"Test")
         .leg(LegBuilder { sender: issuer_keys.public_keys(), receiver: investor1_keys.public_keys(), asset_id, amount: 500, mediator: asset_mediator })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
-    chain.create_settlement(issuer, settlement)?;
+    let settlement_id = chain.create_settlement(issuer, settlement)?;
+    let leg_ref = LegRef::new(settlement_id.into(), 0);
+    let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
+
+    // The issuer affirms the settlement as the sender.
+    eprintln!("Sender decrypts the leg");
+    let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &issuer_keys.enc);
+    let leg = leg_enc.decrypt(LegRole::Sender, &issuer_keys.enc);
+    eprintln!("Leg: {:?}", leg);
+    eprintln!("Sender generate affirmation proof");
+    let proof = SenderAffirmationProof::new(
+        &mut rng,
+        leg_ref.clone(),
+        500,
+        sk_e,
+        &leg_enc,
+        &mut issuer_account,
+        chain.prover_account_tree(),
+    );
+    eprintln!("Sender affirms");
+    chain.sender_affirmation(issuer, proof)?;
+    issuer_account.commit_pending_state();
+
+    chain.push_tree_roots();
+
+    // The investor affirms the settlement as the receiver.
+    eprintln!("Receiver decrypts the leg");
+    let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &investor1_keys.enc);
+    let leg = leg_enc.decrypt(LegRole::Receiver, &investor1_keys.enc);
+    eprintln!("Leg: {:?}", leg);
+    eprintln!("Receiver generate affirmation proof");
+    let proof = ReceiverAffirmationProof::new(
+        &mut rng,
+        leg_ref.clone(),
+        sk_e,
+        &leg_enc,
+        &mut investor1_account,
+        chain.prover_account_tree(),
+    );
+    eprintln!("Receiver affirms");
+    chain.receiver_affirmation(investor1, proof)?;
+    investor1_account.commit_pending_state();
+
+    chain.push_tree_roots();
+
+    // The mediator affirms the settlement.
+    eprintln!("Mediator decrypts the leg");
+    let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &mediator_keys.enc);
+    let leg = leg_enc.decrypt(LegRole::Mediator, &mediator_keys.enc);
+    eprintln!("Leg: {:?}", leg);
+    eprintln!("Mediator generate affirmation proof");
+    let proof = MediatorAffirmationProof::new(
+        &mut rng,
+        leg_ref.clone(),
+        sk_e,
+        &leg_enc,
+        &mediator_keys.acct,
+        true,
+    );
+    eprintln!("Mediator affirms");
+    chain.mediator_affirmation(mediator, proof)?;
+
+    // The settlement should have executed.
+
+    chain.push_tree_roots();
+
+    // Receiver claims their assets.
+    eprintln!("Receiver decrypts the leg for claim");
+    let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &investor1_keys.enc);
+    let leg = leg_enc.decrypt(LegRole::Receiver, &investor1_keys.enc);
+    eprintln!("Leg for claim: {:?}", leg);
+    eprintln!("Receiver generate claim proof");
+    let proof = ReceiverClaimProof::new(
+        &mut rng,
+        leg_ref.clone(),
+        500,
+        sk_e,
+        &leg_enc,
+        &mut investor1_account,
+        chain.prover_account_tree(),
+    );
+    eprintln!("Receiver claims");
+    chain.receiver_claim(investor1, proof)?;
+    investor1_account.commit_pending_state();
 
     Ok(())
 }

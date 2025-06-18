@@ -59,7 +59,8 @@ impl DartBPGenerators {
         );
 
         let pk_acct_g = PallasA::rand(&mut rng);
-        let pk_enc_g = PallasA::rand(&mut rng);
+        //let pk_enc_g = PallasA::rand(&mut rng);
+        let pk_enc_g = pk_acct_g;
 
         let account_comm_g = [
             PallasA::rand(&mut rng), // field: sk -- TODO: Change this generator be the same `pk_acct_g`.
@@ -75,7 +76,8 @@ impl DartBPGenerators {
             PallasA::rand(&mut rng), // field: asset_id
         ];
 
-        let leg_g = PallasA::rand(&mut rng);
+        //let leg_g = PallasA::rand(&mut rng);
+        let leg_g = pk_enc_g;
         let leg_h = PallasA::rand(&mut rng);
 
         let ped_comm_key =
@@ -700,6 +702,7 @@ pub enum LegRole {
 }
 
 /// The decrypted leg details in the Dart BP protocol.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Leg(bp_leg::Leg<PallasA>);
 
 impl Leg {
@@ -998,6 +1001,7 @@ impl EphemeralSkEncryption {
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             );
+        eprintln!("Ephemeral key: sk_e={:?}", _sk_e);
         let pk_e = EncryptionPublicKey(pk_e);
         (
             Self {
@@ -1042,6 +1046,7 @@ impl LegEncrypted {
     /// Decrypts the leg using the provided secret key and role.
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Leg {
         let sk_e = self.decrypt_sk_e(role, keys);
+        eprintln!("Decrypted sk_e: {:?}", sk_e.0.0);
         let leg = self.leg_enc.decrypt(&sk_e.0.0, DART_GENS.leg_h);
         Leg(leg)
     }
@@ -1124,11 +1129,11 @@ impl SenderAffirmationProof {
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
+            log::error!("Invalid root for sender affirmation proof");
             return false;
         }
         let ctx = self.leg_ref.context();
-        self.proof
+        let res = self.proof
             .verify(
                 leg_enc.leg_enc.clone(),
                 &self.root,
@@ -1138,8 +1143,11 @@ impl SenderAffirmationProof {
                 &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
-            )
-            .is_ok()
+            );
+        if res.is_err() {
+            eprintln!("Verify sender affirmation proof: {:?}", res);
+        }
+        res.is_ok()
     }
 }
 
@@ -1220,11 +1228,12 @@ impl ReceiverAffirmationProof {
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
+            log::error!("Invalid root for receiver affirmation proof");
+            eprintln!("Invalid root for receiver affirmation proof");
             return false;
         }
         let ctx = self.leg_ref.context();
-        self.proof
+        let res = self.proof
             .verify(
                 leg_enc.leg_enc.clone(),
                 &self.root,
@@ -1234,8 +1243,11 @@ impl ReceiverAffirmationProof {
                 &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
-            )
-            .is_ok()
+            );
+        if res.is_err() {
+            eprintln!("Verify receiver affirmation proof: {:?}", res);
+        }
+        res.is_ok()
     }
 }
 
@@ -1318,7 +1330,7 @@ impl ReceiverClaimProof {
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
+            log::error!("Invalid root for receiver claim proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -1414,7 +1426,7 @@ impl SenderCounterUpdateProof {
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
+            log::error!("Invalid root for sender counter update proof");
             return false;
         }
         let ctx = self.leg_ref.context();
@@ -1512,7 +1524,7 @@ impl SenderReversalProof {
     ) -> bool {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
-            log::error!("Invalid root for asset minting proof");
+            log::error!("Invalid root for sender reversal proof");
             return false;
         }
         let ctx = self.leg_ref.context();
