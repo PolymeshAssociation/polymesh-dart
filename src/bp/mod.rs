@@ -536,8 +536,6 @@ pub struct AssetMintingProof {
     pub asset_id: AssetId,
     pub amount: Balance,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
-    pub account_state_commitment: AccountStateCommitment,
 
     // proof
     proof: bp_account::MintTxnProof<
@@ -564,7 +562,6 @@ impl AssetMintingProof {
 
         let pk = account_asset.account.acct.public;
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path =
             tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
@@ -588,12 +585,18 @@ impl AssetMintingProof {
             asset_id: account_asset.asset_id,
             amount,
             root,
-            nullifier,
-            account_state_commitment: mint_account_commitment,
 
             proof,
             challenge,
         })
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
@@ -650,6 +653,12 @@ pub enum SettlementRef {
     Hash([u8; 32]),
 }
 
+impl From<SettlementId> for SettlementRef {
+    fn from(id: SettlementId) -> Self {
+        SettlementRef::ID(id)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LegRef {
     /// The settlement reference.
@@ -661,6 +670,20 @@ pub struct LegRef {
 impl LegRef {
     pub fn new(settlement: SettlementRef, leg_id: LegId) -> Self {
         Self { settlement, leg_id }
+    }
+
+    /// Returns the leg ID.
+    pub fn leg_id(&self) -> LegId {
+        self.leg_id
+    }
+
+    /// Returns the settlement ID if the settlement reference is an ID.
+    pub fn settlement_id(&self) -> Option<SettlementId> {
+        if let SettlementRef::ID(id) = &self.settlement {
+            Some(*id)
+        } else {
+            None
+        }
     }
 
     /// The settlement/leg context to tie proofs to a leg.
@@ -872,7 +895,7 @@ impl SettlementProof {
 #[derive(Clone)]
 pub struct SettlementLegProof {
     pub leg_enc: LegEncrypted,
-    pub mediators: u8,
+    pub has_mediator: bool,
 
     proof: bp_leg::SettlementTxnProof<
         ASSET_TREE_L,
@@ -920,7 +943,7 @@ impl SettlementLegProof {
 
         Self {
             leg_enc,
-            mediators: mediator.map_or(0, |_| 1),
+            has_mediator: mediator.is_some(),
 
             proof,
             challenge,
@@ -997,27 +1020,28 @@ pub struct LegEncrypted {
 }
 
 impl LegEncrypted {
-    pub fn decrypt_sk_e(&self, role: LegRole, sk: &EncryptionSecretKey) -> EncryptionSecretKey {
+    pub fn decrypt_sk_e(&self, role: LegRole, keys: &EncryptionKeyPair) -> EncryptionSecretKey {
+        let sk = keys.secret.0.0;
         let sk_e = match role {
             LegRole::Sender => self
                 .ephemeral_key
                 .enc
-                .decrypt_for_sender::<Blake2b512>(sk.0.0),
+                .decrypt_for_sender::<Blake2b512>(sk),
             LegRole::Receiver => self
                 .ephemeral_key
                 .enc
-                .decrypt_for_receiver::<Blake2b512>(sk.0.0),
+                .decrypt_for_receiver::<Blake2b512>(sk),
             LegRole::Auditor | LegRole::Mediator => self
                 .ephemeral_key
                 .enc
-                .decrypt_for_mediator_or_auditor::<Blake2b512>(sk.0.0),
+                .decrypt_for_mediator_or_auditor::<Blake2b512>(sk),
         };
         EncryptionSecretKey(bp_keys::DecKey(sk_e))
     }
 
     /// Decrypts the leg using the provided secret key and role.
-    pub fn decrypt(&self, role: LegRole, sk: &EncryptionSecretKey) -> Leg {
-        let sk_e = self.decrypt_sk_e(role, sk);
+    pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Leg {
+        let sk_e = self.decrypt_sk_e(role, keys);
         let leg = self.leg_enc.decrypt(&sk_e.0.0, DART_GENS.leg_h);
         Leg(leg)
     }
@@ -1027,8 +1051,6 @@ impl LegEncrypted {
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
-    pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::AffirmAsSenderTxnProof<
         ACCOUNT_TREE_L,
@@ -1051,11 +1073,10 @@ impl SenderAffirmationProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Self {
         // Generate a new account state for the sender affirmation.
-        let new_account_state = account_asset.mint(rng, amount);
+        let new_account_state = account_asset.get_sender_affirm_state(rng, amount);
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1070,11 +1091,11 @@ impl SenderAffirmationProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.0,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.asset_comm_g(),
+            &DART_GENS.account_comm_g(),
             DART_GENS.leg_g,
             DART_GENS.leg_h,
         );
@@ -1082,12 +1103,18 @@ impl SenderAffirmationProof {
         Self {
             leg_ref,
             root,
-            nullifier,
-            account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
         }
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(
@@ -1108,7 +1135,7 @@ impl SenderAffirmationProof {
                 self.challenge,
                 ctx.as_bytes(),
                 tree_roots.params(),
-                &DART_GENS.asset_comm_g(),
+                &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             )
@@ -1120,7 +1147,6 @@ impl SenderAffirmationProof {
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
     pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::AffirmAsReceiverTxnProof<
@@ -1147,7 +1173,6 @@ impl ReceiverAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1165,7 +1190,7 @@ impl ReceiverAffirmationProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.asset_comm_g(),
+            &DART_GENS.account_comm_g(),
             DART_GENS.leg_g,
             DART_GENS.leg_h,
         );
@@ -1173,12 +1198,19 @@ impl ReceiverAffirmationProof {
         Self {
             leg_ref,
             root,
-            nullifier,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
         }
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(
@@ -1199,7 +1231,7 @@ impl ReceiverAffirmationProof {
                 self.challenge,
                 ctx.as_bytes(),
                 tree_roots.params(),
-                &DART_GENS.asset_comm_g(),
+                &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             )
@@ -1211,7 +1243,6 @@ impl ReceiverAffirmationProof {
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
     pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::ClaimReceivedTxnProof<
@@ -1239,7 +1270,6 @@ impl ReceiverClaimProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1258,7 +1288,7 @@ impl ReceiverClaimProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.asset_comm_g(),
+            &DART_GENS.account_comm_g(),
             DART_GENS.leg_g,
             DART_GENS.leg_h,
         );
@@ -1266,12 +1296,19 @@ impl ReceiverClaimProof {
         Self {
             leg_ref,
             root,
-            nullifier,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
         }
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(
@@ -1292,7 +1329,7 @@ impl ReceiverClaimProof {
                 self.challenge,
                 ctx.as_bytes(),
                 tree_roots.params(),
-                &DART_GENS.asset_comm_g(),
+                &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             )
@@ -1304,7 +1341,6 @@ impl ReceiverClaimProof {
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
     pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::SenderCounterUpdateTxnProof<
@@ -1331,7 +1367,6 @@ impl SenderCounterUpdateProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1349,7 +1384,7 @@ impl SenderCounterUpdateProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.asset_comm_g(),
+            &DART_GENS.account_comm_g(),
             DART_GENS.leg_g,
             DART_GENS.leg_h,
         );
@@ -1357,12 +1392,19 @@ impl SenderCounterUpdateProof {
         Self {
             leg_ref,
             root,
-            nullifier,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
         }
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(
@@ -1383,7 +1425,7 @@ impl SenderCounterUpdateProof {
                 self.challenge,
                 ctx.as_bytes(),
                 tree_roots.params(),
-                &DART_GENS.asset_comm_g(),
+                &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             )
@@ -1395,7 +1437,6 @@ impl SenderCounterUpdateProof {
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub nullifier: AccountStateNullifier,
     pub account_state_commitment: AccountStateCommitment,
 
     proof: bp_account::SenderReverseTxnProof<
@@ -1423,7 +1464,6 @@ impl SenderReversalProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let nullifier = account_asset.current_state.nullifier();
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
@@ -1442,7 +1482,7 @@ impl SenderReversalProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.asset_comm_g(),
+            &DART_GENS.account_comm_g(),
             DART_GENS.leg_g,
             DART_GENS.leg_h,
         );
@@ -1450,12 +1490,19 @@ impl SenderReversalProof {
         Self {
             leg_ref,
             root,
-            nullifier,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
         }
+    }
+
+    pub fn account_state_commitment(&self) -> AccountStateCommitment {
+        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+    }
+
+    pub fn nullifier(&self) -> AccountStateNullifier {
+        AccountStateNullifier(self.proof.nullifier)
     }
 
     pub fn verify(
@@ -1476,7 +1523,7 @@ impl SenderReversalProof {
                 self.challenge,
                 ctx.as_bytes(),
                 tree_roots.params(),
-                &DART_GENS.asset_comm_g(),
+                &DART_GENS.account_comm_g(),
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             )
@@ -1499,7 +1546,7 @@ impl MediatorAffirmationProof {
         leg_ref: LegRef,
         eph_sk: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
-        mediator_sk: AccountSecretKey,
+        mediator_sk: &AccountKeyPair,
         accept: bool,
     ) -> Self {
         let ctx = leg_ref.context();
@@ -1509,7 +1556,7 @@ impl MediatorAffirmationProof {
             leg_enc.leg_enc.clone(),
             eph_sk.0.0,
             eph_pk.0.0,
-            mediator_sk.0.0,
+            mediator_sk.secret.0.0,
             accept,
             ctx.as_bytes(),
             DART_GENS.leg_g,
