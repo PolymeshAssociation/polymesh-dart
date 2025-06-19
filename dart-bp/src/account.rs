@@ -396,7 +396,9 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
@@ -560,7 +562,9 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -620,7 +624,10 @@ impl<
             self.resp_null
                 .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
         );
-        assert!(self.resp_pk.verify(&issuer_pk, &sig_null_gen, &verifier_challenge));
+        assert!(
+            self.resp_pk
+                .verify(&issuer_pk, &sig_null_gen, &verifier_challenge)
+        );
 
         // Sk and counter in leaf match the ones in updated account commitment
         assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
@@ -738,8 +745,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_prover
             .transcript()
@@ -904,8 +915,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -953,7 +968,13 @@ impl<
             verifier_challenge
         );
 
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
+        verify_schnorr_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            asset_value_gen,
+            verifier_challenge
+        );
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -1059,8 +1080,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_prover
             .transcript()
@@ -1171,8 +1196,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -1329,8 +1358,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_prover
             .transcript()
@@ -1502,8 +1535,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -1559,7 +1596,13 @@ impl<
             asset_value_gen,
             verifier_challenge
         );
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
+        verify_schnorr_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            asset_value_gen,
+            verifier_challenge
+        );
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -1668,8 +1711,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_prover
             .transcript()
@@ -1780,8 +1827,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -1926,8 +1977,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_prover
             .transcript()
@@ -2081,8 +2136,12 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -2129,7 +2188,13 @@ impl<
             asset_value_gen,
             verifier_challenge
         );
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
+        verify_schnorr_for_balance_change!(
+            self,
+            leg_enc,
+            pc_gens,
+            asset_value_gen,
+            verifier_challenge
+        );
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -2202,7 +2267,9 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
@@ -2278,7 +2345,9 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -2415,8 +2484,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
@@ -2678,8 +2751,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut extra_instance)
+            .unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);

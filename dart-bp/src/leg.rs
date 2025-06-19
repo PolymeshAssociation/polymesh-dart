@@ -265,8 +265,14 @@ pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
     };
     // Create ephemeral encryption keypair and encrypt ephemeral sk for each party
     // Passing `asset_value_gen` to `EphemeralSkEncryption::new` is incidental and could be a new generator as well.
-    let (eph_ek_enc, eph_ek_enc_r, sk_e, pk_e) =
-        EphemeralSkEncryption::new::<_, D>(rng, pk_s.1, pk_r.1, pk_a_m, enc_sig_gen, asset_value_gen);
+    let (eph_ek_enc, eph_ek_enc_r, sk_e, pk_e) = EphemeralSkEncryption::new::<_, D>(
+        rng,
+        pk_s.1,
+        pk_r.1,
+        pk_a_m,
+        enc_sig_gen,
+        asset_value_gen,
+    );
     // Create leg and encrypt it for ephemeral pk
     let leg = Leg::new(pk_s.0, pk_r.0, pk_m, amount, asset_id);
     let (leg_enc, leg_enc_rand) = leg.encrypt(rng, &pk_e.0, enc_sig_gen, asset_value_gen);
@@ -416,7 +422,9 @@ impl<
             .serialize_compressed(&mut leg_instance)
             .unwrap();
         enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut leg_instance).unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut leg_instance)
+            .unwrap();
         // TODO: Hash comm_amount and re_randomized_path as well
 
         even_prover
@@ -467,7 +475,8 @@ impl<
             );
 
             // For proving knowledge of randomness used in encryption of mediator key in leg encryption. For relation: g * r = ct_m.eph_pk
-            let t_eph_pk = PokDiscreteLogProtocol::init(leg_enc_rand.2.unwrap(), r_a_blinding, &enc_sig_gen);
+            let t_eph_pk =
+                PokDiscreteLogProtocol::init(leg_enc_rand.2.unwrap(), r_a_blinding, &enc_sig_gen);
             (t_r_leaf, Some(t_eph_pk), None)
         } else {
             // When settlement has auditor
@@ -559,7 +568,8 @@ impl<
         );
 
         // Proving correctness of Elgamal encryption of amount
-        let t_amount_enc_0 = PokDiscreteLogProtocol::init(leg_enc_rand.3, enc_amount_blinding, &enc_sig_gen);
+        let t_amount_enc_0 =
+            PokDiscreteLogProtocol::init(leg_enc_rand.3, enc_amount_blinding, &enc_sig_gen);
         let t_amount_enc_1 = PokPedersenCommitmentProtocol::init(
             leg_enc_rand.3,
             enc_amount_blinding,
@@ -639,7 +649,11 @@ impl<
             )
             .unwrap();
         t_amount_enc_0
-            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_amount.eph_pk, &mut prover_transcript)
+            .challenge_contribution(
+                &enc_sig_gen,
+                &leg_enc.ct_amount.eph_pk,
+                &mut prover_transcript,
+            )
             .unwrap();
         t_amount_enc_1
             .challenge_contribution(
@@ -650,7 +664,11 @@ impl<
             )
             .unwrap();
         t_asset_id_enc_0
-            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_asset_id.eph_pk, &mut prover_transcript)
+            .challenge_contribution(
+                &enc_sig_gen,
+                &leg_enc.ct_asset_id.eph_pk,
+                &mut prover_transcript,
+            )
             .unwrap();
         t_asset_id_enc_1
             .challenge_contribution(
@@ -774,7 +792,9 @@ impl<
             .serialize_compressed(&mut leg_instance)
             .unwrap();
         enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
-        asset_value_gen.serialize_compressed(&mut leg_instance).unwrap();
+        asset_value_gen
+            .serialize_compressed(&mut leg_instance)
+            .unwrap();
 
         even_verifier
             .transcript()
@@ -865,7 +885,11 @@ impl<
             )
             .unwrap();
         self.resp_amount_enc_0
-            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_amount.eph_pk, &mut verifier_transcript)
+            .challenge_contribution(
+                &enc_sig_gen,
+                &leg_enc.ct_amount.eph_pk,
+                &mut verifier_transcript,
+            )
             .unwrap();
         self.resp_amount_enc_1
             .challenge_contribution(
@@ -876,7 +900,11 @@ impl<
             )
             .unwrap();
         self.resp_asset_id_enc_0
-            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_asset_id.eph_pk, &mut verifier_transcript)
+            .challenge_contribution(
+                &enc_sig_gen,
+                &leg_enc.ct_asset_id.eph_pk,
+                &mut verifier_transcript,
+            )
             .unwrap();
         self.resp_asset_id_enc_1
             .challenge_contribution(
@@ -957,10 +985,11 @@ impl<
             &tree_parameters.even_parameters.pc_gens.B_blinding,
             &verifier_challenge,
         ));
-        assert!(
-            self.resp_amount_enc_0
-                .verify(&leg_enc.ct_amount.eph_pk, &enc_sig_gen, &verifier_challenge)
-        );
+        assert!(self.resp_amount_enc_0.verify(
+            &leg_enc.ct_amount.eph_pk,
+            &enc_sig_gen,
+            &verifier_challenge
+        ));
         assert!(self.resp_amount_enc_1.verify(
             &leg_enc.ct_amount.encrypted,
             &eph_pk,
@@ -1054,7 +1083,12 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             &sig_gen,
         );
         t_enc_pk
-            .challenge_contribution(&ct_m.eph_pk, &sig_gen, &ct_m.encrypted, &mut prover_transcript)
+            .challenge_contribution(
+                &ct_m.eph_pk,
+                &sig_gen,
+                &ct_m.encrypted,
+                &mut prover_transcript,
+            )
             .unwrap();
 
         // Hash the mediator's response
@@ -1098,7 +1132,12 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let mut verifier_transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
         self.resp_enc_pk
-            .challenge_contribution(&ct_m.eph_pk, &sig_gen, &ct_m.encrypted, &mut verifier_transcript)
+            .challenge_contribution(
+                &ct_m.eph_pk,
+                &sig_gen,
+                &ct_m.encrypted,
+                &mut verifier_transcript,
+            )
             .unwrap();
 
         // Verifier should also hash the mediator's response
@@ -1123,10 +1162,12 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
 
-        assert!(
-            self.resp_enc_pk
-                .verify(&ct_m.encrypted, &ct_m.eph_pk, &sig_gen, &verifier_challenge)
-        );
+        assert!(self.resp_enc_pk.verify(
+            &ct_m.encrypted,
+            &ct_m.eph_pk,
+            &sig_gen,
+            &verifier_challenge
+        ));
         Ok(())
     }
 }
