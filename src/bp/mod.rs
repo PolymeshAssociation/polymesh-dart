@@ -274,6 +274,7 @@ pub struct AccountStateNullifier(pub PallasA);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountStateCommitment(pub BPAccountStateCommitment);
 
+#[derive(Clone, Debug)]
 pub struct AccountAssetState {
     pub account: AccountKeys,
     pub asset_id: AssetId,
@@ -635,10 +636,10 @@ impl AuditorOrMediator {
         Self::Auditor(*pk)
     }
 
-    pub fn get_keys(&self) -> (EncryptionPublicKey, Option<AccountPublicKey>) {
+    pub fn get_keys(&self) -> (EncryptionPublicKey, Option<AccountPublicKey>, Option<EncryptionPublicKey>) {
         match self {
-            AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct)),
-            AuditorOrMediator::Auditor(pk) => (*pk, None),
+            AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct), None),
+            AuditorOrMediator::Auditor(pk) => (*pk, None, Some(*pk)),
         }
     }
 }
@@ -791,7 +792,7 @@ impl LegBuilder {
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
     ) -> SettlementLegProof {
-        let (mediator_enc, mediator_acct) = self.mediator.get_keys();
+        let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
         let leg = Leg::new(
             self.sender.acct,
             self.receiver.acct,
@@ -810,7 +811,7 @@ impl LegBuilder {
             &leg_enc_rand,
             eph_rand,
             pk_e,
-            mediator_acct,
+            auditor_enc,
             ctx,
             asset_tree,
         );
@@ -891,7 +892,6 @@ impl SettlementProof {
 #[derive(Clone)]
 pub struct SettlementLegProof {
     pub leg_enc: LegEncrypted,
-    pub has_mediator: bool,
 
     proof: bp_leg::SettlementTxnProof<
         ASSET_TREE_L,
@@ -911,7 +911,7 @@ impl SettlementLegProof {
         leg_enc_rand: &LegEncryptionRandomness,
         eph_rand: PallasScalar,
         pk_e: EncryptionPublicKey,
-        mediator: Option<AccountPublicKey>,
+        auditor_enc: Option<EncryptionPublicKey>,
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
     ) -> Self {
@@ -927,7 +927,7 @@ impl SettlementLegProof {
             leg_enc.ephemeral_key.enc.clone(),
             eph_rand,
             pk_e.0.0,
-            mediator.map(|m| m.0.0),
+            auditor_enc.map(|m| m.0.0),
             asset_path,
             ctx,
             asset_tree.params(),
@@ -939,11 +939,14 @@ impl SettlementLegProof {
 
         Self {
             leg_enc,
-            has_mediator: mediator.is_some(),
 
             proof,
             challenge,
         }
+    }
+
+    pub fn has_mediator(&self) -> bool {
+        self.leg_enc.leg_enc.ct_m.is_some()
     }
 
     pub fn verify(
@@ -1059,7 +1062,7 @@ pub struct SenderAffirmationProof {
 impl SenderAffirmationProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         amount: Balance,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
@@ -1095,7 +1098,7 @@ impl SenderAffirmationProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             root,
 
             proof,
@@ -1155,7 +1158,7 @@ pub struct ReceiverAffirmationProof {
 impl ReceiverAffirmationProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
@@ -1189,7 +1192,7 @@ impl ReceiverAffirmationProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
@@ -1250,7 +1253,7 @@ pub struct ReceiverClaimProof {
 impl ReceiverClaimProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         amount: Balance,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
@@ -1286,7 +1289,7 @@ impl ReceiverClaimProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
@@ -1347,7 +1350,7 @@ pub struct SenderCounterUpdateProof {
 impl SenderCounterUpdateProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
@@ -1381,7 +1384,7 @@ impl SenderCounterUpdateProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
@@ -1442,7 +1445,7 @@ pub struct SenderReversalProof {
 impl SenderReversalProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         amount: Balance,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
@@ -1478,7 +1481,7 @@ impl SenderReversalProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
@@ -1532,7 +1535,7 @@ pub struct MediatorAffirmationProof {
 impl MediatorAffirmationProof {
     pub fn new<R: RngCore>(
         rng: &mut R,
-        leg_ref: LegRef,
+        leg_ref: &LegRef,
         eph_sk: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         mediator_sk: &AccountKeyPair,
@@ -1552,7 +1555,7 @@ impl MediatorAffirmationProof {
         );
 
         Self {
-            leg_ref,
+            leg_ref: leg_ref.clone(),
             accept,
 
             proof,
