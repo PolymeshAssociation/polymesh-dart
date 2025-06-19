@@ -7,13 +7,15 @@ edition = "2024"
 dart-common = { workspace = true, default-features = false }
 
 rand = { workspace = true, default-features = false }
+log = { workspace = true, default-features = false }
+digest = { workspace = true }
+blake2 = { workspace = true }
+rayon = { workspace = true, optional = true }
+
 ark-ff = { workspace = true }
 ark-ec = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
-digest = { workspace = true }
-blake2 = { workspace = true }
-rayon = { workspace = true, optional = true }
 dock_crypto_utils = { workspace = true, default-features = false }
 verifiable_encryption = { workspace = true, default-features = false }
 equality_across_groups = { workspace = true, default-features = false }
@@ -24,6 +26,7 @@ bulletproofs = { workspace = true, default-features = false }
 curve_tree_relations = { workspace = true, default-features = false }
 
 [dev-dependencies]
+test-log = { workspace = true }
 criterion = { workspace = true }
 ark-pallas = { workspace = true }
 ark-vesta = { workspace = true }

@@ -1042,7 +1042,7 @@ impl<
             &self.odd_proof,
             &tree_parameters,
         )?;
-        println!("Time and size: {:?}, {}", dur, size);
+        log::info!("Time and size: {:?}, {}", dur, size);
         Ok(())
     }
 }
@@ -1180,6 +1180,7 @@ pub mod tests {
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use std::time::Instant;
+    use test_log::test;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1323,16 +1324,17 @@ pub mod tests {
         assert!(proof.resp_eph_pk.is_some());
         assert!(proof.auditor_enc_proofs.is_none());
 
-        println!(
+        log::info!(
             "total proof size = {}",
             proof.compressed_size()
                 + leg_enc.compressed_size()
                 + eph_sk_enc.compressed_size()
                 + pk_e.0.compressed_size()
         );
-        println!(
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
 
         // All parties decrypt to the same ephemeral secret key
@@ -1463,16 +1465,17 @@ pub mod tests {
         assert!(proof.resp_eph_pk.is_none());
         assert!(proof.auditor_enc_proofs.is_some());
 
-        println!(
+        log::info!(
             "total proof size = {}",
             proof.compressed_size()
                 + leg_enc.compressed_size()
                 + eph_sk_enc.compressed_size()
                 + pk_e.0.compressed_size()
         );
-        println!(
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
 
         // All parties decrypt to the same ephemeral secret key
@@ -1557,10 +1560,11 @@ pub mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("proof size = {}", proof.compressed_size());
+        log::info!(
             "prover time = {:?}, verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 }

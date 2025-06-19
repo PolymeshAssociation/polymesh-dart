@@ -1391,7 +1391,7 @@ impl<
         let mut prover_transcript = even_prover.transcript();
 
         let mut c = prover_transcript.challenge_scalar::<F0>(b"c");
-        println!("prover c0 {}", c.to_string());
+        log::debug!("prover c0 {}", c.to_string());
 
         let sk_blinding = F0::rand(rng);
         let new_counter_blinding = F0::rand(rng);
@@ -1425,7 +1425,7 @@ impl<
             );
 
         c = prover_transcript.challenge_scalar::<F0>(b"c");
-        println!("prover c1 {}", c.to_string());
+        log::debug!("prover c1 {}", c.to_string());
 
         let (t_old_bal, t_new_bal, t_amount, t_leg_amount) =
             generate_schnorr_t_values_for_balance_change(
@@ -1451,7 +1451,7 @@ impl<
             );
 
         c = prover_transcript.challenge_scalar::<F0>(b"c");
-        println!("prover c2 {}", c.to_string());
+        log::debug!("prover c2 {}", c.to_string());
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
@@ -1557,7 +1557,7 @@ impl<
         let mut verifier_transcript = even_verifier.transcript();
 
         let mut c = verifier_transcript.challenge_scalar::<F0>(b"c");
-        println!("verifier c0 {}", c.to_string());
+        log::debug!("verifier c0 {}", c.to_string());
 
         take_challenge_contrib_of_schnorr_t_values_for_common_state_change!(
             self,
@@ -1569,7 +1569,7 @@ impl<
         );
 
         c = verifier_transcript.challenge_scalar::<F0>(b"c");
-        println!("verifier c1 {}", c.to_string());
+        log::debug!("verifier c1 {}", c.to_string());
 
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         take_challenge_contrib_of_schnorr_t_values_for_balance_change!(
@@ -1581,7 +1581,7 @@ impl<
         );
 
         c = verifier_transcript.challenge_scalar::<F0>(b"c");
-        println!("verifier c2 {}", c.to_string());
+        log::debug!("verifier c2 {}", c.to_string());
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         assert_eq!(verifier_challenge, prover_challenge);
@@ -2964,6 +2964,7 @@ mod tests {
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use std::time::Instant;
+    use test_log::test;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -3044,11 +3045,12 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("For reg. txn");
-        println!("total proof size = {}", reg_proof.compressed_size());
-        println!(
+        log::info!("For reg. txn");
+        log::info!("total proof size = {}", reg_proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
 
         let account_tree =
@@ -3103,11 +3105,12 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("For mint txn");
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("For mint txn");
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3208,10 +3211,11 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3311,10 +3315,11 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3412,10 +3417,11 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3510,10 +3516,11 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3607,10 +3614,11 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 
@@ -3753,11 +3761,12 @@ mod tests {
 
         let verifier_time = clock.elapsed();
 
-        println!("For {num_pending_txns} pending txns");
-        println!("total proof size = {}", proof.compressed_size());
-        println!(
+        log::info!("For {num_pending_txns} pending txns");
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            prover_time,
+            verifier_time
         );
     }
 }

@@ -54,6 +54,8 @@ bulletproofs = { version = "2.0.0", default-features = false }
 curve_tree_relations = { version = "0.1.0", package = "relations", default-features = false }
 
 # Dev dependencies
+anyhow = "1.0.98"
+test-log = "0.2.17"
 criterion = "0.3"
 ark-pallas = "0.4"
 ark-vesta = "0.4"
@@ -96,8 +98,8 @@ bulletproofs = { workspace = true, default-features = false, optional = true }
 curve_tree_relations = { workspace = true, default-features = false, optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.98"
-test-log = "0.2.17"
+anyhow = { workspace = true }
+test-log = { workspace = true }
 
 [features]
 default = ["std", "asm", "parallel", "backend_bp"]
