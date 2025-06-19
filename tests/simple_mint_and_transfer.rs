@@ -7,8 +7,10 @@ mod common;
 use common::*;
 
 /// This test simulates a simple mint and transfer of assets between the asset issuer and an investor.
+///
+/// The asset has a mediator who must also affirm the settlement.
 #[test]
-fn test_mint_and_transfer() -> Result<()> {
+fn test_mint_and_transfer_with_mediator() -> Result<()> {
     let mut rng = rand::thread_rng();
 
     // Setup chain state.
@@ -31,22 +33,11 @@ fn test_mint_and_transfer() -> Result<()> {
 
     let asset_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
     // Create a Dart asset with the issuer as the owner and the mediator as the auditor.
-    let asset_id = issuer.create_asset(
-        &mut chain,
-        asset_mediator,
-    )?;
+    let asset_id = issuer.create_asset(&mut chain, asset_mediator)?;
 
     // Initialize account asset state for the issuer and investor.
-    issuer_acct.initialize_asset(
-        &mut rng,
-        &mut chain,
-        asset_id,
-    )?;
-    investor1_acct.initialize_asset(
-        &mut rng,
-        &mut chain,
-        asset_id,
-    )?;
+    issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+    investor1_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
 
     // End the block to finalize the new accounts.
     chain.end_block()?;
@@ -100,12 +91,7 @@ fn test_mint_and_transfer() -> Result<()> {
     )?;
 
     // The mediator affirms the settlement.
-    mediator_acct.mediator_affirmation(
-        &mut rng,
-        &mut chain,
-        &leg_ref,
-        true,
-    )?;
+    mediator_acct.mediator_affirmation(&mut rng, &mut chain, &leg_ref, true)?;
 
     // End the block to finalize the new accounts.
     chain.end_block()?;
@@ -125,7 +111,7 @@ fn test_mint_and_transfer() -> Result<()> {
 }
 
 /// Test an atomic swap using two assets created by different asset issuers.
-/// 
+///
 /// Steps:
 /// 1. Create two asset issuers, one auditor, one mediator and two investors.
 /// 2. Each asset issuer creates an asset (one asset has an auditor the other has a mediator) and mints it to their respective accounts.
@@ -149,7 +135,14 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Step 1: Create two asset issuers, one auditor, one mediator and two investors.
-    let users = chain.create_signers(&["AssetIssuer1", "AssetIssuer2", "Auditor", "Mediator", "Investor1", "Investor2"])?;
+    let users = chain.create_signers(&[
+        "AssetIssuer1",
+        "AssetIssuer2",
+        "Auditor",
+        "Mediator",
+        "Investor1",
+        "Investor2",
+    ])?;
     let mut issuer1 = DartUser::new(&users[0]);
     let mut issuer2 = DartUser::new(&users[1]);
     let mut auditor = DartUser::new(&users[2]);
@@ -168,7 +161,7 @@ fn test_atomic_swap() -> Result<()> {
     // Step 2: Each asset issuer creates an asset (one asset has an auditor the other has a mediator) and mints it to their respective accounts.
     let asset1_auditor = AuditorOrMediator::auditor(&auditor_acct.public_keys().enc);
     let asset2_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
-    
+
     let asset1_id = issuer1.create_asset(&mut chain, asset1_auditor)?;
     let asset2_id = issuer2.create_asset(&mut chain, asset2_mediator)?;
 
@@ -181,8 +174,20 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Mint the assets to the issuers' accounts.
-    issuer1_acct.mint_asset(&mut rng, &mut chain, account_tree.prover_account_tree(), asset1_id, 2000)?;
-    issuer2_acct.mint_asset(&mut rng, &mut chain, account_tree.prover_account_tree(), asset2_id, 3000)?;
+    issuer1_acct.mint_asset(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        asset1_id,
+        2000,
+    )?;
+    issuer2_acct.mint_asset(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        asset2_id,
+        3000,
+    )?;
 
     // Step 3: The investors create and initialize their accounts for the assets.
     investor1_acct.initialize_asset(&mut rng, &mut chain, asset1_id)?;
@@ -227,13 +232,41 @@ fn test_atomic_swap() -> Result<()> {
 
     // Step 5: The asset issuers, mediator and investors affirm the funding settlements.
     // Funding settlement 1 affirmations
-    issuer1_acct.sender_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg1_ref, asset1_id, 1000)?;
-    investor1_acct.receiver_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg1_ref, asset1_id, 1000)?;
+    issuer1_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg1_ref,
+        asset1_id,
+        1000,
+    )?;
+    investor1_acct.receiver_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg1_ref,
+        asset1_id,
+        1000,
+    )?;
     // Note: Asset1 has an auditor, not a mediator, so no mediator affirmation needed
 
     // Funding settlement 2 affirmations
-    issuer2_acct.sender_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg2_ref, asset2_id, 1500)?;
-    investor2_acct.receiver_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg2_ref, asset2_id, 1500)?;
+    issuer2_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg2_ref,
+        asset2_id,
+        1500,
+    )?;
+    investor2_acct.receiver_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg2_ref,
+        asset2_id,
+        1500,
+    )?;
     mediator_acct.mediator_affirmation(&mut rng, &mut chain, &funding_leg2_ref, true)?;
 
     // End the block to finalize the affirmations.
@@ -241,8 +274,18 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Step 6: The investors claim the assets.
-    investor1_acct.receiver_claims(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg1_ref)?;
-    investor2_acct.receiver_claims(&mut rng, &mut chain, account_tree.prover_account_tree(), &funding_leg2_ref)?;
+    investor1_acct.receiver_claims(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg1_ref,
+    )?;
+    investor2_acct.receiver_claims(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg2_ref,
+    )?;
 
     // End the block to finalize the claims.
     chain.end_block()?;
@@ -276,12 +319,40 @@ fn test_atomic_swap() -> Result<()> {
 
     // Step 8: The investors affirm the settlement.
     // Investor1 affirms as sender for leg 1 and receiver for leg 2
-    investor1_acct.sender_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg1_ref, asset1_id, 500)?;
-    investor1_acct.receiver_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg2_ref, asset2_id, 750)?;
-    
+    investor1_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg1_ref,
+        asset1_id,
+        500,
+    )?;
+    investor1_acct.receiver_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg2_ref,
+        asset2_id,
+        750,
+    )?;
+
     // Investor2 affirms as receiver for leg 1 and sender for leg 2
-    investor2_acct.receiver_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg1_ref, asset1_id, 500)?;
-    investor2_acct.sender_affirmation(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg2_ref, asset2_id, 750)?;
+    investor2_acct.receiver_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg1_ref,
+        asset1_id,
+        500,
+    )?;
+    investor2_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg2_ref,
+        asset2_id,
+        750,
+    )?;
 
     // Step 9: The mediator affirms the settlement.
     // Note: Only asset2 has a mediator, asset1 has an auditor
@@ -292,8 +363,18 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Step 10: The investors claim the assets from the settlement.
-    investor1_acct.receiver_claims(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg2_ref)?;
-    investor2_acct.receiver_claims(&mut rng, &mut chain, account_tree.prover_account_tree(), &swap_leg1_ref)?;
+    investor1_acct.receiver_claims(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg2_ref,
+    )?;
+    investor2_acct.receiver_claims(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg1_ref,
+    )?;
 
     Ok(())
 }

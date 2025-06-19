@@ -636,7 +636,13 @@ impl AuditorOrMediator {
         Self::Auditor(*pk)
     }
 
-    pub fn get_keys(&self) -> (EncryptionPublicKey, Option<AccountPublicKey>, Option<EncryptionPublicKey>) {
+    pub fn get_keys(
+        &self,
+    ) -> (
+        EncryptionPublicKey,
+        Option<AccountPublicKey>,
+        Option<EncryptionPublicKey>,
+    ) {
         match self {
             AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct), None),
             AuditorOrMediator::Auditor(pk) => (*pk, None, Some(*pk)),

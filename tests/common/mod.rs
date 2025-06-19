@@ -4,10 +4,15 @@ use anyhow::{Context, Result, anyhow};
 use dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
 use rand::RngCore;
 
-use std::{collections::{HashMap, HashSet}, sync::{Arc, RwLock}};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
+};
 
 use dart::{
-    curve_tree::{CurveTreeLookup, ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree},
+    curve_tree::{
+        CurveTreeLookup, ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree,
+    },
     *,
 };
 
@@ -47,9 +52,17 @@ impl DartUserAccountInner {
         self.keys.public_keys()
     }
 
-    pub fn initialize_asset<R: RngCore>(&mut self, rng: &mut R, chain: &mut DartChainState, asset_id: AssetId) -> Result<()> {
+    pub fn initialize_asset<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        asset_id: AssetId,
+    ) -> Result<()> {
         if self.assets.contains_key(&asset_id) {
-            return Err(anyhow!("Asset ID {} is already initialized for this account", asset_id));
+            return Err(anyhow!(
+                "Asset ID {} is already initialized for this account",
+                asset_id
+            ));
         }
         let (proof, mut asset_state) =
             AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx());
@@ -67,14 +80,11 @@ impl DartUserAccountInner {
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
-        let asset_state = self.assets.get_mut(&asset_id)
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
-        let proof = AssetMintingProof::new(
-            rng,
-            asset_state,
-            account_tree,
-            amount,
-        )?;
+        let proof = AssetMintingProof::new(rng, asset_state, account_tree, amount)?;
         chain.mint_assets(&self.address, proof)?;
         asset_state.commit_pending_state();
         Ok(())
@@ -108,22 +118,24 @@ impl DartUserAccountInner {
                 leg.amount()
             ));
         }
-        
+
         // Get the asset state for the account.
-        let asset_state = self.assets.get_mut(&asset_id)
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
 
         // Create the sender affirmation proof.
         log::info!("Sender generate affirmation proof");
         let proof = SenderAffirmationProof::new(
-                rng,
-                leg_ref,
-                amount,
-                sk_e,
-                &leg_enc,
-                asset_state,
-                account_tree,
-            );
+            rng,
+            leg_ref,
+            amount,
+            sk_e,
+            &leg_enc,
+            asset_state,
+            account_tree,
+        );
         log::info!("Sender affirms");
         chain.sender_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state();
@@ -160,19 +172,15 @@ impl DartUserAccountInner {
         }
 
         // Get the asset state for the account.
-        let asset_state = self.assets.get_mut(&asset_id)
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
 
         // Create the receiver affirmation proof.
         log::info!("Receiver generate affirmation proof");
-        let proof = ReceiverAffirmationProof::new(
-                rng,
-                leg_ref,
-                sk_e,
-                &leg_enc,
-                asset_state,
-                account_tree,
-            );
+        let proof =
+            ReceiverAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree);
         log::info!("Receiver affirms");
         chain.receiver_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state();
@@ -194,14 +202,8 @@ impl DartUserAccountInner {
 
         // Create the mediator affirmation proof.
         log::info!("Mediator generate affirmation proof");
-        let proof = MediatorAffirmationProof::new(
-            rng,
-            leg_ref,
-            sk_e,
-            &leg_enc,
-            &self.keys.acct,
-            accept,
-        );
+        let proof =
+            MediatorAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, &self.keys.acct, accept);
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())
@@ -222,7 +224,9 @@ impl DartUserAccountInner {
         let amount = leg.amount();
 
         // Get the asset state for the account.
-        let asset_state = self.assets.get_mut(&asset_id)
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
 
         // Create the receiver claim proof.
@@ -262,7 +266,10 @@ impl DartUserAccount {
         chain: &mut DartChainState,
         asset_id: AssetId,
     ) -> Result<()> {
-        self.0.write().unwrap().initialize_asset(rng, chain, asset_id)
+        self.0
+            .write()
+            .unwrap()
+            .initialize_asset(rng, chain, asset_id)
     }
 
     pub fn mint_asset<R: RngCore>(
@@ -273,7 +280,10 @@ impl DartUserAccount {
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
-        self.0.write().unwrap().mint_asset(rng, chain, account_tree, asset_id, amount)
+        self.0
+            .write()
+            .unwrap()
+            .mint_asset(rng, chain, account_tree, asset_id, amount)
     }
 
     pub fn sender_affirmation<R: RngCore>(
@@ -285,7 +295,14 @@ impl DartUserAccount {
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
-        self.0.write().unwrap().sender_affirmation(rng, chain, account_tree, leg_ref, asset_id, amount)
+        self.0.write().unwrap().sender_affirmation(
+            rng,
+            chain,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
     }
 
     pub fn receiver_affirmation<R: RngCore>(
@@ -297,7 +314,14 @@ impl DartUserAccount {
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
-        self.0.write().unwrap().receiver_affirmation(rng, chain, account_tree, leg_ref, asset_id, amount)
+        self.0.write().unwrap().receiver_affirmation(
+            rng,
+            chain,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
     }
 
     pub fn mediator_affirmation<R: RngCore>(
@@ -307,7 +331,10 @@ impl DartUserAccount {
         leg_ref: &LegRef,
         accept: bool,
     ) -> Result<()> {
-        self.0.write().unwrap().mediator_affirmation(rng, chain, leg_ref, accept)
+        self.0
+            .write()
+            .unwrap()
+            .mediator_affirmation(rng, chain, leg_ref, accept)
     }
 
     pub fn receiver_claims<R: RngCore>(
@@ -317,7 +344,10 @@ impl DartUserAccount {
         account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
         leg_ref: &LegRef,
     ) -> Result<()> {
-        self.0.write().unwrap().receiver_claims(rng, chain, account_tree, leg_ref)
+        self.0
+            .write()
+            .unwrap()
+            .receiver_claims(rng, chain, account_tree, leg_ref)
     }
 }
 
@@ -328,11 +358,20 @@ pub struct DartUser {
 
 impl DartUser {
     pub fn new(address: &SignerAddress) -> Self {
-        Self { address: address.clone(), accounts: HashMap::new() }
+        Self {
+            address: address.clone(),
+            accounts: HashMap::new(),
+        }
     }
 
-    pub fn create_asset(&self, chain: &mut DartChainState, auditor: AuditorOrMediator) -> Result<AssetId> {
-        chain.create_dart_asset(&self.address, auditor).map(|details| details.asset_id)
+    pub fn create_asset(
+        &self,
+        chain: &mut DartChainState,
+        auditor: AuditorOrMediator,
+    ) -> Result<AssetId> {
+        chain
+            .create_dart_asset(&self.address, auditor)
+            .map(|details| details.asset_id)
     }
 
     /// Create a new account for the user and register it on chain.
@@ -352,7 +391,11 @@ impl DartUser {
         Ok(account)
     }
 
-    pub fn create_settlement(&self, chain: &mut DartChainState, proof: SettlementProof) -> Result<SettlementId> {
+    pub fn create_settlement(
+        &self,
+        chain: &mut DartChainState,
+        proof: SettlementProof,
+    ) -> Result<SettlementId> {
         chain.create_settlement(&self.address, proof)
     }
 }
@@ -846,12 +889,18 @@ impl DartProverAccountTree {
 
     pub fn apply_updates(&mut self, chain: &DartChainState) -> Result<()> {
         let new_leafs = chain.get_new_account_leafs(self.last_leaf_index);
-        log::info!("Applying {} new account leafs to the prover account tree", new_leafs.len());
+        log::info!(
+            "Applying {} new account leafs to the prover account tree",
+            new_leafs.len()
+        );
         for leaf in new_leafs {
-            self.account_tree.insert(leaf.0 .0)?;
+            self.account_tree.insert(leaf.0.0)?;
             self.last_leaf_index += 1;
         }
-        log::info!("Prover account tree now has {} leaves", self.last_leaf_index);
+        log::info!(
+            "Prover account tree now has {} leaves",
+            self.last_leaf_index
+        );
         Ok(())
     }
 }
@@ -931,7 +980,11 @@ impl DartChainState {
             log::info!("No new account leafs to return");
             return &[];
         }
-        log::info!("get new accounts: {} -> {}", last_idx, self.account_leafs.len());
+        log::info!(
+            "get new accounts: {} -> {}",
+            last_idx,
+            self.account_leafs.len()
+        );
         &self.account_leafs[last_idx..]
     }
 
