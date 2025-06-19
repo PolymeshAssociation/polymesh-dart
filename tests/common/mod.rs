@@ -2,11 +2,12 @@
 
 use anyhow::{Context, Result, anyhow};
 use dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
+use rand::RngCore;
 
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, sync::{Arc, RwLock}};
 
 use dart::{
-    curve_tree::{ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree},
+    curve_tree::{CurveTreeLookup, ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree},
     *,
 };
 
@@ -23,6 +24,337 @@ impl SignerAddress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignerState {
     pub nonce: u64,
+}
+
+#[derive(Debug, Clone)]
+struct DartUserAccountInner {
+    address: SignerAddress,
+    keys: AccountKeys,
+    assets: HashMap<AssetId, AccountAssetState>,
+}
+
+impl DartUserAccountInner {
+    pub fn new<R: RngCore>(rng: &mut R, address: SignerAddress) -> Result<Self> {
+        let account_keys = AccountKeys::rand(rng);
+        Ok(Self {
+            address,
+            keys: account_keys,
+            assets: HashMap::new(),
+        })
+    }
+
+    pub fn public_keys(&self) -> AccountPublicKeys {
+        self.keys.public_keys()
+    }
+
+    pub fn initialize_asset<R: RngCore>(&mut self, rng: &mut R, chain: &mut DartChainState, asset_id: AssetId) -> Result<()> {
+        if self.assets.contains_key(&asset_id) {
+            return Err(anyhow!("Asset ID {} is already initialized for this account", asset_id));
+        }
+        let (proof, mut asset_state) =
+            AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx());
+        chain.initialize_account_asset(&self.address, proof)?;
+        asset_state.commit_pending_state();
+        self.assets.insert(asset_id, asset_state);
+        Ok(())
+    }
+
+    pub fn mint_asset<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        let asset_state = self.assets.get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+        let proof = AssetMintingProof::new(
+            rng,
+            asset_state,
+            account_tree,
+            amount,
+        )?;
+        chain.mint_assets(&self.address, proof)?;
+        asset_state.commit_pending_state();
+        Ok(())
+    }
+
+    pub fn sender_affirmation<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        log::info!("Sender decrypts the leg");
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc);
+        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc);
+
+        if asset_id != leg.asset_id() {
+            return Err(anyhow!(
+                "Asset ID {} does not match leg asset ID {}",
+                asset_id,
+                leg.asset_id()
+            ));
+        }
+        if amount != leg.amount() {
+            return Err(anyhow!(
+                "Amount {} does not match leg amount {}",
+                amount,
+                leg.amount()
+            ));
+        }
+        
+        // Get the asset state for the account.
+        let asset_state = self.assets.get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+
+        // Create the sender affirmation proof.
+        log::info!("Sender generate affirmation proof");
+        let proof = SenderAffirmationProof::new(
+                rng,
+                leg_ref,
+                amount,
+                sk_e,
+                &leg_enc,
+                asset_state,
+                account_tree,
+            );
+        log::info!("Sender affirms");
+        chain.sender_affirmation(&self.address, proof)?;
+        asset_state.commit_pending_state();
+        Ok(())
+    }
+
+    pub fn receiver_affirmation<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        log::info!("Receiver decrypts the leg");
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc);
+        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc);
+
+        if asset_id != leg.asset_id() {
+            return Err(anyhow!(
+                "Asset ID {} does not match leg asset ID {}",
+                asset_id,
+                leg.asset_id()
+            ));
+        }
+        if amount != leg.amount() {
+            return Err(anyhow!(
+                "Amount {} does not match leg amount {}",
+                amount,
+                leg.amount()
+            ));
+        }
+
+        // Get the asset state for the account.
+        let asset_state = self.assets.get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+
+        // Create the receiver affirmation proof.
+        log::info!("Receiver generate affirmation proof");
+        let proof = ReceiverAffirmationProof::new(
+                rng,
+                leg_ref,
+                sk_e,
+                &leg_enc,
+                asset_state,
+                account_tree,
+            );
+        log::info!("Receiver affirms");
+        chain.receiver_affirmation(&self.address, proof)?;
+        asset_state.commit_pending_state();
+        Ok(())
+    }
+
+    pub fn mediator_affirmation<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        leg_ref: &LegRef,
+        accept: bool,
+    ) -> Result<()> {
+        log::info!("Mediator decrypts the leg");
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &self.keys.enc);
+        let leg = leg_enc.decrypt(LegRole::Mediator, &self.keys.enc);
+        log::info!("Mediator's view of the leg: {:?}", leg);
+
+        // Create the mediator affirmation proof.
+        log::info!("Mediator generate affirmation proof");
+        let proof = MediatorAffirmationProof::new(
+            rng,
+            leg_ref,
+            sk_e,
+            &leg_enc,
+            &self.keys.acct,
+            accept,
+        );
+        log::info!("Mediator affirms");
+        chain.mediator_affirmation(&self.address, proof)?;
+        Ok(())
+    }
+
+    pub fn receiver_claims<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+    ) -> Result<()> {
+        log::info!("Receiver decrypts the leg for claim");
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc);
+        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc);
+        let asset_id = leg.asset_id();
+        let amount = leg.amount();
+
+        // Get the asset state for the account.
+        let asset_state = self.assets.get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+
+        // Create the receiver claim proof.
+        log::info!("Receiver generate claim proof");
+        let proof = ReceiverClaimProof::new(
+            rng,
+            leg_ref,
+            amount,
+            sk_e,
+            &leg_enc,
+            asset_state,
+            account_tree,
+        );
+        log::info!("Receiver claims");
+        chain.receiver_claim(&self.address, proof)?;
+        asset_state.commit_pending_state();
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DartUserAccount(Arc<RwLock<DartUserAccountInner>>);
+
+impl DartUserAccount {
+    pub fn new<R: RngCore>(rng: &mut R, address: SignerAddress) -> Result<Self> {
+        let inner = DartUserAccountInner::new(rng, address)?;
+        Ok(Self(Arc::new(RwLock::new(inner))))
+    }
+
+    pub fn public_keys(&self) -> AccountPublicKeys {
+        self.0.read().unwrap().public_keys()
+    }
+
+    pub fn initialize_asset<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        asset_id: AssetId,
+    ) -> Result<()> {
+        self.0.write().unwrap().initialize_asset(rng, chain, asset_id)
+    }
+
+    pub fn mint_asset<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        self.0.write().unwrap().mint_asset(rng, chain, account_tree, asset_id, amount)
+    }
+
+    pub fn sender_affirmation<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        self.0.write().unwrap().sender_affirmation(rng, chain, account_tree, leg_ref, asset_id, amount)
+    }
+
+    pub fn receiver_affirmation<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        self.0.write().unwrap().receiver_affirmation(rng, chain, account_tree, leg_ref, asset_id, amount)
+    }
+
+    pub fn mediator_affirmation<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        leg_ref: &LegRef,
+        accept: bool,
+    ) -> Result<()> {
+        self.0.write().unwrap().mediator_affirmation(rng, chain, leg_ref, accept)
+    }
+
+    pub fn receiver_claims<R: RngCore>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        leg_ref: &LegRef,
+    ) -> Result<()> {
+        self.0.write().unwrap().receiver_claims(rng, chain, account_tree, leg_ref)
+    }
+}
+
+pub struct DartUser {
+    pub address: SignerAddress,
+    pub accounts: HashMap<String, DartUserAccount>,
+}
+
+impl DartUser {
+    pub fn new(address: &SignerAddress) -> Self {
+        Self { address: address.clone(), accounts: HashMap::new() }
+    }
+
+    pub fn create_asset(&self, chain: &mut DartChainState, auditor: AuditorOrMediator) -> Result<AssetId> {
+        chain.create_dart_asset(&self.address, auditor).map(|details| details.asset_id)
+    }
+
+    /// Create a new account for the user and register it on chain.
+    pub fn create_and_register_account<R: RngCore>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        name: &str,
+    ) -> Result<DartUserAccount> {
+        // Generate the new account.
+        let account = DartUserAccount::new(rng, self.address.clone())?;
+
+        // Register the account on chain using our address.
+        chain.register_account(&self.address, account.public_keys())?;
+
+        self.accounts.insert(name.to_string(), account.clone());
+        Ok(account)
+    }
+
+    pub fn create_settlement(&self, chain: &mut DartChainState, proof: SettlementProof) -> Result<SettlementId> {
+        chain.create_settlement(&self.address, proof)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,12 +629,15 @@ impl DartSettlement {
         let legs = proof
             .legs
             .into_iter()
-            .map(|leg| DartSettlementLeg {
-                enc: leg.leg_enc,
-                sender: AffirmationStatus::Pending,
-                receiver: AffirmationStatus::Pending,
-                mediator: leg.has_mediator.then_some(AffirmationStatus::Pending),
-                status: AffirmationStatus::Pending,
+            .map(|leg| {
+                let mediator = leg.has_mediator().then_some(AffirmationStatus::Pending);
+                DartSettlementLeg {
+                    enc: leg.leg_enc,
+                    sender: AffirmationStatus::Pending,
+                    receiver: AffirmationStatus::Pending,
+                    mediator,
+                    status: AffirmationStatus::Pending,
+                }
             })
             .collect();
         Self {
