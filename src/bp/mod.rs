@@ -59,6 +59,7 @@ impl DartBPGenerators {
         );
 
         let pk_acct_g = PallasA::rand(&mut rng);
+        // HACK: The sender affirmation fails if this isn't the same.
         //let pk_enc_g = PallasA::rand(&mut rng);
         let pk_enc_g = pk_acct_g;
 
@@ -76,6 +77,7 @@ impl DartBPGenerators {
             PallasA::rand(&mut rng), // field: asset_id
         ];
 
+        // HACK: The sender affirmation fails if this isn't the same.
         //let leg_g = PallasA::rand(&mut rng);
         let leg_g = pk_enc_g;
         let leg_h = PallasA::rand(&mut rng);
