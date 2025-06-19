@@ -20,4 +20,12 @@ pub enum Error {
     /// Bounded container size limit exceeded.
     #[error("Bounded container size limit exceeded.")]
     BoundedContainerSizeLimitExceeded,
+
+    /// Bulletproof r1cs error.
+    #[error("Bulletproof r1cs error: {0:?}")]
+    BulletproofR1CSError(#[from] bulletproofs::errors::R1CSError),
+
+    /// Curve tree root not found.
+    #[error("Curve tree root not found.")]
+    CurveTreeRootNotFound,
 }

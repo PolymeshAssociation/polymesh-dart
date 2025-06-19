@@ -8,7 +8,7 @@ use bounded_collections::{BoundedVec, ConstU32};
 use codec::Encode;
 
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use dart_common::{LegId, SettlementId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS};
+use dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
 use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
@@ -266,10 +266,6 @@ impl AccountState {
     pub fn commitment(&self) -> AccountStateCommitment {
         AccountStateCommitment(self.0.commit(&DART_GENS.account_comm_g()))
     }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.0.nullifier(DART_GENS.pk_acct_g))
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -518,18 +514,17 @@ impl AccountAssetRegistrationProof {
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
-    pub fn verify(&self, ctx: &[u8]) -> bool {
-        self.proof
-            .verify(
-                &self.account.0.0,
-                self.asset_id,
-                &self.account_state_commitment.0,
-                self.challenge,
-                ctx,
-                &DART_GENS.account_comm_g(),
-                DART_GENS.pk_acct_g,
-            )
-            .is_ok()
+    pub fn verify(&self, ctx: &[u8]) -> Result<()> {
+        self.proof.verify(
+            &self.account.0.0,
+            self.asset_id,
+            &self.account_state_commitment.0,
+            self.challenge,
+            ctx,
+            &DART_GENS.account_comm_g(),
+            DART_GENS.pk_acct_g,
+        )?;
+        Ok(())
     }
 }
 
@@ -603,25 +598,24 @@ impl AssetMintingProof {
         AccountStateNullifier(self.proof.nullifier)
     }
 
-    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
+    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for asset minting proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
-        self.proof
-            .verify(
-                self.pk.0.0,
-                self.asset_id,
-                self.amount,
-                &self.root,
-                self.challenge,
-                b"",
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.pk_acct_g,
-            )
-            .is_ok()
+        self.proof.verify(
+            self.pk.0.0,
+            self.asset_id,
+            self.amount,
+            &self.root,
+            self.challenge,
+            b"",
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.pk_acct_g,
+        )?;
+        Ok(())
     }
 }
 
@@ -875,21 +869,18 @@ pub struct SettlementProof {
 }
 
 impl SettlementProof {
-    pub fn verify(&self, asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> bool {
+    pub fn verify(&self, asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> Result<()> {
         // Validate the root of the curve tree.
         if !asset_tree.validate_root(&self.root) {
             log::error!("Invalid root for settlement proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            if !leg.verify(&ctx, &self.root, params) {
-                log::error!("Invalid leg proof in settlement proof");
-                return false;
-            }
+            leg.verify(&ctx, &self.root, params)?;
         }
-        true
+        Ok(())
     }
 }
 
@@ -960,24 +951,23 @@ impl SettlementLegProof {
         ctx: &[u8],
         root: &CurveTreeRoot<ASSET_TREE_L>,
         params: &CurveTreeParameters,
-    ) -> bool {
+    ) -> Result<()> {
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
-        eprintln!("Verify leg: {:?}", self.leg_enc.leg_enc);
-        self.proof
-            .verify(
-                self.leg_enc.leg_enc.clone(),
-                self.leg_enc.ephemeral_key.enc.clone(),
-                pk_e.0.0,
-                &root,
-                self.challenge,
-                ctx,
-                params,
-                &DART_GENS.asset_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-                &DART_GENS.ped_comm_key,
-            )
-            .is_ok()
+        log::debug!("Verify leg: {:?}", self.leg_enc.leg_enc);
+        self.proof.verify(
+            self.leg_enc.leg_enc.clone(),
+            self.leg_enc.ephemeral_key.enc.clone(),
+            pk_e.0.0,
+            &root,
+            self.challenge,
+            ctx,
+            params,
+            &DART_GENS.asset_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+            &DART_GENS.ped_comm_key,
+        )?;
+        Ok(())
     }
 }
 
@@ -1003,7 +993,7 @@ impl EphemeralSkEncryption {
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             );
-        eprintln!("Ephemeral key: sk_e={:?}", _sk_e);
+        log::debug!("Ephemeral key: sk_e={:?}", _sk_e);
         let pk_e = EncryptionPublicKey(pk_e);
         (
             Self {
@@ -1029,10 +1019,7 @@ impl LegEncrypted {
     pub fn decrypt_sk_e(&self, role: LegRole, keys: &EncryptionKeyPair) -> EncryptionSecretKey {
         let sk = keys.secret.0.0;
         let sk_e = match role {
-            LegRole::Sender => self
-                .ephemeral_key
-                .enc
-                .decrypt_for_sender::<Blake2b512>(sk),
+            LegRole::Sender => self.ephemeral_key.enc.decrypt_for_sender::<Blake2b512>(sk),
             LegRole::Receiver => self
                 .ephemeral_key
                 .enc
@@ -1048,7 +1035,7 @@ impl LegEncrypted {
     /// Decrypts the leg using the provided secret key and role.
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Leg {
         let sk_e = self.decrypt_sk_e(role, keys);
-        eprintln!("Decrypted sk_e: {:?}", sk_e.0.0);
+        log::debug!("Decrypted sk_e: {:?}", sk_e.0.0);
         let leg = self.leg_enc.decrypt(&sk_e.0.0, DART_GENS.leg_h);
         Leg(leg)
     }
@@ -1128,28 +1115,24 @@ impl SenderAffirmationProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> bool {
+    ) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender affirmation proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        let res = self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                &self.root,
-                self.challenge,
-                ctx.as_bytes(),
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-            );
-        if res.is_err() {
-            eprintln!("Verify sender affirmation proof: {:?}", res);
-        }
-        res.is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            &self.root,
+            self.challenge,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        )?;
+        Ok(())
     }
 }
 
@@ -1227,29 +1210,24 @@ impl ReceiverAffirmationProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> bool {
+    ) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver affirmation proof");
-            eprintln!("Invalid root for receiver affirmation proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        let res = self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                &self.root,
-                self.challenge,
-                ctx.as_bytes(),
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-            );
-        if res.is_err() {
-            eprintln!("Verify receiver affirmation proof: {:?}", res);
-        }
-        res.is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            &self.root,
+            self.challenge,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        )?;
+        Ok(())
     }
 }
 
@@ -1329,25 +1307,24 @@ impl ReceiverClaimProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> bool {
+    ) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver claim proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                &self.root,
-                self.challenge,
-                ctx.as_bytes(),
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-            )
-            .is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            &self.root,
+            self.challenge,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        )?;
+        Ok(())
     }
 }
 
@@ -1425,25 +1402,24 @@ impl SenderCounterUpdateProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> bool {
+    ) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender counter update proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                &self.root,
-                self.challenge,
-                ctx.as_bytes(),
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-            )
-            .is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            &self.root,
+            self.challenge,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        )?;
+        Ok(())
     }
 }
 
@@ -1523,25 +1499,24 @@ impl SenderReversalProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> bool {
+    ) -> Result<()> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender reversal proof");
-            return false;
+            return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                &self.root,
-                self.challenge,
-                ctx.as_bytes(),
-                tree_roots.params(),
-                &DART_GENS.account_comm_g(),
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
-            )
-            .is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            &self.root,
+            self.challenge,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            &DART_GENS.account_comm_g(),
+            DART_GENS.leg_g,
+            DART_GENS.leg_h,
+        )?;
+        Ok(())
     }
 }
 
@@ -1585,18 +1560,17 @@ impl MediatorAffirmationProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted) -> bool {
+    pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<()> {
         let ctx = self.leg_ref.context();
         let eph_pk = leg_enc.ephemeral_key.pk_e;
-        self.proof
-            .verify(
-                leg_enc.leg_enc.clone(),
-                eph_pk.0.0,
-                self.accept,
-                self.challenge,
-                ctx.as_bytes(),
-                DART_GENS.leg_g,
-            )
-            .is_ok()
+        self.proof.verify(
+            leg_enc.leg_enc.clone(),
+            eph_pk.0.0,
+            self.accept,
+            self.challenge,
+            ctx.as_bytes(),
+            DART_GENS.leg_g,
+        )?;
+        Ok(())
     }
 }

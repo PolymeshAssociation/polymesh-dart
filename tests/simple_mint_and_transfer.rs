@@ -1,4 +1,5 @@
 use anyhow::Result;
+use test_log::test;
 
 use dart::*;
 
@@ -30,10 +31,7 @@ fn test_minting_asset() -> Result<()> {
 
     let asset_mediator = AuditorOrMediator::mediator(&mediator_keys.public_keys());
     // Create a Dart asset with the issuer as the owner and the mediator as the auditor.
-    let asset_details = chain.create_dart_asset(
-        issuer,
-        asset_mediator,
-    )?;
+    let asset_details = chain.create_dart_asset(issuer, asset_mediator)?;
     let asset_id = asset_details.asset_id;
 
     // Initialize account asset state for the issuer and investor.
@@ -62,7 +60,13 @@ fn test_minting_asset() -> Result<()> {
 
     // Create a settlement to transfer some assets from the issuer to the investor.
     let settlement = SettlementBuilder::new(b"Test")
-        .leg(LegBuilder { sender: issuer_keys.public_keys(), receiver: investor1_keys.public_keys(), asset_id, amount: 500, mediator: asset_mediator })
+        .leg(LegBuilder {
+            sender: issuer_keys.public_keys(),
+            receiver: investor1_keys.public_keys(),
+            asset_id,
+            amount: 500,
+            mediator: asset_mediator,
+        })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
     let settlement_id = chain.create_settlement(issuer, settlement)?;
@@ -70,11 +74,11 @@ fn test_minting_asset() -> Result<()> {
     let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
 
     // The issuer affirms the settlement as the sender.
-    eprintln!("Sender decrypts the leg");
+    log::info!("Sender decrypts the leg");
     let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &issuer_keys.enc);
     let leg = leg_enc.decrypt(LegRole::Sender, &issuer_keys.enc);
-    eprintln!("Leg: {:?}", leg);
-    eprintln!("Sender generate affirmation proof");
+    log::info!("Leg: {:?}", leg);
+    log::info!("Sender generate affirmation proof");
     let proof = SenderAffirmationProof::new(
         &mut rng,
         leg_ref.clone(),
@@ -84,18 +88,18 @@ fn test_minting_asset() -> Result<()> {
         &mut issuer_account,
         chain.prover_account_tree(),
     );
-    eprintln!("Sender affirms");
+    log::info!("Sender affirms");
     chain.sender_affirmation(issuer, proof)?;
     issuer_account.commit_pending_state();
 
     chain.push_tree_roots();
 
     // The investor affirms the settlement as the receiver.
-    eprintln!("Receiver decrypts the leg");
+    log::info!("Receiver decrypts the leg");
     let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &investor1_keys.enc);
     let leg = leg_enc.decrypt(LegRole::Receiver, &investor1_keys.enc);
-    eprintln!("Leg: {:?}", leg);
-    eprintln!("Receiver generate affirmation proof");
+    log::info!("Leg: {:?}", leg);
+    log::info!("Receiver generate affirmation proof");
     let proof = ReceiverAffirmationProof::new(
         &mut rng,
         leg_ref.clone(),
@@ -104,18 +108,18 @@ fn test_minting_asset() -> Result<()> {
         &mut investor1_account,
         chain.prover_account_tree(),
     );
-    eprintln!("Receiver affirms");
+    log::info!("Receiver affirms");
     chain.receiver_affirmation(investor1, proof)?;
     investor1_account.commit_pending_state();
 
     chain.push_tree_roots();
 
     // The mediator affirms the settlement.
-    eprintln!("Mediator decrypts the leg");
+    log::info!("Mediator decrypts the leg");
     let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &mediator_keys.enc);
     let leg = leg_enc.decrypt(LegRole::Mediator, &mediator_keys.enc);
-    eprintln!("Leg: {:?}", leg);
-    eprintln!("Mediator generate affirmation proof");
+    log::info!("Leg: {:?}", leg);
+    log::info!("Mediator generate affirmation proof");
     let proof = MediatorAffirmationProof::new(
         &mut rng,
         leg_ref.clone(),
@@ -124,7 +128,7 @@ fn test_minting_asset() -> Result<()> {
         &mediator_keys.acct,
         true,
     );
-    eprintln!("Mediator affirms");
+    log::info!("Mediator affirms");
     chain.mediator_affirmation(mediator, proof)?;
 
     // The settlement should have executed.
@@ -132,11 +136,11 @@ fn test_minting_asset() -> Result<()> {
     chain.push_tree_roots();
 
     // Receiver claims their assets.
-    eprintln!("Receiver decrypts the leg for claim");
+    log::info!("Receiver decrypts the leg for claim");
     let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &investor1_keys.enc);
     let leg = leg_enc.decrypt(LegRole::Receiver, &investor1_keys.enc);
-    eprintln!("Leg for claim: {:?}", leg);
-    eprintln!("Receiver generate claim proof");
+    log::info!("Leg for claim: {:?}", leg);
+    log::info!("Receiver generate claim proof");
     let proof = ReceiverClaimProof::new(
         &mut rng,
         leg_ref.clone(),
@@ -146,7 +150,7 @@ fn test_minting_asset() -> Result<()> {
         &mut investor1_account,
         chain.prover_account_tree(),
     );
-    eprintln!("Receiver claims");
+    log::info!("Receiver claims");
     chain.receiver_claim(investor1, proof)?;
     investor1_account.commit_pending_state();
 

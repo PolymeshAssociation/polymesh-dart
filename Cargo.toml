@@ -97,6 +97,7 @@ curve_tree_relations = { workspace = true, default-features = false, optional = 
 
 [dev-dependencies]
 anyhow = "1.0.98"
+test-log = "0.2.17"
 
 [features]
 default = ["std", "asm", "parallel", "backend_bp"]
