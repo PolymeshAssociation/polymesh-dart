@@ -14,6 +14,8 @@ pub struct EncKey<PK: AffineRepr>(pub PK);
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
+// NOTE that the generators used in both keys is same for now but will be made different soon.   
+
 pub fn keygen_sig<R: RngCore, PK: AffineRepr>(rng: &mut R, g: PK) -> (SigKey<PK>, VerKey<PK>) {
     let s = PK::ScalarField::rand(rng);
     let p = g * s;

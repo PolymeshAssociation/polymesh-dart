@@ -161,7 +161,8 @@ pub const TXN_INSTANCE_LABEL: &[u8; 18] = b"txn-extra-instance";
 // TODO: A refactoring idea is to create partial Schnorr proofs for generic state. With each state, we have same variables which
 // almost always change and some which always have to be proven equal (unless revealed).
 
-/// This is the proof for user registering its public key for an asset. Report section 5.1.3, called "Account Registration"
+/// This is the proof for user registering its (signing) public key for an asset. Report section 5.1.3, called "Account Registration"
+/// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnProof<G: AffineRepr> {
     pub t_acc: G,
@@ -170,6 +171,7 @@ pub struct RegTxnProof<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> RegTxnProof<G> {
+    /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
     pub fn new<R: RngCore>(
         rng: &mut R,
         pk: G,
@@ -177,7 +179,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
+        sig_gen: G,
     ) -> (Self, G::ScalarField) {
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
@@ -202,7 +204,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
@@ -221,12 +223,12 @@ impl<G: AffineRepr> RegTxnProof<G> {
             ],
         );
 
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &sig_gen);
 
         t_acc
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
-        t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
+        t_pk.challenge_contribution(&sig_gen, &pk, &mut prover_transcript)
             .unwrap();
 
         let prover_challenge =
@@ -249,6 +251,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         )
     }
 
+    /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
     pub fn verify(
         &self,
         pk: &G,
@@ -257,7 +260,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         prover_challenge: G::ScalarField,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
+        sig_gen: G,
     ) -> Result<(), R1CSError> {
         let mut verifier_transcript = MerlinTranscript::new(b"test");
 
@@ -271,7 +274,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -280,7 +283,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_pk
-            .challenge_contribution(&g, pk, &mut verifier_transcript)
+            .challenge_contribution(&sig_gen, pk, &mut verifier_transcript)
             .unwrap();
 
         let verifier_challenge =
@@ -302,7 +305,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             )
             .unwrap();
 
-        assert!(self.resp_pk.verify(pk, &g, &verifier_challenge));
+        assert!(self.resp_pk.verify(pk, &sig_gen, &verifier_challenge));
 
         // Sk in account matches the one in public key
         assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
@@ -348,6 +351,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > MintTxnProof<L, F0, F1, G0, G1>
 {
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
     pub fn new<R: RngCore>(
         rng: &mut R,
         issuer_pk: Affine<G0>,
@@ -359,7 +363,7 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
+        sig_null_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -392,7 +396,7 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
@@ -409,7 +413,7 @@ impl<
         let new_balance_blinding = F0::rand(rng);
         let old_rho_blinding = F0::rand(rng);
 
-        let nullifier = account.nullifier(g);
+        let nullifier = account.nullifier(sig_null_gen);
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
@@ -450,10 +454,10 @@ impl<
         );
 
         // Schnorr commitment for proving correctness of nullifier
-        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &g);
+        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &sig_null_gen);
 
         // Schnorr commitment for knowledge of secret key in public key
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &sig_null_gen);
 
         t_r_leaf
             .challenge_contribution(&mut prover_transcript)
@@ -462,9 +466,9 @@ impl<
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
+            .challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)
             .unwrap();
-        t_pk.challenge_contribution(&g, &issuer_pk, &mut prover_transcript)
+        t_pk.challenge_contribution(&sig_null_gen, &issuer_pk, &mut prover_transcript)
             .unwrap();
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
@@ -518,6 +522,7 @@ impl<
         )
     }
 
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
     pub fn verify(
         &self,
         issuer_pk: Affine<G0>,
@@ -528,7 +533,7 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
+        sig_null_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -555,7 +560,7 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -567,10 +572,10 @@ impl<
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
-            .challenge_contribution(&g, &issuer_pk, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &issuer_pk, &mut verifier_transcript)
             .unwrap();
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
@@ -613,9 +618,9 @@ impl<
 
         assert!(
             self.resp_null
-                .verify(&self.nullifier, &g, &verifier_challenge,)
+                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
         );
-        assert!(self.resp_pk.verify(&issuer_pk, &g, &verifier_challenge));
+        assert!(self.resp_pk.verify(&issuer_pk, &sig_null_gen, &verifier_challenge));
 
         // Sk and counter in leaf match the ones in updated account commitment
         assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
@@ -694,6 +699,8 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AffirmAsSenderTxnProof<L, F0, F1, G0, G1>
 {
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
+    /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
     pub fn new<R: RngCore>(
         rng: &mut R,
         amount: Balance,
@@ -706,8 +713,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -731,8 +738,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_prover
             .transcript()
@@ -785,8 +792,8 @@ impl<
                 asset_id_blinding,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
-                g,
-                h,
+                sig_null_gen,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -809,7 +816,7 @@ impl<
                 &comm_bal_new,
                 &comm_amount,
                 &account_tree_params.even_parameters.pc_gens,
-                h,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -865,6 +872,8 @@ impl<
         )
     }
 
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
+    /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -873,8 +882,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -895,8 +904,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -916,8 +925,8 @@ impl<
             self,
             leg_enc,
             true,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -926,8 +935,7 @@ impl<
             self,
             leg_enc,
             pc_gens,
-            g,
-            h,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -940,12 +948,12 @@ impl<
             true,
             account_comm_key,
             pc_gens,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_challenge
         );
 
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -1026,8 +1034,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -1051,8 +1059,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_prover
             .transcript()
@@ -1092,8 +1100,8 @@ impl<
                 asset_id_blinding,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
-                g,
-                h,
+                sig_null_gen,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -1141,8 +1149,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1163,8 +1171,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -1176,8 +1184,8 @@ impl<
             self,
             leg_enc,
             false,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -1191,8 +1199,8 @@ impl<
             false,
             account_comm_key,
             pc_gens,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_challenge
         );
 
@@ -1296,8 +1304,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -1321,8 +1329,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_prover
             .transcript()
@@ -1378,8 +1386,8 @@ impl<
                 asset_id_blinding,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
-                g,
-                h,
+                sig_null_gen,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -1405,7 +1413,7 @@ impl<
                 &comm_bal_new,
                 &comm_amount,
                 &account_tree_params.even_parameters.pc_gens,
-                h,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -1472,8 +1480,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1494,8 +1502,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -1518,8 +1526,8 @@ impl<
             self,
             leg_enc,
             false,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -1531,8 +1539,7 @@ impl<
             self,
             leg_enc,
             pc_gens,
-            g,
-            h,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -1548,11 +1555,11 @@ impl<
             false,
             account_comm_key,
             pc_gens,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_challenge
         );
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -1636,8 +1643,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -1661,8 +1668,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_prover
             .transcript()
@@ -1702,8 +1709,8 @@ impl<
                 asset_id_blinding,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
-                g,
-                h,
+                sig_null_gen,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -1751,8 +1758,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1773,8 +1780,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -1786,8 +1793,8 @@ impl<
             self,
             leg_enc,
             true,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -1801,8 +1808,8 @@ impl<
             true,
             account_comm_key,
             pc_gens,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_challenge
         );
 
@@ -1894,8 +1901,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> (Self, F0) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
@@ -1919,8 +1926,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_prover
             .transcript()
@@ -1964,8 +1971,8 @@ impl<
                 asset_id_blinding,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
-                g,
-                h,
+                sig_null_gen,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -1988,7 +1995,7 @@ impl<
                 &comm_bal_new,
                 &comm_amount,
                 &account_tree_params.even_parameters.pc_gens,
-                h,
+                asset_value_gen,
                 &mut prover_transcript,
             );
 
@@ -2052,8 +2059,8 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -2074,8 +2081,8 @@ impl<
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -2095,8 +2102,8 @@ impl<
             self,
             leg_enc,
             true,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -2105,8 +2112,7 @@ impl<
             self,
             leg_enc,
             pc_gens,
-            g,
-            h,
+            asset_value_gen,
             verifier_transcript
         );
 
@@ -2119,11 +2125,11 @@ impl<
             true,
             account_comm_key,
             pc_gens,
-            g,
-            h,
+            sig_null_gen,
+            asset_value_gen,
             verifier_challenge
         );
-        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, g, h, verifier_challenge);
+        verify_schnorr_for_balance_change!(self, leg_enc, pc_gens, asset_value_gen, verifier_challenge);
 
         // Balance in leaf (old account) is same as in the old balance commitment
         assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
@@ -2177,7 +2183,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
+        sig_null_gen: G,
     ) -> (Self, G::ScalarField) {
         // Need to prove that:
         // 1. sk used in commitment is for the revealed pk
@@ -2196,11 +2202,11 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(g);
+        let nullifier = account.nullifier(sig_null_gen);
 
         let sk_blinding = G::ScalarField::rand(rng);
         let rho_blinding = G::ScalarField::rand(rng);
@@ -2213,17 +2219,17 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
-        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &g);
+        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &sig_null_gen);
 
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &sig_null_gen);
 
         t_acc
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
+            .challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)
             .unwrap();
-        t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
+        t_pk.challenge_contribution(&sig_null_gen, &pk, &mut prover_transcript)
             .unwrap();
 
         let prover_challenge =
@@ -2259,7 +2265,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         prover_challenge: G::ScalarField,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
+        sig_null_gen: G,
     ) -> Result<(), R1CSError> {
         let mut verifier_transcript = MerlinTranscript::new(b"test");
 
@@ -2272,7 +2278,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -2281,10 +2287,10 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
-            .challenge_contribution(&g, &pk, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &pk, &mut verifier_transcript)
             .unwrap();
 
         let verifier_challenge =
@@ -2309,9 +2315,9 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
         assert!(
             self.resp_null
-                .verify(&self.nullifier, &g, &verifier_challenge,)
+                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
         );
-        assert!(self.resp_pk.verify(&pk, &g, &verifier_challenge));
+        assert!(self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge));
 
         // rho matches the one in nullifier
         assert_eq!(self.resp_acc.0[1], self.resp_null.response);
@@ -2353,8 +2359,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
-        h: G,
+        sig_null_gen: G,
+        asset_value_gen: G,
     ) -> (Self, G::ScalarField) {
         assert_eq!(legs.len(), eph_keys.len());
         assert_eq!(
@@ -2374,7 +2380,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare. If its not possible then do a membership proof
 
-        let h_at = h * G::ScalarField::from(account.asset_id);
+        let h_at = asset_value_gen * G::ScalarField::from(account.asset_id);
 
         let mut prover_transcript = MerlinTranscript::new(b"test");
 
@@ -2409,12 +2415,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         prover_transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        let nullifier = account.nullifier(g);
+        let nullifier = account.nullifier(sig_null_gen);
 
         let sk_blinding = G::ScalarField::rand(rng);
         let rho_blinding = G::ScalarField::rand(rng);
@@ -2451,9 +2457,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
-        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &g);
+        let t_null = PokDiscreteLogProtocol::init(account.rho, rho_blinding, &sig_null_gen);
         // To prove secret key in account state is same as in public key
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &g);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &sig_null_gen);
 
         for i in 0..num_pending_txns {
             let sk_e_blinding = G::ScalarField::rand(rng);
@@ -2471,7 +2477,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     &legs[i].1.ct_r.eph_pk,
                     account.sk,
                     sk_blinding,
-                    &g,
+                    &sig_null_gen,
                 );
                 t_pk_recv.insert(i, t_leg_pk);
                 t_recv_points.push(legs[i].1.ct_amount.eph_pk);
@@ -2484,7 +2490,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     &legs[i].1.ct_s.eph_pk,
                     account.sk,
                     sk_blinding,
-                    &g,
+                    &sig_null_gen,
                 );
                 t_pk_send.insert(i, t_leg_pk);
                 t_sent_points.push(legs[i].1.ct_amount.eph_pk);
@@ -2505,9 +2511,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .challenge_contribution(&mut prover_transcript)
             .unwrap();
         t_null
-            .challenge_contribution(&g, &nullifier, &mut prover_transcript)
+            .challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)
             .unwrap();
-        t_pk.challenge_contribution(&g, &pk, &mut prover_transcript)
+        t_pk.challenge_contribution(&sig_null_gen, &pk, &mut prover_transcript)
             .unwrap();
 
         for i in 0..num_pending_txns {
@@ -2525,7 +2531,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .unwrap()
                     .challenge_contribution(
                         &legs[i].1.ct_r.eph_pk,
-                        &g,
+                        &sig_null_gen,
                         &legs[i].1.ct_r.encrypted,
                         &mut prover_transcript,
                     )
@@ -2536,7 +2542,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .unwrap()
                     .challenge_contribution(
                         &legs[i].1.ct_s.eph_pk,
-                        &g,
+                        &sig_null_gen,
                         &legs[i].1.ct_s.encrypted,
                         &mut prover_transcript,
                     )
@@ -2635,8 +2641,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: &[G],
-        g: G,
-        h: G,
+        sig_null_gen: G,
+        asset_value_gen: G,
     ) -> Result<(), R1CSError> {
         assert_eq!(legs.len(), self.resp_asset_id.len());
         assert_eq!(sender_in_leg_indices.len(), self.resp_pk_send.len());
@@ -2648,7 +2654,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let mut verifier_transcript = MerlinTranscript::new(b"test");
 
-        let h_at = h * G::ScalarField::from(asset_id);
+        let h_at = asset_value_gen * G::ScalarField::from(asset_id);
 
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
@@ -2672,8 +2678,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
-        h.serialize_compressed(&mut extra_instance).unwrap();
+        sig_null_gen.serialize_compressed(&mut extra_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
@@ -2688,10 +2694,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(&g, &self.nullifier, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &self.nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
-            .challenge_contribution(&g, &pk, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &pk, &mut verifier_transcript)
             .unwrap();
 
         for i in 0..num_pending_txns {
@@ -2712,7 +2718,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .unwrap()
                     .challenge_contribution(
                         &legs[i].ct_r.eph_pk,
-                        &g,
+                        &sig_null_gen,
                         &legs[i].ct_r.encrypted,
                         &mut verifier_transcript,
                     )
@@ -2725,7 +2731,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .unwrap()
                     .challenge_contribution(
                         &legs[i].ct_s.eph_pk,
-                        &g,
+                        &sig_null_gen,
                         &legs[i].ct_s.encrypted,
                         &mut verifier_transcript,
                     )
@@ -2764,9 +2770,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             .unwrap();
         assert!(
             self.resp_null
-                .verify(&self.nullifier, &g, &verifier_challenge,)
+                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
         );
-        assert!(self.resp_pk.verify(&pk, &g, &verifier_challenge));
+        assert!(self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge));
 
         let mut y_recv = G::Group::zero();
         let mut y_sent = G::Group::zero();
@@ -2783,7 +2789,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 assert!(self.resp_pk_recv.get(&i).unwrap().verify(
                     &legs[i].ct_r.encrypted,
                     &legs[i].ct_r.eph_pk,
-                    &g,
+                    &sig_null_gen,
                     &verifier_challenge
                 ));
                 y_recv += &legs[i].ct_amount.encrypted;
@@ -2791,7 +2797,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 assert!(self.resp_pk_send.get(&i).unwrap().verify(
                     &legs[i].ct_s.encrypted,
                     &legs[i].ct_s.eph_pk,
-                    &g,
+                    &sig_null_gen,
                     &verifier_challenge
                 ));
                 y_sent += &legs[i].ct_amount.encrypted;
@@ -2800,7 +2806,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             }
         }
 
-        y_sent -= h * G::ScalarField::from(pending_sent_amount);
+        y_sent -= asset_value_gen * G::ScalarField::from(pending_sent_amount);
         self.resp_sent_amount
             .is_valid(
                 &t_sent_points,
@@ -2810,7 +2816,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             )
             .unwrap();
 
-        y_recv -= h * G::ScalarField::from(pending_recv_amount);
+        y_recv -= asset_value_gen * G::ScalarField::from(pending_recv_amount);
         self.resp_recv_amount
             .is_valid(
                 &t_recv_points,

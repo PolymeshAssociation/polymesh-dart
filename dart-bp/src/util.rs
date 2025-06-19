@@ -203,6 +203,8 @@ pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarF
 }
 
 /// Generate commitment to randomness (Schnorr step 1) for state change excluding changes related to amount and balances
+/// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
+/// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
 pub fn generate_schnorr_t_values_for_common_state_change<
     R: RngCore,
     F0: PrimeField,
@@ -223,8 +225,8 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     asset_id_blinding: F0,
     account_comm_key: &[Affine<G0>],
     pc_gens: &PedersenGens<Affine<G0>>,
-    g: Affine<G0>,
-    h: Affine<G0>,
+    sig_null_gen: Affine<G0>,
+    asset_value_gen: Affine<G0>,
     mut prover_transcript: &mut MerlinTranscript,
 ) -> (
     Affine<G0>,
@@ -234,7 +236,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
 ) {
-    let nullifier = account.nullifier(g);
+    let nullifier = account.nullifier(sig_null_gen);
 
     // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
     let t_r_leaf = SchnorrCommitment::new(
@@ -279,7 +281,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     );
 
     // Schnorr commitment for proving correctness of nullifier
-    let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &g);
+    let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &sig_null_gen);
 
     // Schnorr commitment for proving correctness of asset-id used in leg
     let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
@@ -288,7 +290,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         &leg_enc.ct_asset_id.eph_pk,
         F0::from(asset_id),
         asset_id_blinding,
-        &h,
+        &asset_value_gen,
     );
 
     // Schnorr commitment for proving knowledge of secret key of the corresponding party's public key used in leg
@@ -302,7 +304,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         }),
         account.sk,
         sk_blinding,
-        &g,
+        &sig_null_gen,
     );
 
     // Add challenge contribution of each of the above commitments to the transcript
@@ -313,12 +315,12 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         .challenge_contribution(&mut prover_transcript)
         .unwrap();
     t_null
-        .challenge_contribution(&g, &nullifier, &mut prover_transcript)
+        .challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)
         .unwrap();
     t_leg_asset_id
         .challenge_contribution(
             &leg_enc.ct_asset_id.eph_pk,
-            &h,
+            &asset_value_gen,
             &leg_enc.ct_asset_id.encrypted,
             &mut prover_transcript,
         )
@@ -330,7 +332,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
             } else {
                 &leg_enc.ct_r.eph_pk
             },
-            &g,
+            &sig_null_gen,
             if is_sender {
                 &leg_enc.ct_s.encrypted
             } else {
@@ -351,6 +353,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
 }
 
 /// Generate commitment to randomness (Schnorr step 1) for state change just related to amount and balances
+/// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
 pub fn generate_schnorr_t_values_for_balance_change<
     R: RngCore,
     F0: PrimeField,
@@ -373,7 +376,7 @@ pub fn generate_schnorr_t_values_for_balance_change<
     comm_bal_new: &Affine<G0>,
     comm_amount: &Affine<G0>,
     pc_gens: &PedersenGens<Affine<G0>>,
-    h: Affine<G0>,
+    asset_value_gen: Affine<G0>,
     mut prover_transcript: &mut MerlinTranscript,
 ) -> (
     PokPedersenCommitmentProtocol<Affine<G0>>,
@@ -418,7 +421,7 @@ pub fn generate_schnorr_t_values_for_balance_change<
         &leg_enc.ct_amount.eph_pk,
         F0::from(amount),
         amount_blinding,
-        &h,
+        &asset_value_gen,
     );
 
     // Add challenge contribution of each of the above commitments to the transcript
@@ -449,7 +452,7 @@ pub fn generate_schnorr_t_values_for_balance_change<
     t_leg_amount
         .challenge_contribution(
             &leg_enc.ct_amount.eph_pk,
-            &h,
+            &asset_value_gen,
             &leg_enc.ct_amount.encrypted,
             &mut prover_transcript,
         )

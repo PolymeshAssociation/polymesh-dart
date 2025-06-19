@@ -85,19 +85,23 @@ impl<G: AffineRepr> Leg<G> {
         }
     }
 
+    /// `enc_sig_gen` should be the same as used in creating both the encryption key and signing (affirmation) key
+    /// as its assumed that both keys use the same generator.
+    /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
+    /// `enc_sig_gen -> g, asset_value_gen -> h` in report.
     pub fn encrypt<R: RngCore>(
         &self,
         rng: &mut R,
         pk_e: &G,
-        g: G,
-        h: G,
+        enc_sig_gen: G,
+        asset_value_gen: G,
     ) -> (LegEncryption<G>, LegEncryptionRandomness<G>) {
         let r1 = G::ScalarField::rand(rng);
         let r2 = G::ScalarField::rand(rng);
         // Encrypt mediator key if it exists
         let (r3, ct_m) = if let Some(pk_m) = self.pk_m {
             let r3 = G::ScalarField::rand(rng);
-            let ct_m = Ciphertext::new_given_randomness(&pk_m, &r3, pk_e, &g);
+            let ct_m = Ciphertext::new_given_randomness(&pk_m, &r3, pk_e, &enc_sig_gen);
             (Some(r3), Some(ct_m))
         } else {
             (None, None)
@@ -106,15 +110,15 @@ impl<G: AffineRepr> Leg<G> {
         let r5 = G::ScalarField::rand(rng);
 
         // TODO: This is not constant time. Fix
-        let v = (h * G::ScalarField::from(self.amount)).into_affine();
-        let asset_id = (h * G::ScalarField::from(self.asset_id)).into_affine();
+        let v = (asset_value_gen * G::ScalarField::from(self.amount)).into_affine();
+        let asset_id = (asset_value_gen * G::ScalarField::from(self.asset_id)).into_affine();
         // TODO: Use new_given_randomness_and_window_tables
         let enc = LegEncryption {
-            ct_s: Ciphertext::new_given_randomness(&self.pk_s, &r1, pk_e, &g),
-            ct_r: Ciphertext::new_given_randomness(&self.pk_r, &r2, pk_e, &g),
+            ct_s: Ciphertext::new_given_randomness(&self.pk_s, &r1, pk_e, &enc_sig_gen),
+            ct_r: Ciphertext::new_given_randomness(&self.pk_r, &r2, pk_e, &enc_sig_gen),
             ct_m,
-            ct_amount: Ciphertext::new_given_randomness(&v, &r4, pk_e, &g),
-            ct_asset_id: Ciphertext::new_given_randomness(&asset_id, &r5, pk_e, &g),
+            ct_amount: Ciphertext::new_given_randomness(&v, &r4, pk_e, &enc_sig_gen),
+            ct_asset_id: Ciphertext::new_given_randomness(&asset_id, &r5, pk_e, &enc_sig_gen),
         };
         (enc, LegEncryptionRandomness(r1, r2, r3, r4, r5))
     }
@@ -122,12 +126,14 @@ impl<G: AffineRepr> Leg<G> {
 
 impl<G: AffineRepr> EphemeralSkEncryption<G> {
     /// `pk_a_m` is the encryption key of the mediator or the auditor
+    /// Generator `enc_gen` should be the same as used in creating encryption key. `enc_gen -> g` in report.
+    /// Generator `h` is a generator to anything else in this code.
     pub fn new<R: RngCore, D: FullDigest>(
         rng: &mut R,
         pk_s: G,
         pk_r: G,
         pk_a_m: G,
-        g: G,
+        enc_gen: G,
         h: G,
     ) -> (Self, G::ScalarField, DecKey<G>, EncKey<G>) {
         // Use twisted-Elgamal encryption.
@@ -137,7 +143,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         let k = G::ScalarField::rand(rng);
         let pre_sk_e = G::ScalarField::rand(rng);
         let h_p = h * pre_sk_e;
-        let encrypted = ((g * k) + h_p).into_affine();
+        let encrypted = ((enc_gen * k) + h_p).into_affine();
         let key_s = (pk_s * k).into_affine();
         let key_r = (pk_r * k).into_affine();
         let key_m_a = (pk_a_m * k).into_affine();
@@ -147,7 +153,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
             .serialize_uncompressed(&mut h_p_bytes)
             .unwrap();
         let sk_e = hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes);
-        let pk_e = (g * sk_e).into_affine();
+        let pk_e = (enc_gen * sk_e).into_affine();
         (
             Self {
                 encrypted,
@@ -176,8 +182,8 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         self.decrypt::<D>(sk, self.key_m_a)
     }
 
-    fn decrypt<D: FullDigest>(&self, sk: G::ScalarField, key: G) -> G::ScalarField {
-        let g_k = (key * sk.inverse().unwrap()).into_affine();
+    fn decrypt<D: FullDigest>(&self, sk: G::ScalarField, enc_key: G) -> G::ScalarField {
+        let g_k = (enc_key * sk.inverse().unwrap()).into_affine();
         let h_p = (self.encrypted.into_group() - g_k).into_affine();
         let mut h_p_bytes = vec![];
         h_p.serialize_uncompressed(&mut h_p_bytes).unwrap();
@@ -186,13 +192,13 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
 }
 
 impl<G: AffineRepr> LegEncryption<G> {
-    pub fn decrypt(&self, sk_e: &G::ScalarField, h: G) -> Leg<G> {
+    pub fn decrypt(&self, sk_e: &G::ScalarField, asset_value_gen: G) -> Leg<G> {
         let pk_s = self.ct_s.decrypt(sk_e);
         let pk_r = self.ct_r.decrypt(sk_e);
         let pk_m = self.ct_m.as_ref().map(|ct_m| ct_m.decrypt(sk_e));
         let amount = self.ct_amount.decrypt(sk_e);
         let asset_id = self.ct_asset_id.decrypt(sk_e);
-        let base = h.into_group();
+        let base = asset_value_gen.into_group();
         let amount = solve_discrete_log_bsgs_alt(MAX_AMOUNT, base, amount.into_group()).unwrap();
         let asset_id =
             solve_discrete_log_bsgs_alt(MAX_ASSET_ID as u64, base, asset_id.into_group()).unwrap();
@@ -227,6 +233,10 @@ pub fn create_leaf_for_asset_tree<G: AffineRepr>(
 
 /// Create leg and ephemeral keys. Encrypt leg and ephemeral secret key.
 /// Called by venue when it intends to create a settlement.
+/// `enc_sig_gen` should be the same as used in creating both the encryption key and signing (affirmation) key
+/// as its assumed that both keys use the same generator.
+/// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
+/// `enc_sig_gen -> g, asset_value_gen -> h` in report.
 pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
     rng: &mut R,
     asset_id: AssetId,
@@ -235,8 +245,8 @@ pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
     pk_r: (G, G),
     pk_m: Option<(G, G)>,
     pk_a: Option<G>,
-    g: G,
-    h: G,
+    enc_sig_gen: G,
+    asset_value_gen: G,
 ) -> (
     Leg<G>,
     LegEncryption<G>,
@@ -254,11 +264,12 @@ pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
         (pk_a.unwrap(), None)
     };
     // Create ephemeral encryption keypair and encrypt ephemeral sk for each party
+    // Passing `asset_value_gen` to `EphemeralSkEncryption::new` is incidental and could be a new generator as well.
     let (eph_ek_enc, eph_ek_enc_r, sk_e, pk_e) =
-        EphemeralSkEncryption::new::<_, D>(rng, pk_s.1, pk_r.1, pk_a_m, g, h);
+        EphemeralSkEncryption::new::<_, D>(rng, pk_s.1, pk_r.1, pk_a_m, enc_sig_gen, asset_value_gen);
     // Create leg and encrypt it for ephemeral pk
     let leg = Leg::new(pk_s.0, pk_r.0, pk_m, amount, asset_id);
-    let (leg_enc, leg_enc_rand) = leg.encrypt(rng, &pk_e.0, g, h);
+    let (leg_enc, leg_enc_rand) = leg.encrypt(rng, &pk_e.0, enc_sig_gen, asset_value_gen);
     (
         leg,
         leg_enc,
@@ -352,6 +363,7 @@ impl<
     // NOTE: This pattern assumes that this is the only proof being created. But an alternative and maybe better pattern
     // is to assume that other proofs will be created along this and `Self::new` should accept transcript which are being shared
     // by other proofs. Also, this could take a randomized mult-checker which is shared by others.
+
     /// `eph_sk_enc_rand` is the randomness created during twisted-Elgamal encryption of ephemeral secret key
     /// and `eph_pk` is the ephemeral public key
     pub fn new<R: RngCore>(
@@ -368,8 +380,8 @@ impl<
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G0, G1>,
         leaf_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        enc_sig_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
     ) -> (
         Self,
@@ -403,8 +415,8 @@ impl<
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();
-        g.serialize_compressed(&mut leg_instance).unwrap();
-        h.serialize_compressed(&mut leg_instance).unwrap();
+        enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut leg_instance).unwrap();
         // TODO: Hash comm_amount and re_randomized_path as well
 
         even_prover
@@ -442,6 +454,8 @@ impl<
         let (t_r_leaf, t_eph_pk, for_auditor_enc_proofs) = if is_mediator_present {
             // When settlement has mediator
 
+            // Notation: `enc_sig_gen` denotes `enc_sig_gen`
+
             // Since we have Elgamal encryption of mediator pk as (g * r, (pk_e * r) + pk_M)) as (C0, C1),
             // we substitute C1 - (pk_e * r) for pk_M in r_leaf to get
             // r_leaf = (leaf_comm_key[0] * role) + (leaf_comm_key[1] * asset_id) + C1 - (pk_e * r) + (B_blinding * rerandomization)
@@ -453,7 +467,7 @@ impl<
             );
 
             // For proving knowledge of randomness used in encryption of mediator key in leg encryption. For relation: g * r = ct_m.eph_pk
-            let t_eph_pk = PokDiscreteLogProtocol::init(leg_enc_rand.2.unwrap(), r_a_blinding, &g);
+            let t_eph_pk = PokDiscreteLogProtocol::init(leg_enc_rand.2.unwrap(), r_a_blinding, &enc_sig_gen);
             (t_r_leaf, Some(t_eph_pk), None)
         } else {
             // When settlement has auditor
@@ -545,26 +559,26 @@ impl<
         );
 
         // Proving correctness of Elgamal encryption of amount
-        let t_amount_enc_0 = PokDiscreteLogProtocol::init(leg_enc_rand.3, enc_amount_blinding, &g);
+        let t_amount_enc_0 = PokDiscreteLogProtocol::init(leg_enc_rand.3, enc_amount_blinding, &enc_sig_gen);
         let t_amount_enc_1 = PokPedersenCommitmentProtocol::init(
             leg_enc_rand.3,
             enc_amount_blinding,
             &eph_pk,
             leg.amount.into(),
             amount_blinding,
-            &h,
+            &asset_value_gen,
         );
 
         // Proving correctness of Elgamal encryption of asset-id
         let t_asset_id_enc_0 =
-            PokDiscreteLogProtocol::init(leg_enc_rand.4, enc_asset_id_blinding, &g);
+            PokDiscreteLogProtocol::init(leg_enc_rand.4, enc_asset_id_blinding, &enc_sig_gen);
         let t_asset_id_enc_1 = PokPedersenCommitmentProtocol::init(
             leg_enc_rand.4,
             enc_asset_id_blinding,
             &eph_pk,
             leg.asset_id.into(),
             asset_id_blinding,
-            &h,
+            &asset_value_gen,
         );
 
         let mut prover_transcript = even_prover.transcript();
@@ -574,7 +588,7 @@ impl<
                 .as_ref()
                 .unwrap()
                 .challenge_contribution(
-                    &g,
+                    &enc_sig_gen,
                     &leg_enc.ct_m.as_ref().unwrap().eph_pk,
                     &mut prover_transcript,
                 )
@@ -625,23 +639,23 @@ impl<
             )
             .unwrap();
         t_amount_enc_0
-            .challenge_contribution(&g, &leg_enc.ct_amount.eph_pk, &mut prover_transcript)
+            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_amount.eph_pk, &mut prover_transcript)
             .unwrap();
         t_amount_enc_1
             .challenge_contribution(
                 &eph_pk,
-                &h,
+                &asset_value_gen,
                 &leg_enc.ct_amount.encrypted,
                 &mut prover_transcript,
             )
             .unwrap();
         t_asset_id_enc_0
-            .challenge_contribution(&g, &leg_enc.ct_asset_id.eph_pk, &mut prover_transcript)
+            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_asset_id.eph_pk, &mut prover_transcript)
             .unwrap();
         t_asset_id_enc_1
             .challenge_contribution(
                 &eph_pk,
-                &h,
+                &asset_value_gen,
                 &leg_enc.ct_asset_id.encrypted,
                 &mut prover_transcript,
             )
@@ -727,8 +741,8 @@ impl<
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G0, G1>,
         leaf_comm_key: &[Affine<G0>],
-        g: Affine<G0>,
-        h: Affine<G0>,
+        enc_sig_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
     ) -> Result<(), R1CSError> {
         let is_mediator_present = leg_enc.ct_m.is_some();
@@ -759,8 +773,8 @@ impl<
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();
-        g.serialize_compressed(&mut leg_instance).unwrap();
-        h.serialize_compressed(&mut leg_instance).unwrap();
+        enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
+        asset_value_gen.serialize_compressed(&mut leg_instance).unwrap();
 
         even_verifier
             .transcript()
@@ -785,7 +799,7 @@ impl<
                 .as_ref()
                 .unwrap()
                 .challenge_contribution(
-                    &g,
+                    &enc_sig_gen,
                     &leg_enc.ct_m.as_ref().unwrap().eph_pk,
                     &mut verifier_transcript,
                 )
@@ -851,23 +865,23 @@ impl<
             )
             .unwrap();
         self.resp_amount_enc_0
-            .challenge_contribution(&g, &leg_enc.ct_amount.eph_pk, &mut verifier_transcript)
+            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_amount.eph_pk, &mut verifier_transcript)
             .unwrap();
         self.resp_amount_enc_1
             .challenge_contribution(
                 &eph_pk,
-                &h,
+                &asset_value_gen,
                 &&leg_enc.ct_amount.encrypted,
                 &mut verifier_transcript,
             )
             .unwrap();
         self.resp_asset_id_enc_0
-            .challenge_contribution(&g, &leg_enc.ct_asset_id.eph_pk, &mut verifier_transcript)
+            .challenge_contribution(&enc_sig_gen, &leg_enc.ct_asset_id.eph_pk, &mut verifier_transcript)
             .unwrap();
         self.resp_asset_id_enc_1
             .challenge_contribution(
                 &eph_pk,
-                &h,
+                &asset_value_gen,
                 &&leg_enc.ct_asset_id.encrypted,
                 &mut verifier_transcript,
             )
@@ -881,7 +895,7 @@ impl<
             let ct_m = leg_enc.ct_m.as_ref().unwrap();
             assert!(self.resp_eph_pk.as_ref().unwrap().verify(
                 &ct_m.eph_pk,
-                &g,
+                &enc_sig_gen,
                 &verifier_challenge
             ));
             // Verify proof of knowledge of opening of leaf commitment and mediator's key encryption (in leg)
@@ -945,23 +959,23 @@ impl<
         ));
         assert!(
             self.resp_amount_enc_0
-                .verify(&leg_enc.ct_amount.eph_pk, &g, &verifier_challenge)
+                .verify(&leg_enc.ct_amount.eph_pk, &enc_sig_gen, &verifier_challenge)
         );
         assert!(self.resp_amount_enc_1.verify(
             &leg_enc.ct_amount.encrypted,
             &eph_pk,
-            &h,
+            &asset_value_gen,
             &verifier_challenge
         ));
         assert!(self.resp_asset_id_enc_0.verify(
             &leg_enc.ct_asset_id.eph_pk,
-            &g,
+            &enc_sig_gen,
             &verifier_challenge
         ));
         assert!(self.resp_asset_id_enc_1.verify(
             &leg_enc.ct_asset_id.encrypted,
             &eph_pk,
-            &h,
+            &asset_value_gen,
             &verifier_challenge
         ));
 
@@ -1013,6 +1027,7 @@ pub struct MediatorTxnProof<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> MediatorTxnProof<G> {
+    /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
     pub fn new<R: RngCore>(
         rng: &mut R,
         leg_enc: LegEncryption<G>,
@@ -1021,7 +1036,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         mediator_sk: G::ScalarField,
         accept: bool,
         nonce: &[u8],
-        g: G,
+        sig_gen: G,
     ) -> (Self, G::ScalarField) {
         assert!(leg_enc.ct_m.is_some());
         let ct_m = leg_enc.ct_m.as_ref().unwrap();
@@ -1036,10 +1051,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             &ct_m.eph_pk,
             mediator_sk,
             G::ScalarField::rand(rng),
-            &g,
+            &sig_gen,
         );
         t_enc_pk
-            .challenge_contribution(&ct_m.eph_pk, &g, &ct_m.encrypted, &mut prover_transcript)
+            .challenge_contribution(&ct_m.eph_pk, &sig_gen, &ct_m.encrypted, &mut prover_transcript)
             .unwrap();
 
         // Hash the mediator's response
@@ -1055,7 +1070,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
         eph_pk.serialize_compressed(&mut extra_instance).unwrap();
         nonce.serialize_compressed(&mut extra_instance).unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         prover_transcript
             .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
@@ -1067,6 +1082,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         (Self { resp_enc_pk }, prover_challenge)
     }
 
+    /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
     pub fn verify(
         &self,
         leg_enc: LegEncryption<G>,
@@ -1074,7 +1090,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         accept: bool,
         prover_challenge: G::ScalarField,
         nonce: &[u8],
-        g: G,
+        sig_gen: G,
     ) -> Result<(), R1CSError> {
         assert!(leg_enc.ct_m.is_some());
         let ct_m = leg_enc.ct_m.as_ref().unwrap();
@@ -1082,7 +1098,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let mut verifier_transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
         self.resp_enc_pk
-            .challenge_contribution(&ct_m.eph_pk, &g, &ct_m.encrypted, &mut verifier_transcript)
+            .challenge_contribution(&ct_m.eph_pk, &sig_gen, &ct_m.encrypted, &mut verifier_transcript)
             .unwrap();
 
         // Verifier should also hash the mediator's response
@@ -1098,7 +1114,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
         eph_pk.serialize_compressed(&mut extra_instance).unwrap();
         nonce.serialize_compressed(&mut extra_instance).unwrap();
-        g.serialize_compressed(&mut extra_instance).unwrap();
+        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
 
         verifier_transcript
             .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
@@ -1109,7 +1125,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
         assert!(
             self.resp_enc_pk
-                .verify(&ct_m.encrypted, &ct_m.eph_pk, &g, &verifier_challenge)
+                .verify(&ct_m.encrypted, &ct_m.eph_pk, &sig_gen, &verifier_challenge)
         );
         Ok(())
     }

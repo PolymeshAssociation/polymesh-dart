@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change {
-    ($self: ident, $leg_enc: ident, $is_sender: expr, $g: ident, $h: ident, $verifier_transcript: ident) => {
+    ($self: ident, $leg_enc: ident, $is_sender: expr, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_transcript: ident) => {
         $self
             .t_r_leaf
             .serialize_compressed(&mut $verifier_transcript)
@@ -11,13 +11,13 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
             .unwrap();
         $self
             .resp_null
-            .challenge_contribution(&$g, &$self.nullifier, &mut $verifier_transcript)
+            .challenge_contribution(&$sig_null_gen, &$self.nullifier, &mut $verifier_transcript)
             .unwrap();
         $self
             .resp_leg_asset_id
             .challenge_contribution(
                 &$leg_enc.ct_asset_id.eph_pk,
-                &$h,
+                &$asset_value_gen,
                 &$leg_enc.ct_asset_id.encrypted,
                 &mut $verifier_transcript,
             )
@@ -30,7 +30,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
                 } else {
                     &$leg_enc.ct_r.eph_pk
                 },
-                &$g,
+                &$sig_null_gen,
                 if $is_sender {
                     &$leg_enc.ct_s.encrypted
                 } else {
@@ -44,7 +44,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
 
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
-    ($self: ident, $leg_enc: ident, $pc_gens: path, $g: ident, $h: ident, $verifier_transcript: ident) => {
+    ($self: ident, $leg_enc: ident, $pc_gens: path, $asset_value_gen: ident, $verifier_transcript: ident) => {
         $self
             .resp_old_bal
             .challenge_contribution(
@@ -76,7 +76,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
             .resp_leg_amount
             .challenge_contribution(
                 &$leg_enc.ct_amount.eph_pk,
-                &$h,
+                &$asset_value_gen,
                 &$leg_enc.ct_amount.encrypted,
                 &mut $verifier_transcript,
             )
@@ -86,7 +86,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
 
 #[macro_export]
 macro_rules! verify_schnorr_for_common_state_change {
-    ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $pc_gens: path, $g: ident, $h: ident, $verifier_challenge: ident) => {
+    ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $pc_gens: path, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_challenge: ident) => {
         $self
             .resp_leaf
             .is_valid(
@@ -123,12 +123,12 @@ macro_rules! verify_schnorr_for_common_state_change {
         assert!(
             $self
                 .resp_null
-                .verify(&$self.nullifier, &$g, &$verifier_challenge,)
+                .verify(&$self.nullifier, &$sig_null_gen, &$verifier_challenge,)
         );
         assert!($self.resp_leg_asset_id.verify(
             &$leg_enc.ct_asset_id.encrypted,
             &$leg_enc.ct_asset_id.eph_pk,
-            &$h,
+            &$asset_value_gen,
             &$verifier_challenge
         ));
         assert!($self.resp_leg_pk.verify(
@@ -142,7 +142,7 @@ macro_rules! verify_schnorr_for_common_state_change {
             } else {
                 &$leg_enc.ct_r.eph_pk
             },
-            &$g,
+            &$sig_null_gen,
             &$verifier_challenge
         ));
 
@@ -163,7 +163,7 @@ macro_rules! verify_schnorr_for_common_state_change {
 
 #[macro_export]
 macro_rules! verify_schnorr_for_balance_change {
-    ($self: ident, $leg_enc: ident, $pc_gens: path, $g: ident, $h: ident, $verifier_challenge: ident) => {
+    ($self: ident, $leg_enc: ident, $pc_gens: path, $asset_value_gen: ident, $verifier_challenge: ident) => {
         assert!($self.resp_old_bal.verify(
             &$self.comm_bal_old,
             &$pc_gens.B,
@@ -186,7 +186,7 @@ macro_rules! verify_schnorr_for_balance_change {
         assert!($self.resp_leg_amount.verify(
             &$leg_enc.ct_amount.encrypted,
             &$leg_enc.ct_amount.eph_pk,
-            &$h,
+            &$asset_value_gen,
             &$verifier_challenge
         ));
     };
