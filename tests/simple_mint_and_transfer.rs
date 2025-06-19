@@ -13,6 +13,10 @@ fn test_minting_asset() -> Result<()> {
     // Setup chain state.
     let mut chain = DartChainState::new()?;
 
+    // Setup an off-chain curve-tree prover.
+    let mut account_tree = DartProverAccountTree::new()?;
+    account_tree.apply_updates(&chain)?;
+
     // Create some users.
     let users = chain.create_signers(&["AssetIssuer", "Mediator", "Investor1"])?;
     let issuer = &users[0];
@@ -44,19 +48,19 @@ fn test_minting_asset() -> Result<()> {
     chain.initialize_account_asset(investor1, proof)?;
     investor1_account.commit_pending_state();
 
-    chain.push_tree_roots();
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
 
     // Mint the asset to the issuer's account.
     let proof = AssetMintingProof::new(
         &mut rng,
         &mut issuer_account,
-        chain.prover_account_tree(),
+        account_tree.prover_account_tree(),
         1000,
     )?;
     chain.mint_assets(issuer, proof)?;
     issuer_account.commit_pending_state();
-
-    chain.push_tree_roots();
 
     // Create a settlement to transfer some assets from the issuer to the investor.
     let settlement = SettlementBuilder::new(b"Test")
@@ -73,6 +77,10 @@ fn test_minting_asset() -> Result<()> {
     let leg_ref = LegRef::new(settlement_id.into(), 0);
     let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
 
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
     // The issuer affirms the settlement as the sender.
     log::info!("Sender decrypts the leg");
     let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &issuer_keys.enc);
@@ -86,13 +94,11 @@ fn test_minting_asset() -> Result<()> {
         sk_e,
         &leg_enc,
         &mut issuer_account,
-        chain.prover_account_tree(),
+        account_tree.prover_account_tree(),
     );
     log::info!("Sender affirms");
     chain.sender_affirmation(issuer, proof)?;
     issuer_account.commit_pending_state();
-
-    chain.push_tree_roots();
 
     // The investor affirms the settlement as the receiver.
     log::info!("Receiver decrypts the leg");
@@ -106,13 +112,11 @@ fn test_minting_asset() -> Result<()> {
         sk_e,
         &leg_enc,
         &mut investor1_account,
-        chain.prover_account_tree(),
+        account_tree.prover_account_tree(),
     );
     log::info!("Receiver affirms");
     chain.receiver_affirmation(investor1, proof)?;
     investor1_account.commit_pending_state();
-
-    chain.push_tree_roots();
 
     // The mediator affirms the settlement.
     log::info!("Mediator decrypts the leg");
@@ -131,9 +135,11 @@ fn test_minting_asset() -> Result<()> {
     log::info!("Mediator affirms");
     chain.mediator_affirmation(mediator, proof)?;
 
-    // The settlement should have executed.
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
 
-    chain.push_tree_roots();
+    // The settlement should have executed.
 
     // Receiver claims their assets.
     log::info!("Receiver decrypts the leg for claim");
@@ -148,7 +154,7 @@ fn test_minting_asset() -> Result<()> {
         sk_e,
         &leg_enc,
         &mut investor1_account,
-        chain.prover_account_tree(),
+        account_tree.prover_account_tree(),
     );
     log::info!("Receiver claims");
     chain.receiver_claim(investor1, proof)?;

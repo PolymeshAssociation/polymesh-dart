@@ -492,6 +492,35 @@ impl DartSettlement {
     }
 }
 
+pub struct DartProverAccountTree {
+    account_tree: ProverCurveTree<ACCOUNT_TREE_L>,
+    last_leaf_index: usize,
+}
+
+impl DartProverAccountTree {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            account_tree: ProverCurveTree::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
+            last_leaf_index: 0,
+        })
+    }
+
+    pub fn prover_account_tree(&self) -> &ProverCurveTree<ACCOUNT_TREE_L> {
+        &self.account_tree
+    }
+
+    pub fn apply_updates(&mut self, chain: &DartChainState) -> Result<()> {
+        let new_leafs = chain.get_new_account_leafs(self.last_leaf_index);
+        log::info!("Applying {} new account leafs to the prover account tree", new_leafs.len());
+        for leaf in new_leafs {
+            self.account_tree.insert(leaf.0 .0)?;
+            self.last_leaf_index += 1;
+        }
+        log::info!("Prover account tree now has {} leaves", self.last_leaf_index);
+        Ok(())
+    }
+}
+
 pub struct DartChainState {
     signers: HashMap<SignerAddress, SignerState>,
 
@@ -511,8 +540,12 @@ pub struct DartChainState {
     account_roots: RootHistory<ACCOUNT_TREE_L>,
     account_nullifiers: HashSet<AccountStateNullifier>,
 
-    /// Also build the prover account tree for testing purposes.
-    prover_account_tree: ProverCurveTree<ACCOUNT_TREE_L>,
+    /// Account leafs in the order they have been inserted.
+    /// This is used by users to build the tree off-chain.
+    account_leafs: Vec<AccountStateCommitment>,
+
+    /// Pending account tree updates to be applied at the end of the block.
+    pending_account_updates: Vec<AccountStateCommitment>,
 
     /// Settlements in the chain state.
     settlements: HashMap<SettlementId, DartSettlement>,
@@ -538,8 +571,8 @@ impl DartChainState {
             account_roots: RootHistory::new(10, account_tree.params()),
             account_tree,
             account_nullifiers: HashSet::new(),
-
-            prover_account_tree: ProverCurveTree::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
+            account_leafs: Vec::new(),
+            pending_account_updates: Vec::new(),
 
             settlements: HashMap::new(),
             next_settlement_id: 0,
@@ -554,8 +587,29 @@ impl DartChainState {
         &self.account_tree
     }
 
-    pub fn prover_account_tree(&self) -> &ProverCurveTree<ACCOUNT_TREE_L> {
-        &self.prover_account_tree
+    pub fn account_leafs(&self) -> &[AccountStateCommitment] {
+        &self.account_leafs
+    }
+
+    pub fn get_new_account_leafs(&self, last_idx: usize) -> &[AccountStateCommitment] {
+        if last_idx >= self.account_leafs.len() {
+            log::info!("No new account leafs to return");
+            return &[];
+        }
+        log::info!("get new accounts: {} -> {}", last_idx, self.account_leafs.len());
+        &self.account_leafs[last_idx..]
+    }
+
+    pub fn end_block(&mut self) -> Result<()> {
+        for commitment in self.pending_account_updates.drain(..) {
+            // Add the commitment to the account tree.
+            self.account_tree.insert(commitment.0.0);
+            self.account_leafs.push(commitment);
+        }
+        // Push the current account tree root to the history.
+        self.account_roots.add_root(self.account_tree.root_node());
+
+        Ok(())
     }
 
     pub fn create_signer(&mut self, name: &str) -> Result<SignerAddress> {
@@ -638,6 +692,8 @@ impl DartChainState {
 
         self.asset_tree.set_asset_state(asset_state)?;
         self.asset_details.insert(asset_id, asset_details.clone());
+        // Push the current asset tree root to the history.
+        self.asset_roots.add_root(self.asset_tree.root_node());
 
         Ok(asset_details)
     }
@@ -668,9 +724,8 @@ impl DartChainState {
     }
 
     fn _add_account_commitment(&mut self, commitment: AccountStateCommitment) -> Result<()> {
-        // Add the commitment to the account tree.
-        self.account_tree.insert(commitment.0.0);
-        self.prover_account_tree.insert(commitment.0.0)?;
+        // Queue the commitment for the end of the block.
+        self.pending_account_updates.push(commitment);
 
         Ok(())
     }
@@ -684,12 +739,6 @@ impl DartChainState {
 
     fn _add_nullifier(&mut self, nullifier: AccountStateNullifier) {
         self.account_nullifiers.insert(nullifier);
-    }
-
-    pub fn push_tree_roots(&mut self) {
-        // Push the current asset and account tree roots to their respective histories.
-        self.asset_roots.add_root(self.asset_tree.root_node());
-        self.account_roots.add_root(self.account_tree.root_node());
     }
 
     pub fn initialize_account_asset(
