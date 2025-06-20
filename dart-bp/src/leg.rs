@@ -150,7 +150,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
 
         let mut h_p_bytes = vec![];
         h_p.into_affine()
-            .serialize_uncompressed(&mut h_p_bytes)
+            .serialize_compressed(&mut h_p_bytes)
             .unwrap();
         let sk_e = hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes);
         let pk_e = (enc_gen * sk_e).into_affine();
@@ -186,7 +186,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         let g_k = (enc_key * sk.inverse().unwrap()).into_affine();
         let h_p = (self.encrypted.into_group() - g_k).into_affine();
         let mut h_p_bytes = vec![];
-        h_p.serialize_uncompressed(&mut h_p_bytes).unwrap();
+        h_p.serialize_compressed(&mut h_p_bytes).unwrap();
         hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes)
     }
 }
@@ -416,8 +416,7 @@ impl<
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
         eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
         nonce.serialize_compressed(&mut leg_instance).unwrap();
-        // TODO: Uncomment
-        // tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
+        tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();
@@ -786,8 +785,7 @@ impl<
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
         eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
         nonce.serialize_compressed(&mut leg_instance).unwrap();
-        // TODO: Uncomment
-        // tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
+        tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();

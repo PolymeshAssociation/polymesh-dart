@@ -391,8 +391,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -557,8 +556,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -740,8 +738,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -910,8 +907,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1075,8 +1071,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1191,8 +1186,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1353,8 +1347,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1530,8 +1523,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1706,8 +1698,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1822,8 +1813,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -1972,8 +1962,7 @@ impl<
         updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
@@ -2131,8 +2120,7 @@ impl<
         self.updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        // TODO: Uncomment
-        // account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
+        account_tree_params.serialize_compressed(&mut extra_instance).unwrap();
         account_comm_key
             .serialize_compressed(&mut extra_instance)
             .unwrap();
