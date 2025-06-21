@@ -416,7 +416,9 @@ impl<
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
         eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
         nonce.serialize_compressed(&mut leg_instance).unwrap();
-        tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
+        tree_parameters
+            .serialize_compressed(&mut leg_instance)
+            .unwrap();
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();
@@ -785,7 +787,9 @@ impl<
         leg_enc.serialize_compressed(&mut leg_instance).unwrap();
         eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
         nonce.serialize_compressed(&mut leg_instance).unwrap();
-        tree_parameters.serialize_compressed(&mut leg_instance).unwrap();
+        tree_parameters
+            .serialize_compressed(&mut leg_instance)
+            .unwrap();
         leaf_comm_key
             .serialize_compressed(&mut leg_instance)
             .unwrap();
