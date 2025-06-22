@@ -869,10 +869,10 @@ impl SettlementBuilder {
 
 #[derive(Clone)]
 pub struct SettlementProof {
-    memo: BoundedVec<u8, ConstU32<MEMO_MAX_LENGTH>>,
+    memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
     root: CurveTreeRoot<ASSET_TREE_L>,
 
-    pub legs: BoundedVec<SettlementLegProof, ConstU32<SETTLEMENT_MAX_LEGS>>,
+    pub legs: BoundedVec<SettlementLegProof, ConstU32<{ SETTLEMENT_MAX_LEGS }>>,
 }
 
 impl SettlementProof {
