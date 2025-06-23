@@ -81,6 +81,17 @@ pub struct FullCurveTree<const L: usize> {
     params: CurveTreeParameters,
 }
 
+impl<const L: usize> std::fmt::Debug for FullCurveTree<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FullCurveTree")
+            .field("tree", &self.tree)
+            .field("height", &self.height)
+            .field("length", &self.length)
+            .field("leaves", &self.leaves)
+            .finish()
+    }
+}
+
 impl<const L: usize> FullCurveTree<L> {
     /// Creates a new instance of `FullCurveTree` with the given height and generators length.
     pub fn new_with_capacity(cap: usize, height: usize, gens_length: usize) -> Self {
@@ -93,6 +104,10 @@ impl<const L: usize> FullCurveTree<L> {
             height,
             params,
         }
+    }
+
+    pub fn height(&self) -> usize {
+        self.tree.height()
     }
 
     /// Insert a new leaf into the curve tree.
@@ -129,7 +144,7 @@ impl<const L: usize> FullCurveTree<L> {
         if last_leaf_index < self.leaves.len() {
             return;
         }
-        let new_cap = (last_leaf_index + L - 1) / L;
+        let new_cap = last_leaf_index + 1;
         self.leaves.resize(new_cap, PallasA::zero());
         let new_tree = CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height));
         self.tree = new_tree;

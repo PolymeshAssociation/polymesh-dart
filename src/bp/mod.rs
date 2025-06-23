@@ -19,10 +19,10 @@ use crate::*;
 pub mod curve_tree;
 use curve_tree::*;
 
-pub(crate) type PallasParameters = ark_pallas::PallasConfig;
-pub(crate) type VestaParameters = ark_vesta::VestaConfig;
-pub(crate) type PallasA = ark_pallas::Affine;
-pub(crate) type PallasScalar = <PallasA as AffineRepr>::ScalarField;
+pub type PallasParameters = ark_pallas::PallasConfig;
+pub type VestaParameters = ark_vesta::VestaConfig;
+pub type PallasA = ark_pallas::Affine;
+pub type PallasScalar = <PallasA as AffineRepr>::ScalarField;
 
 type BPAccountState = bp_account::AccountState<PallasA>;
 type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;

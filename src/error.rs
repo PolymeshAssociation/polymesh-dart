@@ -28,4 +28,8 @@ pub enum Error {
     /// Curve tree root not found.
     #[error("Curve tree root not found.")]
     CurveTreeRootNotFound,
+
+    /// Curve tree leaf index is out of bounds.
+    #[error("Curve tree leaf index is out of bounds: {0}")]
+    CurveTreeLeafIndexOutOfBounds(usize),
 }

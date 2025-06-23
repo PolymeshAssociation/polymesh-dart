@@ -6,7 +6,7 @@ pub use bp::*;
 mod error;
 pub use error::*;
 
-pub mod storage_curve_tree;
+pub mod curve_tree_storage;
 
 pub use dart_common::{
     ACCOUNT_TREE_GENS, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, AMOUNT_BITS, ASSET_TREE_GENS,
