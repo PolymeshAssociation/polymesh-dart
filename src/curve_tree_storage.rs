@@ -200,14 +200,6 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > Inner<P0, P1>
 {
-    pub fn zero_even() -> Self {
-        Self::Even(Affine::<P0>::zero())
-    }
-
-    pub fn zero_odd() -> Self {
-        Self::Odd(Affine::<P1>::zero())
-    }
-
     pub fn default_even<const L: usize>(
         old_child: Option<Affine<P1>>,
         delta: &Affine<P1>,
