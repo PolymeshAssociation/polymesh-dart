@@ -32,4 +32,20 @@ pub enum Error {
     /// Curve tree leaf index is out of bounds.
     #[error("Curve tree leaf index is out of bounds: {0}")]
     CurveTreeLeafIndexOutOfBounds(usize),
+
+    /// Curve tree invalid child index.
+    #[error("Curve tree invalid child index: {0}")]
+    CurveTreeInvalidChildIndex(usize),
+
+    /// Curve tree leaf cannot have children.
+    #[error("Curve tree leaf cannot have children.")]
+    CurveTreeLeafCannotHaveChildren,
+
+    /// Curve tree invalid child node.
+    #[error("Curve tree invalid child node at level {level}, index {index}")]
+    CurveTreeInvalidChildNode { level: usize, index: usize },
+
+    /// Curve tree node not found at a specific level and index.
+    #[error("Curve tree node not found at level {level}, index {index}")]
+    CurveTreeNodeNotFound { level: usize, index: usize },
 }
