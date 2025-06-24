@@ -154,7 +154,7 @@ fn default_inner_node<
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 >(
-    old_child: Option<Affine<P0>>,
+    old_child: Option<ChildCommitments<M, P0>>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
 ) -> [Affine<P1>; M] {
@@ -163,7 +163,7 @@ fn default_inner_node<
     for (tree_index, commitment) in commitments.iter_mut().enumerate() {
         let mut x_coords = [P0::BaseField::zero(); L];
         if let Some(old_comm) = old_child {
-            x_coords[0] = (old_comm + delta).into_affine().x;
+            x_coords[0] = (old_comm.commitment(tree_index) + delta).into_affine().x;
         }
         *commitment = parameters.commit(&x_coords, P1::ScalarField::zero(), tree_index)
     }
@@ -172,30 +172,56 @@ fn default_inner_node<
 
 fn update_inner_node<
     const L: usize,
+    const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 >(
-    tree_index: usize,
-    commitment: &mut Affine<P1>,
+    commitments: &mut [Affine<P1>; M],
     local_index: usize,
-    old_child: Option<Affine<P0>>,
-    new_child: Affine<P0>,
+    old_child: Option<ChildCommitments<M, P0>>,
+    new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
 ) {
-    let old_x_coord = if let Some(old_comm) = old_child {
-        (old_comm + delta).into_affine().x
-    } else {
-        P0::BaseField::zero()
-    };
-    let new_x_coord = (new_child + delta).into_affine().x;
-    let gen_iter = parameters
-        .bp_gens
-        .share(0)
-        .G(L * (tree_index + 1))
-        .skip(L * tree_index + local_index);
-    let g = gen_iter.copied().next().unwrap();
-    *commitment = (commitment.into_group() + g * (new_x_coord - old_x_coord)).into_affine();
+    for tree_index in 0..M {
+        let old_x_coord = if let Some(old_comm) = old_child {
+            (old_comm.commitment(tree_index) + delta).into_affine().x
+        } else {
+            P0::BaseField::zero()
+        };
+        let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
+        let gen_iter = parameters
+            .bp_gens
+            .share(0)
+            .G(L * (tree_index + 1))
+            .skip(L * tree_index + local_index);
+        let g = gen_iter.copied().next().unwrap();
+        commitments[tree_index] =
+            (commitments[tree_index].into_group() + g * (new_x_coord - old_x_coord)).into_affine();
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
+    Leaf(Affine<P0>),
+    Inner([Affine<P0>; M]),
+}
+
+impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
+    pub fn leaf(leaf: Affine<P0>) -> Self {
+        ChildCommitments::Leaf(leaf)
+    }
+
+    pub fn inner(commitments: [Affine<P0>; M]) -> Self {
+        ChildCommitments::Inner(commitments)
+    }
+
+    pub fn commitment(&self, tree_index: usize) -> Affine<P0> {
+        match self {
+            ChildCommitments::Leaf(leaf) => *leaf,
+            ChildCommitments::Inner(commitments) => commitments[tree_index],
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -225,7 +251,7 @@ impl<
 > Inner<M, P0, P1>
 {
     pub fn default_even<const L: usize>(
-        old_child: Option<Affine<P1>>,
+        old_child: Option<ChildCommitments<M, P1>>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
     ) -> Self {
@@ -235,7 +261,7 @@ impl<
     }
 
     pub fn default_odd<const L: usize>(
-        old_child: Option<Affine<P0>>,
+        old_child: Option<ChildCommitments<M, P0>>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
     ) -> Self {
@@ -245,17 +271,15 @@ impl<
     }
 
     pub fn update_even_node<const L: usize>(
-        tree_index: usize,
-        commitment: &mut Affine<P0>,
+        commitments: &mut [Affine<P0>; M],
         local_index: usize,
-        old_child: Option<Affine<P1>>,
-        new_child: Affine<P1>,
+        old_child: Option<ChildCommitments<M, P1>>,
+        new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
     ) {
-        update_inner_node::<L, P1, P0>(
-            tree_index,
-            commitment,
+        update_inner_node::<L, M, P1, P0>(
+            commitments,
             local_index,
             old_child,
             new_child,
@@ -265,17 +289,15 @@ impl<
     }
 
     pub fn update_odd_node<const L: usize>(
-        tree_index: usize,
-        commitment: &mut Affine<P1>,
+        commitments: &mut [Affine<P1>; M],
         local_index: usize,
-        old_child: Option<Affine<P0>>,
-        new_child: Affine<P0>,
+        old_child: Option<ChildCommitments<M, P0>>,
+        new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
     ) {
-        update_inner_node::<L, P0, P1>(
-            tree_index,
-            commitment,
+        update_inner_node::<L, M, P0, P1>(
+            commitments,
             local_index,
             old_child,
             new_child,
@@ -546,32 +568,12 @@ impl<
         // Update the leaf to the new value and get the old value.
         let old_leaf_value = self._set_leaf(leaf_index, new_leaf_value)?;
 
-        for tree_index in 0..M {
-            self._update_leaf(
-                leaf_index,
-                tree_index,
-                old_leaf_value,
-                new_leaf_value,
-                parameters,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn _update_leaf(
-        &mut self,
-        leaf_index: usize,
-        tree_index: usize,
-        old_leaf_value: Option<Affine<P0>>,
-        new_leaf_value: Affine<P0>,
-        parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<()> {
         // Store the leaf as the even commitment.
-        let mut even_old_child = old_leaf_value;
-        let mut even_new_child = new_leaf_value;
+        let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);
+        let mut even_new_child = ChildCommitments::leaf(new_leaf_value);
         // Use zeroes to initialize the odd commitments.
         let mut odd_old_child = None;
-        let mut odd_new_child = Affine::<P1>::zero();
+        let mut odd_new_child = ChildCommitments::leaf(Affine::<P1>::zero());
 
         // Start at the leaf's location.
         let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -607,15 +609,13 @@ impl<
 
             match node {
                 Inner::Even(commitments) => {
-                    let commitment = &mut commitments[tree_index];
                     // If the node is new, there is no old commitment value.
                     // This old commitment value is used when updating the parent node.
-                    even_old_child = is_old.then(|| *commitment);
+                    even_old_child = is_old.then(|| ChildCommitments::inner(*commitments));
 
                     // Update the node.  We pass both the old and new child commitments.
                     Inner::<M, _, _>::update_even_node::<L>(
-                        tree_index,
-                        commitment,
+                        commitments,
                         child_index,
                         odd_old_child,
                         odd_new_child,
@@ -624,19 +624,16 @@ impl<
                     );
 
                     // Save the new commitment value for updating the parent.
-                    even_new_child = *commitment;
+                    even_new_child = ChildCommitments::inner(*commitments);
                 }
                 Inner::Odd(commitments) => {
-                    let commitment = &mut commitments[tree_index];
-
                     // If the node is new, there is no old commitment value.
                     // This old commitment value is used when updating the parent node.
-                    odd_old_child = is_old.then(|| *commitment);
+                    odd_old_child = is_old.then(|| ChildCommitments::inner(*commitments));
 
                     // Update the node.  We pass both the old and new child commitments.
                     Inner::<M, _, _>::update_odd_node::<L>(
-                        tree_index,
-                        commitment,
+                        commitments,
                         child_index,
                         even_old_child,
                         even_new_child,
@@ -645,7 +642,7 @@ impl<
                     );
 
                     // Save the new commitment value for updating the parent.
-                    odd_new_child = *commitment;
+                    odd_new_child = ChildCommitments::inner(*commitments);
                 }
             }
 
