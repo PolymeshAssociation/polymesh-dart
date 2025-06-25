@@ -14,10 +14,8 @@ use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
 use rand::{RngCore, SeedableRng as _};
 
+use crate::curve_tree::*;
 use crate::*;
-
-pub mod curve_tree;
-use curve_tree::*;
 
 pub type PallasParameters = ark_pallas::PallasConfig;
 pub type VestaParameters = ark_vesta::VestaConfig;

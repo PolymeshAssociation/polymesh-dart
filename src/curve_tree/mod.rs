@@ -4,7 +4,9 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 
 use super::*;
-use crate::curve_tree_storage::CurveTreeWithBackend;
+
+pub mod storage;
+use storage::CurveTreeWithBackend;
 
 pub type CurveTreeParameters = SelRerandParameters<PallasParameters, VestaParameters>;
 pub type CurveTreeRoot<const L: usize> = Root<L, 1, PallasParameters, VestaParameters>;
