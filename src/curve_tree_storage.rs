@@ -148,28 +148,30 @@ impl<const L: usize> NodeLocation<L> {
     }
 }
 
-fn default_inner_node<
+fn init_empty_inner_node<
     const L: usize,
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 >(
-    old_child: Option<ChildCommitments<M, P0>>,
+    new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
 ) -> [Affine<P1>; M] {
-    // Create an array of commitments for the inner node.
     let mut commitments = [Affine::<P1>::zero(); M];
-    for (tree_index, commitment) in commitments.iter_mut().enumerate() {
-        let mut x_coords = [P0::BaseField::zero(); L];
-        if let Some(old_comm) = old_child {
-            x_coords[0] = (old_comm.commitment(tree_index) + delta).into_affine().x;
-        }
-        *commitment = parameters.commit(&x_coords, P1::ScalarField::zero(), tree_index)
+    for tree_index in 0..M {
+        let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
+        let gen_iter = parameters
+            .bp_gens
+            .share(0)
+            .G(L * (tree_index + 1))
+            .skip(L * tree_index);
+        let g = gen_iter.copied().next().unwrap();
+        commitments[tree_index] =
+            (commitments[tree_index].into_group() + g * new_x_coord).into_affine();
     }
     commitments
 }
-
 fn update_inner_node<
     const L: usize,
     const M: usize,
@@ -250,23 +252,23 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > Inner<M, P0, P1>
 {
-    pub fn default_even<const L: usize>(
-        old_child: Option<ChildCommitments<M, P1>>,
+    pub fn init_empty_even<const L: usize>(
+        new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
     ) -> Self {
-        Self::Even(default_inner_node::<L, M, P1, P0>(
-            old_child, delta, parameters,
+        Self::Even(init_empty_inner_node::<L, M, P1, P0>(
+            new_child, delta, parameters,
         ))
     }
 
-    pub fn default_odd<const L: usize>(
-        old_child: Option<ChildCommitments<M, P0>>,
+    pub fn init_empty_odd<const L: usize>(
+        new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
     ) -> Self {
-        Self::Odd(default_inner_node::<L, M, P0, P1>(
-            old_child, delta, parameters,
+        Self::Odd(init_empty_inner_node::<L, M, P0, P1>(
+            new_child, delta, parameters,
         ))
     }
 
@@ -584,65 +586,76 @@ impl<
             let (parent_location, child_index) = location.parent();
 
             use std::collections::hash_map::Entry;
-            let (node, is_old) = match self.nodes.entry(parent_location) {
-                Entry::Occupied(entry) => (entry.into_mut(), true),
+            match self.nodes.entry(parent_location) {
+                Entry::Occupied(entry) => {
+                    match entry.into_mut() {
+                        Inner::Even(commitments) => {
+                            // If the node is new, there is no old commitment value.
+                            // This old commitment value is used when updating the parent node.
+                            even_old_child = Some(ChildCommitments::inner(*commitments));
+
+                            // Update the node.  We pass both the old and new child commitments.
+                            Inner::<M, _, _>::update_even_node::<L>(
+                                commitments,
+                                child_index,
+                                odd_old_child,
+                                odd_new_child,
+                                &parameters.odd_parameters.delta,
+                                &parameters.even_parameters,
+                            );
+
+                            // Save the new commitment value for updating the parent.
+                            even_new_child = ChildCommitments::inner(*commitments);
+                        }
+                        Inner::Odd(commitments) => {
+                            // If the node is new, there is no old commitment value.
+                            // This old commitment value is used when updating the parent node.
+                            odd_old_child = Some(ChildCommitments::inner(*commitments));
+
+                            // Update the node.  We pass both the old and new child commitments.
+                            Inner::<M, _, _>::update_odd_node::<L>(
+                                commitments,
+                                child_index,
+                                even_old_child,
+                                even_new_child,
+                                &parameters.even_parameters.delta,
+                                &parameters.odd_parameters,
+                            );
+
+                            // Save the new commitment value for updating the parent.
+                            odd_new_child = ChildCommitments::inner(*commitments);
+                        }
+                    }
+                }
                 Entry::Vacant(entry) => {
                     // If the parent node does not exist, we need to create it.
                     // Depending on whether the parent location is even or odd, we create an even or odd
                     // node, using the old child values if they exist.
                     let node = if parent_location.is_even() {
-                        entry.insert(Inner::default_even::<L>(
-                            odd_old_child,
+                        entry.insert(Inner::init_empty_even::<L>(
+                            odd_new_child,
                             &parameters.odd_parameters.delta,
                             &parameters.even_parameters,
                         ))
                     } else {
-                        entry.insert(Inner::default_odd::<L>(
-                            even_old_child,
+                        entry.insert(Inner::init_empty_odd::<L>(
+                            even_new_child,
                             &parameters.even_parameters.delta,
                             &parameters.odd_parameters,
                         ))
                     };
-                    (node, false)
-                }
-            };
-
-            match node {
-                Inner::Even(commitments) => {
-                    // If the node is new, there is no old commitment value.
-                    // This old commitment value is used when updating the parent node.
-                    even_old_child = is_old.then(|| ChildCommitments::inner(*commitments));
-
-                    // Update the node.  We pass both the old and new child commitments.
-                    Inner::<M, _, _>::update_even_node::<L>(
-                        commitments,
-                        child_index,
-                        odd_old_child,
-                        odd_new_child,
-                        &parameters.odd_parameters.delta,
-                        &parameters.even_parameters,
-                    );
-
-                    // Save the new commitment value for updating the parent.
-                    even_new_child = ChildCommitments::inner(*commitments);
-                }
-                Inner::Odd(commitments) => {
-                    // If the node is new, there is no old commitment value.
-                    // This old commitment value is used when updating the parent node.
-                    odd_old_child = is_old.then(|| ChildCommitments::inner(*commitments));
-
-                    // Update the node.  We pass both the old and new child commitments.
-                    Inner::<M, _, _>::update_odd_node::<L>(
-                        commitments,
-                        child_index,
-                        even_old_child,
-                        even_new_child,
-                        &parameters.even_parameters.delta,
-                        &parameters.odd_parameters,
-                    );
-
-                    // Save the new commitment value for updating the parent.
-                    odd_new_child = ChildCommitments::inner(*commitments);
+                    match node {
+                        Inner::Even(commitments) => {
+                            even_old_child = None;
+                            // Save the new commitment value for updating the parent.
+                            even_new_child = ChildCommitments::inner(*commitments);
+                        }
+                        Inner::Odd(commitments) => {
+                            odd_old_child = None;
+                            // Save the new commitment value for updating the parent.
+                            odd_new_child = ChildCommitments::inner(*commitments);
+                        }
+                    }
                 }
             }
 
