@@ -205,12 +205,12 @@ fn update_inner_node<
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
-    Leaf(Affine<P0>),
+    Leaf(LeafValue<P0>),
     Inner([Affine<P0>; M]),
 }
 
 impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
-    pub fn leaf(leaf: Affine<P0>) -> Self {
+    pub fn leaf(leaf: LeafValue<P0>) -> Self {
         ChildCommitments::Leaf(leaf)
     }
 
@@ -220,7 +220,7 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
 
     pub fn commitment(&self, tree_index: usize) -> Affine<P0> {
         match self {
-            ChildCommitments::Leaf(leaf) => *leaf,
+            ChildCommitments::Leaf(leaf) => leaf.0,
             ChildCommitments::Inner(commitments) => commitments[tree_index],
         }
     }
@@ -309,11 +309,65 @@ impl<
     }
 }
 
-pub struct CurveTreeStorage<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> {
-    pub height: usize,
-    pub leafs: Vec<Affine<P0>>,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct LeafValue<P0: SWCurveConfig>(Affine<P0>);
+
+impl<P0: SWCurveConfig + Copy + Send> std::fmt::Debug for LeafValue<P0> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "LeafValue({:?})", self.0)
+    }
+}
+
+impl<P0: SWCurveConfig + Copy + Send> From<&Affine<P0>> for LeafValue<P0> {
+    fn from(value: &Affine<P0>) -> Self {
+        LeafValue(*value)
+    }
+}
+
+impl<P0: SWCurveConfig + Copy + Send> From<Affine<P0>> for LeafValue<P0> {
+    fn from(value: Affine<P0>) -> Self {
+        LeafValue(value)
+    }
+}
+
+pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
+    std::fmt::Debug
+{
+    fn height(&self) -> usize;
+
+    fn set_height(&mut self, height: usize) -> Result<()>;
+
+    fn allocate_leaf_index(&mut self) -> usize;
+
+    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>>;
+
+    fn set_leaf(
+        &mut self,
+        leaf_index: usize,
+        new_leaf_value: LeafValue<P0>,
+    ) -> Result<Option<LeafValue<P0>>>;
+
+    fn leaf_count(&self) -> usize;
+
+    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>>;
+
+    fn set_inner_node(
+        &mut self,
+        location: NodeLocation<L>,
+        new_node: Inner<M, P0, P1>,
+    ) -> Result<()>;
+}
+
+pub struct CurveTreeMemoryBackend<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField>,
+> {
+    height: usize,
+    leafs: Vec<LeafValue<P0>>,
     next_leaf_index: usize,
-    pub nodes: HashMap<NodeLocation<L>, Inner<M, P0, P1>>,
+    nodes: HashMap<NodeLocation<L>, Inner<M, P0, P1>>,
 }
 
 impl<
@@ -321,11 +375,11 @@ impl<
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> std::fmt::Debug for CurveTreeStorage<L, M, P0, P1>
+> std::fmt::Debug for CurveTreeMemoryBackend<L, M, P0, P1>
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_struct("CurveTreeStorage")
-            .field("height", &self.height)
+        fmt.debug_struct("CurveTreeMemoryBackend")
+            .field("height", &self.height())
             .field("leafs", &self.leafs)
             .field("next_leaf_index", &self.next_leaf_index)
             .field("nodes", &self.nodes)
@@ -338,40 +392,133 @@ impl<
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> CurveTreeStorage<L, M, P0, P1>
+> CurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
+{
+    fn height(&self) -> usize {
+        self.height
+    }
+
+    fn set_height(&mut self, height: usize) -> Result<()> {
+        self.height = height;
+        Ok(())
+    }
+
+    fn allocate_leaf_index(&mut self) -> usize {
+        let leaf_index = self.next_leaf_index;
+        self.next_leaf_index += 1;
+        leaf_index
+    }
+
+    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {
+        Ok(self.leafs.get(leaf_index).copied())
+    }
+
+    fn set_leaf(
+        &mut self,
+        leaf_index: usize,
+        new_leaf_value: LeafValue<P0>,
+    ) -> Result<Option<LeafValue<P0>>> {
+        let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index) {
+            let old = *leaf;
+            *leaf = new_leaf_value;
+            Some(old)
+        } else {
+            self.leafs.push(new_leaf_value);
+            None
+        };
+        Ok(old_leaf_value)
+    }
+
+    fn leaf_count(&self) -> usize {
+        self.leafs.len()
+    }
+
+    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>> {
+        Ok(self.nodes.get(&location).copied())
+    }
+
+    fn set_inner_node(
+        &mut self,
+        location: NodeLocation<L>,
+        new_node: Inner<M, P0, P1>,
+    ) -> Result<()> {
+        self.nodes.insert(location, new_node);
+        Ok(())
+    }
+}
+
+pub struct CurveTreeWithBackend<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig,
+    P1: SWCurveConfig,
+> {
+    backend: Box<dyn CurveTreeBackend<L, M, P0, P1> + Send>,
+}
+
+impl<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig + Copy + Send,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+> std::fmt::Debug for CurveTreeWithBackend<L, M, P0, P1>
+{
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt.debug_struct("CurveTreeStorage")
+            .field("backend", &self.backend)
+            .finish()
+    }
+}
+
+impl<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig + Copy + Send,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+> CurveTreeWithBackend<L, M, P0, P1>
 {
     pub fn new(height: usize, parameters: &SelRerandParameters<P0, P1>) -> Result<Self> {
         let mut tree = Self {
-            height,
-            leafs: vec![],
-            next_leaf_index: 0,
-            nodes: HashMap::new(),
+            backend: Box::new(CurveTreeMemoryBackend {
+                height,
+                leafs: vec![],
+                next_leaf_index: 0,
+                nodes: HashMap::new(),
+            }),
         };
         tree.update_leaf(0, Self::default_leaf_value(), parameters)?;
         Ok(tree)
     }
 
-    pub fn height(&self) -> usize {
-        self.height
+    pub fn new_with_backend(
+        backend: Box<dyn CurveTreeBackend<L, M, P0, P1> + Send>,
+        parameters: &SelRerandParameters<P0, P1>,
+    ) -> Result<Self> {
+        let mut tree = Self { backend };
+        tree.update_leaf(0, Self::default_leaf_value(), parameters)?;
+        Ok(tree)
     }
 
-    fn default_leaf_value() -> Affine<P0> {
-        Affine::<P0>::zero()
+    pub fn height(&self) -> usize {
+        self.backend.height()
+    }
+
+    fn default_leaf_value() -> LeafValue<P0> {
+        LeafValue(Affine::<P0>::zero())
     }
 
     pub fn insert_leaf(
         &mut self,
-        leaf_value: Affine<P0>,
+        leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<()> {
-        let leaf_index = self.next_leaf_index;
-        self.next_leaf_index += 1;
+        let leaf_index = self.backend.allocate_leaf_index();
         self.update_leaf(leaf_index, leaf_value, parameters)?;
         Ok(())
     }
 
-    pub fn get_leaf(&self, leaf_index: usize) -> Option<Affine<P0>> {
-        self.leafs.get(leaf_index).copied()
+    pub fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {
+        self.backend.get_leaf(leaf_index)
     }
 
     fn _get_odd_x_coord_children_batch(
@@ -396,7 +543,7 @@ impl<
         let mut x_coord_children = [P1::BaseField::zero(); L];
         for idx in 0..L {
             let child = parent.child(idx)?;
-            let x_coord = match self.nodes.get(&child).copied() {
+            let x_coord = match self.backend.get_inner_node(child)? {
                 Some(Inner::Odd(commitments)) => {
                     Some((commitments[tree_index] + delta).into_affine().x)
                 }
@@ -438,9 +585,9 @@ impl<
         for idx in 0..L {
             let child = parent.child(idx)?;
             let commitment = if let NodeLocation::Leaf(leaf_index) = child {
-                self.leafs.get(leaf_index).copied()
+                self.backend.get_leaf(leaf_index)?.map(|leaf| leaf.0)
             } else {
-                match self.nodes.get(&child).copied() {
+                match self.backend.get_inner_node(child)? {
                     Some(Inner::Even(commitments)) => Some(commitments[tree_index]),
                     Some(Inner::Odd(_)) => {
                         log::error!("An Odd node cannot have an odd child");
@@ -463,8 +610,8 @@ impl<
         &self,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<Root<L, M, P0, P1>> {
-        let root = NodeLocation::<L>::root(self.height);
-        match self.nodes.get(&root) {
+        let root = NodeLocation::<L>::root(self.height());
+        match self.backend.get_inner_node(root)? {
             Some(Inner::Even(commitments)) => Ok(Root::Even(RootNode {
                 commitments: commitments.clone(),
                 x_coord_children: self
@@ -485,27 +632,28 @@ impl<
         tree_index: usize,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<CurveTreeWitnessPath<L, P0, P1>> {
-        let mut even_internal_nodes = Vec::with_capacity(self.height);
-        let mut odd_internal_nodes = Vec::with_capacity(self.height);
+        let mut even_internal_nodes = Vec::with_capacity(self.height());
+        let mut odd_internal_nodes = Vec::with_capacity(self.height());
 
-        let mut even_child = *self
-            .leafs
-            .get(leaf_index)
+        let mut even_child = self
+            .backend
+            .get_leaf(leaf_index)?
+            .map(|leaf| leaf.0)
             .ok_or_else(|| Error::CurveTreeLeafIndexOutOfBounds(leaf_index))?;
         let mut odd_child = Affine::<P1>::zero();
 
         // Start at the leaf's location.
         let mut location = NodeLocation::<L>::leaf(leaf_index);
 
-        while !location.is_root(self.height) {
+        while !location.is_root(self.height()) {
             let (parent_location, _) = location.parent();
-            let node =
-                self.nodes
-                    .get(&parent_location)
-                    .ok_or_else(|| Error::CurveTreeNodeNotFound {
-                        level: parent_location.level(),
-                        index: parent_location.index(),
-                    })?;
+            let node = self
+                .backend
+                .get_inner_node(parent_location)?
+                .ok_or_else(|| Error::CurveTreeNodeNotFound {
+                    level: parent_location.level(),
+                    index: parent_location.index(),
+                })?;
 
             match node {
                 Inner::Even(commitments) => {
@@ -542,56 +690,36 @@ impl<
         })
     }
 
-    fn _set_leaf(
-        &mut self,
-        leaf_index: usize,
-        new_leaf_value: Affine<P0>,
-    ) -> Result<Option<Affine<P0>>> {
-        let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index) {
-            let old = *leaf;
-            *leaf = new_leaf_value;
-            Some(old)
-        } else if leaf_index == self.leafs.len() {
-            // If the leaf index is equal to the current length, we are adding a new leaf.
-            self.leafs.push(new_leaf_value);
-            None
-        } else {
-            return Err(Error::CurveTreeLeafIndexOutOfBounds(leaf_index));
-        };
-        Ok(old_leaf_value)
-    }
-
     pub fn update_leaf(
         &mut self,
         leaf_index: usize,
-        new_leaf_value: Affine<P0>,
+        new_leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<()> {
         // Update the leaf to the new value and get the old value.
-        let old_leaf_value = self._set_leaf(leaf_index, new_leaf_value)?;
+        let old_leaf_value = self.backend.set_leaf(leaf_index, new_leaf_value)?;
 
         // Store the leaf as the even commitment.
         let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);
         let mut even_new_child = ChildCommitments::leaf(new_leaf_value);
         // Use zeroes to initialize the odd commitments.
         let mut odd_old_child = None;
-        let mut odd_new_child = ChildCommitments::leaf(Affine::<P1>::zero());
+        let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<P1>::zero()));
 
         // Start at the leaf's location.
         let mut location = NodeLocation::<L>::leaf(leaf_index);
 
         // Keep going until we reach the root of the tree.
-        while !location.is_root(self.height) {
-            // Get the parent location and the child index of the current node.
+        while !location.is_root(self.height()) {
+            // Move to the parent location and get the child index of the current node.
             let (parent_location, child_index) = location.parent();
+            location = parent_location;
 
-            use std::collections::hash_map::Entry;
-            match self.nodes.entry(parent_location) {
-                Entry::Occupied(entry) => {
-                    match entry.into_mut() {
+            match self.backend.get_inner_node(location)? {
+                Some(mut node) => {
+                    match &mut node {
                         Inner::Even(commitments) => {
-                            // If the node is new, there is no old commitment value.
-                            // This old commitment value is used when updating the parent node.
+                            // We save the old commitment value for updating the parent node.
                             even_old_child = Some(ChildCommitments::inner(*commitments));
 
                             // Update the node.  We pass both the old and new child commitments.
@@ -608,8 +736,7 @@ impl<
                             even_new_child = ChildCommitments::inner(*commitments);
                         }
                         Inner::Odd(commitments) => {
-                            // If the node is new, there is no old commitment value.
-                            // This old commitment value is used when updating the parent node.
+                            // We save the old commitment value for updating the parent node.
                             odd_old_child = Some(ChildCommitments::inner(*commitments));
 
                             // Update the node.  We pass both the old and new child commitments.
@@ -626,51 +753,55 @@ impl<
                             odd_new_child = ChildCommitments::inner(*commitments);
                         }
                     }
+                    // Save the updated node back to the backend.
+                    self.backend.set_inner_node(location, node)?;
                 }
-                Entry::Vacant(entry) => {
-                    // If the parent node does not exist, we need to create it.
-                    // Depending on whether the parent location is even or odd, we create an even or odd
-                    // node, using the old child values if they exist.
-                    let node = if parent_location.is_even() {
-                        entry.insert(Inner::init_empty_even::<L>(
+                None => {
+                    // If thsi node does not exist, we need to create it.
+                    let node = if location.is_even() {
+                        // If the location is even, we create an even node.
+                        Inner::init_empty_even::<L>(
                             odd_new_child,
                             &parameters.odd_parameters.delta,
                             &parameters.even_parameters,
-                        ))
+                        )
                     } else {
-                        entry.insert(Inner::init_empty_odd::<L>(
+                        // If the location is odd, we create an odd node.
+                        Inner::init_empty_odd::<L>(
                             even_new_child,
                             &parameters.even_parameters.delta,
                             &parameters.odd_parameters,
-                        ))
+                        )
                     };
+
+                    // Save the new commitment value for updating the parent.
+                    // Since this node is new, there isn't an old commitment value for it.
                     match node {
                         Inner::Even(commitments) => {
                             even_old_child = None;
-                            // Save the new commitment value for updating the parent.
-                            even_new_child = ChildCommitments::inner(*commitments);
+                            even_new_child = ChildCommitments::inner(commitments);
                         }
                         Inner::Odd(commitments) => {
                             odd_old_child = None;
-                            // Save the new commitment value for updating the parent.
-                            odd_new_child = ChildCommitments::inner(*commitments);
+                            odd_new_child = ChildCommitments::inner(commitments);
                         }
                     }
+
+                    // Save the new node to the backend.
+                    self.backend.set_inner_node(location, node)?;
                 }
             }
-
-            location = parent_location;
         }
 
         // Check if the tree has grown to accommodate the new leaf.
         // if the root's level is higher than the current height, we need to update the height.
-        if location.level() > self.height {
+        if location.level() > self.height() {
             log::warn!(
                 "Tree height increased from {} to {}",
-                self.height,
+                self.height(),
                 location.level()
             );
-            self.height = location.level();
+            self.backend.set_height(location.level())?;
         }
         Ok(())
     }

@@ -4,7 +4,7 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::SelRerandParameters;
 
 use dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
-use dart::curve_tree_storage::CurveTreeStorage;
+use dart::curve_tree_storage::CurveTreeWithBackend;
 use dart::{Error, Result};
 use dart::{PallasA, PallasParameters, VestaParameters};
 
@@ -13,7 +13,7 @@ const HEIGHT: usize = 4;
 const GENS_LENGTH: usize = 32;
 
 pub struct FullCurveTreeStorage<const L: usize> {
-    tree: CurveTreeStorage<L, 1, PallasParameters, VestaParameters>,
+    tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
     height: usize,
     leaves: Vec<PallasA>,
     length: usize,
@@ -36,9 +36,9 @@ impl<const L: usize> FullCurveTreeStorage<L> {
     pub fn new_with_capacity(cap: usize, height: usize, gens_length: usize) -> Self {
         let params = SelRerandParameters::new(gens_length, gens_length);
         let leaves = (0..cap).map(|_| PallasA::zero()).collect::<Vec<_>>();
-        let mut tree = CurveTreeStorage::new(height, &params).unwrap();
+        let mut tree = CurveTreeWithBackend::new(height, &params).unwrap();
         for leaf in &leaves {
-            tree.insert_leaf(*leaf, &params).unwrap();
+            tree.insert_leaf(leaf.into(), &params).unwrap();
         }
         Self {
             tree,
@@ -84,7 +84,8 @@ impl<const L: usize> FullCurveTreeStorage<L> {
                 return Err(Error::LeafNotFound(leaf));
             }
         }
-        self.tree.update_leaf(leaf_index, leaf, &self.params)?;
+        self.tree
+            .update_leaf(leaf_index, leaf.into(), &self.params)?;
         Ok(())
     }
 
@@ -95,9 +96,9 @@ impl<const L: usize> FullCurveTreeStorage<L> {
         }
         let new_cap = last_leaf_index + 1;
         self.leaves.resize(new_cap, PallasA::zero());
-        let mut new_tree = CurveTreeStorage::new(self.height, &self.params).unwrap();
+        let mut new_tree = CurveTreeWithBackend::new(self.height, &self.params).unwrap();
         for leaf in &self.leaves {
-            new_tree.insert_leaf(*leaf, &self.params).unwrap();
+            new_tree.insert_leaf(leaf.into(), &self.params).unwrap();
         }
         log::debug!("New tree: {:#?}", new_tree);
         self.tree = new_tree;

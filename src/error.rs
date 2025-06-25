@@ -48,4 +48,8 @@ pub enum Error {
     /// Curve tree node not found at a specific level and index.
     #[error("Curve tree node not found at level {level}, index {index}")]
     CurveTreeNodeNotFound { level: usize, index: usize },
+
+    /// Curve tree backend error.
+    #[error("Curve tree backend error: {0:?}")]
+    CurveTreeBackendError(Box<dyn std::error::Error + Send + Sync>),
 }
