@@ -135,7 +135,7 @@ impl DartUserAccountInner {
             &leg_enc,
             asset_state,
             account_tree,
-        );
+        )?;
         log::info!("Sender affirms");
         chain.sender_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state();
@@ -180,7 +180,7 @@ impl DartUserAccountInner {
         // Create the receiver affirmation proof.
         log::info!("Receiver generate affirmation proof");
         let proof =
-            ReceiverAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree);
+            ReceiverAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree)?;
         log::info!("Receiver affirms");
         chain.receiver_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state();
@@ -239,7 +239,7 @@ impl DartUserAccountInner {
             &leg_enc,
             asset_state,
             account_tree,
-        );
+        )?;
         log::info!("Receiver claims");
         chain.receiver_claim(&self.address, proof)?;
         asset_state.commit_pending_state();
@@ -991,11 +991,11 @@ impl DartChainState {
     pub fn end_block(&mut self) -> Result<()> {
         for commitment in self.pending_account_updates.drain(..) {
             // Add the commitment to the account tree.
-            self.account_tree.insert(commitment.0.0);
+            self.account_tree.insert(commitment.0.0)?;
             self.account_leafs.push(commitment);
         }
         // Push the current account tree root to the history.
-        self.account_roots.add_root(self.account_tree.root_node());
+        self.account_roots.add_root(self.account_tree.root_node()?);
 
         Ok(())
     }

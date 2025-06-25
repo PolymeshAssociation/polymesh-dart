@@ -511,10 +511,10 @@ impl<
         &mut self,
         leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let leaf_index = self.backend.allocate_leaf_index();
         self.update_leaf(leaf_index, leaf_value, parameters)?;
-        Ok(())
+        Ok(leaf_index)
     }
 
     pub fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {

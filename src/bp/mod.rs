@@ -429,11 +429,7 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(
-                ASSET_TREE_L,
-                ASSET_TREE_HEIGHT as usize,
-                ACCOUNT_TREE_GENS,
-            ),
+            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT as usize, ACCOUNT_TREE_GENS)?,
             assets: IndexMap::new(),
         })
     }
@@ -565,7 +561,7 @@ impl AssetMintingProof {
         let current_account_path =
             tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let (proof, challenge) = bp_account::MintTxnProof::new(
             rng,
@@ -1074,7 +1070,7 @@ impl SenderAffirmationProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new account state for the sender affirmation.
         let new_account_state = account_asset.get_sender_affirm_state(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1084,7 +1080,7 @@ impl SenderAffirmationProof {
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, challenge) = bp_account::AffirmAsSenderTxnProof::new(
@@ -1103,13 +1099,13 @@ impl SenderAffirmationProof {
             DART_GENS.leg_h,
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
@@ -1169,7 +1165,7 @@ impl ReceiverAffirmationProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new account state for the receiver affirmation.
         let new_account_state = account_asset.get_receiver_affirm_state(rng);
         let new_account_commitment = new_account_state.commitment();
@@ -1179,7 +1175,7 @@ impl ReceiverAffirmationProof {
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, challenge) = bp_account::AffirmAsReceiverTxnProof::new(
@@ -1197,14 +1193,14 @@ impl ReceiverAffirmationProof {
             DART_GENS.leg_h,
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
@@ -1265,7 +1261,7 @@ impl ReceiverClaimProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new account state for claiming received assets.
         let new_account_state = account_asset.get_state_for_claiming_received(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1275,7 +1271,7 @@ impl ReceiverClaimProof {
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, challenge) = bp_account::ClaimReceivedTxnProof::new(
@@ -1294,14 +1290,14 @@ impl ReceiverClaimProof {
             DART_GENS.leg_h,
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
@@ -1361,7 +1357,7 @@ impl SenderCounterUpdateProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new account state for decreasing the counter.
         let new_account_state = account_asset.get_state_for_decreasing_counter(rng);
         let new_account_commitment = new_account_state.commitment();
@@ -1371,7 +1367,7 @@ impl SenderCounterUpdateProof {
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, challenge) = bp_account::SenderCounterUpdateTxnProof::new(
@@ -1389,14 +1385,14 @@ impl SenderCounterUpdateProof {
             DART_GENS.leg_h,
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
@@ -1457,7 +1453,7 @@ impl SenderReversalProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Self {
+    ) -> Result<Self> {
         // Generate a new account state for reversing the send.
         let new_account_state = account_asset.get_state_for_reversing_send(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1467,7 +1463,7 @@ impl SenderReversalProof {
             .get_path_to_leaf(account_asset.current_state_commitment.0.0)
             .expect("Failed to get path to current account state commitment");
 
-        let root = tree_lookup.root_node();
+        let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, challenge) = bp_account::SenderReverseTxnProof::new(
@@ -1486,14 +1482,14 @@ impl SenderReversalProof {
             DART_GENS.leg_h,
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
             account_state_commitment: new_account_commitment,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {

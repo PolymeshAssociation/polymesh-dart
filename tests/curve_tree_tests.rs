@@ -1,10 +1,9 @@
 use test_log::test;
 
 use ark_ec::AffineRepr;
-use curve_tree_relations::curve_tree::SelRerandParameters;
+use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
-use dart::curve_tree_storage::CurveTreeWithBackend;
 use dart::{Error, Result};
 use dart::{PallasA, PallasParameters, VestaParameters};
 
@@ -12,17 +11,18 @@ const L: usize = 16;
 const HEIGHT: usize = 4;
 const GENS_LENGTH: usize = 32;
 
-pub struct FullCurveTreeStorage<const L: usize> {
-    tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
+/// A Full Curve Tree that support both insertion and updates.
+pub struct CurveTreeOld<const L: usize> {
+    tree: CurveTree<L, 1, PallasParameters, VestaParameters>,
     height: usize,
     leaves: Vec<PallasA>,
     length: usize,
     params: CurveTreeParameters,
 }
 
-impl<const L: usize> std::fmt::Debug for FullCurveTreeStorage<L> {
+impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FullCurveTreeStorage")
+        f.debug_struct("FullCurveTree")
             .field("tree", &self.tree)
             .field("height", &self.height)
             .field("length", &self.length)
@@ -31,18 +31,13 @@ impl<const L: usize> std::fmt::Debug for FullCurveTreeStorage<L> {
     }
 }
 
-impl<const L: usize> FullCurveTreeStorage<L> {
+impl<const L: usize> CurveTreeOld<L> {
     /// Creates a new instance of `FullCurveTree` with the given height and generators length.
-    pub fn new_with_capacity(cap: usize, height: usize, gens_length: usize) -> Self {
+    pub fn new_with_capacity(height: usize, gens_length: usize) -> Self {
         let params = SelRerandParameters::new(gens_length, gens_length);
-        let leaves = (0..cap).map(|_| PallasA::zero()).collect::<Vec<_>>();
-        let mut tree = CurveTreeWithBackend::new(height, &params).unwrap();
-        for leaf in &leaves {
-            tree.insert_leaf(leaf.into(), &params).unwrap();
-        }
         Self {
-            tree,
-            leaves,
+            tree: CurveTree::from_leaves(&[PallasA::zero()], &params, Some(height)),
+            leaves: vec![],
             length: 0,
             height,
             params,
@@ -66,13 +61,7 @@ impl<const L: usize> FullCurveTreeStorage<L> {
     /// Updates an existing leaf in the curve tree.
     pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<()> {
         let cap = self.leaves.len();
-        log::debug!("Updating leaf at index {}", leaf_index,);
         if leaf_index >= cap {
-            log::debug!(
-                "Growing leaves vector from {} to accommodate index {}",
-                cap,
-                leaf_index
-            );
             self.grow(leaf_index);
         }
 
@@ -84,8 +73,7 @@ impl<const L: usize> FullCurveTreeStorage<L> {
                 return Err(Error::LeafNotFound(leaf));
             }
         }
-        self.tree
-            .update_leaf(leaf_index, leaf.into(), &self.params)?;
+        self.tree.update_leaf(leaf_index, 0, leaf, &self.params);
         Ok(())
     }
 
@@ -96,20 +84,13 @@ impl<const L: usize> FullCurveTreeStorage<L> {
         }
         let new_cap = last_leaf_index + 1;
         self.leaves.resize(new_cap, PallasA::zero());
-        let mut new_tree = CurveTreeWithBackend::new(self.height, &self.params).unwrap();
-        for leaf in &self.leaves {
-            new_tree.insert_leaf(leaf.into(), &self.params).unwrap();
-        }
-        log::debug!("New tree: {:#?}", new_tree);
+        let new_tree = CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height));
         self.tree = new_tree;
     }
 
     /// Returns the path to a leaf in the curve tree by its index.
     pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>> {
-        Ok(self
-            .tree
-            .get_path_to_leaf(leaf_index, 0, &self.params)
-            .unwrap())
+        Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
     }
 
     /// Returns the parameters of the curve tree.
@@ -119,9 +100,10 @@ impl<const L: usize> FullCurveTreeStorage<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> CurveTreeRoot<L> {
-        self.tree.root_node(&self.params).unwrap()
+        self.tree.root_node()
     }
 }
+
 fn create_test_leaf(value: usize) -> PallasA {
     use ark_ec::{AffineRepr, CurveGroup};
     use ark_pallas::Fr as PallasScalar;
@@ -132,14 +114,15 @@ fn create_test_leaf(value: usize) -> PallasA {
 }
 
 fn setup_trees() -> (
+    CurveTreeOld<L>,
     FullCurveTree<L>,
-    FullCurveTreeStorage<L>,
     SelRerandParameters<PallasParameters, VestaParameters>,
 ) {
-    let full_tree = FullCurveTree::<L>::new_with_capacity(1, HEIGHT, GENS_LENGTH);
+    let full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT, GENS_LENGTH);
     assert!(full_tree.height() == HEIGHT);
     let params = full_tree.params().clone();
-    let storage_tree = FullCurveTreeStorage::<L>::new_with_capacity(1, HEIGHT, GENS_LENGTH);
+    let storage_tree = FullCurveTree::<L>::new_with_capacity(HEIGHT, GENS_LENGTH)
+        .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
     // Compare roots
