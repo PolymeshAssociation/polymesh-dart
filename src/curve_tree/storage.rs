@@ -172,6 +172,7 @@ fn init_empty_inner_node<
     }
     commitments
 }
+
 fn update_inner_node<
     const L: usize,
     const M: usize,
@@ -309,8 +310,156 @@ impl<
     }
 }
 
+struct TreeUpdaterState<
+    'a,
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig + Copy + Send,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+> {
+    even_new_child: ChildCommitments<M, P0>,
+    odd_new_child: ChildCommitments<M, P1>,
+    even_old_child: Option<ChildCommitments<M, P0>>,
+    odd_old_child: Option<ChildCommitments<M, P1>>,
+    height: usize,
+    parameters: &'a SelRerandParameters<P0, P1>,
+    location: NodeLocation<L>,
+    child_index: usize,
+}
+
+impl<
+    'a,
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig + Copy + Send,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+> TreeUpdaterState<'a, L, M, P0, P1>
+{
+    pub fn new(
+        leaf_index: usize,
+        old_leaf_value: Option<LeafValue<P0>>,
+        new_leaf_value: LeafValue<P0>,
+        height: usize,
+        parameters: &'a SelRerandParameters<P0, P1>,
+    ) -> Result<Self> {
+        // Store the leaf as the even commitment.
+        let even_old_child = old_leaf_value.map(ChildCommitments::leaf);
+        let even_new_child = ChildCommitments::leaf(new_leaf_value);
+        // Use zeroes to initialize the odd commitments.
+        let odd_old_child = None;
+        let odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<P1>::zero()));
+
+        // Start at the leaf's location.
+        let location = NodeLocation::<L>::leaf(leaf_index);
+
+        Ok(Self {
+            even_new_child,
+            odd_new_child,
+            even_old_child,
+            odd_old_child,
+            height,
+            parameters,
+            location,
+            child_index: 0,
+        })
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.location.is_root(self.height)
+    }
+
+    pub fn move_to_parent(&mut self) -> Result<NodeLocation<L>> {
+        let (parent_location, child_index) = self.location.parent();
+        self.location = parent_location;
+        self.child_index = child_index;
+        Ok(parent_location)
+    }
+
+    pub fn update_node(&mut self, node: Option<Inner<M, P0, P1>>) -> Result<Inner<M, P0, P1>> {
+        match node {
+            Some(mut node) => {
+                match &mut node {
+                    Inner::Even(commitments) => {
+                        // We save the old commitment value for updating the parent node.
+                        self.even_old_child = Some(ChildCommitments::inner(*commitments));
+
+                        // Update the node.  We pass both the old and new child commitments.
+                        Inner::<M, _, _>::update_even_node::<L>(
+                            commitments,
+                            self.child_index,
+                            self.odd_old_child,
+                            self.odd_new_child,
+                            &self.parameters.odd_parameters.delta,
+                            &self.parameters.even_parameters,
+                        );
+
+                        // Save the new commitment value for updating the parent.
+                        self.even_new_child = ChildCommitments::inner(*commitments);
+                    }
+                    Inner::Odd(commitments) => {
+                        // We save the old commitment value for updating the parent node.
+                        self.odd_old_child = Some(ChildCommitments::inner(*commitments));
+
+                        // Update the node.  We pass both the old and new child commitments.
+                        Inner::<M, _, _>::update_odd_node::<L>(
+                            commitments,
+                            self.child_index,
+                            self.even_old_child,
+                            self.even_new_child,
+                            &self.parameters.even_parameters.delta,
+                            &self.parameters.odd_parameters,
+                        );
+
+                        // Save the new commitment value for updating the parent.
+                        self.odd_new_child = ChildCommitments::inner(*commitments);
+                    }
+                }
+                Ok(node)
+            }
+            None => {
+                // If thsi node does not exist, we need to create it.
+                let node = if self.location.is_even() {
+                    // If the location is even, we create an even node.
+                    Inner::init_empty_even::<L>(
+                        self.odd_new_child,
+                        &self.parameters.odd_parameters.delta,
+                        &self.parameters.even_parameters,
+                    )
+                } else {
+                    // If the location is odd, we create an odd node.
+                    Inner::init_empty_odd::<L>(
+                        self.even_new_child,
+                        &self.parameters.even_parameters.delta,
+                        &self.parameters.odd_parameters,
+                    )
+                };
+
+                // Save the new commitment value for updating the parent.
+                // Since this node is new, there isn't an old commitment value for it.
+                match node {
+                    Inner::Even(commitments) => {
+                        self.even_old_child = None;
+                        self.even_new_child = ChildCommitments::inner(commitments);
+                    }
+                    Inner::Odd(commitments) => {
+                        self.odd_old_child = None;
+                        self.odd_new_child = ChildCommitments::inner(commitments);
+                    }
+                }
+                Ok(node)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LeafValue<P0: SWCurveConfig>(Affine<P0>);
+
+impl<P0: SWCurveConfig + Copy + Send> Default for LeafValue<P0> {
+    fn default() -> Self {
+        Self(Affine::<P0>::zero())
+    }
+}
 
 impl<P0: SWCurveConfig + Copy + Send> std::fmt::Debug for LeafValue<P0> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -486,7 +635,7 @@ impl<
                 nodes: HashMap::new(),
             }),
         };
-        tree.update_leaf(0, Self::default_leaf_value(), parameters)?;
+        tree.update_leaf(0, LeafValue::default(), parameters)?;
         Ok(tree)
     }
 
@@ -495,16 +644,12 @@ impl<
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<Self> {
         let mut tree = Self { backend };
-        tree.update_leaf(0, Self::default_leaf_value(), parameters)?;
+        tree.update_leaf(0, LeafValue::default(), parameters)?;
         Ok(tree)
     }
 
     pub fn height(&self) -> usize {
         self.backend.height()
-    }
-
-    fn default_leaf_value() -> LeafValue<P0> {
-        LeafValue(Affine::<P0>::zero())
     }
 
     pub fn insert_leaf(
@@ -696,109 +841,35 @@ impl<
         new_leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<()> {
+        let height = self.height();
         // Update the leaf to the new value and get the old value.
         let old_leaf_value = self.backend.set_leaf(leaf_index, new_leaf_value)?;
 
-        // Store the leaf as the even commitment.
-        let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);
-        let mut even_new_child = ChildCommitments::leaf(new_leaf_value);
-        // Use zeroes to initialize the odd commitments.
-        let mut odd_old_child = None;
-        let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<P1>::zero()));
-
-        // Start at the leaf's location.
-        let mut location = NodeLocation::<L>::leaf(leaf_index);
+        let mut updater_state = TreeUpdaterState::<L, M, P0, P1>::new(
+            leaf_index,
+            old_leaf_value,
+            new_leaf_value,
+            height,
+            parameters,
+        )?;
 
         // Keep going until we reach the root of the tree.
-        while !location.is_root(self.height()) {
+        while !updater_state.is_root() {
             // Move to the parent location and get the child index of the current node.
-            let (parent_location, child_index) = location.parent();
-            location = parent_location;
+            let location = updater_state.move_to_parent()?;
 
-            match self.backend.get_inner_node(location)? {
-                Some(mut node) => {
-                    match &mut node {
-                        Inner::Even(commitments) => {
-                            // We save the old commitment value for updating the parent node.
-                            even_old_child = Some(ChildCommitments::inner(*commitments));
-
-                            // Update the node.  We pass both the old and new child commitments.
-                            Inner::<M, _, _>::update_even_node::<L>(
-                                commitments,
-                                child_index,
-                                odd_old_child,
-                                odd_new_child,
-                                &parameters.odd_parameters.delta,
-                                &parameters.even_parameters,
-                            );
-
-                            // Save the new commitment value for updating the parent.
-                            even_new_child = ChildCommitments::inner(*commitments);
-                        }
-                        Inner::Odd(commitments) => {
-                            // We save the old commitment value for updating the parent node.
-                            odd_old_child = Some(ChildCommitments::inner(*commitments));
-
-                            // Update the node.  We pass both the old and new child commitments.
-                            Inner::<M, _, _>::update_odd_node::<L>(
-                                commitments,
-                                child_index,
-                                even_old_child,
-                                even_new_child,
-                                &parameters.even_parameters.delta,
-                                &parameters.odd_parameters,
-                            );
-
-                            // Save the new commitment value for updating the parent.
-                            odd_new_child = ChildCommitments::inner(*commitments);
-                        }
-                    }
-                    // Save the updated node back to the backend.
-                    self.backend.set_inner_node(location, node)?;
-                }
-                None => {
-                    // If thsi node does not exist, we need to create it.
-                    let node = if location.is_even() {
-                        // If the location is even, we create an even node.
-                        Inner::init_empty_even::<L>(
-                            odd_new_child,
-                            &parameters.odd_parameters.delta,
-                            &parameters.even_parameters,
-                        )
-                    } else {
-                        // If the location is odd, we create an odd node.
-                        Inner::init_empty_odd::<L>(
-                            even_new_child,
-                            &parameters.even_parameters.delta,
-                            &parameters.odd_parameters,
-                        )
-                    };
-
-                    // Save the new commitment value for updating the parent.
-                    // Since this node is new, there isn't an old commitment value for it.
-                    match node {
-                        Inner::Even(commitments) => {
-                            even_old_child = None;
-                            even_new_child = ChildCommitments::inner(commitments);
-                        }
-                        Inner::Odd(commitments) => {
-                            odd_old_child = None;
-                            odd_new_child = ChildCommitments::inner(commitments);
-                        }
-                    }
-
-                    // Save the new node to the backend.
-                    self.backend.set_inner_node(location, node)?;
-                }
-            }
+            let node = updater_state.update_node(self.backend.get_inner_node(location)?)?;
+            // Save the updated node back to the backend.
+            self.backend.set_inner_node(location, node)?;
         }
 
         // Check if the tree has grown to accommodate the new leaf.
         // if the root's level is higher than the current height, we need to update the height.
-        if location.level() > self.height() {
+        let location = updater_state.location;
+        if location.level() > height {
             log::warn!(
                 "Tree height increased from {} to {}",
-                self.height(),
+                height,
                 location.level()
             );
             self.backend.set_height(location.level())?;
