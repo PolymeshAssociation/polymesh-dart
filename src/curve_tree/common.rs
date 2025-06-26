@@ -153,20 +153,20 @@ fn init_empty_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) -> [Affine<P1>; M] {
+) -> Result<[Affine<P1>; M]> {
     let mut commitments = [Affine::<P1>::zero(); M];
     for tree_index in 0..M {
         let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
-        let gen_iter = parameters
+        let mut gen_iter = parameters
             .bp_gens
             .share(0)
             .G(L * (tree_index + 1))
             .skip(L * tree_index);
-        let g = gen_iter.copied().next().unwrap();
+        let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] =
-            (commitments[tree_index].into_group() + g * new_x_coord).into_affine();
+            (commitments[tree_index].into_group() + *g * new_x_coord).into_affine();
     }
-    commitments
+    Ok(commitments)
 }
 
 fn update_inner_node<
@@ -181,7 +181,7 @@ fn update_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) {
+) -> Result<()> {
     for tree_index in 0..M {
         let old_x_coord = if let Some(old_comm) = old_child {
             (old_comm.commitment(tree_index) + delta).into_affine().x
@@ -189,15 +189,16 @@ fn update_inner_node<
             P0::BaseField::zero()
         };
         let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
-        let gen_iter = parameters
+        let mut gen_iter = parameters
             .bp_gens
             .share(0)
             .G(L * (tree_index + 1))
             .skip(L * tree_index + local_index);
-        let g = gen_iter.copied().next().unwrap();
+        let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] =
-            (commitments[tree_index].into_group() + g * (new_x_coord - old_x_coord)).into_affine();
+            (commitments[tree_index].into_group() + *g * (new_x_coord - old_x_coord)).into_affine();
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -253,20 +254,20 @@ impl<
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
-    ) -> Self {
-        Self::Even(init_empty_inner_node::<L, M, P1, P0>(
+    ) -> Result<Self> {
+        Ok(Self::Even(init_empty_inner_node::<L, M, P1, P0>(
             new_child, delta, parameters,
-        ))
+        )?))
     }
 
     pub fn init_empty_odd<const L: usize>(
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
-    ) -> Self {
-        Self::Odd(init_empty_inner_node::<L, M, P0, P1>(
+    ) -> Result<Self> {
+        Ok(Self::Odd(init_empty_inner_node::<L, M, P0, P1>(
             new_child, delta, parameters,
-        ))
+        )?))
     }
 
     pub fn update_even_node<const L: usize>(
@@ -276,7 +277,7 @@ impl<
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
-    ) {
+    ) -> Result<()> {
         update_inner_node::<L, M, P1, P0>(
             commitments,
             local_index,
@@ -284,7 +285,7 @@ impl<
             new_child,
             delta,
             parameters,
-        );
+        )
     }
 
     pub fn update_odd_node<const L: usize>(
@@ -294,7 +295,7 @@ impl<
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
-    ) {
+    ) -> Result<()> {
         update_inner_node::<L, M, P0, P1>(
             commitments,
             local_index,
@@ -302,7 +303,7 @@ impl<
             new_child,
             delta,
             parameters,
-        );
+        )
     }
 }
 
@@ -399,7 +400,7 @@ impl<
                             self.odd_new_child,
                             &self.parameters.odd_parameters.delta,
                             &self.parameters.even_parameters,
-                        );
+                        )?;
 
                         // Save the new commitment value for updating the parent.
                         self.even_new_child = ChildCommitments::inner(*commitments);
@@ -416,7 +417,7 @@ impl<
                             self.even_new_child,
                             &self.parameters.even_parameters.delta,
                             &self.parameters.odd_parameters,
-                        );
+                        )?;
 
                         // Save the new commitment value for updating the parent.
                         self.odd_new_child = ChildCommitments::inner(*commitments);
@@ -432,14 +433,14 @@ impl<
                         self.odd_new_child,
                         &self.parameters.odd_parameters.delta,
                         &self.parameters.even_parameters,
-                    )
+                    )?
                 } else {
                     // If the location is odd, we create an odd node.
                     Inner::init_empty_odd::<L>(
                         self.even_new_child,
                         &self.parameters.even_parameters.delta,
                         &self.parameters.odd_parameters,
-                    )
+                    )?
                 };
 
                 // Save the new commitment value for updating the parent.

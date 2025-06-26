@@ -119,10 +119,7 @@ impl<const L: usize> FullCurveTree<L> {
 
     /// Returns the path to a leaf in the curve tree by its index.
     pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>> {
-        Ok(self
-            .tree
-            .get_path_to_leaf(leaf_index, 0, &self.params)
-            .unwrap())
+        Ok(self.tree.get_path_to_leaf(leaf_index, 0, &self.params)?)
     }
 
     /// Returns the parameters of the curve tree.
@@ -131,8 +128,8 @@ impl<const L: usize> FullCurveTree<L> {
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> CurveTreeRoot<L> {
-        self.tree.root_node(&self.params).unwrap()
+    pub fn root_node(&self) -> Result<CurveTreeRoot<L>> {
+        self.tree.root_node(&self.params)
     }
 }
 

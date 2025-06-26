@@ -127,7 +127,9 @@ fn setup_trees() -> (
 
     // Compare roots
     let full_root = full_tree.root_node();
-    let storage_root = storage_tree.root_node();
+    let storage_root = storage_tree
+        .root_node()
+        .expect("Failed to get storage root");
 
     assert_roots_equal(&full_root, &storage_root, &format!("on empty trees"));
 
@@ -218,7 +220,9 @@ fn test_inserts() {
 
         // Compare roots
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
 
         assert_roots_equal(
             &full_root,
@@ -245,7 +249,9 @@ fn test_growth_beyond_l() {
 
         // Compare roots after each insertion
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
 
         assert_roots_equal(
             &full_root,
@@ -284,7 +290,9 @@ fn test_mixed_updates_and_inserts() {
 
         // Compare roots after each round
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
 
         assert_roots_equal(&full_root, &storage_root, &format!("after round {}", round));
     }
@@ -357,7 +365,9 @@ fn test_paths_after_updates() {
 
         // Also check that roots are still the same
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
         assert_roots_equal(
             &full_root,
             &storage_root,
@@ -385,7 +395,9 @@ fn test_update_first_leaf() {
 
     // Check roots match
     let full_root = full_tree.root_node();
-    let storage_root = storage_tree.root_node();
+    let storage_root = storage_tree
+        .root_node()
+        .expect("Failed to get storage root");
     assert_roots_equal(&full_root, &storage_root, "after updating first leaf");
 
     // Check paths for all leaves
@@ -418,14 +430,18 @@ fn test_large_tree_growth() {
         // Check roots every few insertions to catch issues early
         if i % L == 0 {
             let full_root = full_tree.root_node();
-            let storage_root = storage_tree.root_node();
+            let storage_root = storage_tree
+                .root_node()
+                .expect("Failed to get storage root");
             assert_roots_equal(&full_root, &storage_root, &format!("after {} leaves", i));
         }
     }
 
     // Final root check
     let full_root = full_tree.root_node();
-    let storage_root = storage_tree.root_node();
+    let storage_root = storage_tree
+        .root_node()
+        .expect("Failed to get storage root");
     assert_roots_equal(
         &full_root,
         &storage_root,
@@ -467,7 +483,9 @@ fn test_sequential_leaf_updates() {
 
         // Check roots after each update
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
         assert_roots_equal(
             &full_root,
             &storage_root,
@@ -527,7 +545,9 @@ fn test_stress_updates_and_insertions() {
 
         // Verify consistency after each cycle
         let full_root = full_tree.root_node();
-        let storage_root = storage_tree.root_node();
+        let storage_root = storage_tree
+            .root_node()
+            .expect("Failed to get storage root");
         assert_roots_equal(
             &full_root,
             &storage_root,

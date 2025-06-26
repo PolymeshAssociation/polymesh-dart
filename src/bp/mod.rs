@@ -462,7 +462,7 @@ impl AssetCurveTree {
         self.tree.params()
     }
 
-    pub fn root_node(&self) -> CurveTreeRoot<ASSET_TREE_L> {
+    pub fn root_node(&self) -> Result<CurveTreeRoot<ASSET_TREE_L>> {
         self.tree.root_node()
     }
 }
@@ -791,7 +791,7 @@ impl LegBuilder {
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
-    ) -> SettlementLegProof {
+    ) -> Result<SettlementLegProof> {
         let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
         let leg = Leg::new(
             self.sender.acct,
@@ -814,9 +814,9 @@ impl LegBuilder {
             auditor_enc,
             ctx,
             asset_tree,
-        );
+        )?;
 
-        leg_proof
+        Ok(leg_proof)
     }
 }
 
@@ -845,13 +845,13 @@ impl SettlementBuilder {
     ) -> Result<SettlementProof> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        let root = asset_tree.root_node();
+        let root = asset_tree.root_node()?;
 
         let mut legs = Vec::with_capacity(self.legs.len());
 
         for (idx, leg_builder) in self.legs.into_iter().enumerate() {
             let ctx = (&memo, idx as u8).encode();
-            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, asset_tree);
+            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, asset_tree)?;
             legs.push(leg_proof);
         }
 
@@ -914,10 +914,10 @@ impl SettlementLegProof {
         auditor_enc: Option<EncryptionPublicKey>,
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
-    ) -> Self {
+    ) -> Result<Self> {
         let asset_path = asset_tree
             .get_asset_state_path(leg.asset_id())
-            .expect("Missing asset state");
+            .ok_or_else(|| Error::AssetStateNotFound(leg.asset_id()))?;
 
         let (proof, challenge) = bp_leg::SettlementTxnProof::new(
             rng,
@@ -937,12 +937,12 @@ impl SettlementLegProof {
             &DART_GENS.ped_comm_key,
         );
 
-        Self {
+        Ok(Self {
             leg_enc,
 
             proof,
             challenge,
-        }
+        })
     }
 
     pub fn has_mediator(&self) -> bool {
@@ -1074,9 +1074,8 @@ impl SenderAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1169,9 +1168,8 @@ impl ReceiverAffirmationProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1265,9 +1263,8 @@ impl ReceiverClaimProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1361,9 +1358,8 @@ impl SenderCounterUpdateProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1457,9 +1453,8 @@ impl SenderReversalProof {
         let new_account_commitment = new_account_state.commitment();
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.0.0)
-            .expect("Failed to get path to current account state commitment");
+        let current_account_path =
+            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
 
         let root = tree_lookup.root_node()?;
 

@@ -1081,7 +1081,7 @@ impl DartChainState {
         self.asset_tree.set_asset_state(asset_state)?;
         self.asset_details.insert(asset_id, asset_details.clone());
         // Push the current asset tree root to the history.
-        self.asset_roots.add_root(self.asset_tree.root_node());
+        self.asset_roots.add_root(self.asset_tree.root_node()?);
 
         Ok(asset_details)
     }

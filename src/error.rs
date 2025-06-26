@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use dart_common::AssetId;
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// The errors that can occur in the Dart protocol.
@@ -52,4 +54,12 @@ pub enum Error {
     /// Curve tree backend error.
     #[error("Curve tree backend error: {0:?}")]
     CurveTreeBackendError(Box<dyn std::error::Error + Send + Sync>),
+
+    /// Curve tree generator not found.
+    #[error("Curve tree generator not found.")]
+    CurveTreeGeneratorNotFound,
+
+    /// Asset state not found.
+    #[error("Asset state not found: {0:?}")]
+    AssetStateNotFound(AssetId),
 }
