@@ -6,7 +6,7 @@ use super::common::*;
 use super::sync_tree::CurveTreeBackend;
 #[cfg(feature = "async_tree")]
 use crate::curve_tree::async_tree::AsyncCurveTreeBackend;
-use crate::error::*;
+use crate::{LeafIndex, NodeLevel, error::*};
 
 pub struct CurveTreeMemoryBackend<
     const L: usize,
@@ -14,9 +14,9 @@ pub struct CurveTreeMemoryBackend<
     P0: SWCurveConfig,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField>,
 > {
-    height: usize,
+    height: NodeLevel,
     leafs: Vec<LeafValue<P0>>,
-    next_leaf_index: usize,
+    next_leaf_index: LeafIndex,
     nodes: HashMap<NodeLocation<L>, Inner<M, P0, P1>>,
 }
 
@@ -44,7 +44,7 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    pub fn new(height: usize) -> Self {
+    pub fn new(height: NodeLevel) -> Self {
         Self {
             height,
             leafs: Vec::new(),
@@ -61,31 +61,31 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    fn height(&self) -> usize {
+    fn height(&self) -> NodeLevel {
         self.height
     }
 
-    fn set_height(&mut self, height: usize) -> Result<(), Error> {
+    fn set_height(&mut self, height: NodeLevel) -> Result<(), Error> {
         self.height = height;
         Ok(())
     }
 
-    fn allocate_leaf_index(&mut self) -> usize {
+    fn allocate_leaf_index(&mut self) -> LeafIndex {
         let leaf_index = self.next_leaf_index;
         self.next_leaf_index += 1;
         leaf_index
     }
 
-    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
-        Ok(self.leafs.get(leaf_index).copied())
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
+        Ok(self.leafs.get(leaf_index as usize).copied())
     }
 
     fn set_leaf(
         &mut self,
-        leaf_index: usize,
+        leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
     ) -> Result<Option<LeafValue<P0>>, Error> {
-        let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index) {
+        let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index as usize) {
             let old = *leaf;
             *leaf = new_leaf_value;
             Some(old)
@@ -96,8 +96,8 @@ impl<
         Ok(old_leaf_value)
     }
 
-    fn leaf_count(&self) -> usize {
-        self.leafs.len()
+    fn leaf_count(&self) -> LeafIndex {
+        self.leafs.len() as LeafIndex
     }
 
     fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error> {
@@ -122,31 +122,31 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > AsyncCurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    async fn height(&self) -> usize {
+    async fn height(&self) -> NodeLevel {
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).height()
     }
 
-    async fn set_height(&mut self, height: usize) -> Result<(), Error> {
+    async fn set_height(&mut self, height: NodeLevel) -> Result<(), Error> {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_height(height)
     }
 
-    async fn allocate_leaf_index(&mut self) -> usize {
+    async fn allocate_leaf_index(&mut self) -> LeafIndex {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).allocate_leaf_index()
     }
 
-    async fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
+    async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).get_leaf(leaf_index)
     }
 
     async fn set_leaf(
         &mut self,
-        leaf_index: usize,
+        leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
     ) -> Result<Option<LeafValue<P0>>, Error> {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_leaf(leaf_index, new_leaf_value)
     }
 
-    async fn leaf_count(&self) -> usize {
+    async fn leaf_count(&self) -> LeafIndex {
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).leaf_count()
     }
 

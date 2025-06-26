@@ -2,9 +2,13 @@ use codec::{Decode, Encode, Error as CodecError, Input, Output};
 #[cfg(feature = "std")]
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
+use ark_ec::short_weierstrass::SWCurveConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
-use crate::{curve_tree::CurveTreeRoot, *};
+use crate::{
+    curve_tree::{CurveTreeRoot, Inner, LeafValue},
+    *,
+};
 
 /// TypeInfo, SCALE encoding and decoding for `EncryptionPublicKey`.
 
@@ -237,6 +241,78 @@ impl<const L: usize> Decode for CurveTreeRoot<L> {
     }
 }
 
+/// TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
+
+#[cfg(feature = "std")]
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> TypeInfo for Inner<M, P0, P1> {
+    type Identity = Self;
+    fn type_info() -> Type {
+        Type::builder()
+            .path(Path::new("Inner", module_path!()))
+            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name("EncodedInner")))
+    }
+}
+
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> Encode for Inner<M, P0, P1> {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.compressed_size()
+    }
+
+    /// Encodes as a `Vec<u8>`.
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        let mut buf = Vec::new();
+        self.serialize_compressed(&mut buf)
+            .expect("Failed to serialize Inner");
+        buf.encode_to(dest);
+    }
+}
+
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> Decode for Inner<M, P0, P1> {
+    /// Decode a `Inner<M, P0, P1>` .
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        let buf = <Vec<u8>>::decode(input)?;
+        Ok(Self::deserialize_compressed(&*buf)
+            .map_err(|_| CodecError::from("Failed to deserialize Inner"))?)
+    }
+}
+
+/// TypeInfo, SCALE encoding and decoding for `LeafValue<P0>`.
+
+#[cfg(feature = "std")]
+impl<P0: SWCurveConfig> TypeInfo for LeafValue<P0> {
+    type Identity = Self;
+    fn type_info() -> Type {
+        Type::builder()
+            .path(Path::new("LeafValue", module_path!()))
+            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name("EncodedLeafValue")))
+    }
+}
+
+impl<P0: SWCurveConfig> Encode for LeafValue<P0> {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.compressed_size()
+    }
+
+    /// Encodes as a `Vec<u8>`.
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        let mut buf = Vec::new();
+        self.serialize_compressed(&mut buf)
+            .expect("Failed to serialize LeafValue");
+        buf.encode_to(dest);
+    }
+}
+
+impl<P0: SWCurveConfig> Decode for LeafValue<P0> {
+    /// Decode a `LeafValue<P0>` .
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        let buf = <Vec<u8>>::decode(input)?;
+        Ok(Self::deserialize_compressed(&*buf)
+            .map_err(|_| CodecError::from("Failed to deserialize LeafValue"))?)
+    }
+}
+
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
 pub struct WrappedCanonical<T>(pub T);
@@ -262,8 +338,10 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
     type Identity = Self;
 
     fn type_info() -> Type {
+        use std::any::type_name;
+
         Type::builder()
-            .path(Path::new("LegEncrypted", module_path!()))
+            .path(Path::new(type_name::<T>(), module_path!()))
             .composite(
                 Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name("EncodedLegEncrypted")),
             )

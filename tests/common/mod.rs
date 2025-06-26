@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result, anyhow};
+use codec::{Decode, Encode};
 use dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
 use rand::RngCore;
 
@@ -15,6 +16,12 @@ use dart::{
     },
     *,
 };
+
+pub fn scale_encode_and_decode_test<T: Encode + Decode>(value: &T) -> Result<T> {
+    let buf = value.encode();
+    let decoded_value = T::decode(&mut buf.as_slice()).context("Failed to decode value")?;
+    Ok(decoded_value)
+}
 
 /// A fake "Substrate" signer address for testing purposes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1138,6 +1145,9 @@ impl DartChainState {
         self.ensure_account_owner(caller, &proof.account)?;
         self.ensure_asset_exists(proof.asset_id)?;
 
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         // Ensure the account has not already been initialized with the asset.
         if !self.account_assets.insert((proof.account, proof.asset_id)) {
             return Err(anyhow!(
@@ -1202,6 +1212,9 @@ impl DartChainState {
     ) -> Result<SettlementId> {
         self.ensure_caller(caller)?;
 
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         // Ensure the settlement has a valid number of legs.
         if proof.legs.is_empty() || proof.legs.len() > SETTLEMENT_MAX_LEGS as usize {
             return Err(anyhow!(
@@ -1256,6 +1269,10 @@ impl DartChainState {
         proof: SenderAffirmationProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()
@@ -1288,6 +1305,10 @@ impl DartChainState {
         proof: ReceiverAffirmationProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()
@@ -1320,6 +1341,10 @@ impl DartChainState {
         proof: MediatorAffirmationProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()
@@ -1344,6 +1369,10 @@ impl DartChainState {
         proof: SenderCounterUpdateProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()
@@ -1380,6 +1409,10 @@ impl DartChainState {
         proof: SenderReversalProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()
@@ -1412,6 +1445,10 @@ impl DartChainState {
         proof: ReceiverClaimProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
         let settlement_id = proof
             .leg_ref
             .settlement_id()

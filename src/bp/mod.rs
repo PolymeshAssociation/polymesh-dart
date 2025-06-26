@@ -24,6 +24,12 @@ pub use encode::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
 
+pub type LeafIndex = u64;
+pub type TreeIndex = u8;
+pub type NodeLevel = u8;
+pub type NodeIndex = LeafIndex;
+pub type ChildIndex = LeafIndex;
+
 pub type PallasParameters = ark_pallas::PallasConfig;
 pub type VestaParameters = ark_vesta::VestaConfig;
 pub type PallasA = ark_pallas::Affine;
@@ -436,7 +442,7 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT as usize, ACCOUNT_TREE_GENS)?,
+            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
             assets: IndexMap::new(),
         })
     }
@@ -458,13 +464,15 @@ impl AssetCurveTree {
         entry.insert_entry(state);
 
         // Update the leaf in the curve tree.
-        self.tree.update(leaf.0, index)?;
+        self.tree.update(leaf.0, index as LeafIndex)?;
         Ok(index)
     }
 
     pub fn get_asset_state_path(&self, asset_id: AssetId) -> Option<CurveTreePath<ASSET_TREE_L>> {
         let leaf_index = self.assets.get_index_of(&asset_id)?;
-        self.tree.get_path_to_leaf_index(leaf_index).ok()
+        self.tree
+            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .ok()
     }
 
     pub fn params(&self) -> &CurveTreeParameters {
@@ -661,7 +669,7 @@ impl AuditorOrMediator {
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum SettlementRef {
     /// ID based reference.
-    ID(SettlementId),
+    ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
     Hash([u8; 32]),
 }

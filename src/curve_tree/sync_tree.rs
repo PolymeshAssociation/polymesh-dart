@@ -8,26 +8,26 @@ use curve_tree_relations::{
 
 use super::backends::CurveTreeMemoryBackend;
 use super::common::*;
-use crate::error::*;
+use crate::{ChildIndex, LeafIndex, NodeLevel, TreeIndex, error::*};
 
 pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
     std::fmt::Debug
 {
-    fn height(&self) -> usize;
+    fn height(&self) -> NodeLevel;
 
-    fn set_height(&mut self, height: usize) -> Result<(), Error>;
+    fn set_height(&mut self, height: NodeLevel) -> Result<(), Error>;
 
-    fn allocate_leaf_index(&mut self) -> usize;
+    fn allocate_leaf_index(&mut self) -> LeafIndex;
 
-    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error>;
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error>;
 
     fn set_leaf(
         &mut self,
-        leaf_index: usize,
+        leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
     ) -> Result<Option<LeafValue<P0>>, Error>;
 
-    fn leaf_count(&self) -> usize;
+    fn leaf_count(&self) -> LeafIndex;
 
     fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error>;
 
@@ -68,7 +68,7 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeWithBackend<L, M, P0, P1>
 {
-    pub fn new(height: usize, parameters: &SelRerandParameters<P0, P1>) -> Result<Self, Error> {
+    pub fn new(height: NodeLevel, parameters: &SelRerandParameters<P0, P1>) -> Result<Self, Error> {
         let mut tree = Self {
             backend: Box::new(CurveTreeMemoryBackend::new(height)),
         };
@@ -85,7 +85,7 @@ impl<
         Ok(tree)
     }
 
-    pub fn height(&self) -> usize {
+    pub fn height(&self) -> NodeLevel {
         self.backend.height()
     }
 
@@ -93,13 +93,13 @@ impl<
         &mut self,
         leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<usize, Error> {
+    ) -> Result<LeafIndex, Error> {
         let leaf_index = self.backend.allocate_leaf_index();
         self.update_leaf(leaf_index, leaf_value, parameters)?;
         Ok(leaf_index)
     }
 
-    pub fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
+    pub fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
         self.backend.get_leaf(leaf_index)
     }
 
@@ -110,7 +110,8 @@ impl<
     ) -> Result<Vec<[P1::BaseField; L]>, Error> {
         let mut batch_x_coord_children = Vec::with_capacity(M);
         for tree_index in 0..M {
-            let x_coord_children = self._get_odd_x_coord_children(tree_index, parent, delta)?;
+            let x_coord_children =
+                self._get_odd_x_coord_children(tree_index as TreeIndex, parent, delta)?;
             batch_x_coord_children.push(x_coord_children);
         }
         Ok(batch_x_coord_children)
@@ -118,16 +119,16 @@ impl<
 
     fn _get_odd_x_coord_children(
         &self,
-        tree_index: usize,
+        tree_index: TreeIndex,
         parent: NodeLocation<L>,
         delta: &Affine<P1>,
     ) -> Result<[P1::BaseField; L], Error> {
         let mut x_coord_children = [P1::BaseField::zero(); L];
         for idx in 0..L {
-            let child = parent.child(idx)?;
+            let child = parent.child(idx as ChildIndex)?;
             let x_coord = match self.backend.get_inner_node(child)? {
                 Some(Inner::Odd(commitments)) => {
-                    Some((commitments[tree_index] + delta).into_affine().x)
+                    Some((commitments[tree_index as usize] + delta).into_affine().x)
                 }
                 Some(Inner::Even(_)) => {
                     return Err(Error::CurveTreeInvalidChildNode {
@@ -151,7 +152,8 @@ impl<
     ) -> Result<Vec<[P0::BaseField; L]>, Error> {
         let mut batch_x_coord_children = Vec::with_capacity(M);
         for tree_index in 0..M {
-            let x_coord_children = self._get_even_x_coord_children(tree_index, parent, delta)?;
+            let x_coord_children =
+                self._get_even_x_coord_children(tree_index as TreeIndex, parent, delta)?;
             batch_x_coord_children.push(x_coord_children);
         }
         Ok(batch_x_coord_children)
@@ -159,18 +161,18 @@ impl<
 
     fn _get_even_x_coord_children(
         &self,
-        tree_index: usize,
+        tree_index: TreeIndex,
         parent: NodeLocation<L>,
         delta: &Affine<P0>,
     ) -> Result<[P0::BaseField; L], Error> {
         let mut x_coord_children = [P0::BaseField::zero(); L];
         for idx in 0..L {
-            let child = parent.child(idx)?;
+            let child = parent.child(idx as ChildIndex)?;
             let commitment = if let NodeLocation::Leaf(leaf_index) = child {
                 self.backend.get_leaf(leaf_index)?.map(|leaf| leaf.0)
             } else {
                 match self.backend.get_inner_node(child)? {
-                    Some(Inner::Even(commitments)) => Some(commitments[tree_index]),
+                    Some(Inner::Even(commitments)) => Some(commitments[tree_index as usize]),
                     Some(Inner::Odd(_)) => {
                         log::error!("An Odd node cannot have an odd child");
                         return Err(Error::CurveTreeInvalidChildNode {
@@ -210,12 +212,13 @@ impl<
 
     pub fn get_path_to_leaf(
         &self,
-        leaf_index: usize,
-        tree_index: usize,
+        leaf_index: LeafIndex,
+        tree_index: TreeIndex,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<CurveTreeWitnessPath<L, P0, P1>, Error> {
-        let mut even_internal_nodes = Vec::with_capacity(self.height());
-        let mut odd_internal_nodes = Vec::with_capacity(self.height());
+        let height = self.height();
+        let mut even_internal_nodes = Vec::with_capacity(height as usize);
+        let mut odd_internal_nodes = Vec::with_capacity(height as usize);
 
         let mut even_child = self
             .backend
@@ -227,7 +230,7 @@ impl<
         // Start at the leaf's location.
         let mut location = NodeLocation::<L>::leaf(leaf_index);
 
-        while !location.is_root(self.height()) {
+        while !location.is_root(height) {
             let (parent_location, _) = location.parent();
             let node = self
                 .backend
@@ -239,7 +242,7 @@ impl<
 
             match node {
                 Inner::Even(commitments) => {
-                    even_child = commitments[tree_index];
+                    even_child = commitments[tree_index as usize];
                     even_internal_nodes.push(WitnessNode {
                         x_coord_children: self._get_odd_x_coord_children(
                             tree_index,
@@ -250,7 +253,7 @@ impl<
                     });
                 }
                 Inner::Odd(commitments) => {
-                    odd_child = commitments[tree_index];
+                    odd_child = commitments[tree_index as usize];
                     odd_internal_nodes.push(WitnessNode {
                         x_coord_children: self._get_even_x_coord_children(
                             tree_index,
@@ -274,7 +277,7 @@ impl<
 
     pub fn update_leaf(
         &mut self,
-        leaf_index: usize,
+        leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
     ) -> Result<(), Error> {

@@ -2,6 +2,8 @@ use thiserror::Error;
 
 use dart_common::AssetId;
 
+use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
+
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -31,11 +33,11 @@ pub enum Error {
 
     /// Curve tree leaf index is out of bounds.
     #[error("Curve tree leaf index is out of bounds: {0}")]
-    CurveTreeLeafIndexOutOfBounds(usize),
+    CurveTreeLeafIndexOutOfBounds(LeafIndex),
 
     /// Curve tree invalid child index.
     #[error("Curve tree invalid child index: {0}")]
-    CurveTreeInvalidChildIndex(usize),
+    CurveTreeInvalidChildIndex(ChildIndex),
 
     /// Curve tree leaf cannot have children.
     #[error("Curve tree leaf cannot have children.")]
@@ -43,11 +45,11 @@ pub enum Error {
 
     /// Curve tree invalid child node.
     #[error("Curve tree invalid child node at level {level}, index {index}")]
-    CurveTreeInvalidChildNode { level: usize, index: usize },
+    CurveTreeInvalidChildNode { level: NodeLevel, index: NodeIndex },
 
     /// Curve tree node not found at a specific level and index.
     #[error("Curve tree node not found at level {level}, index {index}")]
-    CurveTreeNodeNotFound { level: usize, index: usize },
+    CurveTreeNodeNotFound { level: NodeLevel, index: NodeIndex },
 
     /// Curve tree backend error.
     #[error("Curve tree backend error: {0:?}")]

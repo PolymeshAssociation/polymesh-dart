@@ -1,33 +1,41 @@
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
+use ark_serialize::{Compress, SerializationError, Valid, Validate};
 use ark_std::Zero;
+use codec::{Decode, Encode};
 use curve_tree_relations::{
     curve_tree::SelRerandParameters, single_level_select_and_rerandomize::*,
 };
 
+use super::*;
 use crate::error::*;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
 pub enum NodeLocation<const L: usize> {
-    Leaf(usize), // Leaf nodes are identified by their index
+    Leaf(#[codec(compact)] LeafIndex), // Leaf nodes are identified by their index
     Odd {
-        level: usize, // Level of the node in the tree
-        index: usize, // Index of the node at that level
+        #[codec(compact)]
+        level: NodeLevel, // Level of the node in the tree
+        #[codec(compact)]
+        index: NodeIndex, // Index of the node at that level
     },
     Even {
-        level: usize, // Level of the node in the tree
-        index: usize, // Index of the node at that level
+        #[codec(compact)]
+        level: NodeLevel, // Level of the node in the tree
+        #[codec(compact)]
+        index: NodeIndex, // Index of the node at that level
     },
 }
 
 impl<const L: usize> NodeLocation<L> {
     /// Creates a leaf node location.
-    pub fn leaf(leaf_index: usize) -> Self {
+    pub fn leaf(leaf_index: LeafIndex) -> Self {
         // Leaf nodes are at level 0, and their index is the leaf_index
         Self::Leaf(leaf_index)
     }
 
-    pub fn root(height: usize) -> Self {
+    pub fn root(height: NodeLevel) -> Self {
         // Root nodes are at the highest level, which is `height`, and their index is 0
         if height % 2 == 0 {
             // Even height, root is an even node
@@ -61,7 +69,7 @@ impl<const L: usize> NodeLocation<L> {
 
     /// Returns true if the node is the root of the tree at the given height.
     /// A node is a root if it is at the highest level and has index 0.
-    pub fn is_root(&self, height: usize) -> bool {
+    pub fn is_root(&self, height: NodeLevel) -> bool {
         match *self {
             Self::Leaf(_) => false,
             Self::Odd { level, index } | Self::Even { level, index } => {
@@ -74,7 +82,7 @@ impl<const L: usize> NodeLocation<L> {
     /// Returns the level of the node.
     ///
     /// Leaf nodes are at level 0, odd nodes are at their specified level, and even nodes are at their specified level.
-    pub fn level(&self) -> usize {
+    pub fn level(&self) -> NodeLevel {
         match *self {
             Self::Leaf(_) => 0,
             Self::Odd { level, .. } | Self::Even { level, .. } => level,
@@ -82,7 +90,7 @@ impl<const L: usize> NodeLocation<L> {
     }
 
     /// Returns the index of the node at its level.
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> NodeIndex {
         match *self {
             Self::Leaf(leaf_index) => leaf_index,
             Self::Odd { index, .. } | Self::Even { index, .. } => index,
@@ -92,28 +100,28 @@ impl<const L: usize> NodeLocation<L> {
     /// Returns the parent node location of this node.
     ///
     /// The parent is one level up, and its index is the integer division of the current index by L.
-    pub fn parent(self) -> (Self, usize) {
+    pub fn parent(self) -> (Self, ChildIndex) {
         match self {
             Self::Leaf(leaf_index) => (
                 Self::Odd {
                     level: 1,
-                    index: leaf_index.saturating_div(L),
+                    index: leaf_index.saturating_div(L as LeafIndex),
                 },
-                leaf_index % L,
+                leaf_index % L as LeafIndex,
             ),
             Self::Odd { level, index } => (
                 Self::Even {
                     level: level.saturating_add(1),
-                    index: index.saturating_div(L),
+                    index: index.saturating_div(L as NodeIndex),
                 },
-                index % L,
+                index % L as NodeIndex,
             ),
             Self::Even { level, index } => (
                 Self::Odd {
                     level: level.saturating_add(1),
-                    index: index.saturating_div(L),
+                    index: index.saturating_div(L as NodeIndex),
                 },
-                index % L,
+                index % L as NodeIndex,
             ),
         }
     }
@@ -122,8 +130,8 @@ impl<const L: usize> NodeLocation<L> {
     ///
     /// The child index must be less than L, and the child node is at one level down.
     /// The index of the child node is the current index multiplied by L plus the child index.
-    pub fn child(self, child_index: usize) -> Result<Self, Error> {
-        if child_index >= L {
+    pub fn child(self, child_index: ChildIndex) -> Result<Self, Error> {
+        if child_index >= L as NodeIndex {
             return Err(Error::CurveTreeInvalidChildIndex(child_index));
         }
         match self {
@@ -131,14 +139,14 @@ impl<const L: usize> NodeLocation<L> {
                 // Leaf nodes cannot have children, so we return an error.
                 Err(Error::CurveTreeLeafCannotHaveChildren)
             }
-            Self::Odd { level: 1, index } => Ok(Self::Leaf(index * L + child_index)),
+            Self::Odd { level: 1, index } => Ok(Self::Leaf(index * L as LeafIndex + child_index)),
             Self::Odd { level, index } => Ok(Self::Even {
                 level: level.saturating_sub(1),
-                index: index * L + child_index,
+                index: index * L as NodeIndex + child_index,
             }),
             Self::Even { level, index } => Ok(Self::Odd {
                 level: level.saturating_sub(1),
-                index: index * L + child_index,
+                index: index * L as NodeIndex + child_index,
             }),
         }
     }
@@ -156,7 +164,9 @@ fn init_empty_inner_node<
 ) -> Result<[Affine<P1>; M], Error> {
     let mut commitments = [Affine::<P1>::zero(); M];
     for tree_index in 0..M {
-        let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
+        let new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
+            .into_affine()
+            .x;
         let mut gen_iter = parameters
             .bp_gens
             .share(0)
@@ -176,7 +186,7 @@ fn update_inner_node<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 >(
     commitments: &mut [Affine<P1>; M],
-    local_index: usize,
+    local_index: ChildIndex,
     old_child: Option<ChildCommitments<M, P0>>,
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
@@ -184,16 +194,20 @@ fn update_inner_node<
 ) -> Result<(), Error> {
     for tree_index in 0..M {
         let old_x_coord = if let Some(old_comm) = old_child {
-            (old_comm.commitment(tree_index) + delta).into_affine().x
+            (old_comm.commitment(tree_index as TreeIndex) + delta)
+                .into_affine()
+                .x
         } else {
             P0::BaseField::zero()
         };
-        let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
+        let new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
+            .into_affine()
+            .x;
         let mut gen_iter = parameters
             .bp_gens
             .share(0)
-            .G(L * (tree_index + 1))
-            .skip(L * tree_index + local_index);
+            .G(L * (tree_index as usize + 1))
+            .skip(L * tree_index as usize + local_index as usize);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] =
             (commitments[tree_index].into_group() + *g * (new_x_coord - old_x_coord)).into_affine();
@@ -202,7 +216,7 @@ fn update_inner_node<
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
+pub(crate) enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
     Leaf(LeafValue<P0>),
     Inner([Affine<P0>; M]),
 }
@@ -216,10 +230,10 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
         ChildCommitments::Inner(commitments)
     }
 
-    pub fn commitment(&self, tree_index: usize) -> Affine<P0> {
+    pub fn commitment(&self, tree_index: TreeIndex) -> Affine<P0> {
         match self {
             ChildCommitments::Leaf(leaf) => leaf.0,
-            ChildCommitments::Inner(commitments) => commitments[tree_index],
+            ChildCommitments::Inner(commitments) => commitments[tree_index as usize],
         }
     }
 }
@@ -228,6 +242,66 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
 pub enum Inner<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> {
     Even([Affine<P0>; M]),
     Odd([Affine<P1>; M]),
+}
+
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> CanonicalSerialize for Inner<M, P0, P1> {
+    fn serialize_with_mode<W: std::io::Write>(
+        &self,
+        mut writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        match self {
+            Inner::Even(commitments) => {
+                0u8.serialize_with_mode(&mut writer, compress)?;
+                commitments.serialize_with_mode(writer, compress)
+            }
+            Inner::Odd(commitments) => {
+                1u8.serialize_with_mode(&mut writer, compress)?;
+                commitments.serialize_with_mode(writer, compress)
+            }
+        }
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        match self {
+            Inner::Even(commitments) => 1 + commitments.serialized_size(compress),
+            Inner::Odd(commitments) => 1 + commitments.serialized_size(compress),
+        }
+    }
+}
+
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> Valid for Inner<M, P0, P1> {
+    fn check(&self) -> Result<(), SerializationError> {
+        match self {
+            Inner::Even(commitments) => commitments.check(),
+            Inner::Odd(commitments) => commitments.check(),
+        }
+    }
+}
+
+impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> CanonicalDeserialize
+    for Inner<M, P0, P1>
+{
+    fn deserialize_with_mode<R: std::io::Read>(
+        mut reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let t: u8 = CanonicalDeserialize::deserialize_with_mode(&mut reader, compress, validate)?;
+        match t {
+            0 => {
+                let commitments =
+                    <[Affine<P0>; M]>::deserialize_with_mode(reader, compress, validate)?;
+                Ok(Inner::Even(commitments))
+            }
+            1 => {
+                let commitments =
+                    <[Affine<P1>; M]>::deserialize_with_mode(reader, compress, validate)?;
+                Ok(Inner::Odd(commitments))
+            }
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
 }
 
 impl<
@@ -250,7 +324,7 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > Inner<M, P0, P1>
 {
-    pub fn init_empty_even<const L: usize>(
+    pub(crate) fn init_empty_even<const L: usize>(
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
@@ -260,7 +334,7 @@ impl<
         )?))
     }
 
-    pub fn init_empty_odd<const L: usize>(
+    pub(crate) fn init_empty_odd<const L: usize>(
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
@@ -270,9 +344,9 @@ impl<
         )?))
     }
 
-    pub fn update_even_node<const L: usize>(
+    pub(crate) fn update_even_node<const L: usize>(
         commitments: &mut [Affine<P0>; M],
-        local_index: usize,
+        local_index: ChildIndex,
         old_child: Option<ChildCommitments<M, P1>>,
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
@@ -288,9 +362,9 @@ impl<
         )
     }
 
-    pub fn update_odd_node<const L: usize>(
+    pub(crate) fn update_odd_node<const L: usize>(
         commitments: &mut [Affine<P1>; M],
-        local_index: usize,
+        local_index: ChildIndex,
         old_child: Option<ChildCommitments<M, P0>>,
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
@@ -319,10 +393,10 @@ pub(crate) struct TreeUpdaterState<
     odd_new_child: ChildCommitments<M, P1>,
     even_old_child: Option<ChildCommitments<M, P0>>,
     odd_old_child: Option<ChildCommitments<M, P1>>,
-    height: usize,
+    height: NodeLevel,
     parameters: &'a SelRerandParameters<P0, P1>,
     location: NodeLocation<L>,
-    child_index: usize,
+    child_index: ChildIndex,
 }
 
 impl<
@@ -334,10 +408,10 @@ impl<
 > TreeUpdaterState<'a, L, M, P0, P1>
 {
     pub fn new(
-        leaf_index: usize,
+        leaf_index: LeafIndex,
         old_leaf_value: Option<LeafValue<P0>>,
         new_leaf_value: LeafValue<P0>,
-        height: usize,
+        height: NodeLevel,
         parameters: &'a SelRerandParameters<P0, P1>,
     ) -> Result<Self, Error> {
         // Store the leaf as the even commitment.
@@ -362,7 +436,7 @@ impl<
         })
     }
 
-    pub fn is_new_height(&mut self) -> Option<usize> {
+    pub fn is_new_height(&mut self) -> Option<NodeLevel> {
         let level = self.location.level();
         if level > self.height {
             log::warn!("Tree height increased from {} to {}", self.height, level);
@@ -464,7 +538,7 @@ impl<
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct LeafValue<P0: SWCurveConfig>(pub(crate) Affine<P0>);
 
 impl<P0: SWCurveConfig + Copy + Send> Default for LeafValue<P0> {
