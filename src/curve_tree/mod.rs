@@ -8,6 +8,9 @@ use super::*;
 pub mod sync_tree;
 use sync_tree::CurveTreeWithBackend;
 
+#[cfg(feature = "async_tree")]
+pub mod async_tree;
+
 pub mod backends;
 
 mod common;

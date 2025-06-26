@@ -102,7 +102,9 @@ anyhow = { workspace = true }
 test-log = { workspace = true }
 
 [features]
-default = ["std", "asm", "parallel", "backend_bp"]
+default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
+
+async_tree = []
 
 backend_bp = [
     "dart-bp",
