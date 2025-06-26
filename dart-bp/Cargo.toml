@@ -17,8 +17,8 @@ ark-ec = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 dock_crypto_utils = { workspace = true, default-features = false }
-verifiable_encryption = { workspace = true, default-features = false }
-equality_across_groups = { workspace = true, default-features = false }
+#verifiable_encryption = { workspace = true, default-features = false }
+#equality_across_groups = { workspace = true, default-features = false }
 schnorr_pok = { workspace = true, default-features = false }
 
 # Curve tree dependencies
@@ -41,4 +41,4 @@ std = [
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
-parallel = ["rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "bulletproofs/parallel", "curve_tree_relations/parallel", "dock_crypto_utils/parallel", "schnorr_pok/parallel", "verifiable_encryption/parallel", "equality_across_groups/parallel"]
+parallel = ["rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "bulletproofs/parallel", "curve_tree_relations/parallel", "dock_crypto_utils/parallel", "schnorr_pok/parallel"]

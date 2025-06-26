@@ -43,8 +43,8 @@ digest = { version = "0.10.7", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 rayon = {version = "1.5.3", default-features = false }
 dock_crypto_utils = {git = "https://github.com/docknetwork/crypto", default-features = false }
-verifiable_encryption = {git = "https://github.com/docknetwork/crypto", default-features = false }
-equality_across_groups = {git = "https://github.com/docknetwork/crypto", default-features = false }
+#verifiable_encryption = {git = "https://github.com/docknetwork/crypto", default-features = false }
+#equality_across_groups = {git = "https://github.com/docknetwork/crypto", default-features = false }
 schnorr_pok = {git = "https://github.com/docknetwork/crypto", default-features = false }
 
 # Curve tree dependencies
