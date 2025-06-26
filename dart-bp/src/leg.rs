@@ -389,10 +389,7 @@ impl<
         enc_sig_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
-    ) -> (
-        Self,
-        F0, // outputting challenge just for debugging
-    ) {
+    ) -> Self {
         assert!(
             (leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some())
                 || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some())
@@ -730,24 +727,21 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &tree_parameters).unwrap();
 
-        (
-            Self {
-                even_proof,
-                odd_proof,
-                re_randomized_path,
-                comm_amount,
-                t_r_leaf: t_r_leaf.t,
-                resp_leaf,
-                resp_eph_pk,
-                auditor_enc_proofs,
-                resp_amount,
-                resp_amount_enc_0,
-                resp_amount_enc_1,
-                resp_asset_id_enc_0,
-                resp_asset_id_enc_1,
-            },
-            prover_challenge,
-        )
+        Self {
+            even_proof,
+            odd_proof,
+            re_randomized_path,
+            comm_amount,
+            t_r_leaf: t_r_leaf.t,
+            resp_leaf,
+            resp_eph_pk,
+            auditor_enc_proofs,
+            resp_amount,
+            resp_amount_enc_0,
+            resp_amount_enc_1,
+            resp_asset_id_enc_0,
+            resp_asset_id_enc_1,
+        }
     }
 
     pub fn verify(
@@ -756,7 +750,6 @@ impl<
         eph_sk_enc: EphemeralSkEncryption<Affine<G0>>,
         eph_pk: Affine<G0>,
         tree_root: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G0, G1>,
         leaf_comm_key: &[Affine<G0>],
@@ -919,7 +912,6 @@ impl<
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         if is_mediator_present {
             let ct_m = leg_enc.ct_m.as_ref().unwrap();
@@ -1068,7 +1060,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         accept: bool,
         nonce: &[u8],
         sig_gen: G,
-    ) -> (Self, G::ScalarField) {
+    ) -> Self {
         assert!(leg_enc.ct_m.is_some());
         let ct_m = leg_enc.ct_m.as_ref().unwrap();
 
@@ -1115,7 +1107,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             prover_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
         let resp_enc_pk = t_enc_pk.gen_proof(&prover_challenge);
-        (Self { resp_enc_pk }, prover_challenge)
+        Self { resp_enc_pk }
     }
 
     /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
@@ -1124,7 +1116,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         leg_enc: LegEncryption<G>,
         eph_pk: G,
         accept: bool,
-        prover_challenge: G::ScalarField,
         nonce: &[u8],
         sig_gen: G,
     ) -> Result<(), R1CSError> {
@@ -1162,7 +1153,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         assert!(self.resp_enc_pk.verify(
             &ct_m.encrypted,
@@ -1284,7 +1274,7 @@ pub mod tests {
         // Verifier gets the root of the tree
         let root = asset_tree.root_node();
 
-        let (proof, prover_challenge) = SettlementTxnProof::new(
+        let proof = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -1311,7 +1301,6 @@ pub mod tests {
                 eph_sk_enc.clone(),
                 pk_e.0,
                 &root,
-                prover_challenge,
                 nonce,
                 &asset_tree_params,
                 &leaf_comm_key,
@@ -1425,7 +1414,7 @@ pub mod tests {
         // Verifier gets the root of the tree
         let root = asset_tree.root_node();
 
-        let (proof, prover_challenge) = SettlementTxnProof::new(
+        let proof = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -1452,7 +1441,6 @@ pub mod tests {
                 eph_sk_enc.clone(),
                 pk_e.0,
                 &root,
-                prover_challenge,
                 nonce,
                 &asset_tree_params,
                 &leaf_comm_key,
@@ -1535,7 +1523,7 @@ pub mod tests {
         let accept = true;
 
         let clock = Instant::now();
-        let (proof, prover_challenge) = MediatorTxnProof::new(
+        let proof = MediatorTxnProof::new(
             &mut rng,
             leg_enc.clone(),
             sk_e.0,
@@ -1550,14 +1538,7 @@ pub mod tests {
         let clock = Instant::now();
 
         proof
-            .verify(
-                leg_enc.clone(),
-                pk_e.0,
-                accept,
-                prover_challenge,
-                nonce,
-                gen_p_1,
-            )
+            .verify(leg_enc.clone(), pk_e.0, accept, nonce, gen_p_1)
             .unwrap();
 
         let verifier_time = clock.elapsed();

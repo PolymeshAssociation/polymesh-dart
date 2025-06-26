@@ -1,14 +1,15 @@
 use ark_ec::{AffineRepr, CurveGroup};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use rand::RngCore;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SigKey<PK: AffineRepr>(pub PK::ScalarField);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct EncKey<PK: AffineRepr>(pub PK);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

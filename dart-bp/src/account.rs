@@ -180,7 +180,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         nonce: &[u8],
         account_comm_key: &[G],
         sig_gen: G,
-    ) -> (Self, G::ScalarField) {
+    ) -> Self {
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
 
@@ -241,14 +241,11 @@ impl<G: AffineRepr> RegTxnProof<G> {
             )
             .unwrap();
         let resp_pk = t_pk.gen_proof(&prover_challenge);
-        (
-            Self {
-                t_acc: t_acc.t,
-                resp_acc,
-                resp_pk,
-            },
-            prover_challenge,
-        )
+        Self {
+            t_acc: t_acc.t,
+            resp_acc,
+            resp_pk,
+        }
     }
 
     /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
@@ -257,7 +254,6 @@ impl<G: AffineRepr> RegTxnProof<G> {
         pk: &G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
-        prover_challenge: G::ScalarField,
         nonce: &[u8],
         account_comm_key: &[G],
         sig_gen: G,
@@ -288,7 +284,6 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let y = account_commitment.0.into_group()
             - account_comm_key[3] * G::ScalarField::from(asset_id);
@@ -364,7 +359,7 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
@@ -507,22 +502,19 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                re_randomized_path,
-                updated_account_commitment,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-                resp_leaf,
-                resp_acc_new,
-                resp_null,
-                resp_pk,
-            },
-            prover_challenge,
-        )
+        Self {
+            odd_proof,
+            even_proof,
+            re_randomized_path,
+            updated_account_commitment,
+            nullifier,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+            resp_leaf,
+            resp_acc_new,
+            resp_null,
+            resp_pk,
+        }
     }
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
@@ -532,7 +524,6 @@ impl<
         asset_id: AssetId,
         increase_bal_by: Balance,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -585,7 +576,6 @@ impl<
             .unwrap();
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let asset_id_comm = (account_comm_key[3] * F0::from(asset_id)).into_affine();
 
@@ -724,7 +714,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -860,30 +850,27 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                updated_account_commitment,
-                re_randomized_path,
-                comm_bal_old,
-                comm_bal_new,
-                comm_amount,
-                resp_leaf,
-                resp_acc_new,
-                resp_old_bal,
-                resp_new_bal,
-                resp_null,
-                resp_leg_amount,
-                resp_leg_asset_id,
-                resp_leg_pk,
-                resp_amount,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-            },
-            prover_challenge,
-        )
+        Self {
+            odd_proof,
+            even_proof,
+            updated_account_commitment,
+            re_randomized_path,
+            comm_bal_old,
+            comm_bal_new,
+            comm_amount,
+            resp_leaf,
+            resp_acc_new,
+            resp_old_bal,
+            resp_new_bal,
+            resp_null,
+            resp_leg_amount,
+            resp_leg_asset_id,
+            resp_leg_pk,
+            resp_amount,
+            nullifier,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+        }
     }
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
@@ -892,7 +879,6 @@ impl<
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -959,7 +945,6 @@ impl<
         );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         verify_schnorr_for_common_state_change!(
             self,
@@ -1061,7 +1046,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1152,30 +1137,26 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                re_randomized_path,
-                nullifier,
-                updated_account_commitment,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-                resp_leaf,
-                resp_acc_new,
-                resp_null,
-                resp_leg_pk,
-                resp_leg_asset_id,
-            },
-            prover_challenge,
-        )
+        Self {
+            odd_proof,
+            even_proof,
+            re_randomized_path,
+            nullifier,
+            updated_account_commitment,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+            resp_leaf,
+            resp_acc_new,
+            resp_null,
+            resp_leg_pk,
+            resp_leg_asset_id,
+        }
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -1225,7 +1206,6 @@ impl<
         );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         verify_schnorr_for_common_state_change!(
@@ -1341,7 +1321,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1486,37 +1466,33 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                updated_account_commitment,
-                re_randomized_path,
-                comm_bal_old,
-                comm_bal_new,
-                comm_amount,
-                resp_leaf,
-                resp_acc_new,
-                resp_old_bal,
-                resp_new_bal,
-                resp_null,
-                resp_leg_amount,
-                resp_leg_asset_id,
-                resp_leg_pk,
-                resp_amount,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-            },
-            prover_challenge,
-        )
+        Self {
+            odd_proof,
+            even_proof,
+            updated_account_commitment,
+            re_randomized_path,
+            comm_bal_old,
+            comm_bal_new,
+            comm_amount,
+            resp_leaf,
+            resp_acc_new,
+            resp_old_bal,
+            resp_new_bal,
+            resp_null,
+            resp_leg_amount,
+            resp_leg_asset_id,
+            resp_leg_pk,
+            resp_amount,
+            nullifier,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+        }
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -1592,7 +1568,6 @@ impl<
         log::debug!("verifier c2 {}", c.to_string());
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         verify_schnorr_for_common_state_change!(
             self,
@@ -1696,7 +1671,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1787,30 +1762,26 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                even_proof,
-                odd_proof,
-                re_randomized_path,
-                updated_account_commitment,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-                resp_leaf,
-                resp_acc_new,
-                resp_null,
-                resp_leg_asset_id,
-                resp_leg_pk,
-            },
-            prover_challenge,
-        )
+        Self {
+            even_proof,
+            odd_proof,
+            re_randomized_path,
+            updated_account_commitment,
+            nullifier,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+            resp_leaf,
+            resp_acc_new,
+            resp_null,
+            resp_leg_asset_id,
+            resp_leg_pk,
+        }
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -1860,7 +1831,6 @@ impl<
         );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         verify_schnorr_for_common_state_change!(
@@ -1964,7 +1934,7 @@ impl<
         account_comm_key: &[Affine<G0>],
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> (Self, F0) {
+    ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -2091,37 +2061,33 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        (
-            Self {
-                odd_proof,
-                even_proof,
-                updated_account_commitment,
-                re_randomized_path,
-                comm_bal_old,
-                comm_bal_new,
-                comm_amount,
-                resp_leaf,
-                resp_acc_new,
-                resp_old_bal,
-                resp_new_bal,
-                resp_null,
-                resp_leg_amount,
-                resp_leg_asset_id,
-                resp_leg_pk,
-                resp_amount,
-                nullifier,
-                t_r_leaf: t_r_leaf.t,
-                t_acc_new: t_acc_new.t,
-            },
-            prover_challenge,
-        )
+        Self {
+            odd_proof,
+            even_proof,
+            updated_account_commitment,
+            re_randomized_path,
+            comm_bal_old,
+            comm_bal_new,
+            comm_amount,
+            resp_leaf,
+            resp_acc_new,
+            resp_old_bal,
+            resp_new_bal,
+            resp_null,
+            resp_leg_amount,
+            resp_leg_asset_id,
+            resp_leg_pk,
+            resp_amount,
+            nullifier,
+            t_r_leaf: t_r_leaf.t,
+            t_acc_new: t_acc_new.t,
+        }
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
-        prover_challenge: F0,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &[Affine<G0>],
@@ -2188,7 +2154,6 @@ impl<
         );
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         verify_schnorr_for_common_state_change!(
             self,
@@ -2261,7 +2226,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         nonce: &[u8],
         account_comm_key: &[G],
         sig_null_gen: G,
-    ) -> (Self, G::ScalarField) {
+    ) -> Self {
         // Need to prove that:
         // 1. sk used in commitment is for the revealed pk
         // 2. nullifier is created from rho and sk in account commitment
@@ -2322,16 +2287,13 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             .unwrap();
         let resp_null = t_null.gen_proof(&prover_challenge);
         let resp_pk = t_pk.gen_proof(&prover_challenge);
-        (
-            Self {
-                nullifier,
-                t_acc: t_acc.t,
-                resp_acc,
-                resp_null,
-                resp_pk,
-            },
-            prover_challenge,
-        )
+        Self {
+            nullifier,
+            t_acc: t_acc.t,
+            resp_acc,
+            resp_null,
+            resp_pk,
+        }
     }
 
     pub fn verify(
@@ -2341,7 +2303,6 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         counter: PendingTxnCounter,
         pk: &G,
         account_commitment: AccountStateCommitment<G>,
-        prover_challenge: G::ScalarField,
         nonce: &[u8],
         account_comm_key: &[G],
         sig_null_gen: G,
@@ -2376,7 +2337,6 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
@@ -2442,7 +2402,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key: &[G],
         sig_null_gen: G,
         asset_value_gen: G,
-    ) -> (Self, G::ScalarField) {
+    ) -> Self {
         assert_eq!(legs.len(), eph_keys.len());
         assert_eq!(
             legs.len(),
@@ -2692,23 +2652,20 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let resp_recv_amount = t_recv_amount
             .response(&recv_sk_e, &prover_challenge)
             .unwrap();
-        (
-            Self {
-                nullifier,
-                t_acc: t_acc.t,
-                resp_acc,
-                resp_null,
-                resp_pk,
-                t_sent_amount: t_sent_amount.t,
-                t_recv_amount: t_recv_amount.t,
-                resp_asset_id,
-                resp_pk_recv,
-                resp_pk_send,
-                resp_recv_amount,
-                resp_sent_amount,
-            },
-            prover_challenge,
-        )
+        Self {
+            nullifier,
+            t_acc: t_acc.t,
+            resp_acc,
+            resp_null,
+            resp_pk,
+            t_sent_amount: t_sent_amount.t,
+            t_recv_amount: t_recv_amount.t,
+            resp_asset_id,
+            resp_pk_recv,
+            resp_pk_send,
+            resp_recv_amount,
+            resp_sent_amount,
+        }
     }
 
     pub fn verify(
@@ -2719,7 +2676,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pk: &G,
         account_commitment: AccountStateCommitment<G>,
         legs: Vec<LegEncryption<G>>,
-        prover_challenge: G::ScalarField,
         sender_in_leg_indices: BTreeSet<usize>,
         receiver_in_leg_indices: BTreeSet<usize>,
         pending_sent_amount: Balance,
@@ -2839,7 +2795,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-        assert_eq!(verifier_challenge, prover_challenge);
 
         let y = account_commitment.0.into_group()
             - (account_comm_key[1] * G::ScalarField::from(balance)
@@ -3030,7 +2985,7 @@ mod tests {
 
         let nonce = b"test-nonce-0";
 
-        let (reg_proof, prover_challenge) = RegTxnProof::new(
+        let reg_proof = RegTxnProof::new(
             &mut rng,
             pk_i.0,
             &account,
@@ -3048,7 +3003,6 @@ mod tests {
                 &pk_i.0,
                 asset_id,
                 &account_comm,
-                prover_challenge,
                 nonce,
                 &account_comm_key,
                 gen_p,
@@ -3084,7 +3038,7 @@ mod tests {
         // Verifier gets the root of the tree
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = MintTxnProof::new(
+        let proof = MintTxnProof::new(
             &mut rng,
             pk_i.0,
             increase_bal_by,
@@ -3107,7 +3061,6 @@ mod tests {
                 asset_id,
                 increase_bal_by,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3189,7 +3142,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = AffirmAsSenderTxnProof::new(
+        let proof = AffirmAsSenderTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3212,7 +3165,6 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3294,7 +3246,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = AffirmAsReceiverTxnProof::new(
+        let proof = AffirmAsReceiverTxnProof::new(
             &mut rng,
             sk_e.0,
             leg_enc.clone(),
@@ -3316,7 +3268,6 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3395,7 +3346,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = ClaimReceivedTxnProof::new(
+        let proof = ClaimReceivedTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3418,7 +3369,6 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3495,7 +3445,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = SenderCounterUpdateTxnProof::new(
+        let proof = SenderCounterUpdateTxnProof::new(
             &mut rng,
             sk_e.0,
             leg_enc.clone(),
@@ -3517,7 +3467,6 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3592,7 +3541,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, prover_challenge) = SenderReverseTxnProof::new(
+        let proof = SenderReverseTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3615,7 +3564,6 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
-                prover_challenge,
                 nonce,
                 &account_tree_params,
                 &account_comm_key,
@@ -3653,7 +3601,7 @@ mod tests {
 
         let nonce = b"test-nonce";
 
-        let (proof, prover_challenge) = PobWithAuditorProof::new(
+        let proof = PobWithAuditorProof::new(
             &mut rng,
             &pk.0,
             &account,
@@ -3669,7 +3617,6 @@ mod tests {
                 account.counter,
                 &pk.0,
                 account_comm,
-                prover_challenge,
                 nonce,
                 &account_comm_key,
                 gen_p,
@@ -3730,7 +3677,7 @@ mod tests {
 
         let clock = Instant::now();
 
-        let (proof, prover_challenge) = PobWithAnyoneProof::new(
+        let proof = PobWithAnyoneProof::new(
             &mut rng,
             &pk.0,
             &account,
@@ -3759,7 +3706,6 @@ mod tests {
                 &pk.0,
                 account_comm,
                 legs.into_iter().map(|l| l.1).collect(),
-                prover_challenge,
                 sender_in_leg_indices.clone(),
                 receiver_in_leg_indices.clone(),
                 pending_sent_amount,
