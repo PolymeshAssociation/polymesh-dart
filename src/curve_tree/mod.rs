@@ -5,8 +5,12 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 
 use super::*;
 
-pub mod storage;
-use storage::CurveTreeWithBackend;
+pub mod sync_tree;
+use sync_tree::CurveTreeWithBackend;
+
+pub mod backends;
+
+mod common;
 
 pub type CurveTreeParameters = SelRerandParameters<PallasParameters, VestaParameters>;
 pub type CurveTreeRoot<const L: usize> = Root<L, 1, PallasParameters, VestaParameters>;
