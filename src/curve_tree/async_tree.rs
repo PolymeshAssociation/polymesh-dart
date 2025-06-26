@@ -19,33 +19,33 @@ pub trait AsyncCurveTreeBackend<
 {
     fn height(&self) -> impl Future<Output = usize> + Send;
 
-    fn set_height(&mut self, height: usize) -> impl Future<Output = Result<()>> + Send;
+    fn set_height(&mut self, height: usize) -> impl Future<Output = Result<(), Error>> + Send;
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = usize> + Send;
 
     fn get_leaf(
         &self,
         leaf_index: usize,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>>> + Send;
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
 
     fn set_leaf(
         &mut self,
         leaf_index: usize,
         new_leaf_value: LeafValue<P0>,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>>> + Send;
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
 
     fn leaf_count(&self) -> impl Future<Output = usize> + Send;
 
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>>> + Send;
+    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>, Error>> + Send;
 
     fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
 pub struct AsyncCurveTreeWithBackend<
@@ -81,7 +81,10 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > AsyncCurveTreeWithBackend<L, M, P0, P1, CurveTreeMemoryBackend<L, M, P0, P1>>
 {
-    pub async fn new(height: usize, parameters: &SelRerandParameters<P0, P1>) -> Result<Self> {
+    pub async fn new(
+        height: usize,
+        parameters: &SelRerandParameters<P0, P1>,
+    ) -> Result<Self, Error> {
         Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters).await
     }
 }
@@ -97,7 +100,7 @@ impl<
     pub async fn new_with_backend(
         backend: B,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         let mut tree = Self {
             backend,
             _phantom: std::marker::PhantomData,
@@ -115,13 +118,13 @@ impl<
         &mut self,
         leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<usize> {
+    ) -> Result<usize, Error> {
         let leaf_index = self.backend.allocate_leaf_index().await;
         self.update_leaf(leaf_index, leaf_value, parameters).await?;
         Ok(leaf_index)
     }
 
-    pub async fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {
+    pub async fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
         self.backend.get_leaf(leaf_index).await
     }
 
@@ -129,7 +132,7 @@ impl<
         &self,
         parent: NodeLocation<L>,
         delta: &Affine<P1>,
-    ) -> Result<Vec<[P1::BaseField; L]>> {
+    ) -> Result<Vec<[P1::BaseField; L]>, Error> {
         let mut batch_x_coord_children = Vec::with_capacity(M);
         for tree_index in 0..M {
             let x_coord_children = self
@@ -145,7 +148,7 @@ impl<
         tree_index: usize,
         parent: NodeLocation<L>,
         delta: &Affine<P1>,
-    ) -> Result<[P1::BaseField; L]> {
+    ) -> Result<[P1::BaseField; L], Error> {
         let mut x_coord_children = [P1::BaseField::zero(); L];
         for idx in 0..L {
             let child = parent.child(idx)?;
@@ -172,7 +175,7 @@ impl<
         &self,
         parent: NodeLocation<L>,
         delta: &Affine<P0>,
-    ) -> Result<Vec<[P0::BaseField; L]>> {
+    ) -> Result<Vec<[P0::BaseField; L]>, Error> {
         let mut batch_x_coord_children = Vec::with_capacity(M);
         for tree_index in 0..M {
             let x_coord_children = self
@@ -188,7 +191,7 @@ impl<
         tree_index: usize,
         parent: NodeLocation<L>,
         delta: &Affine<P0>,
-    ) -> Result<[P0::BaseField; L]> {
+    ) -> Result<[P0::BaseField; L], Error> {
         let mut x_coord_children = [P0::BaseField::zero(); L];
         for idx in 0..L {
             let child = parent.child(idx)?;
@@ -217,7 +220,7 @@ impl<
     pub async fn root_node(
         &self,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<Root<L, M, P0, P1>> {
+    ) -> Result<Root<L, M, P0, P1>, Error> {
         let root = NodeLocation::<L>::root(self.height().await);
         match self.backend.get_inner_node(root).await? {
             Some(Inner::Even(commitments)) => Ok(Root::Even(RootNode {
@@ -241,7 +244,7 @@ impl<
         leaf_index: usize,
         tree_index: usize,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<CurveTreeWitnessPath<L, P0, P1>> {
+    ) -> Result<CurveTreeWitnessPath<L, P0, P1>, Error> {
         let height = self.height().await;
         let mut even_internal_nodes = Vec::with_capacity(height);
         let mut odd_internal_nodes = Vec::with_capacity(height);
@@ -312,7 +315,7 @@ impl<
         leaf_index: usize,
         new_leaf_value: LeafValue<P0>,
         parameters: &SelRerandParameters<P0, P1>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         let height = self.height().await;
         // Update the leaf to the new value and get the old value.
         let old_leaf_value = self.backend.set_leaf(leaf_index, new_leaf_value).await?;

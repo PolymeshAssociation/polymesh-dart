@@ -3,8 +3,8 @@ use test_log::test;
 use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
+use dart::Error;
 use dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
-use dart::{Error, Result};
 use dart::{PallasA, PallasParameters, VestaParameters};
 
 const L: usize = 16;
@@ -49,7 +49,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<usize> {
+    pub fn insert(&mut self, leaf: PallasA) -> Result<usize, Error> {
         let leaf_index = self.length;
         self.update(leaf, leaf_index)?;
 
@@ -59,7 +59,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Updates an existing leaf in the curve tree.
-    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<()> {
+    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<(), Error> {
         let cap = self.leaves.len();
         if leaf_index >= cap {
             self.grow(leaf_index);
@@ -89,7 +89,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Returns the path to a leaf in the curve tree by its index.
-    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>> {
+    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>, Error> {
         Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
     }
 

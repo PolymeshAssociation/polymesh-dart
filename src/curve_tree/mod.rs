@@ -22,16 +22,16 @@ pub type CurveTreePath<const L: usize> = CurveTreeWitnessPath<L, PallasParameter
 /// A trait for looking up paths in a curve tree.
 pub trait CurveTreeLookup<const L: usize> {
     /// Returns the path to a leaf in the curve tree by its index.
-    fn get_path_to_leaf_index(&self, leaf_index: u64) -> Result<CurveTreePath<L>>;
+    fn get_path_to_leaf_index(&self, leaf_index: u64) -> Result<CurveTreePath<L>, Error>;
 
     /// Returns the path to a leaf in the curve tree by its value.
-    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>>;
+    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>, Error>;
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
 
     /// Returns the root node of the curve tree.
-    fn root_node(&self) -> Result<CurveTreeRoot<L>>;
+    fn root_node(&self) -> Result<CurveTreeRoot<L>, Error>;
 }
 
 /// Check if the tree root is valid.
@@ -95,7 +95,7 @@ impl<const L: usize> std::fmt::Debug for FullCurveTree<L> {
 
 impl<const L: usize> FullCurveTree<L> {
     /// Creates a new instance of `FullCurveTree` with the given height and generators length.
-    pub fn new_with_capacity(height: usize, gens_length: usize) -> Result<Self> {
+    pub fn new_with_capacity(height: usize, gens_length: usize) -> Result<Self, Error> {
         let params = SelRerandParameters::new(gens_length, gens_length);
         Ok(Self {
             tree: CurveTreeWithBackend::new(height, &params)?,
@@ -108,17 +108,17 @@ impl<const L: usize> FullCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<usize> {
+    pub fn insert(&mut self, leaf: PallasA) -> Result<usize, Error> {
         self.tree.insert_leaf(leaf.into(), &self.params)
     }
 
     /// Updates an existing leaf in the curve tree.
-    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<()> {
+    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<(), Error> {
         self.tree.update_leaf(leaf_index, leaf.into(), &self.params)
     }
 
     /// Returns the path to a leaf in the curve tree by its index.
-    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>> {
+    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>, Error> {
         Ok(self.tree.get_path_to_leaf(leaf_index, 0, &self.params)?)
     }
 
@@ -128,7 +128,7 @@ impl<const L: usize> FullCurveTree<L> {
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CurveTreeRoot<L>> {
+    pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         self.tree.root_node(&self.params)
     }
 }
@@ -145,7 +145,7 @@ pub struct VerifierCurveTree<const L: usize> {
 
 impl<const L: usize> VerifierCurveTree<L> {
     /// Creates a new instance of `VerifierCurveTree` with the given height and generators length.
-    pub fn new(height: u8, gens_length: usize) -> Result<Self> {
+    pub fn new(height: u8, gens_length: usize) -> Result<Self, Error> {
         let params = SelRerandParameters::new(gens_length, gens_length);
         Ok(Self {
             tree: CurveTreeWithBackend::new(height as usize, &params)?,
@@ -154,7 +154,7 @@ impl<const L: usize> VerifierCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<usize> {
+    pub fn insert(&mut self, leaf: PallasA) -> Result<usize, Error> {
         self.tree.insert_leaf(leaf.into(), &self.params)
     }
 
@@ -164,7 +164,7 @@ impl<const L: usize> VerifierCurveTree<L> {
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CurveTreeRoot<L>> {
+    pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         self.tree.root_node(&self.params)
     }
 }
@@ -178,7 +178,7 @@ pub struct ProverCurveTree<const L: usize> {
 
 impl<const L: usize> ProverCurveTree<L> {
     /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
-    pub fn new(height: u8, gens_length: usize) -> Result<Self> {
+    pub fn new(height: u8, gens_length: usize) -> Result<Self, Error> {
         let params = SelRerandParameters::new(gens_length, gens_length);
         Ok(Self {
             tree: CurveTreeWithBackend::new(height as usize, &params)?,
@@ -188,14 +188,14 @@ impl<const L: usize> ProverCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<u64> {
+    pub fn insert(&mut self, leaf: PallasA) -> Result<u64, Error> {
         let leaf_index = self.tree.insert_leaf(leaf.into(), &self.params)? as u64;
         self.leaf_to_index.insert(leaf, leaf_index);
         Ok(leaf_index)
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
-    pub fn apply_updates(&mut self, leaves: Vec<PallasA>) -> Result<()> {
+    pub fn apply_updates(&mut self, leaves: Vec<PallasA>) -> Result<(), Error> {
         for leaf in &leaves {
             self.tree.insert_leaf(leaf.into(), &self.params)?;
         }
@@ -204,13 +204,13 @@ impl<const L: usize> ProverCurveTree<L> {
 }
 
 impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
-    fn get_path_to_leaf_index(&self, leaf_index: u64) -> Result<CurveTreePath<L>> {
+    fn get_path_to_leaf_index(&self, leaf_index: u64) -> Result<CurveTreePath<L>, Error> {
         Ok(self
             .tree
             .get_path_to_leaf(leaf_index as usize, 0, &self.params)?)
     }
 
-    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>> {
+    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>, Error> {
         if let Some(&leaf_index) = self.leaf_to_index.get(&leaf) {
             self.get_path_to_leaf_index(leaf_index)
         } else {
@@ -222,7 +222,7 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
         &self.params
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L>> {
+    fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         self.tree.root_node(&self.params)
     }
 }

@@ -4,7 +4,7 @@ mod bp;
 pub use bp::*;
 
 mod error;
-pub use error::*;
+pub use error::Error;
 
 pub mod curve_tree;
 

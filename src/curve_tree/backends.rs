@@ -65,7 +65,7 @@ impl<
         self.height
     }
 
-    fn set_height(&mut self, height: usize) -> Result<()> {
+    fn set_height(&mut self, height: usize) -> Result<(), Error> {
         self.height = height;
         Ok(())
     }
@@ -76,7 +76,7 @@ impl<
         leaf_index
     }
 
-    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {
+    fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
         Ok(self.leafs.get(leaf_index).copied())
     }
 
@@ -84,7 +84,7 @@ impl<
         &mut self,
         leaf_index: usize,
         new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>> {
+    ) -> Result<Option<LeafValue<P0>>, Error> {
         let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index) {
             let old = *leaf;
             *leaf = new_leaf_value;
@@ -100,7 +100,7 @@ impl<
         self.leafs.len()
     }
 
-    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>> {
+    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error> {
         Ok(self.nodes.get(&location).copied())
     }
 
@@ -108,7 +108,7 @@ impl<
         &mut self,
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         self.nodes.insert(location, new_node);
         Ok(())
     }
@@ -126,7 +126,7 @@ impl<
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).height()
     }
 
-    async fn set_height(&mut self, height: usize) -> Result<()> {
+    async fn set_height(&mut self, height: usize) -> Result<(), Error> {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_height(height)
     }
 
@@ -134,7 +134,7 @@ impl<
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).allocate_leaf_index()
     }
 
-    async fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>> {
+    async fn get_leaf(&self, leaf_index: usize) -> Result<Option<LeafValue<P0>>, Error> {
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).get_leaf(leaf_index)
     }
 
@@ -142,7 +142,7 @@ impl<
         &mut self,
         leaf_index: usize,
         new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>> {
+    ) -> Result<Option<LeafValue<P0>>, Error> {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_leaf(leaf_index, new_leaf_value)
     }
 
@@ -150,7 +150,10 @@ impl<
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).leaf_count()
     }
 
-    async fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>> {
+    async fn get_inner_node(
+        &self,
+        location: NodeLocation<L>,
+    ) -> Result<Option<Inner<M, P0, P1>>, Error> {
         (self as &dyn CurveTreeBackend<L, M, P0, P1>).get_inner_node(location)
     }
 
@@ -158,7 +161,7 @@ impl<
         &mut self,
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_inner_node(location, new_node)
     }
 }

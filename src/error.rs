@@ -2,8 +2,6 @@ use thiserror::Error;
 
 use dart_common::AssetId;
 
-pub type Result<T> = core::result::Result<T, Error>;
-
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]
 pub enum Error {

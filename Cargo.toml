@@ -32,10 +32,8 @@ log = { version = "0.4.27", default-features = false }
 
 # Substrate/SCALE deps.
 bounded-collections = { version = "0.1.4", default-features = false }
-codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false, features = [
-  "derive",
-  "max-encoded-len",
-] }
+codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false }
+scale-info = { version = "2.0", default-features = false }
 
 ark-ff = { version = "0.4", default-features = false }
 ark-ec = { version = "0.4", default-features = false }
@@ -63,8 +61,8 @@ ark-secp256k1 = "0.4"
 ark-secq256k1 = "0.4"
 
 [dependencies]
-# common dependencies
 dart-common = { workspace = true, default-features = false }
+# common dependencies
 rand = { workspace = true, default-features = false }
 rand_core = { workspace = true, default-features = false }
 rand_chacha = { workspace = true, default-features = false }
@@ -77,8 +75,9 @@ indexmap = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
 
 # Substrate/SCALE deps.
+codec = { workspace = true, default-features = false, features = ["derive"] }
+scale-info = { workspace = true, default-features = false, features = ["derive"] }
 bounded-collections = { workspace = true, default-features = false }
-codec = { workspace = true, default-features = false }
 
 # dart-bp dependencies
 dart-bp = { workspace = true, default-features = false, optional = true }

@@ -137,7 +137,7 @@ impl AccountLookupMap {
         }
     }
 
-    pub fn ensure_unregistered(&self, keys: &AccountPublicKeys) -> Result<()> {
+    pub fn ensure_unregistered(&self, keys: &AccountPublicKeys) -> Result<(), Error> {
         if self.enc_to_acct.contains_key(&keys.enc) {
             return Err(Error::AccountPublicKeyExists);
         }
@@ -425,7 +425,7 @@ pub struct AssetCurveTree {
 
 impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, Error> {
         Ok(Self {
             tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT as usize, ACCOUNT_TREE_GENS)?,
             assets: IndexMap::new(),
@@ -438,7 +438,7 @@ impl AssetCurveTree {
     }
 
     /// Sets the asset state in the tree and returns the index of the asset state.
-    pub fn set_asset_state(&mut self, state: AssetState) -> Result<usize> {
+    pub fn set_asset_state(&mut self, state: AssetState) -> Result<usize, Error> {
         let asset_id = state.asset_id;
         // Get the new asset state commitment.
         let leaf = state.commitment();
@@ -462,7 +462,7 @@ impl AssetCurveTree {
         self.tree.params()
     }
 
-    pub fn root_node(&self) -> Result<CurveTreeRoot<ASSET_TREE_L>> {
+    pub fn root_node(&self) -> Result<CurveTreeRoot<ASSET_TREE_L>, Error> {
         self.tree.root_node()
     }
 }
@@ -509,7 +509,7 @@ impl AccountAssetRegistrationProof {
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
-    pub fn verify(&self, ctx: &[u8]) -> Result<()> {
+    pub fn verify(&self, ctx: &[u8]) -> Result<(), Error> {
         self.proof.verify(
             &self.account.0.0,
             self.asset_id,
@@ -549,7 +549,7 @@ impl AssetMintingProof {
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
         amount: Balance,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
         let mint_account_state = account_asset.mint(rng, amount);
         let mint_account_commitment = mint_account_state.commitment();
@@ -593,7 +593,10 @@ impl AssetMintingProof {
         AccountStateNullifier(self.proof.nullifier)
     }
 
-    pub fn verify(&self, tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>) -> Result<()> {
+    pub fn verify(
+        &self,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for asset minting proof");
@@ -791,7 +794,7 @@ impl LegBuilder {
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
-    ) -> Result<SettlementLegProof> {
+    ) -> Result<SettlementLegProof, Error> {
         let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
         let leg = Leg::new(
             self.sender.acct,
@@ -842,7 +845,7 @@ impl SettlementBuilder {
         self,
         rng: &mut R,
         asset_tree: &AssetCurveTree,
-    ) -> Result<SettlementProof> {
+    ) -> Result<SettlementProof, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         let root = asset_tree.root_node()?;
@@ -870,7 +873,10 @@ pub struct SettlementProof {
 }
 
 impl SettlementProof {
-    pub fn verify(&self, asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>) -> Result<()> {
+    pub fn verify(
+        &self,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !asset_tree.validate_root(&self.root) {
             log::error!("Invalid root for settlement proof");
@@ -914,7 +920,7 @@ impl SettlementLegProof {
         auditor_enc: Option<EncryptionPublicKey>,
         ctx: &[u8],
         asset_tree: &AssetCurveTree,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         let asset_path = asset_tree
             .get_asset_state_path(leg.asset_id())
             .ok_or_else(|| Error::AssetStateNotFound(leg.asset_id()))?;
@@ -954,7 +960,7 @@ impl SettlementLegProof {
         ctx: &[u8],
         root: &CurveTreeRoot<ASSET_TREE_L>,
         params: &CurveTreeParameters,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", self.leg_enc.leg_enc);
         self.proof.verify(
@@ -1068,7 +1074,7 @@ impl SenderAffirmationProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
         let new_account_state = account_asset.get_sender_affirm_state(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1117,7 +1123,7 @@ impl SenderAffirmationProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender affirmation proof");
@@ -1162,7 +1168,7 @@ impl ReceiverAffirmationProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
         let new_account_state = account_asset.get_receiver_affirm_state(rng);
         let new_account_commitment = new_account_state.commitment();
@@ -1211,7 +1217,7 @@ impl ReceiverAffirmationProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver affirmation proof");
@@ -1257,7 +1263,7 @@ impl ReceiverClaimProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
         let new_account_state = account_asset.get_state_for_claiming_received(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1307,7 +1313,7 @@ impl ReceiverClaimProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver claim proof");
@@ -1352,7 +1358,7 @@ impl SenderCounterUpdateProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
         let new_account_state = account_asset.get_state_for_decreasing_counter(rng);
         let new_account_commitment = new_account_state.commitment();
@@ -1401,7 +1407,7 @@ impl SenderCounterUpdateProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender counter update proof");
@@ -1447,7 +1453,7 @@ impl SenderReversalProof {
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
         let new_account_state = account_asset.get_state_for_reversing_send(rng, amount);
         let new_account_commitment = new_account_state.commitment();
@@ -1497,7 +1503,7 @@ impl SenderReversalProof {
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // Validate the root of the curve tree.
         if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender reversal proof");
@@ -1558,7 +1564,7 @@ impl MediatorAffirmationProof {
         }
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<()> {
+    pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
         let eph_pk = leg_enc.ephemeral_key.pk_e;
         self.proof.verify(

@@ -122,7 +122,7 @@ impl<const L: usize> NodeLocation<L> {
     ///
     /// The child index must be less than L, and the child node is at one level down.
     /// The index of the child node is the current index multiplied by L plus the child index.
-    pub fn child(self, child_index: usize) -> Result<Self> {
+    pub fn child(self, child_index: usize) -> Result<Self, Error> {
         if child_index >= L {
             return Err(Error::CurveTreeInvalidChildIndex(child_index));
         }
@@ -153,7 +153,7 @@ fn init_empty_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) -> Result<[Affine<P1>; M]> {
+) -> Result<[Affine<P1>; M], Error> {
     let mut commitments = [Affine::<P1>::zero(); M];
     for tree_index in 0..M {
         let new_x_coord = (new_child.commitment(tree_index) + delta).into_affine().x;
@@ -181,7 +181,7 @@ fn update_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) -> Result<()> {
+) -> Result<(), Error> {
     for tree_index in 0..M {
         let old_x_coord = if let Some(old_comm) = old_child {
             (old_comm.commitment(tree_index) + delta).into_affine().x
@@ -254,7 +254,7 @@ impl<
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         Ok(Self::Even(init_empty_inner_node::<L, M, P1, P0>(
             new_child, delta, parameters,
         )?))
@@ -264,7 +264,7 @@ impl<
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         Ok(Self::Odd(init_empty_inner_node::<L, M, P0, P1>(
             new_child, delta, parameters,
         )?))
@@ -277,7 +277,7 @@ impl<
         new_child: ChildCommitments<M, P1>,
         delta: &Affine<P1>,
         parameters: &SingleLayerParameters<P0>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         update_inner_node::<L, M, P1, P0>(
             commitments,
             local_index,
@@ -295,7 +295,7 @@ impl<
         new_child: ChildCommitments<M, P0>,
         delta: &Affine<P0>,
         parameters: &SingleLayerParameters<P1>,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         update_inner_node::<L, M, P0, P1>(
             commitments,
             local_index,
@@ -339,7 +339,7 @@ impl<
         new_leaf_value: LeafValue<P0>,
         height: usize,
         parameters: &'a SelRerandParameters<P0, P1>,
-    ) -> Result<Self> {
+    ) -> Result<Self, Error> {
         // Store the leaf as the even commitment.
         let even_old_child = old_leaf_value.map(ChildCommitments::leaf);
         let even_new_child = ChildCommitments::leaf(new_leaf_value);
@@ -377,14 +377,17 @@ impl<
         self.location.is_root(self.height)
     }
 
-    pub fn move_to_parent(&mut self) -> Result<NodeLocation<L>> {
+    pub fn move_to_parent(&mut self) -> Result<NodeLocation<L>, Error> {
         let (parent_location, child_index) = self.location.parent();
         self.location = parent_location;
         self.child_index = child_index;
         Ok(parent_location)
     }
 
-    pub fn update_node(&mut self, node: Option<Inner<M, P0, P1>>) -> Result<Inner<M, P0, P1>> {
+    pub fn update_node(
+        &mut self,
+        node: Option<Inner<M, P0, P1>>,
+    ) -> Result<Inner<M, P0, P1>, Error> {
         match node {
             Some(mut node) => {
                 match &mut node {
