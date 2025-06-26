@@ -1,11 +1,15 @@
 use std::{collections::HashMap, hash::Hash};
 
+use codec::{Decode, Encode};
+#[cfg(feature = "std")]
+use scale_info::TypeInfo;
+
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::UniformRand as _;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use blake2::{Blake2b512, Blake2s256};
 
 use bounded_collections::{BoundedVec, ConstU32};
-use codec::Encode;
 
 use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
 use dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
@@ -13,6 +17,9 @@ use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
 use rand::{RngCore, SeedableRng as _};
+
+pub mod encode;
+pub use encode::WrappedCanonical;
 
 use crate::curve_tree::*;
 use crate::*;
@@ -35,7 +42,7 @@ pub const DART_GEN_ACCOUNT_KEY: &'static str = "polymesh-dart-pk-acct";
 pub const DART_GEN_ENC_KEY: &'static str = "polymesh-dart-pk-enc";
 
 /// The generators for the Dart BP protocol.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct DartBPGenerators {
     pub pk_acct_g: PallasA,
     pub pk_enc_g: PallasA,
@@ -156,8 +163,8 @@ impl AccountLookupMap {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct EncryptionPublicKey(bp_keys::EncKey<PallasA>);
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
+pub struct EncryptionPublicKey(pub(crate) bp_keys::EncKey<PallasA>);
 
 impl From<AccountPublicKey> for EncryptionPublicKey {
     fn from(account_pk: AccountPublicKey) -> Self {
@@ -185,8 +192,8 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AccountPublicKey(bp_keys::VerKey<PallasA>);
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
+pub struct AccountPublicKey(pub(crate) bp_keys::VerKey<PallasA>);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AccountSecretKey(bp_keys::SigKey<PallasA>);
@@ -212,7 +219,8 @@ impl AccountKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
@@ -266,10 +274,10 @@ impl AccountState {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AccountStateNullifier(pub PallasA);
+#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, Debug, PartialEq, Eq, Hash)]
+pub struct AccountStateNullifier(pub(crate) PallasA);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct AccountStateCommitment(pub BPAccountStateCommitment);
 
 #[derive(Clone, Debug)]
@@ -374,7 +382,8 @@ impl AccountAssetState {
 }
 
 /// Represents the state of an asset in the Dart BP protocol.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AssetState {
     asset_id: AssetId,
     is_mediator: bool,
@@ -414,7 +423,7 @@ impl AssetState {
 }
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Debug, Default)]
 pub struct AssetStateCommitment(pub PallasA);
 
 /// Represents a tree of asset states in the Dart BP protocol.
@@ -468,13 +477,14 @@ impl AssetCurveTree {
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub account_state_commitment: AccountStateCommitment,
     pub asset_id: AssetId,
 
-    proof: bp_account::RegTxnProof<PallasA>,
-    challenge: PallasScalar,
+    proof: WrappedCanonical<bp_account::RegTxnProof<PallasA>>,
 }
 
 impl AccountAssetRegistrationProof {
@@ -487,7 +497,7 @@ impl AccountAssetRegistrationProof {
     ) -> (Self, AccountAssetState) {
         let account_state = account.init_asset_state(rng, asset_id);
         let account_state_commitment = account_state.current_state_commitment.clone();
-        let (proof, challenge) = bp_account::RegTxnProof::new(
+        let proof = bp_account::RegTxnProof::new(
             rng,
             account.acct.public.0.0,
             &account_state.current_state.0,
@@ -501,8 +511,7 @@ impl AccountAssetRegistrationProof {
                 account: account.acct.public,
                 account_state_commitment,
                 asset_id,
-                proof,
-                challenge,
+                proof: proof.into(),
             },
             account_state,
         )
@@ -514,7 +523,6 @@ impl AccountAssetRegistrationProof {
             &self.account.0.0,
             self.asset_id,
             &self.account_state_commitment.0,
-            self.challenge,
             ctx,
             &DART_GENS.account_comm_g(),
             DART_GENS.pk_acct_g,
@@ -524,6 +532,8 @@ impl AccountAssetRegistrationProof {
 }
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AssetMintingProof {
     // Public inputs.
     pub pk: AccountPublicKey,
@@ -532,14 +542,15 @@ pub struct AssetMintingProof {
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
 
     // proof
-    proof: bp_account::MintTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::MintTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl AssetMintingProof {
@@ -561,7 +572,7 @@ impl AssetMintingProof {
 
         let root = tree_lookup.root_node()?;
 
-        let (proof, challenge) = bp_account::MintTxnProof::new(
+        let proof = bp_account::MintTxnProof::new(
             rng,
             pk.0.0,
             amount,
@@ -580,8 +591,7 @@ impl AssetMintingProof {
             amount,
             root,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -607,7 +617,6 @@ impl AssetMintingProof {
             self.asset_id,
             self.amount,
             &self.root,
-            self.challenge,
             b"",
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -618,7 +627,8 @@ impl AssetMintingProof {
 }
 
 /// Represents the auditor or mediator in a leg of the Dart BP protocol.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum AuditorOrMediator {
     Mediator(AccountPublicKeys),
     Auditor(EncryptionPublicKey),
@@ -647,7 +657,8 @@ impl AuditorOrMediator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum SettlementRef {
     /// ID based reference.
     ID(SettlementId),
@@ -661,7 +672,8 @@ impl From<SettlementId> for SettlementRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
@@ -694,6 +706,8 @@ impl LegRef {
     }
 }
 
+#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum LegRole {
     Sender,
     Receiver,
@@ -864,7 +878,8 @@ impl SettlementBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SettlementProof {
     memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
     root: CurveTreeRoot<ASSET_TREE_L>,
@@ -895,18 +910,20 @@ impl SettlementProof {
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone)]
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SettlementLegProof {
     pub leg_enc: LegEncrypted,
 
-    proof: bp_leg::SettlementTxnProof<
-        ASSET_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_leg::SettlementTxnProof<
+            ASSET_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl SettlementLegProof {
@@ -925,7 +942,7 @@ impl SettlementLegProof {
             .get_asset_state_path(leg.asset_id())
             .ok_or_else(|| Error::AssetStateNotFound(leg.asset_id()))?;
 
-        let (proof, challenge) = bp_leg::SettlementTxnProof::new(
+        let proof = bp_leg::SettlementTxnProof::new(
             rng,
             leg.0,
             leg_enc.leg_enc.clone(),
@@ -946,8 +963,7 @@ impl SettlementLegProof {
         Ok(Self {
             leg_enc,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -968,7 +984,6 @@ impl SettlementLegProof {
             self.leg_enc.ephemeral_key.enc.clone(),
             pk_e.0.0,
             &root,
-            self.challenge,
             ctx,
             params,
             &DART_GENS.asset_comm_g(),
@@ -980,10 +995,10 @@ impl SettlementLegProof {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct EphemeralSkEncryption {
-    enc: bp_leg::EphemeralSkEncryption<PallasA>,
-    pk_e: EncryptionPublicKey,
+    pub(crate) enc: bp_leg::EphemeralSkEncryption<PallasA>,
+    pub(crate) pk_e: EncryptionPublicKey,
 }
 
 impl EphemeralSkEncryption {
@@ -1002,7 +1017,6 @@ impl EphemeralSkEncryption {
                 DART_GENS.leg_g,
                 DART_GENS.leg_h,
             );
-        log::debug!("Ephemeral key: sk_e={:?}", _sk_e);
         let pk_e = EncryptionPublicKey(pk_e);
         (
             Self {
@@ -1018,10 +1032,10 @@ impl EphemeralSkEncryption {
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasA>);
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct LegEncrypted {
-    leg_enc: bp_leg::LegEncryption<PallasA>,
-    ephemeral_key: EphemeralSkEncryption,
+    pub(crate) leg_enc: bp_leg::LegEncryption<PallasA>,
+    pub(crate) ephemeral_key: EphemeralSkEncryption,
 }
 
 impl LegEncrypted {
@@ -1051,18 +1065,21 @@ impl LegEncrypted {
 }
 
 /// The sender affirmation proof in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
 
-    proof: bp_account::AffirmAsSenderTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::AffirmAsSenderTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl SenderAffirmationProof {
@@ -1086,7 +1103,7 @@ impl SenderAffirmationProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, challenge) = bp_account::AffirmAsSenderTxnProof::new(
+        let proof = bp_account::AffirmAsSenderTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
@@ -1106,8 +1123,7 @@ impl SenderAffirmationProof {
             leg_ref: leg_ref.clone(),
             root,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -1133,7 +1149,6 @@ impl SenderAffirmationProof {
         self.proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.challenge,
             ctx.as_bytes(),
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -1145,19 +1160,22 @@ impl SenderAffirmationProof {
 }
 
 /// The receiver affirmation proof in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub account_state_commitment: AccountStateCommitment,
 
-    proof: bp_account::AffirmAsReceiverTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::AffirmAsReceiverTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl ReceiverAffirmationProof {
@@ -1180,7 +1198,7 @@ impl ReceiverAffirmationProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, challenge) = bp_account::AffirmAsReceiverTxnProof::new(
+        let proof = bp_account::AffirmAsReceiverTxnProof::new(
             rng,
             sk_e.0.0,
             leg_enc.leg_enc.clone(),
@@ -1200,8 +1218,7 @@ impl ReceiverAffirmationProof {
             root,
             account_state_commitment: new_account_commitment,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -1227,7 +1244,6 @@ impl ReceiverAffirmationProof {
         self.proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.challenge,
             ctx.as_bytes(),
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -1239,19 +1255,22 @@ impl ReceiverAffirmationProof {
 }
 
 /// The proof for claiming received assets in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub account_state_commitment: AccountStateCommitment,
 
-    proof: bp_account::ClaimReceivedTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::ClaimReceivedTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl ReceiverClaimProof {
@@ -1275,7 +1294,7 @@ impl ReceiverClaimProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, challenge) = bp_account::ClaimReceivedTxnProof::new(
+        let proof = bp_account::ClaimReceivedTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
@@ -1296,8 +1315,7 @@ impl ReceiverClaimProof {
             root,
             account_state_commitment: new_account_commitment,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -1323,7 +1341,6 @@ impl ReceiverClaimProof {
         self.proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.challenge,
             ctx.as_bytes(),
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -1335,19 +1352,22 @@ impl ReceiverClaimProof {
 }
 
 /// Sender counter update proof in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub account_state_commitment: AccountStateCommitment,
 
-    proof: bp_account::SenderCounterUpdateTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::SenderCounterUpdateTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl SenderCounterUpdateProof {
@@ -1370,7 +1390,7 @@ impl SenderCounterUpdateProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, challenge) = bp_account::SenderCounterUpdateTxnProof::new(
+        let proof = bp_account::SenderCounterUpdateTxnProof::new(
             rng,
             sk_e.0.0,
             leg_enc.leg_enc.clone(),
@@ -1390,8 +1410,7 @@ impl SenderCounterUpdateProof {
             root,
             account_state_commitment: new_account_commitment,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -1417,7 +1436,6 @@ impl SenderCounterUpdateProof {
         self.proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.challenge,
             ctx.as_bytes(),
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -1429,19 +1447,22 @@ impl SenderCounterUpdateProof {
 }
 
 /// Sender reversal proof in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub account_state_commitment: AccountStateCommitment,
 
-    proof: bp_account::SenderReverseTxnProof<
-        ACCOUNT_TREE_L,
-        <PallasParameters as CurveConfig>::ScalarField,
-        <VestaParameters as CurveConfig>::ScalarField,
-        PallasParameters,
-        VestaParameters,
+    proof: WrappedCanonical<
+        bp_account::SenderReverseTxnProof<
+            ACCOUNT_TREE_L,
+            <PallasParameters as CurveConfig>::ScalarField,
+            <VestaParameters as CurveConfig>::ScalarField,
+            PallasParameters,
+            VestaParameters,
+        >,
     >,
-    challenge: PallasScalar,
 }
 
 impl SenderReversalProof {
@@ -1465,7 +1486,7 @@ impl SenderReversalProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, challenge) = bp_account::SenderReverseTxnProof::new(
+        let proof = bp_account::SenderReverseTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
@@ -1486,8 +1507,7 @@ impl SenderReversalProof {
             root,
             account_state_commitment: new_account_commitment,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         })
     }
 
@@ -1513,7 +1533,6 @@ impl SenderReversalProof {
         self.proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.challenge,
             ctx.as_bytes(),
             tree_roots.params(),
             &DART_GENS.account_comm_g(),
@@ -1525,12 +1544,13 @@ impl SenderReversalProof {
 }
 
 /// Mediator affirmation proof in the Dart BP protocol.
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,
 
-    proof: bp_leg::MediatorTxnProof<PallasA>,
-    challenge: PallasScalar,
+    proof: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
 }
 
 impl MediatorAffirmationProof {
@@ -1544,7 +1564,7 @@ impl MediatorAffirmationProof {
     ) -> Self {
         let ctx = leg_ref.context();
         let eph_pk = leg_enc.ephemeral_key.pk_e;
-        let (proof, challenge) = bp_leg::MediatorTxnProof::new(
+        let proof = bp_leg::MediatorTxnProof::new(
             rng,
             leg_enc.leg_enc.clone(),
             eph_sk.0.0,
@@ -1559,8 +1579,7 @@ impl MediatorAffirmationProof {
             leg_ref: leg_ref.clone(),
             accept,
 
-            proof,
-            challenge,
+            proof: proof.into(),
         }
     }
 
@@ -1571,7 +1590,6 @@ impl MediatorAffirmationProof {
             leg_enc.leg_enc.clone(),
             eph_pk.0.0,
             self.accept,
-            self.challenge,
             ctx.as_bytes(),
             DART_GENS.leg_g,
         )?;

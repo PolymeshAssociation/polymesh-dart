@@ -100,7 +100,7 @@ impl<const L: usize> CurveTreeOld<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> CurveTreeRoot<L> {
-        self.tree.root_node()
+        self.tree.root_node().into()
     }
 }
 

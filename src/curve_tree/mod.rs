@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 
@@ -16,8 +18,24 @@ pub mod backends;
 mod common;
 
 pub type CurveTreeParameters = SelRerandParameters<PallasParameters, VestaParameters>;
-pub type CurveTreeRoot<const L: usize> = Root<L, 1, PallasParameters, VestaParameters>;
 pub type CurveTreePath<const L: usize> = CurveTreeWitnessPath<L, PallasParameters, VestaParameters>;
+
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+pub struct CurveTreeRoot<const L: usize>(pub Root<L, 1, PallasParameters, VestaParameters>);
+
+impl<const L: usize> Deref for CurveTreeRoot<L> {
+    type Target = Root<L, 1, PallasParameters, VestaParameters>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const L: usize> From<Root<L, 1, PallasParameters, VestaParameters>> for CurveTreeRoot<L> {
+    fn from(root: Root<L, 1, PallasParameters, VestaParameters>) -> Self {
+        Self(root)
+    }
+}
 
 /// A trait for looking up paths in a curve tree.
 pub trait CurveTreeLookup<const L: usize> {
@@ -129,7 +147,7 @@ impl<const L: usize> FullCurveTree<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        self.tree.root_node(&self.params)
+        Ok(self.tree.root_node(&self.params)?.into())
     }
 }
 
@@ -165,7 +183,7 @@ impl<const L: usize> VerifierCurveTree<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        self.tree.root_node(&self.params)
+        Ok(self.tree.root_node(&self.params)?.into())
     }
 }
 
@@ -223,6 +241,6 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        self.tree.root_node(&self.params)
+        Ok(self.tree.root_node(&self.params)?.into())
     }
 }
