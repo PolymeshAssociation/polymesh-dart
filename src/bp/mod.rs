@@ -42,16 +42,15 @@ type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
 
 /// Constants that are hashed to generate the generators for the Dart BP protocol.
 pub const DART_GEN_DOMAIN: &'static [u8] = b"polymesh-dart-generators";
-pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-pk-acct";
+pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
+pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 }
 
-#[derive(
-    Clone, Copy, Encode, Decode, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize,
-)]
+#[derive(Clone, Copy, Debug, Encode, Decode, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentKey {
     #[codec(encoded_as = "CompressedAffine")]
     pub sk_gen: PallasA,
@@ -102,20 +101,6 @@ impl AccountCommitmentKey {
             randomness_gen,
         }
     }
-
-    /// Returns the commitment key as an array of generators.
-    pub fn as_gens(&self) -> [PallasA; 6] {
-        // The order of elements in this slice is important as it is used in MSM
-        // when committing to account state
-        [
-            self.sk_gen,
-            self.balance_gen,
-            self.counter_gen,
-            self.asset_id_gen,
-            self.rho_gen,
-            self.randomness_gen,
-        ]
-    }
 }
 
 impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
@@ -142,9 +127,32 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     fn randomness_gen(&self) -> PallasA {
         self.randomness_gen
     }
+}
 
-    fn as_gens(&self) -> [PallasA; 6] {
-        self.as_gens()
+#[derive(Clone, Copy, Debug, Encode, Decode, CanonicalSerialize, CanonicalDeserialize)]
+pub struct AssetCommitmentKey {
+    #[codec(encoded_as = "CompressedAffine")]
+    pub is_mediator_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub asset_id_gen: PallasA,
+}
+
+impl AssetCommitmentKey {
+    /// Create a new asset commitment key
+    pub fn new<D: Digest>(label: &[u8]) -> Self {
+        let is_mediator_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : is_mediator_gen"
+        ]);
+        let asset_id_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : asset_id_gen"
+        ]);
+
+        Self {
+            is_mediator_gen,
+            asset_id_gen,
+        }
     }
 }
 
@@ -156,10 +164,7 @@ pub struct DartBPGenerators {
     #[codec(encoded_as = "CompressedAffine")]
     enc_gen: PallasA,
     account_comm_key: AccountCommitmentKey,
-    #[codec(encoded_as = "CompressedAffine")]
-    asset_comm_g_0: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
-    asset_comm_g_1: PallasA,
+    asset_comm_key: AssetCommitmentKey,
     #[codec(encoded_as = "CompressedAffine")]
     enc_sig_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
@@ -183,17 +188,7 @@ impl DartBPGenerators {
 
         let account_comm_key = AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY);
 
-        let asset_comm_is_mediator_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
-                label,
-                b" : is_mediator_gen"
-            ]);
-        let asset_comm_asset_id_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
-                label,
-                b" : asset_id_gen"
-            ]);
-        let asset_comm_g = [asset_comm_is_mediator_gen, asset_comm_asset_id_gen];
+        let asset_comm_key = AssetCommitmentKey::new::<Blake2b512>(DART_GEN_ASSET_KEY);
 
         // HACK: The sender affirmation fails if this isn't the same.
         //let leg_g = PallasA::rand(&mut rng);
@@ -211,8 +206,7 @@ impl DartBPGenerators {
             sig_gen,
             enc_gen,
             account_comm_key,
-            asset_comm_g_0: asset_comm_g[0],
-            asset_comm_g_1: asset_comm_g[1],
+            asset_comm_key,
             enc_sig_gen,
             leg_asset_value_gen,
             ped_comm_key_g: ped_comm_key.g,
@@ -227,7 +221,10 @@ impl DartBPGenerators {
 
     /// Returns the generators for asset state commitments.
     pub fn asset_comm_g(&self) -> [PallasA; 2] {
-        [self.asset_comm_g_0, self.asset_comm_g_1]
+        [
+            self.asset_comm_key.is_mediator_gen,
+            self.asset_comm_key.asset_id_gen,
+        ]
     }
 
     pub fn sig_gen(&self) -> PallasA {
@@ -583,8 +580,8 @@ impl AssetState {
 }
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Debug, Default)]
-pub struct AssetStateCommitment(pub PallasA);
+#[derive(Clone, Encode, Decode, Debug, Default)]
+pub struct AssetStateCommitment(#[codec(encoded_as = "CompressedAffine")] pub PallasA);
 
 /// Represents a tree of asset states in the Dart BP protocol.
 pub struct AssetCurveTree {

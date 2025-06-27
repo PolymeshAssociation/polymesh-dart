@@ -1,3 +1,5 @@
+use std::mem;
+
 use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, Output};
 #[cfg(feature = "std")]
 use scale_info::{Path, Type, TypeInfo, build::Fields};
@@ -10,16 +12,20 @@ use crate::{
     *,
 };
 
+pub const ARK_EC_POINT_SIZE: usize = 33;
+
+pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
+
 #[derive(Copy, Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
-pub struct CompressedAffine([u8; 33]);
+pub struct CompressedAffine(CompressedPoint);
 
 impl<P: SWCurveConfig> TryFrom<Affine<P>> for CompressedAffine {
     type Error = ();
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: Affine<P>) -> Result<Self, Self::Error> {
-        let mut buf = [0u8; 33];
+        let mut buf = [0u8; ARK_EC_POINT_SIZE];
         affine.serialize_compressed(&mut buf[..]).map_err(|err| {
             log::error!("Failed to serialize CompressedAffine: {:?}", err);
             ()
@@ -56,20 +62,48 @@ impl TypeInfo for DartBPGenerators {
             .path(Path::new("DartBPGenerators", module_path!()))
             .composite(
                 Fields::named()
-                    .field(|f| f.name("pk_acct_g").ty::<CompressedAffine>())
-                    .field(|f| f.name("pk_enc_g").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_0").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_1").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_2").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_3").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_4").ty::<CompressedAffine>())
-                    .field(|f| f.name("account_comm_g_5").ty::<CompressedAffine>())
-                    .field(|f| f.name("asset_comm_g_0").ty::<CompressedAffine>())
-                    .field(|f| f.name("asset_comm_g_1").ty::<CompressedAffine>())
-                    .field(|f| f.name("leg_g").ty::<CompressedAffine>())
-                    .field(|f| f.name("leg_h").ty::<CompressedAffine>())
+                    .field(|f| f.name("sig_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("enc_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
+                    .field(|f| f.name("asset_comm_key").ty::<AssetCommitmentKey>())
+                    .field(|f| f.name("enc_sig_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("ped_comm_key_g").ty::<CompressedAffine>())
                     .field(|f| f.name("ped_comm_key_h").ty::<CompressedAffine>()),
+            )
+    }
+}
+
+#[cfg(feature = "std")]
+impl TypeInfo for AccountCommitmentKey {
+    type Identity = Self;
+
+    fn type_info() -> Type {
+        Type::builder()
+            .path(Path::new("AccountCommitmentKey", module_path!()))
+            .composite(
+                Fields::named()
+                    .field(|f| f.name("sk_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("balance_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("counter_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("rho_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("randomness_gen").ty::<CompressedAffine>()),
+            )
+    }
+}
+
+#[cfg(feature = "std")]
+impl TypeInfo for AssetCommitmentKey {
+    type Identity = Self;
+
+    fn type_info() -> Type {
+        Type::builder()
+            .path(Path::new("AssetCommitmentKey", module_path!()))
+            .composite(
+                Fields::named()
+                    .field(|f| f.name("is_mediator_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>()),
             )
     }
 }
@@ -82,10 +116,10 @@ impl TypeInfo for EncryptionPublicKey {
     fn type_info() -> Type {
         Type::builder()
             .path(Path::new("EncryptionPublicKey", module_path!()))
-            .composite(
-                Fields::unnamed()
-                    .field(|f| f.ty::<Vec<u8>>().type_name("EncodedEncryptionPublicKey")),
-            )
+            .composite(Fields::unnamed().field(|f| {
+                f.ty::<CompressedPoint>()
+                    .type_name("EncodedEncryptionPublicKey")
+            }))
     }
 }
 
@@ -100,15 +134,15 @@ impl Encode for EncryptionPublicKey {
         let mut buf = Vec::new();
         self.serialize_compressed(&mut buf)
             .expect("Failed to serialize EncryptionPublicKey");
-        buf.encode_to(dest);
+        dest.write(&*buf);
     }
 }
 
 impl Decode for EncryptionPublicKey {
     /// Decode a `EncryptionPublicKey` .
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self::deserialize_compressed(&*buf)
+        let buf = <CompressedPoint>::decode(input)?;
+        Ok(Self::deserialize_compressed(&buf[..])
             .map_err(|_| CodecError::from("Failed to deserialize EncryptionPublicKey"))?)
     }
 }
@@ -121,9 +155,10 @@ impl TypeInfo for AccountPublicKey {
     fn type_info() -> Type {
         Type::builder()
             .path(Path::new("AccountPublicKey", module_path!()))
-            .composite(
-                Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name("EncodedAccountPublicKey")),
-            )
+            .composite(Fields::unnamed().field(|f| {
+                f.ty::<CompressedPoint>()
+                    .type_name("EncodedAccountPublicKey")
+            }))
     }
 }
 
@@ -138,15 +173,15 @@ impl Encode for AccountPublicKey {
         let mut buf = Vec::new();
         self.serialize_compressed(&mut buf)
             .expect("Failed to serialize AccountPublicKey");
-        buf.encode_to(dest);
+        dest.write(&*buf);
     }
 }
 
 impl Decode for AccountPublicKey {
     /// Decode a `AccountPublicKey` .
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self::deserialize_compressed(&*buf)
+        let buf = <CompressedPoint>::decode(input)?;
+        Ok(Self::deserialize_compressed(&buf[..])
             .map_err(|_| CodecError::from("Failed to deserialize AccountPublicKey"))?)
     }
 }
@@ -197,10 +232,10 @@ impl TypeInfo for AccountStateCommitment {
     fn type_info() -> Type {
         Type::builder()
             .path(Path::new("AccountStateCommitment", module_path!()))
-            .composite(
-                Fields::unnamed()
-                    .field(|f| f.ty::<Vec<u8>>().type_name("EncodedAccountStateCommitment")),
-            )
+            .composite(Fields::unnamed().field(|f| {
+                f.ty::<CompressedPoint>()
+                    .type_name("EncodedAccountStateCommitment")
+            }))
     }
 }
 
@@ -215,55 +250,30 @@ impl Encode for AccountStateCommitment {
         let mut buf = Vec::new();
         self.serialize_compressed(&mut buf)
             .expect("Failed to serialize AccountStateCommitment");
-        buf.encode_to(dest);
+        dest.write(&*buf);
     }
 }
 
 impl Decode for AccountStateCommitment {
     /// Decode a `AccountStateCommitment` .
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self::deserialize_compressed(&*buf)
+        let buf = <CompressedPoint>::decode(input)?;
+        Ok(Self::deserialize_compressed(&buf[..])
             .map_err(|_| CodecError::from("Failed to deserialize AccountStateCommitment"))?)
     }
 }
 
-/// TypeInfo, SCALE encoding and decoding for `AssetStateCommitment`.
-
+/// TypeInfo for `AssetStateCommitment`.
 #[cfg(feature = "std")]
 impl TypeInfo for AssetStateCommitment {
     type Identity = Self;
     fn type_info() -> Type {
         Type::builder()
             .path(Path::new("AssetStateCommitment", module_path!()))
-            .composite(
-                Fields::unnamed()
-                    .field(|f| f.ty::<Vec<u8>>().type_name("EncodedAssetStateCommitment")),
-            )
-    }
-}
-
-impl Encode for AssetStateCommitment {
-    #[inline]
-    fn size_hint(&self) -> usize {
-        self.compressed_size()
-    }
-
-    /// Encodes as a `Vec<u8>`.
-    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
-        let mut buf = Vec::new();
-        self.serialize_compressed(&mut buf)
-            .expect("Failed to serialize AssetStateCommitment");
-        buf.encode_to(dest);
-    }
-}
-
-impl Decode for AssetStateCommitment {
-    /// Decode a `AssetStateCommitment` .
-    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self::deserialize_compressed(&*buf)
-            .map_err(|_| CodecError::from("Failed to deserialize AssetStateCommitment"))?)
+            .composite(Fields::unnamed().field(|f| {
+                f.ty::<CompressedPoint>()
+                    .type_name("EncodedAssetStateCommitment")
+            }))
     }
 }
 
@@ -284,7 +294,7 @@ impl<const L: usize> TypeInfo for CurveTreeRoot<L> {
 impl<const L: usize> Encode for CurveTreeRoot<L> {
     #[inline]
     fn size_hint(&self) -> usize {
-        self.compressed_size()
+        mem::size_of::<u32>() + self.compressed_size()
     }
 
     /// Encodes as a `Vec<u8>`.
@@ -320,7 +330,7 @@ impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> TypeInfo for Inner<M,
 impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> Encode for Inner<M, P0, P1> {
     #[inline]
     fn size_hint(&self) -> usize {
-        self.compressed_size()
+        mem::size_of::<u32>() + self.compressed_size()
     }
 
     /// Encodes as a `Vec<u8>`.
@@ -349,7 +359,10 @@ impl<P0: SWCurveConfig> TypeInfo for LeafValue<P0> {
     fn type_info() -> Type {
         Type::builder()
             .path(Path::new("LeafValue", module_path!()))
-            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name("EncodedLeafValue")))
+            .composite(
+                Fields::unnamed()
+                    .field(|f| f.ty::<CompressedPoint>().type_name("EncodedLeafValue")),
+            )
     }
 }
 
@@ -364,15 +377,15 @@ impl<P0: SWCurveConfig> Encode for LeafValue<P0> {
         let mut buf = Vec::new();
         self.serialize_compressed(&mut buf)
             .expect("Failed to serialize LeafValue");
-        buf.encode_to(dest);
+        dest.write(&*buf);
     }
 }
 
 impl<P0: SWCurveConfig> Decode for LeafValue<P0> {
     /// Decode a `LeafValue<P0>` .
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self::deserialize_compressed(&*buf)
+        let buf = <CompressedPoint>::decode(input)?;
+        Ok(Self::deserialize_compressed(&buf[..])
             .map_err(|_| CodecError::from("Failed to deserialize LeafValue"))?)
     }
 }
@@ -415,7 +428,7 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
 impl<T: CanonicalSerialize> Encode for WrappedCanonical<T> {
     #[inline]
     fn size_hint(&self) -> usize {
-        self.0.compressed_size()
+        mem::size_of::<u32>() + self.0.compressed_size()
     }
 
     /// Encodes as a `Vec<u8>`.

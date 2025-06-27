@@ -31,6 +31,10 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
     let mediator_acct = mediator.create_and_register_account(&mut rng, &mut chain, "1")?;
     let investor1_acct = investor1.create_and_register_account(&mut rng, &mut chain, "1")?;
 
+    eprintln!("Issuer account: {:?}", issuer_acct.public_keys());
+    eprintln!("Mediator account: {:?}", mediator_acct.public_keys());
+    eprintln!("Investor account: {:?}", investor1_acct.public_keys());
+
     let asset_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
     // Create a Dart asset with the issuer as the owner and the mediator as the auditor.
     let asset_id = issuer.create_asset(&mut chain, asset_mediator)?;

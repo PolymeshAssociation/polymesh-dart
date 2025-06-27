@@ -43,43 +43,58 @@ use std::collections::{BTreeMap, BTreeSet};
 /// generators for the account commitment key while still providing the same interface.
 pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize {
     /// Returns the generator for the signing key.
-    fn sk_gen(&self) -> G {
-        self.as_gens()[0]
-    }
+    fn sk_gen(&self) -> G;
 
     /// Returns the generator for the balance.
-    fn balance_gen(&self) -> G {
-        self.as_gens()[1]
-    }
+    fn balance_gen(&self) -> G;
 
     /// Returns the generator for the pending transaction counter.
-    fn counter_gen(&self) -> G {
-        self.as_gens()[2]
-    }
+    fn counter_gen(&self) -> G;
 
     /// Returns the generator for the asset ID.
-    fn asset_id_gen(&self) -> G {
-        self.as_gens()[3]
-    }
+    fn asset_id_gen(&self) -> G;
 
     /// Returns the generator for the rho value.
-    fn rho_gen(&self) -> G {
-        self.as_gens()[4]
-    }
+    fn rho_gen(&self) -> G;
 
     /// Returns the generator for the randomness value.
-    fn randomness_gen(&self) -> G {
-        self.as_gens()[5]
-    }
+    fn randomness_gen(&self) -> G;
 
-    /// Returns the commitment key as an array of generators.
-    fn as_gens(&self) -> [G; 6];
+    fn as_gens(&self) -> [G; 6] {
+        [
+            self.sk_gen(),
+            self.balance_gen(),
+            self.counter_gen(),
+            self.asset_id_gen(),
+            self.rho_gen(),
+            self.randomness_gen(),
+        ]
+    }
 }
 
 impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for &[G] {
-    fn as_gens(&self) -> [G; 6] {
-        assert!(self.len() >= 6);
-        [self[0], self[1], self[2], self[3], self[4], self[5]]
+    fn sk_gen(&self) -> G {
+        self[0]
+    }
+
+    fn balance_gen(&self) -> G {
+        self[1]
+    }
+
+    fn counter_gen(&self) -> G {
+        self[2]
+    }
+
+    fn asset_id_gen(&self) -> G {
+        self[3]
+    }
+
+    fn rho_gen(&self) -> G {
+        self[4]
+    }
+
+    fn randomness_gen(&self) -> G {
+        self[5]
     }
 }
 
