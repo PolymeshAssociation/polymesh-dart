@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use dart_common::AssetId;
+use polymesh_dart_common::AssetId;
 
 use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
 

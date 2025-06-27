@@ -3,9 +3,9 @@ use test_log::test;
 use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
-use dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
-use dart::{Error, LeafIndex, NodeLevel};
-use dart::{PallasA, PallasParameters, VestaParameters};
+use polymesh_dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
+use polymesh_dart::{Error, LeafIndex, NodeLevel};
+use polymesh_dart::{PallasA, PallasParameters, VestaParameters};
 
 const L: usize = 16;
 const HEIGHT: NodeLevel = 4;

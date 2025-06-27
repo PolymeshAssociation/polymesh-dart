@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use codec::{Decode, Encode};
-use dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
+use polymesh_dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
 use rand::RngCore;
 
 use std::{
@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use dart::{
+use polymesh_dart::{
     curve_tree::{
         CurveTreeLookup, ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree,
     },

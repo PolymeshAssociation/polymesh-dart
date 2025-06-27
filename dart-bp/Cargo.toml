@@ -1,10 +1,10 @@
 [package]
-name = "dart-bp"
+name = "polymesh-dart-bp"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dart-common = { workspace = true, default-features = false }
+polymesh-dart-common = { workspace = true, default-features = false }
 
 rand = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }

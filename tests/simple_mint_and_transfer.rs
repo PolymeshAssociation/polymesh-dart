@@ -1,7 +1,7 @@
 use anyhow::Result;
 use test_log::test;
 
-use dart::*;
+use polymesh_dart::*;
 
 mod common;
 use common::*;

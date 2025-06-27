@@ -1,7 +1,10 @@
 [package]
-name = "dart"
+name = "polymesh-dart"
 version = "0.1.0"
 edition = "2024"
+description = "Polymesh DART assets."
+authors = [ "Polymesh Association" ]
+license-file = "LICENSE.pdf"
 
 [workspace]
 members = [
@@ -18,8 +21,8 @@ curve_tree_relations = { package = "relations", path = "../curve-trees/relations
 #curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 
 [workspace.dependencies]
-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
-dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
+polymesh-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
+polymesh-dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
 
 # Common
 rand = { version = "0.8", default-features = false }
@@ -61,7 +64,9 @@ ark-secp256k1 = "0.4"
 ark-secq256k1 = "0.4"
 
 [dependencies]
-dart-common = { workspace = true, default-features = false }
+polymesh-dart-bp = { workspace = true, default-features = false, optional = true }
+polymesh-dart-common = { workspace = true, default-features = false }
+
 # common dependencies
 rand = { workspace = true, default-features = false }
 rand_core = { workspace = true, default-features = false }
@@ -80,7 +85,6 @@ scale-info = { workspace = true, default-features = false, features = ["derive"]
 bounded-collections = { workspace = true, default-features = false }
 
 # dart-bp dependencies
-dart-bp = { workspace = true, default-features = false, optional = true }
 ark-ff = { workspace = true, optional = true }
 ark-ec = { workspace = true, optional = true }
 ark-serialize = { workspace = true, optional = true }
@@ -106,7 +110,7 @@ default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
 async_tree = []
 
 backend_bp = [
-    "dart-bp",
+    "polymesh-dart-bp",
     "ark-ff",
     "ark-ec",
     "ark-serialize",
@@ -123,12 +127,12 @@ backend_bp = [
 
 std = [
      "log/std",
-     "dart-bp?/std",
+     "polymesh-dart-bp?/std",
 		 "thiserror/std",
      "indexmap/std",
      "bounded-collections/std",
      "codec/std",
 ]
 
-asm = ["dart-bp?/asm"]
-parallel = ["dart-bp?/parallel"]
+asm = ["polymesh-dart-bp?/asm"]
+parallel = ["polymesh-dart-bp?/parallel"]

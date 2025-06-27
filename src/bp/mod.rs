@@ -11,8 +11,8 @@ use blake2::{Blake2b512, Blake2s256};
 
 use bounded_collections::{BoundedVec, ConstU32};
 
-use dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
+use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
+use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
 use digest::Digest as _;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
