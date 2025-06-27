@@ -91,12 +91,12 @@ macro_rules! verify_schnorr_for_common_state_change {
             .resp_leaf
             .is_valid(
                 &[
-                    $account_comm_key[0],
-                    $account_comm_key[1],
-                    $account_comm_key[2],
-                    $account_comm_key[3],
-                    $account_comm_key[4],
-                    $account_comm_key[5],
+                    $account_comm_key.sk_gen(),
+                    $account_comm_key.balance_gen(),
+                    $account_comm_key.counter_gen(),
+                    $account_comm_key.asset_id_gen(),
+                    $account_comm_key.rho_gen(),
+                    $account_comm_key.randomness_gen(),
                     $pc_gens.B_blinding,
                 ],
                 &$self.re_randomized_path.re_randomized_leaf,
@@ -108,12 +108,12 @@ macro_rules! verify_schnorr_for_common_state_change {
             .resp_acc_new
             .is_valid(
                 &[
-                    $account_comm_key[0],
-                    $account_comm_key[1],
-                    $account_comm_key[2],
-                    $account_comm_key[3],
-                    $account_comm_key[4],
-                    $account_comm_key[5],
+                    $account_comm_key.sk_gen(),
+                    $account_comm_key.balance_gen(),
+                    $account_comm_key.counter_gen(),
+                    $account_comm_key.asset_id_gen(),
+                    $account_comm_key.rho_gen(),
+                    $account_comm_key.randomness_gen(),
                 ],
                 &$self.updated_account_commitment.0,
                 &$self.t_acc_new,

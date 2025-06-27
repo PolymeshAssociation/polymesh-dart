@@ -19,21 +19,69 @@ use crate::{
     take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
     verify_schnorr_for_balance_change, verify_schnorr_for_common_state_change,
 };
+
+use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
+use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
-use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand::RngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+
 use std::collections::{BTreeMap, BTreeSet};
+
+/// This trait is used to abstract over the account commitment key. It allows us to use different
+/// generators for the account commitment key while still providing the same interface.
+pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize {
+    /// Returns the generator for the signing key.
+    fn sk_gen(&self) -> G {
+        self.as_gens()[0]
+    }
+
+    /// Returns the generator for the balance.
+    fn balance_gen(&self) -> G {
+        self.as_gens()[1]
+    }
+
+    /// Returns the generator for the pending transaction counter.
+    fn counter_gen(&self) -> G {
+        self.as_gens()[2]
+    }
+
+    /// Returns the generator for the asset ID.
+    fn asset_id_gen(&self) -> G {
+        self.as_gens()[3]
+    }
+
+    /// Returns the generator for the rho value.
+    fn rho_gen(&self) -> G {
+        self.as_gens()[4]
+    }
+
+    /// Returns the generator for the randomness value.
+    fn randomness_gen(&self) -> G {
+        self.as_gens()[5]
+    }
+
+    /// Returns the commitment key as an array of generators.
+    fn as_gens(&self) -> [G; 6];
+}
+
+impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for &[G] {
+    fn as_gens(&self) -> [G; 6] {
+        assert!(self.len() >= 6);
+        [self[0], self[1], self[2], self[3], self[4], self[5]]
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
@@ -66,10 +114,12 @@ impl<G: AffineRepr> AccountState<G> {
         }
     }
 
-    pub fn commit(&self, comm_key: &[G]) -> AccountStateCommitment<G> {
-        assert!(comm_key.len() >= 6);
+    pub fn commit(
+        &self,
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> AccountStateCommitment<G> {
         let comm = G::Group::msm(
-            &comm_key[..6],
+            &account_comm_key.as_gens()[..],
             &[
                 self.sk,
                 G::ScalarField::from(self.balance),
@@ -178,7 +228,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_gen: G,
     ) -> Self {
         assert_eq!(account.balance, 0);
@@ -212,9 +262,9 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let t_acc = SchnorrCommitment::new(
             &[
-                account_comm_key[0],
-                account_comm_key[4],
-                account_comm_key[5],
+                account_comm_key.sk_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
             ],
             vec![
                 sk_blinding,
@@ -255,7 +305,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_gen: G,
     ) -> Result<(), R1CSError> {
         let mut verifier_transcript = MerlinTranscript::new(b"test");
@@ -286,13 +336,13 @@ impl<G: AffineRepr> RegTxnProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
-            - account_comm_key[3] * G::ScalarField::from(asset_id);
+            - account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id);
         self.resp_acc
             .is_valid(
                 &[
-                    account_comm_key[0],
-                    account_comm_key[4],
-                    account_comm_key[5],
+                    account_comm_key.sk_gen(),
+                    account_comm_key.rho_gen(),
+                    account_comm_key.randomness_gen(),
                 ],
                 &y.into_affine(),
                 &self.t_acc,
@@ -357,7 +407,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
     ) -> Self {
         assert_eq!(account.asset_id, updated_account.asset_id);
@@ -416,11 +466,11 @@ impl<
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
             &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[4],
-                account_comm_key[5],
+                account_comm_key.sk_gen(),
+                account_comm_key.balance_gen(),
+                account_comm_key.counter_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
                 account_tree_params.even_parameters.pc_gens.B_blinding,
             ],
             vec![
@@ -436,11 +486,11 @@ impl<
         // Schnorr commitment for proving correctness of new account state which will become new leaf
         let t_acc_new = SchnorrCommitment::new(
             &[
-                account_comm_key[0],
-                account_comm_key[1],
-                account_comm_key[2],
-                account_comm_key[4],
-                account_comm_key[5],
+                account_comm_key.sk_gen(),
+                account_comm_key.balance_gen(),
+                account_comm_key.counter_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
             ],
             vec![
                 sk_blinding,
@@ -526,7 +576,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
@@ -577,17 +627,17 @@ impl<
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let asset_id_comm = (account_comm_key[3] * F0::from(asset_id)).into_affine();
+        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
         let y = self.re_randomized_path.re_randomized_leaf - asset_id_comm;
         self.resp_leaf
             .is_valid(
                 &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[4],
-                    account_comm_key[5],
+                    account_comm_key.sk_gen(),
+                    account_comm_key.balance_gen(),
+                    account_comm_key.counter_gen(),
+                    account_comm_key.rho_gen(),
+                    account_comm_key.randomness_gen(),
                     account_tree_params.even_parameters.pc_gens.B_blinding,
                 ],
                 &y.into_affine(),
@@ -600,11 +650,11 @@ impl<
         self.resp_acc_new
             .is_valid(
                 &[
-                    account_comm_key[0],
-                    account_comm_key[1],
-                    account_comm_key[2],
-                    account_comm_key[4],
-                    account_comm_key[5],
+                    account_comm_key.sk_gen(),
+                    account_comm_key.balance_gen(),
+                    account_comm_key.counter_gen(),
+                    account_comm_key.rho_gen(),
+                    account_comm_key.randomness_gen(),
                 ],
                 &y.into_affine(),
                 &self.t_acc_new,
@@ -711,7 +761,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Self {
@@ -881,7 +931,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
@@ -1043,7 +1093,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Self {
@@ -1159,7 +1209,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
@@ -1318,7 +1368,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Self {
@@ -1495,7 +1545,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
@@ -1668,7 +1718,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Self {
@@ -1784,7 +1834,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
@@ -1931,7 +1981,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Self {
@@ -2090,7 +2140,7 @@ impl<
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &[Affine<G0>],
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(), R1CSError> {
@@ -2224,7 +2274,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_null_gen: G,
     ) -> Self {
         // Need to prove that:
@@ -2257,9 +2307,9 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let t_acc = SchnorrCommitment::new(
             &[
-                account_comm_key[0],
-                account_comm_key[4],
-                account_comm_key[5],
+                account_comm_key.sk_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
@@ -2304,7 +2354,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         pk: &G,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_null_gen: G,
     ) -> Result<(), R1CSError> {
         let mut verifier_transcript = MerlinTranscript::new(b"test");
@@ -2339,15 +2389,15 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
-            - (account_comm_key[1] * G::ScalarField::from(balance)
-                + account_comm_key[2] * G::ScalarField::from(counter)
-                + account_comm_key[3] * G::ScalarField::from(asset_id));
+            - (account_comm_key.balance_gen() * G::ScalarField::from(balance)
+                + account_comm_key.counter_gen() * G::ScalarField::from(counter)
+                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
-                    account_comm_key[0],
-                    account_comm_key[4],
-                    account_comm_key[5],
+                    account_comm_key.sk_gen(),
+                    account_comm_key.rho_gen(),
+                    account_comm_key.randomness_gen(),
                 ],
                 &y.into_affine(),
                 &self.t_acc,
@@ -2399,7 +2449,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_sent_amount: Balance,
         pending_recv_amount: Balance,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_null_gen: G,
         asset_value_gen: G,
     ) -> Self {
@@ -2496,9 +2546,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let t_acc = SchnorrCommitment::new(
             &[
-                account_comm_key[0],
-                account_comm_key[4],
-                account_comm_key[5],
+                account_comm_key.sk_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
             ],
             vec![sk_blinding, rho_blinding, G::ScalarField::rand(rng)],
         );
@@ -2681,7 +2731,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_sent_amount: Balance,
         pending_recv_amount: Balance,
         nonce: &[u8],
-        account_comm_key: &[G],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_null_gen: G,
         asset_value_gen: G,
     ) -> Result<(), R1CSError> {
@@ -2797,15 +2847,15 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
-            - (account_comm_key[1] * G::ScalarField::from(balance)
-                + account_comm_key[2] * G::ScalarField::from(counter)
-                + account_comm_key[3] * G::ScalarField::from(asset_id));
+            - (account_comm_key.balance_gen() * G::ScalarField::from(balance)
+                + account_comm_key.counter_gen() * G::ScalarField::from(counter)
+                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
         self.resp_acc
             .is_valid(
                 &[
-                    account_comm_key[0],
-                    account_comm_key[4],
-                    account_comm_key[5],
+                    account_comm_key.sk_gen(),
+                    account_comm_key.rho_gen(),
+                    account_comm_key.randomness_gen(),
                 ],
                 &y.into_affine(),
                 &self.t_acc,
@@ -2942,10 +2992,10 @@ mod tests {
     /// random position in tree.
     fn get_tree_with_account_comm<const L: usize>(
         account: &AccountState<PallasA>,
-        account_comm_key: &[PallasA],
+        account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
         account_tree_params: &SelRerandParameters<PallasParameters, VestaParameters>,
     ) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
-        let account_comm = account.commit(&account_comm_key);
+        let account_comm = account.commit(account_comm_key);
 
         // Add account commitment in curve tree
         let set = vec![account_comm.0];
@@ -2981,7 +3031,7 @@ mod tests {
         // Issuer creates account to mint to
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
         let account = AccountState::new(&mut rng, sk_i.0, asset_id);
-        let account_comm = account.commit(&account_comm_key);
+        let account_comm = account.commit(&*account_comm_key);
 
         let nonce = b"test-nonce-0";
 
@@ -2991,7 +3041,7 @@ mod tests {
             &account,
             account_comm.clone(),
             nonce,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p,
         );
 
@@ -3004,7 +3054,7 @@ mod tests {
                 asset_id,
                 &account_comm,
                 nonce,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p,
             )
             .unwrap();
@@ -3020,7 +3070,7 @@ mod tests {
         );
 
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         // Setup ends. Issuer and verifier interaction begins below
 
@@ -3031,7 +3081,7 @@ mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_mint(&mut rng, increase_bal_by);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3048,7 +3098,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p,
         );
 
@@ -3063,7 +3113,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p,
             )
             .unwrap();
@@ -3127,7 +3177,7 @@ mod tests {
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         // Setup ends. Sender and verifier interaction begins below
 
@@ -3136,7 +3186,7 @@ mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_send(&mut rng, amount);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3153,7 +3203,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3167,7 +3217,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )
@@ -3232,7 +3282,7 @@ mod tests {
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         // Setup ends. Receiver and verifier interaction begins below
 
@@ -3240,7 +3290,7 @@ mod tests {
 
         let clock = Instant::now();
         let updated_account = account.get_state_for_receive(&mut rng);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3256,7 +3306,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3270,7 +3320,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )
@@ -3333,14 +3383,14 @@ mod tests {
         account.counter += 1;
 
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_claiming_received(&mut rng, amount);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3357,7 +3407,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3371,7 +3421,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )
@@ -3433,14 +3483,14 @@ mod tests {
         account.counter = 1;
 
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_decreasing_counter(&mut rng, None);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
         let root = account_tree.root_node();
@@ -3455,7 +3505,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3469,7 +3519,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )
@@ -3529,13 +3579,13 @@ mod tests {
         account.counter += 1;
 
         let account_tree =
-            get_tree_with_account_comm::<L>(&account, &account_comm_key, &account_tree_params);
+            get_tree_with_account_comm::<L>(&account, &*account_comm_key, &account_tree_params);
 
         let nonce = b"test-nonce";
 
         let clock = Instant::now();
         let updated_account = account.get_state_for_reversing_send(&mut rng, amount);
-        let updated_account_comm = updated_account.commit(&account_comm_key);
+        let updated_account_comm = updated_account.commit(&*account_comm_key);
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3552,7 +3602,7 @@ mod tests {
             path,
             nonce,
             &account_tree_params,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3566,7 +3616,7 @@ mod tests {
                 &root,
                 nonce,
                 &account_tree_params,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )
@@ -3597,7 +3647,7 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk.0, asset_id);
         account.balance = 1000;
         account.counter = 7;
-        let account_comm = account.commit(&account_comm_key);
+        let account_comm = account.commit(&*account_comm_key);
 
         let nonce = b"test-nonce";
 
@@ -3607,7 +3657,7 @@ mod tests {
             &account,
             account_comm.clone(),
             nonce,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p,
         );
         proof
@@ -3618,7 +3668,7 @@ mod tests {
                 &pk.0,
                 account_comm,
                 nonce,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p,
             )
             .unwrap();
@@ -3642,7 +3692,7 @@ mod tests {
         let mut account = AccountState::new(&mut rng, sk.0, asset_id);
         account.balance = 1000000;
         account.counter = num_pending_txns;
-        let account_comm = account.commit(&account_comm_key);
+        let account_comm = account.commit(&*account_comm_key);
 
         let (_sk_other, pk_other) = keygen_sig(&mut rng, gen_p_1);
         let (_sk_a, pk_a) = keygen_sig(&mut rng, gen_p_1);
@@ -3689,7 +3739,7 @@ mod tests {
             pending_sent_amount,
             pending_recv_amount,
             nonce,
-            &account_comm_key,
+            &*account_comm_key,
             gen_p_1,
             gen_p_2,
         );
@@ -3711,7 +3761,7 @@ mod tests {
                 pending_sent_amount,
                 pending_recv_amount,
                 nonce,
-                &account_comm_key,
+                &*account_comm_key,
                 gen_p_1,
                 gen_p_2,
             )

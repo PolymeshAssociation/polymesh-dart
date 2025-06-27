@@ -6,7 +6,9 @@ pub mod leg;
 pub mod macros;
 pub mod util;
 
-pub use polymesh_dart_common::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter};
+pub use polymesh_dart_common::{
+    AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
+};
 
 // TODO: The ephemeral public key created during instance should be added to the transcript.
 

@@ -32,6 +32,7 @@ lazy_static = { version = "1.5.0", default-features = false }
 thiserror = { version = "2", default-features = false }
 indexmap = { version = "2.9.0", default-features = false }
 log = { version = "0.4.27", default-features = false }
+hex = { version = "0.4.3", default-features = false }
 
 # Substrate/SCALE deps.
 bounded-collections = { version = "0.1.4", default-features = false }
@@ -78,6 +79,7 @@ lazy_static = { workspace = true, default-features = false }
 thiserror = { workspace = true, default-features = false }
 indexmap = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
+hex = { workspace = true, default-features = false }
 
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
@@ -125,13 +127,18 @@ backend_bp = [
     "ark-secq256k1",
 ]
 
+no_std = [
+    "hex/alloc",
+]
+
 std = [
-     "log/std",
-     "polymesh-dart-bp?/std",
-		 "thiserror/std",
-     "indexmap/std",
-     "bounded-collections/std",
-     "codec/std",
+    "log/std",
+    "hex/std",
+    "polymesh-dart-bp?/std",
+    "thiserror/std",
+    "indexmap/std",
+    "bounded-collections/std",
+    "codec/std",
 ]
 
 asm = ["polymesh-dart-bp?/asm"]

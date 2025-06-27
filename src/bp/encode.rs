@@ -1,14 +1,78 @@
-use codec::{Decode, Encode, Error as CodecError, Input, Output};
+use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, Output};
 #[cfg(feature = "std")]
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
-use ark_ec::short_weierstrass::SWCurveConfig;
+use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use crate::{
     curve_tree::{CurveTreeRoot, Inner, LeafValue},
     *,
 };
+
+#[derive(Copy, Clone, Debug, Encode, Decode)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct CompressedAffine([u8; 33]);
+
+impl<P: SWCurveConfig> TryFrom<Affine<P>> for CompressedAffine {
+    type Error = ();
+
+    /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
+    fn try_from(affine: Affine<P>) -> Result<Self, Self::Error> {
+        let mut buf = [0u8; 33];
+        affine.serialize_compressed(&mut buf[..]).map_err(|err| {
+            log::error!("Failed to serialize CompressedAffine: {:?}", err);
+            ()
+        })?;
+        Ok(Self(buf))
+    }
+}
+
+/// Convert from `Affine<P>` to `CompressedAffine`.
+impl<P: SWCurveConfig> From<&Affine<P>> for CompressedAffine {
+    fn from(affine: &Affine<P>) -> Self {
+        CompressedAffine::try_from(affine).expect("Failed to convert Affine to CompressedAffine")
+    }
+}
+
+impl<P: SWCurveConfig> From<CompressedAffine> for Affine<P> {
+    fn from(compressed: CompressedAffine) -> Self {
+        compressed
+            .try_into()
+            .expect("Failed to convert CompressedAffine to Affine")
+    }
+}
+
+impl<'a, P: SWCurveConfig> EncodeAsRef<'a, Affine<P>> for CompressedAffine {
+    type RefType = CompressedAffine;
+}
+
+#[cfg(feature = "std")]
+impl TypeInfo for DartBPGenerators {
+    type Identity = Self;
+
+    fn type_info() -> Type {
+        Type::builder()
+            .path(Path::new("DartBPGenerators", module_path!()))
+            .composite(
+                Fields::named()
+                    .field(|f| f.name("pk_acct_g").ty::<CompressedAffine>())
+                    .field(|f| f.name("pk_enc_g").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_0").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_1").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_2").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_3").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_4").ty::<CompressedAffine>())
+                    .field(|f| f.name("account_comm_g_5").ty::<CompressedAffine>())
+                    .field(|f| f.name("asset_comm_g_0").ty::<CompressedAffine>())
+                    .field(|f| f.name("asset_comm_g_1").ty::<CompressedAffine>())
+                    .field(|f| f.name("leg_g").ty::<CompressedAffine>())
+                    .field(|f| f.name("leg_h").ty::<CompressedAffine>())
+                    .field(|f| f.name("ped_comm_key_g").ty::<CompressedAffine>())
+                    .field(|f| f.name("ped_comm_key_h").ty::<CompressedAffine>()),
+            )
+    }
+}
 
 /// TypeInfo, SCALE encoding and decoding for `EncryptionPublicKey`.
 

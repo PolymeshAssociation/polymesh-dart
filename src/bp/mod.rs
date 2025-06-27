@@ -1,25 +1,27 @@
 use std::{collections::HashMap, hash::Hash};
 
 use codec::{Decode, Encode};
+use dock_crypto_utils::concat_slices;
+use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
+use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
 #[cfg(feature = "std")]
 use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
-use ark_ff::UniformRand as _;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use blake2::{Blake2b512, Blake2s256};
 
 use bounded_collections::{BoundedVec, ConstU32};
 
-use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
-use digest::Digest as _;
+use digest::Digest;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use indexmap::IndexMap;
+use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
+use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
 use rand::{RngCore, SeedableRng as _};
 
 pub mod encode;
-pub use encode::WrappedCanonical;
+pub use encode::{CompressedAffine, WrappedCanonical};
 
 use crate::curve_tree::*;
 use crate::*;
@@ -38,83 +40,217 @@ pub type PallasScalar = <PallasA as AffineRepr>::ScalarField;
 type BPAccountState = bp_account::AccountState<PallasA>;
 type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
 
+/// Constants that are hashed to generate the generators for the Dart BP protocol.
+pub const DART_GEN_DOMAIN: &'static [u8] = b"polymesh-dart-generators";
+pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-pk-acct";
+pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
+
 lazy_static::lazy_static! {
-    pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new();
+    pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 }
 
-/// Constants that are hashed to generate the generators for the Dart BP protocol.
-pub const DART_GEN_DOMAIN: &'static str = "polymesh-dart-generators";
-pub const DART_GEN_ACCOUNT_KEY: &'static str = "polymesh-dart-pk-acct";
-pub const DART_GEN_ENC_KEY: &'static str = "polymesh-dart-pk-enc";
+#[derive(
+    Clone, Copy, Encode, Decode, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize,
+)]
+pub struct AccountCommitmentKey {
+    #[codec(encoded_as = "CompressedAffine")]
+    pub sk_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub balance_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub counter_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub asset_id_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub rho_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub randomness_gen: PallasA,
+}
+
+impl AccountCommitmentKey {
+    /// Create a new account commitment key
+    pub fn new<D: Digest>(label: &[u8]) -> Self {
+        let sk_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![label, b" : sk_gen"]);
+        let balance_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : balance_gen"
+        ]);
+        let counter_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : counter_gen"
+        ]);
+        let asset_id_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : asset_id_gen"
+        ]);
+        let rho_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : rho_gen"
+        ]);
+        let randomness_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : randomness_gen"
+        ]);
+
+        Self {
+            sk_gen,
+            balance_gen,
+            counter_gen,
+            asset_id_gen,
+            rho_gen,
+            randomness_gen,
+        }
+    }
+
+    /// Returns the commitment key as an array of generators.
+    pub fn as_gens(&self) -> [PallasA; 6] {
+        // The order of elements in this slice is important as it is used in MSM
+        // when committing to account state
+        [
+            self.sk_gen,
+            self.balance_gen,
+            self.counter_gen,
+            self.asset_id_gen,
+            self.rho_gen,
+            self.randomness_gen,
+        ]
+    }
+}
+
+impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
+    fn sk_gen(&self) -> PallasA {
+        self.sk_gen
+    }
+
+    fn balance_gen(&self) -> PallasA {
+        self.balance_gen
+    }
+
+    fn counter_gen(&self) -> PallasA {
+        self.counter_gen
+    }
+
+    fn asset_id_gen(&self) -> PallasA {
+        self.asset_id_gen
+    }
+
+    fn rho_gen(&self) -> PallasA {
+        self.rho_gen
+    }
+
+    fn randomness_gen(&self) -> PallasA {
+        self.randomness_gen
+    }
+
+    fn as_gens(&self) -> [PallasA; 6] {
+        self.as_gens()
+    }
+}
 
 /// The generators for the Dart BP protocol.
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct DartBPGenerators {
-    pub pk_acct_g: PallasA,
-    pub pk_enc_g: PallasA,
-    pub account_comm_g: [PallasA; 6],
-    pub asset_comm_g: [PallasA; 2],
-    pub leg_g: PallasA,
-    pub leg_h: PallasA,
-    pub ped_comm_key: PedersenCommitmentKey<PallasA>,
+    #[codec(encoded_as = "CompressedAffine")]
+    sig_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    enc_gen: PallasA,
+    account_comm_key: AccountCommitmentKey,
+    #[codec(encoded_as = "CompressedAffine")]
+    asset_comm_g_0: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    asset_comm_g_1: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    enc_sig_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    leg_asset_value_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    ped_comm_key_g: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    ped_comm_key_h: PallasA,
 }
 
 impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
-    pub fn new() -> Self {
-        // TODO: we should the standard HashToCurve algorithm to generate the generators.
-
-        // Use a seeded rng to generate the generators.  Usse `DART_GEN_DOMAIN` to seed the RNG.
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(
-            Blake2s256::digest(DART_GEN_DOMAIN.as_bytes()).into(),
-        );
-
-        let pk_acct_g = PallasA::rand(&mut rng);
+    pub fn new(label: &[u8]) -> Self {
+        let sig_gen = affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+            label,
+            b" : sig_gen"
+        ]);
         // HACK: The sender affirmation fails if this isn't the same.
         //let pk_enc_g = PallasA::rand(&mut rng);
-        let pk_enc_g = pk_acct_g;
+        let enc_gen = sig_gen;
 
-        let account_comm_g = [
-            PallasA::rand(&mut rng), // field: sk -- TODO: Change this generator be the same `pk_acct_g`.
-            PallasA::rand(&mut rng), // field: finalized balance.
-            PallasA::rand(&mut rng), // field: counter
-            PallasA::rand(&mut rng), // field: asset_id
-            PallasA::rand(&mut rng), // field: random value rho
-            PallasA::rand(&mut rng), // field: random value s
-        ];
+        let account_comm_key = AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY);
 
-        let asset_comm_g = [
-            PallasA::rand(&mut rng), // field: is_mediator (1 for true, 0 for false)
-            PallasA::rand(&mut rng), // field: asset_id
-        ];
+        let asset_comm_is_mediator_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+                label,
+                b" : is_mediator_gen"
+            ]);
+        let asset_comm_asset_id_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+                label,
+                b" : asset_id_gen"
+            ]);
+        let asset_comm_g = [asset_comm_is_mediator_gen, asset_comm_asset_id_gen];
 
         // HACK: The sender affirmation fails if this isn't the same.
         //let leg_g = PallasA::rand(&mut rng);
-        let leg_g = pk_enc_g;
-        let leg_h = PallasA::rand(&mut rng);
+        let enc_sig_gen = enc_gen;
+        let leg_asset_value_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+                label,
+                b" : leg_asset_value_gen"
+            ]);
 
         let ped_comm_key =
             PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"polymesh-dart-comm-key");
 
         Self {
-            pk_acct_g,
-            pk_enc_g,
-            account_comm_g,
-            asset_comm_g,
-            leg_g,
-            leg_h,
-            ped_comm_key,
+            sig_gen,
+            enc_gen,
+            account_comm_key,
+            asset_comm_g_0: asset_comm_g[0],
+            asset_comm_g_1: asset_comm_g[1],
+            enc_sig_gen,
+            leg_asset_value_gen,
+            ped_comm_key_g: ped_comm_key.g,
+            ped_comm_key_h: ped_comm_key.h,
         }
     }
 
     /// Returns the generators for account state commitments.
-    pub fn account_comm_g(&self) -> &[PallasA] {
-        &self.account_comm_g
+    pub fn account_comm_key(&self) -> AccountCommitmentKey {
+        self.account_comm_key
     }
 
     /// Returns the generators for asset state commitments.
-    pub fn asset_comm_g(&self) -> &[PallasA] {
-        &self.asset_comm_g
+    pub fn asset_comm_g(&self) -> [PallasA; 2] {
+        [self.asset_comm_g_0, self.asset_comm_g_1]
+    }
+
+    pub fn sig_gen(&self) -> PallasA {
+        self.sig_gen
+    }
+
+    pub fn enc_gen(&self) -> PallasA {
+        self.enc_gen
+    }
+
+    pub fn enc_sig_gen(&self) -> PallasA {
+        self.enc_sig_gen
+    }
+
+    pub fn leg_asset_value_gen(&self) -> PallasA {
+        self.leg_asset_value_gen
+    }
+
+    pub fn ped_comm_key(&self) -> PedersenCommitmentKey<PallasA> {
+        PedersenCommitmentKey {
+            g: self.ped_comm_key_g,
+            h: self.ped_comm_key_h,
+        }
     }
 }
 
@@ -169,12 +305,21 @@ impl AccountLookupMap {
     }
 }
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct EncryptionPublicKey(pub(crate) bp_keys::EncKey<PallasA>);
 
 impl From<AccountPublicKey> for EncryptionPublicKey {
     fn from(account_pk: AccountPublicKey) -> Self {
         EncryptionPublicKey(bp_keys::EncKey(account_pk.0.0))
+    }
+}
+
+impl core::fmt::Debug for EncryptionPublicKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut buf = Vec::new();
+        self.serialize_compressed(&mut buf)
+            .map_err(|_| core::fmt::Error)?;
+        write!(f, "EncryptionPublicKey({})", hex::encode(buf))
     }
 }
 
@@ -190,7 +335,7 @@ pub struct EncryptionKeyPair {
 impl EncryptionKeyPair {
     /// Generates a new set of encryption keys using the provided RNG.
     pub fn rand<R: RngCore>(rng: &mut R) -> Self {
-        let (enc, enc_pk) = bp_keys::keygen_enc(rng, DART_GENS.pk_enc_g);
+        let (enc, enc_pk) = bp_keys::keygen_enc(rng, DART_GENS.enc_gen());
         Self {
             public: EncryptionPublicKey(enc_pk),
             secret: EncryptionSecretKey(enc),
@@ -198,8 +343,17 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct AccountPublicKey(pub(crate) bp_keys::VerKey<PallasA>);
+
+impl core::fmt::Debug for AccountPublicKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut buf = Vec::new();
+        self.serialize_compressed(&mut buf)
+            .map_err(|_| core::fmt::Error)?;
+        write!(f, "AccountPublicKey({})", hex::encode(buf))
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AccountSecretKey(bp_keys::SigKey<PallasA>);
@@ -213,7 +367,7 @@ pub struct AccountKeyPair {
 impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
     pub fn rand<R: RngCore>(rng: &mut R) -> Self {
-        let (account, account_pk) = bp_keys::keygen_sig(rng, DART_GENS.pk_acct_g);
+        let (account, account_pk) = bp_keys::keygen_sig(rng, DART_GENS.sig_gen());
         Self {
             public: AccountPublicKey(account_pk),
             secret: AccountSecretKey(account),
@@ -276,7 +430,7 @@ pub struct AccountState(BPAccountState);
 
 impl AccountState {
     pub fn commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.0.commit(&DART_GENS.account_comm_g()))
+        AccountStateCommitment(self.0.commit(DART_GENS.account_comm_key()))
     }
 }
 
@@ -511,8 +665,8 @@ impl AccountAssetRegistrationProof {
             &account_state.current_state.0,
             account_state_commitment.0.clone(),
             ctx,
-            &DART_GENS.account_comm_g(),
-            DART_GENS.pk_acct_g,
+            DART_GENS.account_comm_key(),
+            DART_GENS.sig_gen(),
         );
         (
             Self {
@@ -532,8 +686,8 @@ impl AccountAssetRegistrationProof {
             self.asset_id,
             &self.account_state_commitment.0,
             ctx,
-            &DART_GENS.account_comm_g(),
-            DART_GENS.pk_acct_g,
+            DART_GENS.account_comm_key(),
+            DART_GENS.sig_gen(),
         )?;
         Ok(())
     }
@@ -590,8 +744,8 @@ impl AssetMintingProof {
             current_account_path,
             b"",
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.pk_acct_g,
+            DART_GENS.account_comm_key(),
+            DART_GENS.sig_gen(),
         );
         Ok(Self {
             pk,
@@ -627,8 +781,8 @@ impl AssetMintingProof {
             &self.root,
             b"",
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.pk_acct_g,
+            DART_GENS.account_comm_key(),
+            DART_GENS.sig_gen(),
         )?;
         Ok(())
     }
@@ -751,9 +905,12 @@ impl Leg {
         ephemeral_key: EphemeralSkEncryption,
         pk_e: &EncryptionPublicKey,
     ) -> (LegEncrypted, LegEncryptionRandomness) {
-        let (leg_enc, leg_enc_rand) =
-            self.0
-                .encrypt(rng, &pk_e.0.0, DART_GENS.leg_g, DART_GENS.leg_h);
+        let (leg_enc, leg_enc_rand) = self.0.encrypt(
+            rng,
+            &pk_e.0.0,
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
+        );
         (
             LegEncrypted {
                 leg_enc,
@@ -963,9 +1120,9 @@ impl SettlementLegProof {
             ctx,
             asset_tree.params(),
             &DART_GENS.asset_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
-            &DART_GENS.ped_comm_key,
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
+            &DART_GENS.ped_comm_key(),
         );
 
         Ok(Self {
@@ -995,9 +1152,9 @@ impl SettlementLegProof {
             ctx,
             params,
             &DART_GENS.asset_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
-            &DART_GENS.ped_comm_key,
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
+            &DART_GENS.ped_comm_key(),
         )?;
         Ok(())
     }
@@ -1022,8 +1179,8 @@ impl EphemeralSkEncryption {
                 sender.0.0,
                 receiver.0.0,
                 mediator.0.0,
-                DART_GENS.leg_g,
-                DART_GENS.leg_h,
+                DART_GENS.enc_sig_gen(),
+                DART_GENS.leg_asset_value_gen(),
             );
         let pk_e = EncryptionPublicKey(pk_e);
         (
@@ -1067,7 +1224,9 @@ impl LegEncrypted {
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Leg {
         let sk_e = self.decrypt_sk_e(role, keys);
         log::debug!("Decrypted sk_e: {:?}", sk_e.0.0);
-        let leg = self.leg_enc.decrypt(&sk_e.0.0, DART_GENS.leg_h);
+        let leg = self
+            .leg_enc
+            .decrypt(&sk_e.0.0, DART_GENS.leg_asset_value_gen());
         Leg(leg)
     }
 }
@@ -1122,9 +1281,9 @@ impl SenderAffirmationProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1159,9 +1318,9 @@ impl SenderAffirmationProof {
             &self.root,
             ctx.as_bytes(),
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         )?;
         Ok(())
     }
@@ -1216,9 +1375,9 @@ impl ReceiverAffirmationProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1254,9 +1413,9 @@ impl ReceiverAffirmationProof {
             &self.root,
             ctx.as_bytes(),
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         )?;
         Ok(())
     }
@@ -1313,9 +1472,9 @@ impl ReceiverClaimProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1351,9 +1510,9 @@ impl ReceiverClaimProof {
             &self.root,
             ctx.as_bytes(),
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         )?;
         Ok(())
     }
@@ -1408,9 +1567,9 @@ impl SenderCounterUpdateProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1446,9 +1605,9 @@ impl SenderCounterUpdateProof {
             &self.root,
             ctx.as_bytes(),
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         )?;
         Ok(())
     }
@@ -1505,9 +1664,9 @@ impl SenderReversalProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1543,9 +1702,9 @@ impl SenderReversalProof {
             &self.root,
             ctx.as_bytes(),
             tree_roots.params(),
-            &DART_GENS.account_comm_g(),
-            DART_GENS.leg_g,
-            DART_GENS.leg_h,
+            DART_GENS.account_comm_key(),
+            DART_GENS.enc_sig_gen(),
+            DART_GENS.leg_asset_value_gen(),
         )?;
         Ok(())
     }
@@ -1580,7 +1739,7 @@ impl MediatorAffirmationProof {
             mediator_sk.secret.0.0,
             accept,
             ctx.as_bytes(),
-            DART_GENS.leg_g,
+            DART_GENS.enc_sig_gen(),
         );
 
         Self {
@@ -1599,7 +1758,7 @@ impl MediatorAffirmationProof {
             eph_pk.0.0,
             self.accept,
             ctx.as_bytes(),
-            DART_GENS.leg_g,
+            DART_GENS.enc_sig_gen(),
         )?;
         Ok(())
     }

@@ -1,4 +1,4 @@
-use crate::account::AccountState;
+use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -223,7 +223,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     new_counter_blinding: F0,
     old_rho_blinding: F0,
     asset_id_blinding: F0,
-    account_comm_key: &[Affine<G0>],
+    account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     pc_gens: &PedersenGens<Affine<G0>>,
     sig_null_gen: Affine<G0>,
     asset_value_gen: Affine<G0>,
@@ -241,12 +241,12 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
     let t_r_leaf = SchnorrCommitment::new(
         &[
-            account_comm_key[0],
-            account_comm_key[1],
-            account_comm_key[2],
-            account_comm_key[3],
-            account_comm_key[4],
-            account_comm_key[5],
+            account_comm_key.sk_gen(),
+            account_comm_key.balance_gen(),
+            account_comm_key.counter_gen(),
+            account_comm_key.asset_id_gen(),
+            account_comm_key.rho_gen(),
+            account_comm_key.randomness_gen(),
             pc_gens.B_blinding,
         ],
         vec![
@@ -263,12 +263,12 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     // Schnorr commitment for proving correctness of new account state which will become new leaf
     let t_acc_new = SchnorrCommitment::new(
         &[
-            account_comm_key[0],
-            account_comm_key[1],
-            account_comm_key[2],
-            account_comm_key[3],
-            account_comm_key[4],
-            account_comm_key[5],
+            account_comm_key.sk_gen(),
+            account_comm_key.balance_gen(),
+            account_comm_key.counter_gen(),
+            account_comm_key.asset_id_gen(),
+            account_comm_key.rho_gen(),
+            account_comm_key.randomness_gen(),
         ],
         vec![
             sk_blinding,
