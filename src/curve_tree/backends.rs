@@ -3,10 +3,74 @@ use std::collections::HashMap;
 use ark_ec::models::short_weierstrass::SWCurveConfig;
 
 use super::common::*;
-use super::sync_tree::CurveTreeBackend;
-#[cfg(feature = "async_tree")]
-use crate::curve_tree::async_tree::AsyncCurveTreeBackend;
 use crate::{LeafIndex, NodeLevel, error::*};
+
+pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
+    std::fmt::Debug
+{
+    fn height(&self) -> NodeLevel;
+
+    fn set_height(&mut self, height: NodeLevel) -> Result<(), Error>;
+
+    fn allocate_leaf_index(&mut self) -> LeafIndex;
+
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error>;
+
+    fn set_leaf(
+        &mut self,
+        leaf_index: LeafIndex,
+        new_leaf_value: LeafValue<P0>,
+    ) -> Result<Option<LeafValue<P0>>, Error>;
+
+    fn leaf_count(&self) -> LeafIndex;
+
+    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error>;
+
+    fn set_inner_node(
+        &mut self,
+        location: NodeLocation<L>,
+        new_node: Inner<M, P0, P1>,
+    ) -> Result<(), Error>;
+}
+
+#[cfg(feature = "async_tree")]
+pub trait AsyncCurveTreeBackend<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig,
+    P1: SWCurveConfig,
+>: std::fmt::Debug
+{
+    fn height(&self) -> impl Future<Output = NodeLevel> + Send;
+
+    fn set_height(&mut self, height: NodeLevel) -> impl Future<Output = Result<(), Error>> + Send;
+
+    fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
+
+    fn get_leaf(
+        &self,
+        leaf_index: LeafIndex,
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
+
+    fn set_leaf(
+        &mut self,
+        leaf_index: LeafIndex,
+        new_leaf_value: LeafValue<P0>,
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
+
+    fn leaf_count(&self) -> impl Future<Output = LeafIndex> + Send;
+
+    fn get_inner_node(
+        &self,
+        location: NodeLocation<L>,
+    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>, Error>> + Send;
+
+    fn set_inner_node(
+        &mut self,
+        location: NodeLocation<L>,
+        new_node: Inner<M, P0, P1>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+}
 
 pub struct CurveTreeMemoryBackend<
     const L: usize,

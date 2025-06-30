@@ -1,21 +1,29 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
+use ark_ec::AffineRepr;
+use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use ark_std::Zero;
+
+use curve_tree_relations::{
+    curve_tree::{Root, RootNode, SelRerandParameters},
+    curve_tree_prover::{CurveTreeWitnessPath, WitnessNode},
+};
 
 use super::*;
 use crate::curve_tree::{LeafIndex, NodeLevel};
 
-pub mod sync_tree;
-use sync_tree::CurveTreeWithBackend;
+//pub mod sync_tree;
+//use sync_tree::CurveTreeWithBackend;
 
-#[cfg(feature = "async_tree")]
-pub mod async_tree;
+//#[cfg(feature = "async_tree")]
+//pub mod async_tree;
 
 pub mod backends;
+use backends::*;
 
+#[macro_use]
 mod common;
 pub use common::*;
 
@@ -24,6 +32,10 @@ pub type CurveTreePath<const L: usize> = CurveTreeWitnessPath<L, PallasParameter
 
 #[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct CurveTreeRoot<const L: usize>(pub Root<L, 1, PallasParameters, VestaParameters>);
+
+#[cfg(feature = "async_tree")]
+impl_curve_tree_with_backend!(Async, AsyncCurveTreeWithBackend, AsyncCurveTreeBackend);
+impl_curve_tree_with_backend!(Sync, CurveTreeWithBackend, CurveTreeBackend);
 
 impl<const L: usize> Deref for CurveTreeRoot<L> {
     type Target = Root<L, 1, PallasParameters, VestaParameters>;
