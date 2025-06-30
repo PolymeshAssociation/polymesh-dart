@@ -50,7 +50,7 @@ lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 }
 
-#[derive(Clone, Copy, Debug, Encode, Decode, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
 pub struct AccountCommitmentKey {
     #[codec(encoded_as = "CompressedAffine")]
     pub sk_gen: PallasA,
@@ -129,7 +129,7 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Encode, Decode, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
 pub struct AssetCommitmentKey {
     #[codec(encoded_as = "CompressedAffine")]
     pub is_mediator_gen: PallasA,
@@ -157,7 +157,7 @@ impl AssetCommitmentKey {
 }
 
 /// The generators for the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct DartBPGenerators {
     #[codec(encoded_as = "CompressedAffine")]
     sig_gen: PallasA,
@@ -580,8 +580,8 @@ impl AssetState {
 }
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, Default)]
-pub struct AssetStateCommitment(#[codec(encoded_as = "CompressedAffine")] pub PallasA);
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Debug, Default)]
+pub struct AssetStateCommitment(pub PallasA);
 
 /// Represents a tree of asset states in the Dart BP protocol.
 pub struct AssetCurveTree {
@@ -1758,5 +1758,20 @@ impl MediatorAffirmationProof {
             DART_GENS.enc_sig_gen(),
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test encode/decode of DartBPGenerators.
+    #[test]
+    fn test_dart_bp_generators_encode_decode() {
+        let gens = DART_GENS.clone();
+
+        let encoded = gens.encode();
+        let decoded: DartBPGenerators = Decode::decode(&mut &encoded[..]).unwrap();
+        assert_eq!(gens, decoded);
     }
 }
