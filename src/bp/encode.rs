@@ -8,7 +8,7 @@ use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use crate::{
-    curve_tree::{CurveTreeRoot, Inner, LeafValue},
+    curve_tree::{Inner, LeafValue},
     *,
 };
 
@@ -259,9 +259,6 @@ impl_scale_and_type_info!(LegEncrypted as Vec);
 // TypeInfo, SCALE encoding and decoding for `AssetStateCommitment`.
 impl_scale_and_type_info!(AssetStateCommitment as CompressedPoint);
 
-// TypeInfo, SCALE encoding and decoding for `CurveTreeRoot<L>`.
-impl_scale_and_type_info!(CurveTreeRoot as Vec<const L: usize>);
-
 // TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>);
 
@@ -269,7 +266,7 @@ impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SW
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WrappedCanonical<T> {
     wrapped: Vec<u8>,
     _marker: core::marker::PhantomData<T>,
