@@ -434,7 +434,7 @@ impl AccountState {
 #[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, Debug, PartialEq, Eq, Hash)]
 pub struct AccountStateNullifier(pub(crate) PallasA);
 
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct AccountStateCommitment(pub BPAccountStateCommitment);
 
 #[derive(Clone, Debug)]
@@ -653,7 +653,7 @@ impl AccountAssetRegistrationProof {
         account: &AccountKeys,
         asset_id: AssetId,
         ctx: &[u8],
-    ) -> (Self, AccountAssetState) {
+    ) -> Result<(Self, AccountAssetState), Error> {
         let account_state = account.init_asset_state(rng, asset_id);
         let account_state_commitment = account_state.current_state_commitment.clone();
         let proof = bp_account::RegTxnProof::new(
@@ -665,20 +665,21 @@ impl AccountAssetRegistrationProof {
             DART_GENS.account_comm_key(),
             DART_GENS.sig_gen(),
         );
-        (
+        Ok((
             Self {
                 account: account.acct.public,
                 account_state_commitment,
                 asset_id,
-                proof: proof.into(),
+                proof: WrappedCanonical::wrap(&proof)?,
             },
             account_state,
-        )
+        ))
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
     pub fn verify(&self, ctx: &[u8]) -> Result<(), Error> {
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             &self.account.0.0,
             self.asset_id,
             &self.account_state_commitment.0,
@@ -699,6 +700,8 @@ pub struct AssetMintingProof {
     pub asset_id: AssetId,
     pub amount: Balance,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     // proof
     proof: WrappedCanonical<
@@ -731,13 +734,13 @@ impl AssetMintingProof {
 
         let root = tree_lookup.root_node()?;
 
-        let proof = bp_account::MintTxnProof::new(
+        let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
             pk.0.0,
             amount,
             current_account_state,
             &mint_account_state.0,
-            mint_account_commitment.0.clone(),
+            mint_account_commitment.0,
             current_account_path,
             b"",
             tree_lookup.params(),
@@ -749,17 +752,19 @@ impl AssetMintingProof {
             asset_id: account_asset.asset_id,
             amount,
             root,
+            updated_account_state_commitment: mint_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -771,10 +776,13 @@ impl AssetMintingProof {
             log::error!("Invalid root for asset minting proof");
             return Err(Error::CurveTreeRootNotFound);
         }
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             self.pk.0.0,
             self.asset_id,
             self.amount,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             &self.root,
             b"",
             tree_roots.params(),
@@ -1125,7 +1133,7 @@ impl SettlementLegProof {
         Ok(Self {
             leg_enc,
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -1141,7 +1149,8 @@ impl SettlementLegProof {
     ) -> Result<(), Error> {
         let pk_e = self.leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", self.leg_enc.leg_enc);
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             self.leg_enc.leg_enc.clone(),
             self.leg_enc.ephemeral_key.enc.clone(),
             pk_e.0.0,
@@ -1234,6 +1243,8 @@ impl LegEncrypted {
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
         bp_account::AffirmAsSenderTxnProof<
@@ -1267,14 +1278,14 @@ impl SenderAffirmationProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let proof = bp_account::AffirmAsSenderTxnProof::new(
+        let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0,
+            new_account_commitment.0.clone(),
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1286,17 +1297,19 @@ impl SenderAffirmationProof {
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
+            updated_account_state_commitment: new_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -1310,9 +1323,12 @@ impl SenderAffirmationProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1329,7 +1345,8 @@ impl SenderAffirmationProof {
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub account_state_commitment: AccountStateCommitment,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
         bp_account::AffirmAsReceiverTxnProof<
@@ -1362,7 +1379,7 @@ impl ReceiverAffirmationProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let proof = bp_account::AffirmAsReceiverTxnProof::new(
+        let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
             rng,
             sk_e.0.0,
             leg_enc.leg_enc.clone(),
@@ -1380,18 +1397,19 @@ impl ReceiverAffirmationProof {
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
-            account_state_commitment: new_account_commitment,
+            updated_account_state_commitment: new_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -1405,9 +1423,12 @@ impl ReceiverAffirmationProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1424,7 +1445,8 @@ impl ReceiverAffirmationProof {
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub account_state_commitment: AccountStateCommitment,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
         bp_account::ClaimReceivedTxnProof<
@@ -1458,7 +1480,7 @@ impl ReceiverClaimProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let proof = bp_account::ClaimReceivedTxnProof::new(
+        let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
@@ -1477,18 +1499,19 @@ impl ReceiverClaimProof {
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
-            account_state_commitment: new_account_commitment,
+            updated_account_state_commitment: new_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -1502,9 +1525,12 @@ impl ReceiverClaimProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1521,7 +1547,8 @@ impl ReceiverClaimProof {
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub account_state_commitment: AccountStateCommitment,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
         bp_account::SenderCounterUpdateTxnProof<
@@ -1554,7 +1581,7 @@ impl SenderCounterUpdateProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let proof = bp_account::SenderCounterUpdateTxnProof::new(
+        let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
             rng,
             sk_e.0.0,
             leg_enc.leg_enc.clone(),
@@ -1572,18 +1599,19 @@ impl SenderCounterUpdateProof {
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
-            account_state_commitment: new_account_commitment,
+            updated_account_state_commitment: new_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -1597,9 +1625,12 @@ impl SenderCounterUpdateProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1616,7 +1647,8 @@ impl SenderCounterUpdateProof {
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
-    pub account_state_commitment: AccountStateCommitment,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
         bp_account::SenderReverseTxnProof<
@@ -1650,7 +1682,7 @@ impl SenderReversalProof {
         let root = tree_lookup.root_node()?;
 
         let ctx = leg_ref.context();
-        let proof = bp_account::SenderReverseTxnProof::new(
+        let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
             rng,
             amount,
             sk_e.0.0,
@@ -1669,18 +1701,19 @@ impl SenderReversalProof {
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root,
-            account_state_commitment: new_account_commitment,
+            updated_account_state_commitment: new_account_commitment,
+            nullifier: AccountStateNullifier(nullifier),
 
-            proof: proof.into(),
+            proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.proof.updated_account_commitment.clone())
+        self.updated_account_state_commitment
     }
 
     pub fn nullifier(&self) -> AccountStateNullifier {
-        AccountStateNullifier(self.proof.nullifier)
+        self.nullifier
     }
 
     pub fn verify(
@@ -1694,9 +1727,12 @@ impl SenderReversalProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let ctx = self.leg_ref.context();
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
+            self.updated_account_state_commitment.0,
+            self.nullifier.0,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1725,7 +1761,7 @@ impl MediatorAffirmationProof {
         leg_enc: &LegEncrypted,
         mediator_sk: &AccountKeyPair,
         accept: bool,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let ctx = leg_ref.context();
         let eph_pk = leg_enc.ephemeral_key.pk_e;
         let proof = bp_leg::MediatorTxnProof::new(
@@ -1739,18 +1775,19 @@ impl MediatorAffirmationProof {
             DART_GENS.enc_sig_gen(),
         );
 
-        Self {
+        Ok(Self {
             leg_ref: leg_ref.clone(),
             accept,
 
-            proof: proof.into(),
-        }
+            proof: WrappedCanonical::wrap(&proof)?,
+        })
     }
 
     pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
         let eph_pk = leg_enc.ephemeral_key.pk_e;
-        self.proof.verify(
+        let proof = self.proof.decode()?;
+        proof.verify(
             leg_enc.leg_enc.clone(),
             eph_pk.0.0,
             self.accept,

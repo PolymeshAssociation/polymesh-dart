@@ -245,6 +245,9 @@ impl_scale_and_type_info!(LegEncrypted as Vec);
 // TypeInfo, SCALE encoding and decoding for `AccountStateCommitment`.
 impl_scale_and_type_info!(AccountStateCommitment as CompressedPoint);
 
+// TypeInfo, SCALE encoding and decoding for `AccountStateNullifier`.
+impl_scale_and_type_info!(AccountStateNullifier as CompressedPoint);
+
 // TypeInfo, SCALE encoding and decoding for `AssetStateCommitment`.
 impl_scale_and_type_info!(AssetStateCommitment as CompressedPoint);
 
@@ -259,21 +262,25 @@ impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
-pub struct WrappedCanonical<T>(pub T);
-
-impl<T> core::ops::Deref for WrappedCanonical<T> {
-    type Target = T;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct WrappedCanonical<T> {
+    wrapped: Vec<u8>,
+    _marker: core::marker::PhantomData<T>,
 }
 
-impl<T> From<T> for WrappedCanonical<T> {
-    #[inline]
-    fn from(value: T) -> Self {
-        Self(value)
+impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
+    /// Wraps a `T` value into a `WrappedCanonical` by serializing it into a compressed byte vector.
+    pub fn wrap(value: &T) -> Result<Self, Error> {
+        let mut buf = Vec::with_capacity(value.compressed_size());
+        value.serialize_compressed(&mut buf)?;
+        Ok(Self {
+            wrapped: buf,
+            _marker: core::marker::PhantomData,
+        })
+    }
+
+    /// Decodes the wrapped value back into its original type `T`.
+    pub fn decode(&self) -> Result<T, Error> {
+        Ok(T::deserialize_compressed(&*self.wrapped)?)
     }
 }
 
@@ -296,24 +303,19 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
 impl<T: CanonicalSerialize> Encode for WrappedCanonical<T> {
     #[inline]
     fn size_hint(&self) -> usize {
-        mem::size_of::<u32>() + self.0.compressed_size()
+        self.wrapped.size_hint()
     }
 
     fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
-        let mut buf = Vec::new();
-        self.0
-            .serialize_compressed(&mut buf)
-            .expect("Failed to serialize");
-        buf.encode_to(dest);
+        self.wrapped.encode_to(dest);
     }
 }
 
 impl<T: CanonicalDeserialize> Decode for WrappedCanonical<T> {
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf = <Vec<u8>>::decode(input)?;
-        Ok(Self(
-            T::deserialize_compressed(&*buf)
-                .map_err(|_| CodecError::from("Failed to deserialize"))?,
-        ))
+        Ok(Self {
+            wrapped: <Vec<u8>>::decode(input)?,
+            _marker: core::marker::PhantomData,
+        })
     }
 }

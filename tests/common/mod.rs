@@ -72,7 +72,7 @@ impl DartUserAccountInner {
             ));
         }
         let (proof, mut asset_state) =
-            AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx());
+            AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx())?;
         chain.initialize_account_asset(&self.address, proof)?;
         asset_state.commit_pending_state();
         self.assets.insert(asset_id, asset_state);
@@ -210,7 +210,7 @@ impl DartUserAccountInner {
         // Create the mediator affirmation proof.
         log::info!("Mediator generate affirmation proof");
         let proof =
-            MediatorAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, &self.keys.acct, accept);
+            MediatorAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, &self.keys.acct, accept)?;
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())

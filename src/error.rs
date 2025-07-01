@@ -62,4 +62,8 @@ pub enum Error {
     /// Asset state not found.
     #[error("Asset state not found: {0:?}")]
     AssetStateNotFound(AssetId),
+
+    /// Arkworks serialization error.
+    #[error("Arkworks serialization error: {0}")]
+    ArkworksSerializationError(#[from] ark_serialize::SerializationError),
 }

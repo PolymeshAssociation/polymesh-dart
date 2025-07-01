@@ -109,7 +109,7 @@ pub struct AccountState<G: AffineRepr> {
     // TODO: Add version
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
 
 // TODO: Convert asserts to errors
@@ -386,9 +386,6 @@ pub struct MintTxnProof<
     pub odd_proof: R1CSProof<Affine<G1>>,
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -424,7 +421,7 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
@@ -567,19 +564,20 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            odd_proof,
-            even_proof,
-            re_randomized_path,
-            updated_account_commitment,
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                re_randomized_path,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+                resp_leaf,
+                resp_acc_new,
+                resp_null,
+                resp_pk,
+            },
             nullifier,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-            resp_leaf,
-            resp_acc_new,
-            resp_null,
-            resp_pk,
-        }
+        )
     }
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
@@ -588,6 +586,8 @@ impl<
         issuer_pk: Affine<G0>,
         asset_id: AssetId,
         increase_bal_by: Balance,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         account_tree: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -611,7 +611,7 @@ impl<
         increase_bal_by
             .serialize_compressed(&mut extra_instance)
             .unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -634,7 +634,7 @@ impl<
             .serialize_compressed(&mut verifier_transcript)
             .unwrap();
         self.resp_null
-            .challenge_contribution(&sig_null_gen, &self.nullifier, &mut verifier_transcript)
+            .challenge_contribution(&sig_null_gen, &nullifier, &mut verifier_transcript)
             .unwrap();
         self.resp_pk
             .challenge_contribution(&sig_null_gen, &issuer_pk, &mut verifier_transcript)
@@ -661,7 +661,7 @@ impl<
             )
             .unwrap();
 
-        let y = self.updated_account_commitment.0 - asset_id_comm;
+        let y = updated_account_commitment.0 - asset_id_comm;
         self.resp_acc_new
             .is_valid(
                 &[
@@ -679,7 +679,7 @@ impl<
 
         assert!(
             self.resp_null
-                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
+                .verify(&nullifier, &sig_null_gen, &verifier_challenge,)
         );
         assert!(
             self.resp_pk
@@ -722,12 +722,9 @@ pub struct AffirmAsSenderTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -779,7 +776,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -915,27 +912,28 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            odd_proof,
-            even_proof,
-            updated_account_commitment,
-            re_randomized_path,
-            comm_bal_old,
-            comm_bal_new,
-            comm_amount,
-            resp_leaf,
-            resp_acc_new,
-            resp_old_bal,
-            resp_new_bal,
-            resp_null,
-            resp_leg_amount,
-            resp_leg_asset_id,
-            resp_leg_pk,
-            resp_amount,
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                re_randomized_path,
+                comm_bal_old,
+                comm_bal_new,
+                comm_amount,
+                resp_leaf,
+                resp_acc_new,
+                resp_old_bal,
+                resp_new_bal,
+                resp_null,
+                resp_leg_amount,
+                resp_leg_asset_id,
+                resp_leg_pk,
+                resp_amount,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+            },
             nullifier,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-        }
+        )
     }
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
@@ -944,6 +942,8 @@ impl<
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -961,7 +961,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -995,6 +995,7 @@ impl<
             self,
             leg_enc,
             true,
+            nullifier,
             sig_null_gen,
             asset_value_gen,
             verifier_transcript
@@ -1016,6 +1017,8 @@ impl<
             leg_enc,
             true,
             account_comm_key,
+            updated_account_commitment,
+            nullifier,
             pc_gens,
             sig_null_gen,
             asset_value_gen,
@@ -1073,9 +1076,6 @@ pub struct AffirmAsReceiverTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -1111,7 +1111,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1202,26 +1202,29 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            odd_proof,
-            even_proof,
-            re_randomized_path,
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                re_randomized_path,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+                resp_leaf,
+                resp_acc_new,
+                resp_null,
+                resp_leg_pk,
+                resp_leg_asset_id,
+            },
             nullifier,
-            updated_account_commitment,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-            resp_leaf,
-            resp_acc_new,
-            resp_null,
-            resp_leg_pk,
-            resp_leg_asset_id,
-        }
+        )
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1239,7 +1242,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -1265,6 +1268,7 @@ impl<
             self,
             leg_enc,
             false,
+            nullifier,
             sig_null_gen,
             asset_value_gen,
             verifier_transcript
@@ -1278,6 +1282,8 @@ impl<
             leg_enc,
             false,
             account_comm_key,
+            updated_account_commitment,
+            nullifier,
             pc_gens,
             sig_null_gen,
             asset_value_gen,
@@ -1331,12 +1337,9 @@ pub struct ClaimReceivedTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -1386,7 +1389,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1531,33 +1534,36 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            odd_proof,
-            even_proof,
-            updated_account_commitment,
-            re_randomized_path,
-            comm_bal_old,
-            comm_bal_new,
-            comm_amount,
-            resp_leaf,
-            resp_acc_new,
-            resp_old_bal,
-            resp_new_bal,
-            resp_null,
-            resp_leg_amount,
-            resp_leg_asset_id,
-            resp_leg_pk,
-            resp_amount,
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                re_randomized_path,
+                comm_bal_old,
+                comm_bal_new,
+                comm_amount,
+                resp_leaf,
+                resp_acc_new,
+                resp_old_bal,
+                resp_new_bal,
+                resp_null,
+                resp_leg_amount,
+                resp_leg_asset_id,
+                resp_leg_pk,
+                resp_amount,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+            },
             nullifier,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-        }
+        )
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1575,7 +1581,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -1612,6 +1618,7 @@ impl<
             self,
             leg_enc,
             false,
+            nullifier,
             sig_null_gen,
             asset_value_gen,
             verifier_transcript
@@ -1639,6 +1646,8 @@ impl<
             leg_enc,
             false,
             account_comm_key,
+            updated_account_commitment,
+            nullifier,
             pc_gens,
             sig_null_gen,
             asset_value_gen,
@@ -1698,9 +1707,6 @@ pub struct SenderCounterUpdateTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -1736,7 +1742,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -1827,26 +1833,29 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            even_proof,
-            odd_proof,
-            re_randomized_path,
-            updated_account_commitment,
+        (
+            Self {
+                even_proof,
+                odd_proof,
+                re_randomized_path,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+                resp_leaf,
+                resp_acc_new,
+                resp_null,
+                resp_leg_asset_id,
+                resp_leg_pk,
+            },
             nullifier,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-            resp_leaf,
-            resp_acc_new,
-            resp_null,
-            resp_leg_asset_id,
-            resp_leg_pk,
-        }
+        )
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1864,7 +1873,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -1890,6 +1899,7 @@ impl<
             self,
             leg_enc,
             true,
+            nullifier,
             sig_null_gen,
             asset_value_gen,
             verifier_transcript
@@ -1903,6 +1913,8 @@ impl<
             leg_enc,
             true,
             account_comm_key,
+            updated_account_commitment,
+            nullifier,
             pc_gens,
             sig_null_gen,
             asset_value_gen,
@@ -1944,12 +1956,9 @@ pub struct SenderReverseTxnProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
-    /// This is the commitment to the new account state which will become new leaf
-    pub updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub comm_bal_old: Affine<G0>,
     pub comm_bal_new: Affine<G0>,
     pub comm_amount: Affine<G0>,
-    pub nullifier: Affine<G0>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -1999,7 +2008,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
-    ) -> Self {
+    ) -> (Self, Affine<G0>) {
         assert_eq!(account.asset_id, updated_account.asset_id);
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
@@ -2126,33 +2135,36 @@ impl<
 
         let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
 
-        Self {
-            odd_proof,
-            even_proof,
-            updated_account_commitment,
-            re_randomized_path,
-            comm_bal_old,
-            comm_bal_new,
-            comm_amount,
-            resp_leaf,
-            resp_acc_new,
-            resp_old_bal,
-            resp_new_bal,
-            resp_null,
-            resp_leg_amount,
-            resp_leg_asset_id,
-            resp_leg_pk,
-            resp_amount,
+        (
+            Self {
+                odd_proof,
+                even_proof,
+                re_randomized_path,
+                comm_bal_old,
+                comm_bal_new,
+                comm_amount,
+                resp_leaf,
+                resp_acc_new,
+                resp_old_bal,
+                resp_new_bal,
+                resp_null,
+                resp_leg_amount,
+                resp_leg_asset_id,
+                resp_leg_pk,
+                resp_amount,
+                t_r_leaf: t_r_leaf.t,
+                t_acc_new: t_acc_new.t,
+            },
             nullifier,
-            t_r_leaf: t_r_leaf.t,
-            t_acc_new: t_acc_new.t,
-        }
+        )
     }
 
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -2170,7 +2182,7 @@ impl<
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance).unwrap();
         leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        self.updated_account_commitment
+        updated_account_commitment
             .serialize_compressed(&mut extra_instance)
             .unwrap();
         account_tree_params
@@ -2204,6 +2216,7 @@ impl<
             self,
             leg_enc,
             true,
+            nullifier,
             sig_null_gen,
             asset_value_gen,
             verifier_transcript
@@ -2225,6 +2238,8 @@ impl<
             leg_enc,
             true,
             account_comm_key,
+            updated_account_commitment,
+            nullifier,
             pc_gens,
             sig_null_gen,
             asset_value_gen,
@@ -3103,7 +3118,7 @@ mod tests {
         // Verifier gets the root of the tree
         let root = account_tree.root_node();
 
-        let proof = MintTxnProof::new(
+        let (proof, nullifier) = MintTxnProof::new(
             &mut rng,
             pk_i.0,
             increase_bal_by,
@@ -3125,6 +3140,8 @@ mod tests {
                 pk_i.0,
                 asset_id,
                 increase_bal_by,
+                updated_account_comm,
+                nullifier,
                 &root,
                 nonce,
                 &account_tree_params,
@@ -3207,7 +3224,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let proof = AffirmAsSenderTxnProof::new(
+        let (proof, nullifier) = AffirmAsSenderTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3230,6 +3247,8 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
+                updated_account_comm,
+                nullifier,
                 nonce,
                 &account_tree_params,
                 &*account_comm_key,
@@ -3311,7 +3330,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let proof = AffirmAsReceiverTxnProof::new(
+        let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
             &mut rng,
             sk_e.0,
             leg_enc.clone(),
@@ -3333,6 +3352,8 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
+                updated_account_comm,
+                nullifier,
                 nonce,
                 &account_tree_params,
                 &*account_comm_key,
@@ -3411,7 +3432,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let proof = ClaimReceivedTxnProof::new(
+        let (proof, nullifier) = ClaimReceivedTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3434,6 +3455,8 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
+                updated_account_comm,
+                nullifier,
                 nonce,
                 &account_tree_params,
                 &*account_comm_key,
@@ -3510,7 +3533,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let proof = SenderCounterUpdateTxnProof::new(
+        let (proof, nullifier) = SenderCounterUpdateTxnProof::new(
             &mut rng,
             sk_e.0,
             leg_enc.clone(),
@@ -3532,6 +3555,8 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
+                updated_account_comm,
+                nullifier,
                 nonce,
                 &account_tree_params,
                 &*account_comm_key,
@@ -3606,7 +3631,7 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let proof = SenderReverseTxnProof::new(
+        let (proof, nullifier) = SenderReverseTxnProof::new(
             &mut rng,
             amount,
             sk_e.0,
@@ -3629,6 +3654,8 @@ mod tests {
             .verify(
                 leg_enc,
                 &root,
+                updated_account_comm,
+                nullifier,
                 nonce,
                 &account_tree_params,
                 &*account_comm_key,

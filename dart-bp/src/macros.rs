@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change {
-    ($self: ident, $leg_enc: ident, $is_sender: expr, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_transcript: ident) => {
+    ($self: ident, $leg_enc: ident, $is_sender: expr, $nullifier: expr, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_transcript: ident) => {
         $self
             .t_r_leaf
             .serialize_compressed(&mut $verifier_transcript)
@@ -11,7 +11,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
             .unwrap();
         $self
             .resp_null
-            .challenge_contribution(&$sig_null_gen, &$self.nullifier, &mut $verifier_transcript)
+            .challenge_contribution(&$sig_null_gen, &$nullifier, &mut $verifier_transcript)
             .unwrap();
         $self
             .resp_leg_asset_id
@@ -86,7 +86,7 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
 
 #[macro_export]
 macro_rules! verify_schnorr_for_common_state_change {
-    ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $pc_gens: path, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_challenge: ident) => {
+    ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $updated_account_commitment: expr, $nullifier: expr, $pc_gens: path, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_challenge: ident) => {
         $self
             .resp_leaf
             .is_valid(
@@ -115,7 +115,7 @@ macro_rules! verify_schnorr_for_common_state_change {
                     $account_comm_key.rho_gen(),
                     $account_comm_key.randomness_gen(),
                 ],
-                &$self.updated_account_commitment.0,
+                &$updated_account_commitment.0,
                 &$self.t_acc_new,
                 &$verifier_challenge,
             )
@@ -123,7 +123,7 @@ macro_rules! verify_schnorr_for_common_state_change {
         assert!(
             $self
                 .resp_null
-                .verify(&$self.nullifier, &$sig_null_gen, &$verifier_challenge,)
+                .verify(&$nullifier, &$sig_null_gen, &$verifier_challenge,)
         );
         assert!($self.resp_leg_asset_id.verify(
             &$leg_enc.ct_asset_id.encrypted,
