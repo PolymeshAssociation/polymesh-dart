@@ -562,8 +562,8 @@ pub fn prove<
 
     #[cfg(not(feature = "parallel"))]
     let (even_proof, odd_proof) = (
-        even_prover.prove(&account_tree_params.even_parameters.bp_gens),
-        odd_prover.prove(&account_tree_params.odd_parameters.bp_gens),
+        even_prover.prove(&tree_params.even_parameters.bp_gens),
+        odd_prover.prove(&tree_params.odd_parameters.bp_gens),
     );
 
     let (even_proof, odd_proof) = (even_proof?, odd_proof?);
@@ -603,14 +603,14 @@ pub fn verify<
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
         even_verifier.verify(
-            &self.even_proof,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            even_proof,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
         ),
         odd_verifier.verify(
-            &self.odd_proof,
-            &account_tree_params.odd_parameters.pc_gens,
-            &account_tree_params.odd_parameters.bp_gens,
+            odd_proof,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
         ),
     );
 
