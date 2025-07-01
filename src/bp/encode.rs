@@ -5,7 +5,7 @@ use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, Output};
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use crate::{
     curve_tree::{CurveTreeRoot, Inner, LeafValue},
@@ -137,12 +137,32 @@ pub const ARK_EC_POINT_SIZE: usize = 33;
 
 pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 
-#[derive(Copy, Clone, Debug, Encode, Decode)]
+#[derive(
+    Copy, Clone, Encode, Decode, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash,
+)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct CompressedAffine(CompressedPoint);
 
+impl core::fmt::Debug for CompressedAffine {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0[..]))
+    }
+}
+
+impl CompressedAffine {
+    /// Returns the underlying byte array.
+    pub fn as_bytes(&self) -> &[u8; ARK_EC_POINT_SIZE] {
+        &self.0
+    }
+
+    /// Returns the size of the compressed point.
+    pub fn size_hint() -> usize {
+        ARK_EC_POINT_SIZE
+    }
+}
+
 impl<P: SWCurveConfig> TryFrom<Affine<P>> for CompressedAffine {
-    type Error = SerializationError;
+    type Error = Error;
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: Affine<P>) -> Result<Self, Self::Error> {
@@ -160,7 +180,7 @@ impl<P: SWCurveConfig> From<&Affine<P>> for CompressedAffine {
 }
 
 impl<P: SWCurveConfig> TryFrom<&CompressedAffine> for Affine<P> {
-    type Error = SerializationError;
+    type Error = Error;
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: &CompressedAffine) -> Result<Self, Self::Error> {
@@ -233,20 +253,8 @@ impl TypeInfo for AssetCommitmentKey {
     }
 }
 
-// TypeInfo, SCALE encoding and decoding for `EncryptionPublicKey`.
-impl_scale_and_type_info!(EncryptionPublicKey as CompressedPoint);
-
-// TypeInfo, SCALE encoding and decoding for `AccountPublicKey`.
-impl_scale_and_type_info!(AccountPublicKey as CompressedPoint);
-
 // TypeInfo, SCALE encoding and decoding for `LegEncrypted`.
 impl_scale_and_type_info!(LegEncrypted as Vec);
-
-// TypeInfo, SCALE encoding and decoding for `AccountStateCommitment`.
-impl_scale_and_type_info!(AccountStateCommitment as CompressedPoint);
-
-// TypeInfo, SCALE encoding and decoding for `AccountStateNullifier`.
-impl_scale_and_type_info!(AccountStateNullifier as CompressedPoint);
 
 // TypeInfo, SCALE encoding and decoding for `AssetStateCommitment`.
 impl_scale_and_type_info!(AssetStateCommitment as CompressedPoint);
@@ -261,7 +269,7 @@ impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SW
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WrappedCanonical<T> {
     wrapped: Vec<u8>,
     _marker: core::marker::PhantomData<T>,

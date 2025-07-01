@@ -47,7 +47,7 @@ struct DartUserAccountInner {
 
 impl DartUserAccountInner {
     pub fn new<R: RngCore>(rng: &mut R, address: SignerAddress) -> Result<Self> {
-        let account_keys = AccountKeys::rand(rng);
+        let account_keys = AccountKeys::rand(rng)?;
         Ok(Self {
             address,
             keys: account_keys,
@@ -74,7 +74,7 @@ impl DartUserAccountInner {
         let (proof, mut asset_state) =
             AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx())?;
         chain.initialize_account_asset(&self.address, proof)?;
-        asset_state.commit_pending_state();
+        asset_state.commit_pending_state()?;
         self.assets.insert(asset_id, asset_state);
         Ok(())
     }
@@ -93,7 +93,7 @@ impl DartUserAccountInner {
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
         let proof = AssetMintingProof::new(rng, asset_state, account_tree, amount)?;
         chain.mint_assets(&self.address, proof)?;
-        asset_state.commit_pending_state();
+        asset_state.commit_pending_state()?;
         Ok(())
     }
 
@@ -145,7 +145,7 @@ impl DartUserAccountInner {
         )?;
         log::info!("Sender affirms");
         chain.sender_affirmation(&self.address, proof)?;
-        asset_state.commit_pending_state();
+        asset_state.commit_pending_state()?;
         Ok(())
     }
 
@@ -190,7 +190,7 @@ impl DartUserAccountInner {
             ReceiverAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree)?;
         log::info!("Receiver affirms");
         chain.receiver_affirmation(&self.address, proof)?;
-        asset_state.commit_pending_state();
+        asset_state.commit_pending_state()?;
         Ok(())
     }
 
@@ -249,7 +249,7 @@ impl DartUserAccountInner {
         )?;
         log::info!("Receiver claims");
         chain.receiver_claim(&self.address, proof)?;
-        asset_state.commit_pending_state();
+        asset_state.commit_pending_state()?;
         Ok(())
     }
 }
@@ -675,26 +675,26 @@ pub struct DartSettlement {
 }
 
 impl DartSettlement {
-    pub fn from_proof(id: SettlementId, proof: SettlementProof) -> Self {
+    pub fn from_proof(id: SettlementId, proof: SettlementProof) -> Result<Self> {
         let legs = proof
             .legs
             .into_iter()
             .map(|leg| {
-                let mediator = leg.has_mediator().then_some(AffirmationStatus::Pending);
-                DartSettlementLeg {
-                    enc: leg.leg_enc,
+                let mediator = leg.has_mediator()?.then_some(AffirmationStatus::Pending);
+                Ok(DartSettlementLeg {
+                    enc: leg.leg_enc()?,
                     sender: AffirmationStatus::Pending,
                     receiver: AffirmationStatus::Pending,
                     mediator,
                     status: AffirmationStatus::Pending,
-                }
+                })
             })
-            .collect();
-        Self {
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
             id,
             legs,
             status: SettlementStatus::Pending,
-        }
+        })
     }
 
     /// Ensure the settlement is in a pending state.
@@ -901,7 +901,7 @@ impl DartProverAccountTree {
             new_leafs.len()
         );
         for leaf in new_leafs {
-            self.account_tree.insert(leaf.0.0)?;
+            self.account_tree.insert(leaf.as_leaf_value()?)?;
             self.last_leaf_index += 1;
         }
         log::info!(
@@ -998,7 +998,7 @@ impl DartChainState {
     pub fn end_block(&mut self) -> Result<()> {
         for commitment in self.pending_account_updates.drain(..) {
             // Add the commitment to the account tree.
-            self.account_tree.insert(commitment.0.0)?;
+            self.account_tree.insert(commitment.as_leaf_value()?)?;
             self.account_leafs.push(commitment);
         }
         // Push the current account tree root to the history.
@@ -1233,7 +1233,7 @@ impl DartChainState {
         self.next_settlement_id += 1;
 
         // Save the settlement.
-        let settlement = DartSettlement::from_proof(settlement_id, proof);
+        let settlement = DartSettlement::from_proof(settlement_id, proof)?;
         self.settlements.insert(settlement_id, settlement);
 
         Ok(settlement_id)

@@ -302,21 +302,42 @@ impl AccountLookupMap {
     }
 }
 
-#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
-pub struct EncryptionPublicKey(pub(crate) bp_keys::EncKey<PallasA>);
+#[derive(
+    Copy,
+    Clone,
+    Encode,
+    Decode,
+    Debug,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Hash,
+)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct EncryptionPublicKey(CompressedAffine);
 
 impl From<AccountPublicKey> for EncryptionPublicKey {
     fn from(account_pk: AccountPublicKey) -> Self {
-        EncryptionPublicKey(bp_keys::EncKey(account_pk.0.0))
+        EncryptionPublicKey(account_pk.0)
     }
 }
 
-impl core::fmt::Debug for EncryptionPublicKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut buf = Vec::new();
-        self.serialize_compressed(&mut buf)
-            .map_err(|_| core::fmt::Error)?;
-        write!(f, "EncryptionPublicKey({})", hex::encode(buf))
+impl EncryptionPublicKey {
+    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::try_from(affine)?))
+    }
+
+    pub fn get_affine(&self) -> Result<PallasA, Error> {
+        Ok(PallasA::try_from(&self.0)?)
+    }
+
+    pub fn from_bp_key(pk: bp_keys::EncKey<PallasA>) -> Result<Self, Error> {
+        Self::from_affine(pk.0)
+    }
+
+    pub fn get_bp_key(&self) -> Result<bp_keys::EncKey<PallasA>, Error> {
+        Ok(bp_keys::EncKey(self.get_affine()?))
     }
 }
 
@@ -331,24 +352,34 @@ pub struct EncryptionKeyPair {
 
 impl EncryptionKeyPair {
     /// Generates a new set of encryption keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Self {
+    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
         let (enc, enc_pk) = bp_keys::keygen_enc(rng, DART_GENS.enc_gen());
-        Self {
-            public: EncryptionPublicKey(enc_pk),
+        Ok(Self {
+            public: EncryptionPublicKey::from_bp_key(enc_pk)?,
             secret: EncryptionSecretKey(enc),
-        }
+        })
     }
 }
 
-#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
-pub struct AccountPublicKey(pub(crate) bp_keys::VerKey<PallasA>);
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct AccountPublicKey(CompressedAffine);
 
-impl core::fmt::Debug for AccountPublicKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut buf = Vec::new();
-        self.serialize_compressed(&mut buf)
-            .map_err(|_| core::fmt::Error)?;
-        write!(f, "AccountPublicKey({})", hex::encode(buf))
+impl AccountPublicKey {
+    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::try_from(affine)?))
+    }
+
+    pub fn get_affine(&self) -> Result<PallasA, Error> {
+        Ok(PallasA::try_from(&self.0)?)
+    }
+
+    pub fn from_bp_key(pk: bp_keys::VerKey<PallasA>) -> Result<Self, Error> {
+        Self::from_affine(pk.0)
+    }
+
+    pub fn get_bp_key(&self) -> Result<bp_keys::VerKey<PallasA>, Error> {
+        Ok(bp_keys::VerKey(self.get_affine()?))
     }
 }
 
@@ -363,12 +394,12 @@ pub struct AccountKeyPair {
 
 impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Self {
+    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
         let (account, account_pk) = bp_keys::keygen_sig(rng, DART_GENS.sig_gen());
-        Self {
-            public: AccountPublicKey(account_pk),
+        Ok(Self {
+            public: AccountPublicKey::from_bp_key(account_pk)?,
             secret: AccountSecretKey(account),
-        }
+        })
     }
 
     pub fn account_state<R: RngCore>(&self, rng: &mut R, asset_id: AssetId) -> AccountState {
@@ -391,14 +422,14 @@ pub struct AccountKeys {
 
 impl AccountKeys {
     /// Generates a new set of account keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Self {
-        let enc = EncryptionKeyPair::rand(rng);
-        let acct = AccountKeyPair::rand(rng);
-        Self { enc, acct }
+    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
+        let enc = EncryptionKeyPair::rand(rng)?;
+        let acct = AccountKeyPair::rand(rng)?;
+        Ok(Self { enc, acct })
     }
 
     /// Genreates a new set of account keys using the provided string as a seed.
-    pub fn from_seed(seed: &str) -> Self {
+    pub fn from_seed(seed: &str) -> Result<Self, Error> {
         let mut rng =
             rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(seed.as_bytes()).into());
         Self::rand(&mut rng)
@@ -409,7 +440,7 @@ impl AccountKeys {
         &self,
         rng: &mut R,
         asset_id: AssetId,
-    ) -> AccountAssetState {
+    ) -> Result<AccountAssetState, Error> {
         AccountAssetState::new(rng, self, asset_id)
     }
 
@@ -426,16 +457,46 @@ impl AccountKeys {
 pub struct AccountState(BPAccountState);
 
 impl AccountState {
-    pub fn commitment(&self) -> AccountStateCommitment {
-        AccountStateCommitment(self.0.commit(DART_GENS.account_comm_key()))
+    pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
+        AccountStateCommitment::from_affine(self.0.commit(DART_GENS.account_comm_key()).0)
     }
 }
 
-#[derive(Copy, Clone, CanonicalSerialize, CanonicalDeserialize, Debug, PartialEq, Eq, Hash)]
-pub struct AccountStateNullifier(pub(crate) PallasA);
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct AccountStateNullifier(CompressedAffine);
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct AccountStateCommitment(pub BPAccountStateCommitment);
+impl AccountStateNullifier {
+    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::try_from(affine)?))
+    }
+
+    pub fn get_affine(&self) -> Result<PallasA, Error> {
+        Ok(PallasA::try_from(&self.0)?)
+    }
+}
+
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct AccountStateCommitment(CompressedAffine);
+
+impl AccountStateCommitment {
+    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::try_from(affine)?))
+    }
+
+    pub fn get_affine(&self) -> Result<PallasA, Error> {
+        Ok(PallasA::try_from(&self.0)?)
+    }
+
+    pub fn as_leaf_value(&self) -> Result<PallasA, Error> {
+        self.get_affine()
+    }
+
+    pub fn as_commitment(&self) -> Result<BPAccountStateCommitment, Error> {
+        Ok(bp_account::AccountStateCommitment(self.get_affine()?))
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AccountAssetState {
@@ -448,17 +509,21 @@ pub struct AccountAssetState {
 }
 
 impl AccountAssetState {
-    pub fn new<R: RngCore>(rng: &mut R, account: &AccountKeys, asset_id: AssetId) -> Self {
+    pub fn new<R: RngCore>(
+        rng: &mut R,
+        account: &AccountKeys,
+        asset_id: AssetId,
+    ) -> Result<Self, Error> {
         let current_state = account.acct.account_state(rng, asset_id);
-        let current_state_commitment = current_state.commitment();
-        Self {
+        let current_state_commitment = current_state.commitment()?;
+        Ok(Self {
             account: *account,
             asset_id,
             current_state,
             current_state_commitment,
             current_tx_id: 0,
             pending_state: None,
-        }
+        })
     }
 
     pub fn mint<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
@@ -525,15 +590,15 @@ impl AccountAssetState {
         self.pending_state = Some(state);
     }
 
-    pub fn commit_pending_state(&mut self) -> bool {
+    pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
         match self.pending_state.take() {
             Some(pending_state) => {
                 self.current_state = pending_state;
-                self.current_state_commitment = self.current_state.commitment();
+                self.current_state_commitment = self.current_state.commitment()?;
                 self.current_tx_id += 1;
-                true
+                Ok(true)
             }
-            None => false,
+            None => Ok(false),
         }
     }
 }
@@ -565,17 +630,19 @@ impl AssetState {
 
     /// Given commitment key `leaf_comm_key`, the leaf is `leaf_comm_key[0] * role + leaf_comm_key[1] * asset_id + pk`
     /// where `role` equals 1 if `pk` is the public key of mediator else its 0.A
-    pub fn commitment(&self) -> AssetStateCommitment {
+    pub fn commitment(&self) -> Result<AssetStateCommitment, Error> {
         let leaf_comm_key = DART_GENS.asset_comm_g();
         let comm = if self.is_mediator {
             leaf_comm_key[0]
         } else {
             <PallasA as AffineRepr>::zero()
         };
-        AssetStateCommitment(
-            (comm + (leaf_comm_key[1] * PallasScalar::from(self.asset_id)) + self.pk.0.0)
-                .into_affine(),
-        )
+        Ok(AssetStateCommitment(
+            (comm
+                + (leaf_comm_key[1] * PallasScalar::from(self.asset_id))
+                + self.pk.get_affine()?)
+            .into_affine(),
+        ))
     }
 }
 
@@ -607,7 +674,7 @@ impl AssetCurveTree {
     pub fn set_asset_state(&mut self, state: AssetState) -> Result<usize, Error> {
         let asset_id = state.asset_id;
         // Get the new asset state commitment.
-        let leaf = state.commitment();
+        let leaf = state.commitment()?;
 
         // Update or insert the asset state.
         let entry = self.assets.entry(asset_id);
@@ -654,13 +721,13 @@ impl AccountAssetRegistrationProof {
         asset_id: AssetId,
         ctx: &[u8],
     ) -> Result<(Self, AccountAssetState), Error> {
-        let account_state = account.init_asset_state(rng, asset_id);
-        let account_state_commitment = account_state.current_state_commitment.clone();
+        let account_state = account.init_asset_state(rng, asset_id)?;
+        let account_state_commitment = account_state.current_state_commitment;
         let proof = bp_account::RegTxnProof::new(
             rng,
-            account.acct.public.0.0,
+            account.acct.public.get_affine()?,
             &account_state.current_state.0,
-            account_state_commitment.0.clone(),
+            account_state_commitment.as_commitment()?,
             ctx,
             DART_GENS.account_comm_key(),
             DART_GENS.sig_gen(),
@@ -680,9 +747,9 @@ impl AccountAssetRegistrationProof {
     pub fn verify(&self, ctx: &[u8]) -> Result<(), Error> {
         let proof = self.proof.decode()?;
         proof.verify(
-            &self.account.0.0,
+            &self.account.get_affine()?,
             self.asset_id,
-            &self.account_state_commitment.0,
+            &self.account_state_commitment.as_commitment()?,
             ctx,
             DART_GENS.account_comm_key(),
             DART_GENS.sig_gen(),
@@ -725,22 +792,22 @@ impl AssetMintingProof {
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
         let mint_account_state = account_asset.mint(rng, amount);
-        let mint_account_commitment = mint_account_state.commitment();
+        let mint_account_commitment = mint_account_state.commitment()?;
 
         let pk = account_asset.account.acct.public;
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
-            pk.0.0,
+            pk.get_affine()?,
             amount,
             current_account_state,
             &mint_account_state.0,
-            mint_account_commitment.0,
+            mint_account_commitment.as_commitment()?,
             current_account_path,
             b"",
             tree_lookup.params(),
@@ -753,7 +820,7 @@ impl AssetMintingProof {
             amount,
             root,
             updated_account_state_commitment: mint_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -778,11 +845,11 @@ impl AssetMintingProof {
         }
         let proof = self.proof.decode()?;
         proof.verify(
-            self.pk.0.0,
+            self.pk.get_affine()?,
             self.asset_id,
             self.amount,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             &self.root,
             b"",
             tree_roots.params(),
@@ -893,15 +960,15 @@ impl Leg {
         mediator: Option<AccountPublicKey>,
         asset_id: AssetId,
         amount: Balance,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let leg = bp_leg::Leg::new(
-            sender.0.0,
-            receiver.0.0,
-            mediator.map(|m| m.0.0),
+            sender.get_affine()?,
+            receiver.get_affine()?,
+            mediator.map(|m| m.get_affine()).transpose()?,
             amount,
             asset_id,
         );
-        Self(leg)
+        Ok(Self(leg))
     }
 
     pub fn encrypt<R: RngCore>(
@@ -909,32 +976,35 @@ impl Leg {
         rng: &mut R,
         ephemeral_key: EphemeralSkEncryption,
         pk_e: &EncryptionPublicKey,
-    ) -> (LegEncrypted, LegEncryptionRandomness) {
+    ) -> Result<(LegEncrypted, LegEncryptionRandomness), Error> {
         let (leg_enc, leg_enc_rand) = self.0.encrypt(
             rng,
-            &pk_e.0.0,
+            &pk_e.get_affine()?,
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
         );
-        (
+        Ok((
             LegEncrypted {
                 leg_enc,
                 ephemeral_key,
             },
             LegEncryptionRandomness(leg_enc_rand),
-        )
+        ))
     }
 
-    pub fn sender(&self) -> AccountPublicKey {
-        AccountPublicKey(bp_keys::VerKey(self.0.pk_s))
+    pub fn sender(&self) -> Result<AccountPublicKey, Error> {
+        AccountPublicKey::from_affine(self.0.pk_s)
     }
 
-    pub fn receiver(&self) -> AccountPublicKey {
-        AccountPublicKey(bp_keys::VerKey(self.0.pk_r))
+    pub fn receiver(&self) -> Result<AccountPublicKey, Error> {
+        AccountPublicKey::from_affine(self.0.pk_r)
     }
 
-    pub fn mediator(&self) -> Option<AccountPublicKey> {
-        self.0.pk_m.map(|m| AccountPublicKey(bp_keys::VerKey(m)))
+    pub fn mediator(&self) -> Result<Option<AccountPublicKey>, Error> {
+        self.0
+            .pk_m
+            .map(|m| AccountPublicKey::from_affine(m))
+            .transpose()
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -986,10 +1056,10 @@ impl LegBuilder {
             mediator_acct,
             self.asset_id,
             self.amount,
-        );
+        )?;
         let (ephemeral_key, eph_rand, pk_e) =
-            EphemeralSkEncryption::new(rng, self.sender.enc, self.receiver.enc, mediator_enc);
-        let (leg_enc, leg_enc_rand) = leg.encrypt(rng, ephemeral_key, &pk_e);
+            EphemeralSkEncryption::new(rng, self.sender.enc, self.receiver.enc, mediator_enc)?;
+        let (leg_enc, leg_enc_rand) = leg.encrypt(rng, ephemeral_key, &pk_e)?;
 
         let leg_proof = SettlementLegProof::new(
             rng,
@@ -1083,7 +1153,7 @@ impl SettlementProof {
 #[derive(Clone, Encode, Decode)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct SettlementLegProof {
-    pub leg_enc: LegEncrypted,
+    leg_enc: WrappedCanonical<LegEncrypted>,
 
     proof: WrappedCanonical<
         bp_leg::SettlementTxnProof<
@@ -1119,8 +1189,8 @@ impl SettlementLegProof {
             leg_enc_rand.0.clone(),
             leg_enc.ephemeral_key.enc.clone(),
             eph_rand,
-            pk_e.0.0,
-            auditor_enc.map(|m| m.0.0),
+            pk_e.get_affine()?,
+            auditor_enc.map(|m| m.get_affine()).transpose()?,
             asset_path,
             ctx,
             asset_tree.params(),
@@ -1131,14 +1201,19 @@ impl SettlementLegProof {
         );
 
         Ok(Self {
-            leg_enc,
+            leg_enc: WrappedCanonical::wrap(&leg_enc)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
     }
 
-    pub fn has_mediator(&self) -> bool {
-        self.leg_enc.leg_enc.ct_m.is_some()
+    pub fn leg_enc(&self) -> Result<LegEncrypted, Error> {
+        self.leg_enc.decode()
+    }
+
+    pub fn has_mediator(&self) -> Result<bool, Error> {
+        let leg_enc = self.leg_enc.decode()?;
+        Ok(leg_enc.leg_enc.ct_m.is_some())
     }
 
     pub fn verify(
@@ -1147,13 +1222,14 @@ impl SettlementLegProof {
         root: &CurveTreeRoot<ASSET_TREE_L>,
         params: &CurveTreeParameters,
     ) -> Result<(), Error> {
-        let pk_e = self.leg_enc.ephemeral_key.pk_e;
-        log::debug!("Verify leg: {:?}", self.leg_enc.leg_enc);
+        let leg_enc = self.leg_enc.decode()?;
+        let pk_e = leg_enc.ephemeral_key.pk_e;
+        log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
         let proof = self.proof.decode()?;
         proof.verify(
-            self.leg_enc.leg_enc.clone(),
-            self.leg_enc.ephemeral_key.enc.clone(),
-            pk_e.0.0,
+            leg_enc.leg_enc.clone(),
+            leg_enc.ephemeral_key.enc.clone(),
+            pk_e.get_affine()?,
             &root,
             ctx,
             params,
@@ -1178,25 +1254,25 @@ impl EphemeralSkEncryption {
         sender: EncryptionPublicKey,
         receiver: EncryptionPublicKey,
         mediator: EncryptionPublicKey,
-    ) -> (Self, PallasScalar, EncryptionPublicKey) {
+    ) -> Result<(Self, PallasScalar, EncryptionPublicKey), Error> {
         let (ephemeral_key, eph_key_rand, _sk_e, pk_e) =
             bp_leg::EphemeralSkEncryption::new::<_, Blake2b512>(
                 rng,
-                sender.0.0,
-                receiver.0.0,
-                mediator.0.0,
+                sender.get_affine()?,
+                receiver.get_affine()?,
+                mediator.get_affine()?,
                 DART_GENS.enc_sig_gen(),
                 DART_GENS.leg_asset_value_gen(),
             );
-        let pk_e = EncryptionPublicKey(pk_e);
-        (
+        let pk_e = EncryptionPublicKey::from_bp_key(pk_e)?;
+        Ok((
             Self {
                 enc: ephemeral_key,
                 pk_e,
             },
             eph_key_rand,
             pk_e,
-        )
+        ))
     }
 }
 
@@ -1269,11 +1345,11 @@ impl SenderAffirmationProof {
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
         let new_account_state = account_asset.get_sender_affirm_state(rng, amount);
-        let new_account_commitment = new_account_state.commitment();
+        let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1285,7 +1361,7 @@ impl SenderAffirmationProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.as_commitment()?,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1298,7 +1374,7 @@ impl SenderAffirmationProof {
             leg_ref: leg_ref.clone(),
             root,
             updated_account_state_commitment: new_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -1327,8 +1403,8 @@ impl SenderAffirmationProof {
         proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1370,11 +1446,11 @@ impl ReceiverAffirmationProof {
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
         let new_account_state = account_asset.get_receiver_affirm_state(rng);
-        let new_account_commitment = new_account_state.commitment();
+        let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1385,7 +1461,7 @@ impl ReceiverAffirmationProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.as_commitment()?,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1398,7 +1474,7 @@ impl ReceiverAffirmationProof {
             leg_ref: leg_ref.clone(),
             root,
             updated_account_state_commitment: new_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -1427,8 +1503,8 @@ impl ReceiverAffirmationProof {
         proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1471,11 +1547,11 @@ impl ReceiverClaimProof {
     ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
         let new_account_state = account_asset.get_state_for_claiming_received(rng, amount);
-        let new_account_commitment = new_account_state.commitment();
+        let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1487,7 +1563,7 @@ impl ReceiverClaimProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.as_commitment()?,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1500,7 +1576,7 @@ impl ReceiverClaimProof {
             leg_ref: leg_ref.clone(),
             root,
             updated_account_state_commitment: new_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -1529,8 +1605,8 @@ impl ReceiverClaimProof {
         proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1572,11 +1648,11 @@ impl SenderCounterUpdateProof {
     ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
         let new_account_state = account_asset.get_state_for_decreasing_counter(rng);
-        let new_account_commitment = new_account_state.commitment();
+        let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1587,7 +1663,7 @@ impl SenderCounterUpdateProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.as_commitment()?,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1600,7 +1676,7 @@ impl SenderCounterUpdateProof {
             leg_ref: leg_ref.clone(),
             root,
             updated_account_state_commitment: new_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -1629,8 +1705,8 @@ impl SenderCounterUpdateProof {
         proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1673,11 +1749,11 @@ impl SenderReversalProof {
     ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
         let new_account_state = account_asset.get_state_for_reversing_send(rng, amount);
-        let new_account_commitment = new_account_state.commitment();
+        let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
-        let current_account_path =
-            tree_lookup.get_path_to_leaf(account_asset.current_state_commitment.0.0)?;
+        let current_account_path = tree_lookup
+            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root = tree_lookup.root_node()?;
 
@@ -1689,7 +1765,7 @@ impl SenderReversalProof {
             leg_enc.leg_enc.clone(),
             &current_account_state,
             &new_account_state.0,
-            new_account_commitment.0.clone(),
+            new_account_commitment.as_commitment()?,
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
@@ -1702,7 +1778,7 @@ impl SenderReversalProof {
             leg_ref: leg_ref.clone(),
             root,
             updated_account_state_commitment: new_account_commitment,
-            nullifier: AccountStateNullifier(nullifier),
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -1731,8 +1807,8 @@ impl SenderReversalProof {
         proof.verify(
             leg_enc.leg_enc.clone(),
             &self.root,
-            self.updated_account_state_commitment.0,
-            self.nullifier.0,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
             DART_GENS.account_comm_key(),
@@ -1768,7 +1844,7 @@ impl MediatorAffirmationProof {
             rng,
             leg_enc.leg_enc.clone(),
             eph_sk.0.0,
-            eph_pk.0.0,
+            eph_pk.get_affine()?,
             mediator_sk.secret.0.0,
             accept,
             ctx.as_bytes(),
@@ -1789,7 +1865,7 @@ impl MediatorAffirmationProof {
         let proof = self.proof.decode()?;
         proof.verify(
             leg_enc.leg_enc.clone(),
-            eph_pk.0.0,
+            eph_pk.get_affine()?,
             self.accept,
             ctx.as_bytes(),
             DART_GENS.enc_sig_gen(),
