@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use codec::{Decode, Encode};
+use codec::{Decode, Encode, MaxEncodedLen};
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
@@ -305,6 +305,7 @@ impl AccountLookupMap {
 #[derive(
     Copy,
     Clone,
+    MaxEncodedLen,
     Encode,
     Decode,
     Debug,
@@ -361,7 +362,7 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountPublicKey(CompressedAffine);
 
@@ -407,7 +408,7 @@ impl AccountKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
@@ -462,7 +463,7 @@ impl AccountState {
     }
 }
 
-#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountStateNullifier(CompressedAffine);
 
@@ -476,7 +477,7 @@ impl AccountStateNullifier {
     }
 }
 
-#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct AccountStateCommitment(CompressedAffine);
 
@@ -637,18 +638,33 @@ impl AssetState {
         } else {
             <PallasA as AffineRepr>::zero()
         };
-        Ok(AssetStateCommitment(
+        AssetStateCommitment::from_affine(
             (comm
                 + (leaf_comm_key[1] * PallasScalar::from(self.asset_id))
                 + self.pk.get_affine()?)
             .into_affine(),
-        ))
+        )
     }
 }
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Debug, Default)]
-pub struct AssetStateCommitment(pub PallasA);
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(TypeInfo))]
+pub struct AssetStateCommitment(CompressedAffine);
+
+impl AssetStateCommitment {
+    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::try_from(affine)?))
+    }
+
+    pub fn get_affine(&self) -> Result<PallasA, Error> {
+        Ok(PallasA::try_from(&self.0)?)
+    }
+
+    pub fn as_leaf_value(&self) -> Result<PallasA, Error> {
+        self.get_affine()
+    }
+}
 
 /// Represents a tree of asset states in the Dart BP protocol.
 pub struct AssetCurveTree {
@@ -682,7 +698,8 @@ impl AssetCurveTree {
         entry.insert_entry(state);
 
         // Update the leaf in the curve tree.
-        self.tree.update(leaf.0, index as LeafIndex)?;
+        self.tree
+            .update(leaf.as_leaf_value()?, index as LeafIndex)?;
         Ok(index)
     }
 
@@ -862,7 +879,7 @@ impl AssetMintingProof {
 }
 
 /// Represents the auditor or mediator in a leg of the Dart BP protocol.
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum AuditorOrMediator {
     Mediator(AccountPublicKeys),
@@ -892,7 +909,7 @@ impl AuditorOrMediator {
     }
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum SettlementRef {
     /// ID based reference.
@@ -907,7 +924,7 @@ impl From<SettlementId> for SettlementRef {
     }
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct LegRef {
     /// The settlement reference.
@@ -941,7 +958,7 @@ impl LegRef {
     }
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub enum LegRole {
     Sender,

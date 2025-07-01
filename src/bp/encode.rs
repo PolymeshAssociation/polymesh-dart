@@ -1,6 +1,6 @@
 use std::mem;
 
-use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, Output};
+use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, MaxEncodedLen, Output};
 #[cfg(feature = "std")]
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
@@ -138,7 +138,16 @@ pub const ARK_EC_POINT_SIZE: usize = 33;
 pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 
 #[derive(
-    Copy, Clone, Encode, Decode, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash,
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Hash,
 )]
 #[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct CompressedAffine(CompressedPoint);
@@ -255,9 +264,6 @@ impl TypeInfo for AssetCommitmentKey {
 
 // TypeInfo, SCALE encoding and decoding for `LegEncrypted`.
 impl_scale_and_type_info!(LegEncrypted as Vec);
-
-// TypeInfo, SCALE encoding and decoding for `AssetStateCommitment`.
-impl_scale_and_type_info!(AssetStateCommitment as CompressedPoint);
 
 // TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>);
