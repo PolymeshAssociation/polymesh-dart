@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result, anyhow};
+use ark_std::rand;
 use codec::{Decode, Encode};
 use polymesh_dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
-use rand::RngCore;
+use rand_core::{CryptoRng, RngCore};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -47,7 +48,7 @@ struct DartUserAccountInner {
 }
 
 impl DartUserAccountInner {
-    pub fn new<R: RngCore>(rng: &mut R, address: SignerAddress) -> Result<Self> {
+    pub fn new<R: RngCore + CryptoRng>(rng: &mut R, address: SignerAddress) -> Result<Self> {
         let account_keys = AccountKeys::rand(rng)?;
         Ok(Self {
             address,
@@ -60,7 +61,7 @@ impl DartUserAccountInner {
         self.keys.public_keys()
     }
 
-    pub fn initialize_asset<R: RngCore>(
+    pub fn initialize_asset<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -80,7 +81,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn mint_asset<R: RngCore>(
+    pub fn mint_asset<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -98,7 +99,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn sender_affirmation<R: RngCore>(
+    pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -150,7 +151,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn receiver_affirmation<R: RngCore>(
+    pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -195,7 +196,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn mediator_affirmation<R: RngCore>(
+    pub fn mediator_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -217,7 +218,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn receiver_claims<R: RngCore>(
+    pub fn receiver_claims<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -259,7 +260,7 @@ impl DartUserAccountInner {
 pub struct DartUserAccount(Arc<RwLock<DartUserAccountInner>>);
 
 impl DartUserAccount {
-    pub fn new<R: RngCore>(rng: &mut R, address: SignerAddress) -> Result<Self> {
+    pub fn new<R: RngCore + CryptoRng>(rng: &mut R, address: SignerAddress) -> Result<Self> {
         let inner = DartUserAccountInner::new(rng, address)?;
         Ok(Self(Arc::new(RwLock::new(inner))))
     }
@@ -268,7 +269,7 @@ impl DartUserAccount {
         self.0.read().unwrap().public_keys()
     }
 
-    pub fn initialize_asset<R: RngCore>(
+    pub fn initialize_asset<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -280,7 +281,7 @@ impl DartUserAccount {
             .initialize_asset(rng, chain, asset_id)
     }
 
-    pub fn mint_asset<R: RngCore>(
+    pub fn mint_asset<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -294,7 +295,7 @@ impl DartUserAccount {
             .mint_asset(rng, chain, account_tree, asset_id, amount)
     }
 
-    pub fn sender_affirmation<R: RngCore>(
+    pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -313,7 +314,7 @@ impl DartUserAccount {
         )
     }
 
-    pub fn receiver_affirmation<R: RngCore>(
+    pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -332,7 +333,7 @@ impl DartUserAccount {
         )
     }
 
-    pub fn mediator_affirmation<R: RngCore>(
+    pub fn mediator_affirmation<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -345,7 +346,7 @@ impl DartUserAccount {
             .mediator_affirmation(rng, chain, leg_ref, accept)
     }
 
-    pub fn receiver_claims<R: RngCore>(
+    pub fn receiver_claims<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -383,7 +384,7 @@ impl DartUser {
     }
 
     /// Create a new account for the user and register it on chain.
-    pub fn create_and_register_account<R: RngCore>(
+    pub fn create_and_register_account<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -511,17 +512,18 @@ impl DartSettlementLeg {
     }
 
     /// Verify a sender affirmation proof for this leg.
-    pub fn sender_affirmation(
+    pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Pending {
             return Err(anyhow!("Sender has already affirmed this leg"));
         }
         // verify the proof.
         proof
-            .verify(&self.enc, tree_roots)
+            .verify(&self.enc, tree_roots, rng)
             .context("Invalid sender affirmation proof")?;
 
         // Update the leg's status.
@@ -532,17 +534,18 @@ impl DartSettlementLeg {
     }
 
     /// Verify a receiver affirmation proof for this leg.
-    pub fn receiver_affirmation(
+    pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.receiver != AffirmationStatus::Pending {
             return Err(anyhow!("Receiver has already affirmed this leg"));
         }
         // verify the proof.
         proof
-            .verify(&self.enc, tree_roots)
+            .verify(&self.enc, tree_roots, rng)
             .context("Invalid receiver affirmation proof")?;
 
         // Update the leg's status.
@@ -578,10 +581,11 @@ impl DartSettlementLeg {
     /// Verify the sender's counter update proof for this leg.
     ///
     /// The sender is only allowed to submit this proof if the settlement has been executed.
-    pub fn sender_counter_update(
+    pub fn sender_counter_update<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderCounterUpdateProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Affirmed {
             return Err(anyhow!(
@@ -593,7 +597,7 @@ impl DartSettlementLeg {
         }
         // verify the proof.
         proof
-            .verify(&self.enc, tree_roots)
+            .verify(&self.enc, tree_roots, rng)
             .context("Invalid sender counter update proof")?;
 
         // Update the leg's status.
@@ -606,10 +610,11 @@ impl DartSettlementLeg {
     /// Verify the sender's Reversal proof for this leg.
     ///
     /// The sender is only allowed to submit this proof if the settlement has been rejected.
-    pub fn sender_reversal(
+    pub fn sender_reversal<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderReversalProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Affirmed {
             return Err(anyhow!(
@@ -621,7 +626,7 @@ impl DartSettlementLeg {
         }
         // verify the proof.
         proof
-            .verify(&self.enc, tree_roots)
+            .verify(&self.enc, tree_roots, rng)
             .context("Invalid sender reversal proof")?;
 
         // Update the leg's status.
@@ -634,10 +639,11 @@ impl DartSettlementLeg {
     /// Verify the receiver's claim proof for this leg.
     ///
     /// The receiver is only allowed to submit this proof if the settlement has been executed.
-    pub fn receiver_claim(
+    pub fn receiver_claim<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverClaimProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.receiver != AffirmationStatus::Affirmed {
             return Err(anyhow!(
@@ -649,7 +655,7 @@ impl DartSettlementLeg {
         }
         // verify the proof.
         proof
-            .verify(&self.enc, tree_roots)
+            .verify(&self.enc, tree_roots, rng)
             .context("Invalid receiver claim proof")?;
 
         // Update the leg's status.
@@ -707,10 +713,11 @@ impl DartSettlement {
     }
 
     /// Verify a sender affirmation proof for a specific leg in the settlement.
-    pub fn sender_affirmation(
+    pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         self.ensure_pending()?;
 
@@ -719,7 +726,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.sender_affirmation(proof, tree_roots)?;
+        leg.sender_affirmation(proof, tree_roots, rng)?;
 
         // If the sender has affirmed, update the status of the settlement.
         self.update_status()?;
@@ -727,10 +734,11 @@ impl DartSettlement {
     }
 
     /// Verify a receiver affirmation proof for a specific leg in the settlement.
-    pub fn receiver_affirmation(
+    pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         self.ensure_pending()?;
 
@@ -739,7 +747,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.receiver_affirmation(proof, tree_roots)?;
+        leg.receiver_affirmation(proof, tree_roots, rng)?;
 
         // If the receiver has affirmed, update the status of the settlement.
         self.update_status()?;
@@ -768,10 +776,11 @@ impl DartSettlement {
     }
 
     /// Verify the sender's counter update proof for a specific leg in the settlement.
-    pub fn sender_counter_update(
+    pub fn sender_counter_update<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderCounterUpdateProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Executed {
             return Err(anyhow!(
@@ -784,7 +793,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.sender_counter_update(proof, tree_roots)?;
+        leg.sender_counter_update(proof, tree_roots, rng)?;
 
         // If the sender has finalized the leg, update the status of the settlement.
         self.update_status()?;
@@ -792,10 +801,11 @@ impl DartSettlement {
     }
 
     /// Verify the sender's reversal proof for a specific leg in the settlement.
-    pub fn sender_reversal(
+    pub fn sender_reversal<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderReversalProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Rejected {
             return Err(anyhow!(
@@ -808,7 +818,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.sender_reversal(proof, tree_roots)?;
+        leg.sender_reversal(proof, tree_roots, rng)?;
 
         // If the sender has finalized the leg, update the status of the settlement.
         self.update_status()?;
@@ -816,10 +826,11 @@ impl DartSettlement {
     }
 
     /// Verify the receiver's claim proof for a specific leg in the settlement.
-    pub fn receiver_claim(
+    pub fn receiver_claim<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverClaimProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Executed {
             return Err(anyhow!("Settlement must be executed before receiver claim"));
@@ -830,7 +841,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.receiver_claim(proof, tree_roots)?;
+        leg.receiver_claim(proof, tree_roots, rng)?;
 
         // If the receiver has finalized the leg, update the status of the settlement.
         self.update_status()?;
@@ -1194,9 +1205,10 @@ impl DartChainState {
         let nullifier = proof.nullifier();
         self.ensure_nullifier_unique(&nullifier)?;
 
+        let mut rng = rand::thread_rng();
         // Verify the minting proof.
         proof
-            .verify(&self.account_roots)
+            .verify(&self.account_roots, &mut rng)
             .context("Invalid minting proof")?;
 
         // Add the new account state commitment to the account tree.
@@ -1224,9 +1236,10 @@ impl DartChainState {
             ));
         }
 
+        let mut rng = rand::thread_rng();
         // verify the settlement proof.
         proof
-            .verify(&self.asset_roots)
+            .verify(&self.asset_roots, &mut rng)
             .context("Invalid settlement proof")?;
 
         // Allocate a new settlement ID.
@@ -1289,8 +1302,9 @@ impl DartChainState {
             .get_mut(&settlement_id)
             .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
 
+        let mut rng = rand::thread_rng();
         // Verify the sender affirmation proof and update the settlement status.
-        settlement.sender_affirmation(&proof, &self.account_roots)?;
+        settlement.sender_affirmation(&proof, &self.account_roots, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1325,8 +1339,9 @@ impl DartChainState {
             .get_mut(&settlement_id)
             .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
 
+        let mut rng = rand::thread_rng();
         // Verify the receiver affirmation proof and update the settlement status.
-        settlement.receiver_affirmation(&proof, &self.account_roots)?;
+        settlement.receiver_affirmation(&proof, &self.account_roots, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1389,8 +1404,9 @@ impl DartChainState {
             .get_mut(&settlement_id)
             .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
 
+        let mut rng = rand::thread_rng();
         // Verify the sender counter update proof and update the settlement status.
-        settlement.sender_counter_update(&proof, &self.account_roots)?;
+        settlement.sender_counter_update(&proof, &self.account_roots, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1429,8 +1445,9 @@ impl DartChainState {
             .get_mut(&settlement_id)
             .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
 
+        let mut rng = rand::thread_rng();
         // Verify the sender reversal proof and update the settlement status.
-        settlement.sender_reversal(&proof, &self.account_roots)?;
+        settlement.sender_reversal(&proof, &self.account_roots, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1465,8 +1482,9 @@ impl DartChainState {
             .get_mut(&settlement_id)
             .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
 
+        let mut rng = rand::thread_rng();
         // Verify the receiver claim proof and update the settlement status.
-        settlement.receiver_claim(&proof, &self.account_roots)?;
+        settlement.receiver_claim(&proof, &self.account_roots, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;

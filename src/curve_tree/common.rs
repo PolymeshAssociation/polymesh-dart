@@ -2,7 +2,7 @@ use std::hash::Hasher;
 
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
-use ark_serialize::{Compress, SerializationError, Valid, Validate};
+use ark_serialize::{Compress, Read, SerializationError, Valid, Validate, Write};
 use ark_std::Zero;
 use codec::{Decode, Encode};
 use curve_tree_relations::single_level_select_and_rerandomize::*;
@@ -245,7 +245,7 @@ pub enum Inner<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> {
 }
 
 impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> CanonicalSerialize for Inner<M, P0, P1> {
-    fn serialize_with_mode<W: std::io::Write>(
+    fn serialize_with_mode<W: Write>(
         &self,
         mut writer: W,
         compress: Compress,
@@ -282,7 +282,7 @@ impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> Valid for Inner<M, P0
 impl<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig> CanonicalDeserialize
     for Inner<M, P0, P1>
 {
-    fn deserialize_with_mode<R: std::io::Read>(
+    fn deserialize_with_mode<R: Read>(
         mut reader: R,
         compress: Compress,
         validate: Validate,

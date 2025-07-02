@@ -9,7 +9,7 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndReran
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::transcript::MerlinTranscript;
-use rand::RngCore;
+use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
@@ -544,6 +544,7 @@ pub fn generate_schnorr_responses_for_balance_change<
     (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount)
 }
 
+#[cfg(feature = "std")]
 pub fn prove<
     F0: PrimeField,
     F1: PrimeField,
@@ -554,6 +555,23 @@ pub fn prove<
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
+    let mut rng = rand::thread_rng();
+    prove_with_rng(even_prover, odd_prover, tree_params, &mut rng)
+}
+
+#[allow(unused_variables)]
+pub fn prove_with_rng<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_prover: Prover<MerlinTranscript, Affine<G0>>,
+    odd_prover: Prover<MerlinTranscript, Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+    rng: &mut R,
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
         || even_prover.prove(&tree_params.even_parameters.bp_gens),
@@ -562,14 +580,15 @@ pub fn prove<
 
     #[cfg(not(feature = "parallel"))]
     let (even_proof, odd_proof) = (
-        even_prover.prove(&tree_params.even_parameters.bp_gens),
-        odd_prover.prove(&tree_params.odd_parameters.bp_gens),
+        even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, rng),
+        odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, rng),
     );
 
     let (even_proof, odd_proof) = (even_proof?, odd_proof?);
     Ok((even_proof, odd_proof))
 }
 
+#[cfg(feature = "std")]
 pub fn verify<
     F0: PrimeField,
     F1: PrimeField,
@@ -581,6 +600,32 @@ pub fn verify<
     even_proof: &R1CSProof<Affine<G0>>,
     odd_proof: &R1CSProof<Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
+) -> Result<(), R1CSError> {
+    let mut rng = rand::thread_rng();
+    verify_with_rng(
+        even_verifier,
+        odd_verifier,
+        even_proof,
+        odd_proof,
+        tree_params,
+        &mut rng,
+    )
+}
+
+#[allow(unused_variables)]
+pub fn verify_with_rng<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    even_proof: &R1CSProof<Affine<G0>>,
+    odd_proof: &R1CSProof<Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+    rng: &mut R,
 ) -> Result<(), R1CSError> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
@@ -602,15 +647,17 @@ pub fn verify<
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        even_verifier.verify(
+        even_verifier.verify_with_rng(
             even_proof,
             &tree_params.even_parameters.pc_gens,
             &tree_params.even_parameters.bp_gens,
+            rng,
         ),
-        odd_verifier.verify(
+        odd_verifier.verify_with_rng(
             odd_proof,
             &tree_params.odd_parameters.pc_gens,
             &tree_params.odd_parameters.bp_gens,
+            rng,
         ),
     );
 

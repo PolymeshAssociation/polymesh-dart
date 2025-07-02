@@ -11,7 +11,7 @@ use crate::util::{
     generate_schnorr_responses_for_common_state_change,
     generate_schnorr_t_values_for_balance_change,
     generate_schnorr_t_values_for_common_state_change, initialize_curve_tree_prover,
-    initialize_curve_tree_verifier, prove, verify,
+    initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
 };
 use crate::{
     AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
@@ -29,7 +29,7 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use rand::RngCore;
+use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
@@ -115,7 +115,7 @@ pub struct AccountStateCommitment<G: AffineRepr>(pub G);
 // TODO: Convert asserts to errors
 
 impl<G: AffineRepr> AccountState<G> {
-    pub fn new<R: RngCore>(rng: &mut R, sk: G::ScalarField, asset_id: AssetId) -> Self {
+    pub fn new<R: RngCore + CryptoRng>(rng: &mut R, sk: G::ScalarField, asset_id: AssetId) -> Self {
         assert!(asset_id <= MAX_ASSET_ID);
         let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
@@ -237,7 +237,7 @@ pub struct RegTxnProof<G: AffineRepr> {
 
 impl<G: AffineRepr> RegTxnProof<G> {
     /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: G,
         account: &AccountState<G>,
@@ -409,7 +409,7 @@ impl<
 > MintTxnProof<L, F0, F1, G0, G1>
 {
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         issuer_pk: Affine<G0>,
         increase_bal_by: Balance,
@@ -562,7 +562,8 @@ impl<
         let resp_null = t_null.gen_proof(&prover_challenge);
         let resp_pk = t_pk.gen_proof(&prover_challenge);
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -581,6 +582,7 @@ impl<
     }
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         issuer_pk: Affine<G0>,
@@ -593,6 +595,37 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            issuer_pk,
+            asset_id,
+            increase_bal_by,
+            updated_account_commitment,
+            nullifier,
+            account_tree,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            &mut rng,
+        )
+    }
+
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. Both both of these could use a different generator
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        issuer_pk: Affine<G0>,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        account_tree: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -700,12 +733,13 @@ impl<
         // Sk in leaf matches the one in public key
         assert_eq!(self.resp_leaf.0[0], self.resp_pk.response);
 
-        verify(
+        verify_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
             &account_tree_params,
+            rng,
         )
     }
 }
@@ -762,7 +796,7 @@ impl<
 {
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
     /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         amount: Balance,
         sk_e: G0::ScalarField,
@@ -910,7 +944,8 @@ impl<
                 &prover_challenge,
             );
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -938,6 +973,7 @@ impl<
 
     /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
     /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -949,6 +985,36 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            account_tree,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            asset_value_gen,
+            &mut rng,
+        )
+    }
+
+    /// `sig_null_gen` is the generator used when creating signing key and nullifier. But both of these could use a different generator.
+    /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1053,12 +1119,13 @@ impl<
         );
         assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
-        verify(
+        verify_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
             &account_tree_params,
+            rng,
         )?;
         Ok(())
     }
@@ -1098,7 +1165,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AffirmAsReceiverTxnProof<L, F0, F1, G0, G1>
 {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1200,7 +1267,8 @@ impl<
                 &prover_challenge,
             );
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -1219,6 +1287,7 @@ impl<
         )
     }
 
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1230,6 +1299,34 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            account_tree,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            asset_value_gen,
+            &mut rng,
+        )
+    }
+
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1311,15 +1408,17 @@ impl<
         // sk_e matches in both encryptions
         assert_eq!(self.resp_leg_pk.response1, self.resp_leg_asset_id.response1);
 
-        odd_verifier.verify(
+        odd_verifier.verify_with_rng(
             &self.odd_proof,
             &account_tree_params.odd_parameters.pc_gens,
             &account_tree_params.odd_parameters.bp_gens,
+            rng,
         )?;
-        even_verifier.verify(
+        even_verifier.verify_with_rng(
             &self.even_proof,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
+            rng,
         )?;
         Ok(())
     }
@@ -1375,7 +1474,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > ClaimReceivedTxnProof<L, F0, F1, G0, G1>
 {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         amount: Balance,
         sk_e: G0::ScalarField,
@@ -1532,7 +1631,8 @@ impl<
                 &prover_challenge,
             );
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -1558,6 +1658,7 @@ impl<
         )
     }
 
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1569,6 +1670,34 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            account_tree,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            asset_value_gen,
+            &mut rng,
+        )
+    }
+
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1681,15 +1810,17 @@ impl<
         );
         assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
-        odd_verifier.verify(
+        odd_verifier.verify_with_rng(
             &self.odd_proof,
             &account_tree_params.odd_parameters.pc_gens,
             &account_tree_params.odd_parameters.bp_gens,
+            rng,
         )?;
-        even_verifier.verify(
+        even_verifier.verify_with_rng(
             &self.even_proof,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
+            rng,
         )?;
         Ok(())
     }
@@ -1729,7 +1860,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > SenderCounterUpdateTxnProof<L, F0, F1, G0, G1>
 {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         sk_e: G0::ScalarField,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1831,7 +1962,8 @@ impl<
                 &prover_challenge,
             );
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -1850,6 +1982,7 @@ impl<
         )
     }
 
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1861,6 +1994,34 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            account_tree,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            asset_value_gen,
+            &mut rng,
+        )
+    }
+
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1930,15 +2091,17 @@ impl<
             self.resp_leaf.0[2]
         );
 
-        odd_verifier.verify(
+        odd_verifier.verify_with_rng(
             &self.odd_proof,
             &account_tree_params.odd_parameters.pc_gens,
             &account_tree_params.odd_parameters.bp_gens,
+            rng,
         )?;
-        even_verifier.verify(
+        even_verifier.verify_with_rng(
             &self.even_proof,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
+            rng,
         )?;
         Ok(())
     }
@@ -1994,7 +2157,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > SenderReverseTxnProof<L, F0, F1, G0, G1>
 {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         amount: Balance,
         sk_e: G0::ScalarField,
@@ -2133,7 +2296,8 @@ impl<
                 &prover_challenge,
             );
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &account_tree_params).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng).unwrap();
 
         (
             Self {
@@ -2159,6 +2323,7 @@ impl<
         )
     }
 
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -2170,6 +2335,34 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            account_tree,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            sig_null_gen,
+            asset_value_gen,
+            &mut rng,
+        )
+    }
+
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        account_tree: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        sig_null_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -2273,15 +2466,17 @@ impl<
         );
         assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
 
-        odd_verifier.verify(
+        odd_verifier.verify_with_rng(
             &self.odd_proof,
             &account_tree_params.odd_parameters.pc_gens,
             &account_tree_params.odd_parameters.bp_gens,
+            rng,
         )?;
-        even_verifier.verify(
+        even_verifier.verify_with_rng(
             &self.even_proof,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
+            rng,
         )?;
         Ok(())
     }
@@ -2298,7 +2493,7 @@ pub struct PobWithAuditorProof<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> PobWithAuditorProof<G> {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: &G,
         account: &AccountState<G>,
@@ -2466,7 +2661,7 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> PobWithAnyoneProof<G> {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: &G,
         account: &AccountState<G>,

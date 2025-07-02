@@ -65,5 +65,11 @@ pub enum Error {
 
     /// Arkworks serialization error.
     #[error("Arkworks serialization error: {0}")]
-    ArkworksSerializationError(#[from] ark_serialize::SerializationError),
+    ArkworksSerializationError(ark_serialize::SerializationError),
+}
+
+impl From<ark_serialize::SerializationError> for Error {
+    fn from(err: ark_serialize::SerializationError) -> Self {
+        Error::ArkworksSerializationError(err)
+    }
 }

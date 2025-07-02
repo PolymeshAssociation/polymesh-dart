@@ -7,15 +7,16 @@ edition = "2024"
 polymesh-dart-common = { workspace = true, default-features = false }
 
 rand = { workspace = true, default-features = false }
+rand_core = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
-digest = { workspace = true }
-blake2 = { workspace = true }
-rayon = { workspace = true, optional = true }
+digest = { workspace = true, default-features = false }
+blake2 = { workspace = true, default-features = false }
+rayon = { workspace = true, default-features = false, optional = true }
 
-ark-ff = { workspace = true }
-ark-ec = { workspace = true }
-ark-serialize = { workspace = true }
-ark-std = { workspace = true }
+ark-ff = { workspace = true, default-features = false }
+ark-ec = { workspace = true, default-features = false }
+ark-serialize = { workspace = true, default-features = false }
+ark-std = { workspace = true, default-features = false }
 dock_crypto_utils = { workspace = true, default-features = false }
 #verifiable_encryption = { workspace = true, default-features = false }
 #equality_across_groups = { workspace = true, default-features = false }

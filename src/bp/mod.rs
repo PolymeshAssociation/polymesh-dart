@@ -10,6 +10,7 @@ use scale_info::TypeInfo;
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use blake2::{Blake2b512, Blake2s256};
+use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use bounded_collections::{BoundedVec, ConstU32};
 
@@ -17,7 +18,6 @@ use digest::Digest;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
 use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
-use rand::{RngCore, SeedableRng as _};
 
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
@@ -355,7 +355,7 @@ pub struct EncryptionKeyPair {
 
 impl EncryptionKeyPair {
     /// Generates a new set of encryption keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
+    pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
         let (enc, enc_pk) = bp_keys::keygen_enc(rng, DART_GENS.enc_gen());
         Ok(Self {
             public: EncryptionPublicKey::from_bp_key(enc_pk)?,
@@ -396,7 +396,7 @@ pub struct AccountKeyPair {
 
 impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
+    pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
         let (account, account_pk) = bp_keys::keygen_sig(rng, DART_GENS.sig_gen());
         Ok(Self {
             public: AccountPublicKey::from_bp_key(account_pk)?,
@@ -404,7 +404,11 @@ impl AccountKeyPair {
         })
     }
 
-    pub fn account_state<R: RngCore>(&self, rng: &mut R, asset_id: AssetId) -> AccountState {
+    pub fn account_state<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        asset_id: AssetId,
+    ) -> AccountState {
         AccountState(BPAccountState::new(rng, self.secret.0.0, asset_id))
     }
 }
@@ -423,7 +427,7 @@ pub struct AccountKeys {
 
 impl AccountKeys {
     /// Generates a new set of account keys using the provided RNG.
-    pub fn rand<R: RngCore>(rng: &mut R) -> Result<Self, Error> {
+    pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
         let enc = EncryptionKeyPair::rand(rng)?;
         let acct = AccountKeyPair::rand(rng)?;
         Ok(Self { enc, acct })
@@ -437,7 +441,7 @@ impl AccountKeys {
     }
 
     /// Initializes a new asset state for the account.
-    pub fn init_asset_state<R: RngCore>(
+    pub fn init_asset_state<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         asset_id: AssetId,
@@ -508,7 +512,7 @@ pub struct AccountAssetState {
 }
 
 impl AccountAssetState {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         account: &AccountKeys,
         asset_id: AssetId,
@@ -525,13 +529,13 @@ impl AccountAssetState {
         })
     }
 
-    pub fn mint<R: RngCore>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
+    pub fn mint<R: RngCore + CryptoRng>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
         let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount));
         self._set_pending_state(state.clone());
         state
     }
 
-    pub fn get_sender_affirm_state<R: RngCore>(
+    pub fn get_sender_affirm_state<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
@@ -541,13 +545,16 @@ impl AccountAssetState {
         state
     }
 
-    pub fn get_receiver_affirm_state<R: RngCore>(&mut self, rng: &mut R) -> AccountState {
+    pub fn get_receiver_affirm_state<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> AccountState {
         let state = AccountState(self.current_state.0.get_state_for_receive(rng));
         self._set_pending_state(state.clone());
         state
     }
 
-    pub fn get_state_for_claiming_received<R: RngCore>(
+    pub fn get_state_for_claiming_received<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
@@ -561,7 +568,7 @@ impl AccountAssetState {
         state
     }
 
-    pub fn get_state_for_reversing_send<R: RngCore>(
+    pub fn get_state_for_reversing_send<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
@@ -575,7 +582,10 @@ impl AccountAssetState {
         state
     }
 
-    pub fn get_state_for_decreasing_counter<R: RngCore>(&mut self, rng: &mut R) -> AccountState {
+    pub fn get_state_for_decreasing_counter<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> AccountState {
         let state = AccountState(
             self.current_state
                 .0
@@ -737,8 +747,8 @@ pub struct AccountAssetRegistrationProof {
 
 impl AccountAssetRegistrationProof {
     /// Generate a new account state for an asset and a registration proof for it.
-    pub fn new(
-        rng: &mut impl RngCore,
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
         account: &AccountKeys,
         asset_id: AssetId,
         ctx: &[u8],
@@ -805,8 +815,8 @@ pub struct AssetMintingProof {
 
 impl AssetMintingProof {
     /// Generate a new asset minting proof.
-    pub fn new(
-        rng: &mut impl RngCore,
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
         amount: Balance,
@@ -855,9 +865,10 @@ impl AssetMintingProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -866,7 +877,7 @@ impl AssetMintingProof {
             return Err(Error::CurveTreeRootNotFound);
         }
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             self.pk.get_affine()?,
             self.asset_id,
             self.amount,
@@ -877,6 +888,7 @@ impl AssetMintingProof {
             tree_roots.params(),
             DART_GENS.account_comm_key(),
             DART_GENS.sig_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -989,7 +1001,7 @@ impl Leg {
         Ok(Self(leg))
     }
 
-    pub fn encrypt<R: RngCore>(
+    pub fn encrypt<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         ephemeral_key: EphemeralSkEncryption,
@@ -1061,7 +1073,7 @@ impl LegBuilder {
         }
     }
 
-    pub fn encryt_and_prove<R: RngCore>(
+    pub fn encryt_and_prove<R: RngCore + CryptoRng>(
         self,
         rng: &mut R,
         ctx: &[u8],
@@ -1113,7 +1125,7 @@ impl SettlementBuilder {
         self
     }
 
-    pub fn encryt_and_prove<R: RngCore>(
+    pub fn encryt_and_prove<R: RngCore + CryptoRng>(
         self,
         rng: &mut R,
         asset_tree: impl CurveTreeLookup<ASSET_TREE_L>,
@@ -1149,9 +1161,10 @@ pub struct SettlementProof {
 }
 
 impl SettlementProof {
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1162,7 +1175,7 @@ impl SettlementProof {
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            leg.verify(&ctx, &root, params)?;
+            leg.verify(&ctx, &root, params, rng)?;
         }
         Ok(())
     }
@@ -1188,8 +1201,8 @@ pub struct SettlementLegProof {
 }
 
 impl SettlementLegProof {
-    pub(crate) fn new(
-        rng: &mut impl RngCore,
+    pub(crate) fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
         leg: Leg,
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
@@ -1235,17 +1248,18 @@ impl SettlementLegProof {
         Ok(leg_enc.leg_enc.ct_m.is_some())
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
         root: &CurveTreeRoot<ASSET_TREE_L>,
         params: &CurveTreeParameters,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let leg_enc = self.leg_enc.decode()?;
         let pk_e = leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             leg_enc.ephemeral_key.enc.clone(),
             pk_e.get_affine()?,
@@ -1256,6 +1270,7 @@ impl SettlementLegProof {
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
             &DART_GENS.ped_comm_key(),
+            rng,
         )?;
         Ok(())
     }
@@ -1268,7 +1283,7 @@ pub struct EphemeralSkEncryption {
 }
 
 impl EphemeralSkEncryption {
-    pub(crate) fn new<R: RngCore>(
+    pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         sender: EncryptionPublicKey,
         receiver: EncryptionPublicKey,
@@ -1352,7 +1367,7 @@ pub struct SenderAffirmationProof {
 }
 
 impl SenderAffirmationProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
@@ -1406,10 +1421,11 @@ impl SenderAffirmationProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1419,7 +1435,7 @@ impl SenderAffirmationProof {
         }
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1429,6 +1445,7 @@ impl SenderAffirmationProof {
             DART_GENS.account_comm_key(),
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -1454,7 +1471,7 @@ pub struct ReceiverAffirmationProof {
 }
 
 impl ReceiverAffirmationProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
@@ -1506,10 +1523,11 @@ impl ReceiverAffirmationProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1519,7 +1537,7 @@ impl ReceiverAffirmationProof {
         }
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1529,6 +1547,7 @@ impl ReceiverAffirmationProof {
             DART_GENS.account_comm_key(),
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -1554,7 +1573,7 @@ pub struct ReceiverClaimProof {
 }
 
 impl ReceiverClaimProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
@@ -1608,10 +1627,11 @@ impl ReceiverClaimProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1621,7 +1641,7 @@ impl ReceiverClaimProof {
         }
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1631,6 +1651,7 @@ impl ReceiverClaimProof {
             DART_GENS.account_comm_key(),
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -1656,7 +1677,7 @@ pub struct SenderCounterUpdateProof {
 }
 
 impl SenderCounterUpdateProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
@@ -1708,10 +1729,11 @@ impl SenderCounterUpdateProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1721,7 +1743,7 @@ impl SenderCounterUpdateProof {
         }
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1731,6 +1753,7 @@ impl SenderCounterUpdateProof {
             DART_GENS.account_comm_key(),
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -1756,7 +1779,7 @@ pub struct SenderReversalProof {
 }
 
 impl SenderReversalProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
@@ -1810,10 +1833,11 @@ impl SenderReversalProof {
         self.nullifier
     }
 
-    pub fn verify(
+    pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        rng: &mut R,
     ) -> Result<(), Error> {
         let root = self.root.decode()?;
         // Validate the root of the curve tree.
@@ -1823,7 +1847,7 @@ impl SenderReversalProof {
         }
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify(
+        proof.verify_with_rng(
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1833,6 +1857,7 @@ impl SenderReversalProof {
             DART_GENS.account_comm_key(),
             DART_GENS.enc_sig_gen(),
             DART_GENS.leg_asset_value_gen(),
+            rng,
         )?;
         Ok(())
     }
@@ -1848,7 +1873,7 @@ pub struct MediatorAffirmationProof {
 }
 
 impl MediatorAffirmationProof {
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         eph_sk: EncryptionSecretKey,

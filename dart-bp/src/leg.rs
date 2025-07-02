@@ -1,5 +1,7 @@
 use crate::keys::{DecKey, EncKey};
-use crate::util::{initialize_curve_tree_prover, initialize_curve_tree_verifier, prove, verify};
+use crate::util::{
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
+};
 use crate::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -16,7 +18,7 @@ use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use rand::RngCore;
+use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
@@ -89,7 +91,7 @@ impl<G: AffineRepr> Leg<G> {
     /// as its assumed that both keys use the same generator.
     /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
     /// `enc_sig_gen -> g, asset_value_gen -> h` in report.
-    pub fn encrypt<R: RngCore>(
+    pub fn encrypt<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         pk_e: &G,
@@ -128,7 +130,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
     /// `pk_a_m` is the encryption key of the mediator or the auditor
     /// Generator `enc_gen` should be the same as used in creating encryption key. `enc_gen -> g` in report.
     /// Generator `h` is a generator to anything else in this code.
-    pub fn new<R: RngCore, D: FullDigest>(
+    pub fn new<R: RngCore + CryptoRng, D: FullDigest>(
         rng: &mut R,
         pk_s: G,
         pk_r: G,
@@ -237,7 +239,7 @@ pub fn create_leaf_for_asset_tree<G: AffineRepr>(
 /// as its assumed that both keys use the same generator.
 /// `asset_value_gen` is used for Elgamal enc. of value and asset-id while leg encryption.
 /// `enc_sig_gen -> g, asset_value_gen -> h` in report.
-pub fn initialize_leg_for_settlement<R: RngCore, G: AffineRepr, D: FullDigest>(
+pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: FullDigest>(
     rng: &mut R,
     asset_id: AssetId,
     amount: Balance,
@@ -372,7 +374,7 @@ impl<
 
     /// `eph_sk_enc_rand` is the randomness created during twisted-Elgamal encryption of ephemeral secret key
     /// and `eph_pk` is the ephemeral public key
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg: Leg<Affine<G0>>,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -725,7 +727,8 @@ impl<
         let resp_asset_id_enc_0 = t_asset_id_enc_0.clone().gen_proof(&prover_challenge);
         let resp_asset_id_enc_1 = t_asset_id_enc_1.clone().gen_proof(&prover_challenge);
 
-        let (even_proof, odd_proof) = prove(even_prover, odd_prover, &tree_parameters).unwrap();
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng).unwrap();
 
         Self {
             even_proof,
@@ -744,6 +747,7 @@ impl<
         }
     }
 
+    #[cfg(feature = "std")]
     pub fn verify(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -756,6 +760,36 @@ impl<
         enc_sig_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
+    ) -> Result<(), R1CSError> {
+        let mut rng = rand::thread_rng();
+        self.verify_with_rng(
+            leg_enc,
+            eph_sk_enc,
+            eph_pk,
+            tree_root,
+            nonce,
+            tree_parameters,
+            leaf_comm_key,
+            enc_sig_gen,
+            asset_value_gen,
+            ped_comm_key,
+            &mut rng,
+        )
+    }
+
+    pub fn verify_with_rng<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        eph_sk_enc: EphemeralSkEncryption<Affine<G0>>,
+        eph_pk: Affine<G0>,
+        tree_root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G0, G1>,
+        leaf_comm_key: &[Affine<G0>],
+        enc_sig_gen: Affine<G0>,
+        asset_value_gen: Affine<G0>,
+        ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
+        rng: &mut R,
     ) -> Result<(), R1CSError> {
         let is_mediator_present = leg_enc.ct_m.is_some();
 
@@ -1029,12 +1063,13 @@ impl<
             assert_eq!(self.resp_leaf.0[1], aud_proofs.resp_K_3.response1);
         }
 
-        verify(
+        verify_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
             &tree_parameters,
+            rng,
         )?;
         log::info!("Time and size: {:?}, {}", dur, size);
         Ok(())
@@ -1051,7 +1086,7 @@ pub struct MediatorTxnProof<G: AffineRepr> {
 
 impl<G: AffineRepr> MediatorTxnProof<G> {
     /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
-    pub fn new<R: RngCore>(
+    pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_enc: LegEncryption<G>,
         eph_sk: G::ScalarField,
@@ -1181,7 +1216,7 @@ pub mod tests {
 
     /// Generate account signing and encryption keys for all sender, receiver, and auditor.
     /// This is just for testing and in practice, each party generates its own keys.
-    pub fn setup_keys<R: RngCore, G: AffineRepr>(
+    pub fn setup_keys<R: RngCore + CryptoRng, G: AffineRepr>(
         rng: &mut R,
         g: G,
     ) -> (
