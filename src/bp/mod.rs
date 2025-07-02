@@ -4,7 +4,6 @@ use codec::{Decode, Encode, MaxEncodedLen};
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
-#[cfg(feature = "std")]
 use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
@@ -308,6 +307,7 @@ impl AccountLookupMap {
     MaxEncodedLen,
     Encode,
     Decode,
+    TypeInfo,
     Debug,
     CanonicalSerialize,
     CanonicalDeserialize,
@@ -315,7 +315,6 @@ impl AccountLookupMap {
     Eq,
     Hash,
 )]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct EncryptionPublicKey(CompressedAffine);
 
 impl From<AccountPublicKey> for EncryptionPublicKey {
@@ -362,8 +361,7 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
 pub struct AccountPublicKey(CompressedAffine);
 
 impl AccountPublicKey {
@@ -408,8 +406,7 @@ impl AccountKeyPair {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
@@ -463,8 +460,7 @@ impl AccountState {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
 pub struct AccountStateNullifier(CompressedAffine);
 
 impl AccountStateNullifier {
@@ -477,8 +473,7 @@ impl AccountStateNullifier {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
 pub struct AccountStateCommitment(CompressedAffine);
 
 impl AccountStateCommitment {
@@ -605,8 +600,7 @@ impl AccountAssetState {
 }
 
 /// Represents the state of an asset in the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
 pub struct AssetState {
     asset_id: AssetId,
     is_mediator: bool,
@@ -648,8 +642,7 @@ impl AssetState {
 }
 
 /// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
 pub struct AssetStateCommitment(CompressedAffine);
 
 impl AssetStateCommitment {
@@ -720,8 +713,7 @@ impl AssetCurveTree {
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub account_state_commitment: AccountStateCommitment,
@@ -776,8 +768,7 @@ impl AccountAssetRegistrationProof {
 }
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct AssetMintingProof {
     // Public inputs.
     pub pk: AccountPublicKey,
@@ -879,8 +870,7 @@ impl AssetMintingProof {
 }
 
 /// Represents the auditor or mediator in a leg of the Dart BP protocol.
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub enum AuditorOrMediator {
     Mediator(AccountPublicKeys),
     Auditor(EncryptionPublicKey),
@@ -909,8 +899,7 @@ impl AuditorOrMediator {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub enum SettlementRef {
     /// ID based reference.
     ID(#[codec(compact)] SettlementId),
@@ -924,8 +913,7 @@ impl From<SettlementId> for SettlementRef {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
@@ -958,8 +946,7 @@ impl LegRef {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub enum LegRole {
     Sender,
     Receiver,
@@ -1140,8 +1127,7 @@ impl SettlementBuilder {
     }
 }
 
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct SettlementProof {
     memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
     root: WrappedCanonical<CurveTreeRoot<ASSET_TREE_L>>,
@@ -1173,8 +1159,7 @@ impl SettlementProof {
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct SettlementLegProof {
     leg_enc: WrappedCanonical<LegEncrypted>,
 
@@ -1337,8 +1322,7 @@ impl LegEncrypted {
 }
 
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1440,8 +1424,7 @@ impl SenderAffirmationProof {
 }
 
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1541,8 +1524,7 @@ impl ReceiverAffirmationProof {
 }
 
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1644,8 +1626,7 @@ impl ReceiverClaimProof {
 }
 
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1745,8 +1726,7 @@ impl SenderCounterUpdateProof {
 }
 
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1848,8 +1828,7 @@ impl SenderReversalProof {
 }
 
 /// Mediator affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
+#[derive(Clone, Encode, Decode, TypeInfo)]
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,

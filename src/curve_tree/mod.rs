@@ -14,14 +14,8 @@ use curve_tree_relations::{
 use super::*;
 use crate::curve_tree::{LeafIndex, NodeLevel};
 
-//pub mod sync_tree;
-//use sync_tree::CurveTreeWithBackend;
-
-//#[cfg(feature = "async_tree")]
-//pub mod async_tree;
-
 pub mod backends;
-use backends::*;
+pub use backends::*;
 
 #[macro_use]
 mod common;

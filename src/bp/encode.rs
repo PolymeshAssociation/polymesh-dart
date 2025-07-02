@@ -1,14 +1,15 @@
 use std::mem;
 
-use codec::{Decode, Encode, EncodeAsRef, Error as CodecError, Input, MaxEncodedLen, Output};
-#[cfg(feature = "std")]
+use codec::{
+    Decode, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input, MaxEncodedLen, Output,
+};
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use crate::{
-    curve_tree::{Inner, LeafValue},
+    curve_tree::{CurveTreeRoot, Inner, LeafValue},
     *,
 };
 
@@ -59,7 +60,6 @@ macro_rules! impl_scale_and_type_info {
             trailing { > }
         )?
     }) => {
-        #[cfg(feature = "std")]
         impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
             type Identity = Self;
             fn type_info() -> Type {
@@ -68,6 +68,8 @@ macro_rules! impl_scale_and_type_info {
                     .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name(concat!("Encoded", stringify!($type)))))
             }
         }
+
+        impl $(< $( $impl_generics )* >)? EncodeLike for $type $(< $( $generics )* >)? { }
 
         impl $(< $( $impl_generics )* >)? Encode for $type $(< $( $generics )* >)? {
             #[inline]
@@ -99,7 +101,6 @@ macro_rules! impl_scale_and_type_info {
             trailing { > }
         )?
     }) => {
-        #[cfg(feature = "std")]
         impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
             type Identity = Self;
             fn type_info() -> Type {
@@ -108,6 +109,8 @@ macro_rules! impl_scale_and_type_info {
                     .composite(Fields::unnamed().field(|f| f.ty::<CompressedPoint>().type_name(concat!("Encoded", stringify!($type)))))
             }
         }
+
+        impl $(< $( $impl_generics )* >)? EncodeLike for $type $(< $( $generics )* >)? { }
 
         impl $(< $( $impl_generics )* >)? Encode for $type $(< $( $generics )* >)? {
             #[inline]
@@ -143,13 +146,13 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     MaxEncodedLen,
     Encode,
     Decode,
+    TypeInfo,
     CanonicalSerialize,
     CanonicalDeserialize,
     PartialEq,
     Eq,
     Hash,
 )]
-#[cfg_attr(feature = "std", derive(TypeInfo))]
 pub struct CompressedAffine(CompressedPoint);
 
 impl core::fmt::Debug for CompressedAffine {
@@ -207,7 +210,6 @@ impl<'a, P: SWCurveConfig> EncodeAsRef<'a, Affine<P>> for CompressedAffine {
     type RefType = CompressedAffine;
 }
 
-#[cfg(feature = "std")]
 impl TypeInfo for DartBPGenerators {
     type Identity = Self;
 
@@ -228,7 +230,6 @@ impl TypeInfo for DartBPGenerators {
     }
 }
 
-#[cfg(feature = "std")]
 impl TypeInfo for AccountCommitmentKey {
     type Identity = Self;
 
@@ -247,7 +248,6 @@ impl TypeInfo for AccountCommitmentKey {
     }
 }
 
-#[cfg(feature = "std")]
 impl TypeInfo for AssetCommitmentKey {
     type Identity = Self;
 
@@ -267,6 +267,9 @@ impl_scale_and_type_info!(LegEncrypted as Vec);
 
 // TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>);
+
+// TypeInfo, SCALE encoding and decoding for `CurveTreeRoot<L>`.
+impl_scale_and_type_info!(CurveTreeRoot as Vec<const L: usize>);
 
 // TypeInfo, SCALE encoding and decoding for `LeafValue<P0>`.
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
@@ -295,7 +298,6 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     }
 }
 
-#[cfg(feature = "std")]
 impl<T: 'static> TypeInfo for WrappedCanonical<T> {
     type Identity = Self;
 
@@ -310,6 +312,8 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
             )
     }
 }
+
+impl<T: CanonicalSerialize> EncodeLike for WrappedCanonical<T> {}
 
 impl<T: CanonicalSerialize> Encode for WrappedCanonical<T> {
     #[inline]
