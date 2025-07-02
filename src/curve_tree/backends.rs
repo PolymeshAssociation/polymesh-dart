@@ -8,29 +8,34 @@ use crate::{LeafIndex, NodeLevel, error::*};
 pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
     std::fmt::Debug
 {
+    type Error: From<crate::Error>;
+
     fn height(&self) -> NodeLevel;
 
-    fn set_height(&mut self, height: NodeLevel) -> Result<(), Error>;
+    fn set_height(&mut self, height: NodeLevel) -> Result<(), Self::Error>;
 
     fn allocate_leaf_index(&mut self) -> LeafIndex;
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error>;
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Self::Error>;
 
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>, Error>;
+    ) -> Result<Option<LeafValue<P0>>, Self::Error>;
 
     fn leaf_count(&self) -> LeafIndex;
 
-    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error>;
+    fn get_inner_node(
+        &self,
+        location: NodeLocation<L>,
+    ) -> Result<Option<Inner<M, P0, P1>>, Self::Error>;
 
     fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
-    ) -> Result<(), Error>;
+    ) -> Result<(), Self::Error>;
 }
 
 #[cfg(feature = "async_tree")]
@@ -41,35 +46,40 @@ pub trait AsyncCurveTreeBackend<
     P1: SWCurveConfig,
 >: std::fmt::Debug
 {
+    type Error: From<crate::Error>;
+
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
 
-    fn set_height(&mut self, height: NodeLevel) -> impl Future<Output = Result<(), Error>> + Send;
+    fn set_height(
+        &mut self,
+        height: NodeLevel,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
 
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send;
 
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send;
 
     fn leaf_count(&self) -> impl Future<Output = LeafIndex> + Send;
 
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>, Self::Error>> + Send;
 
     fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
-    ) -> impl Future<Output = Result<(), Error>> + Send;
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 pub struct CurveTreeMemoryBackend<
@@ -125,6 +135,8 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
 {
+    type Error = Error;
+
     fn height(&self) -> NodeLevel {
         self.height
     }
@@ -186,20 +198,22 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > AsyncCurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
 {
+    type Error = Error;
+
     async fn height(&self) -> NodeLevel {
-        (self as &dyn CurveTreeBackend<L, M, P0, P1>).height()
+        (self as &dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).height()
     }
 
     async fn set_height(&mut self, height: NodeLevel) -> Result<(), Error> {
-        (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_height(height)
+        (self as &mut dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).set_height(height)
     }
 
     async fn allocate_leaf_index(&mut self) -> LeafIndex {
-        (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).allocate_leaf_index()
+        (self as &mut dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).allocate_leaf_index()
     }
 
     async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
-        (self as &dyn CurveTreeBackend<L, M, P0, P1>).get_leaf(leaf_index)
+        (self as &dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).get_leaf(leaf_index)
     }
 
     async fn set_leaf(
@@ -207,18 +221,19 @@ impl<
         leaf_index: LeafIndex,
         new_leaf_value: LeafValue<P0>,
     ) -> Result<Option<LeafValue<P0>>, Error> {
-        (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_leaf(leaf_index, new_leaf_value)
+        (self as &mut dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>)
+            .set_leaf(leaf_index, new_leaf_value)
     }
 
     async fn leaf_count(&self) -> LeafIndex {
-        (self as &dyn CurveTreeBackend<L, M, P0, P1>).leaf_count()
+        (self as &dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).leaf_count()
     }
 
     async fn get_inner_node(
         &self,
         location: NodeLocation<L>,
     ) -> Result<Option<Inner<M, P0, P1>>, Error> {
-        (self as &dyn CurveTreeBackend<L, M, P0, P1>).get_inner_node(location)
+        (self as &dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>).get_inner_node(location)
     }
 
     async fn set_inner_node(
@@ -226,6 +241,7 @@ impl<
         location: NodeLocation<L>,
         new_node: Inner<M, P0, P1>,
     ) -> Result<(), Error> {
-        (self as &mut dyn CurveTreeBackend<L, M, P0, P1>).set_inner_node(location, new_node)
+        (self as &mut dyn CurveTreeBackend<L, M, P0, P1, Error = Self::Error>)
+            .set_inner_node(location, new_node)
     }
 }

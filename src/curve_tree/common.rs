@@ -4,12 +4,12 @@ use ark_serialize::{Compress, SerializationError, Valid, Validate};
 use ark_std::Zero;
 use codec::{Decode, Encode};
 use curve_tree_relations::single_level_select_and_rerandomize::*;
+use scale_info::TypeInfo;
 
 use super::*;
 use crate::error::*;
 
-#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
 pub enum NodeLocation<const L: usize> {
     Leaf(#[codec(compact)] LeafIndex), // Leaf nodes are identified by their index
     Odd {
@@ -387,7 +387,8 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig,
             P1: SWCurveConfig,
-            B: $curve_tree_backend_trait<L, M, P0, P1>,
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
+            Error: From<crate::Error> = crate::Error,
         > {
             backend: B,
             _phantom: std::marker::PhantomData<(P0, P1)>,
@@ -398,13 +399,13 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-        > $curve_tree_ty<L, M, P0, P1, CurveTreeMemoryBackend<L, M, P0, P1>>
+        > $curve_tree_ty<L, M, P0, P1, CurveTreeMemoryBackend<L, M, P0, P1>, crate::Error>
         {
             pub async fn new(
                 height: NodeLevel,
                 parameters: &SelRerandParameters<P0, P1>,
             ) -> Result<Self, Error> {
-                Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters).await
+                Ok(Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters).await?)
             }
         }
 
@@ -413,8 +414,9 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            B: $curve_tree_backend_trait<L, M, P0, P1> + Send,
-        > $curve_tree_ty<L, M, P0, P1, B>
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Send,
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, M, P0, P1, B, Error>
         {
             pub async fn new_with_backend(
                 backend: B,
@@ -433,7 +435,7 @@ macro_rules! impl_curve_tree_with_backend {
         impl_curve_tree_with_backend!(
             $curve_tree_ty,
             $curve_tree_backend_trait,
-            { B: $curve_tree_backend_trait<L, M, P0, P1> + Send, },
+            { B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Send, },
             { , B },
             { async },
             { .await }
@@ -445,8 +447,9 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig,
             P1: SWCurveConfig,
+            Error: From<crate::Error> = crate::Error,
         > {
-            backend: Box<dyn CurveTreeBackend<L, M, P0, P1> + Send>,
+            backend: Box<dyn CurveTreeBackend<L, M, P0, P1, Error = Error> + Send>,
         }
 
         impl<
@@ -454,7 +457,7 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-        > $curve_tree_ty<L, M, P0, P1>
+        > $curve_tree_ty<L, M, P0, P1, crate::Error>
         {
             pub fn new(
                 height: NodeLevel,
@@ -463,9 +466,18 @@ macro_rules! impl_curve_tree_with_backend {
                 let backend = Box::new(CurveTreeMemoryBackend::new(height));
                 Self::new_with_backend(backend, parameters)
             }
+        }
 
+        impl<
+            const L: usize,
+            const M: usize,
+            P0: SWCurveConfig + Copy + Send,
+            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, M, P0, P1, Error>
+        {
             pub fn new_with_backend(
-                backend: Box<dyn CurveTreeBackend<L, M, P0, P1> + Send>,
+                backend: Box<dyn CurveTreeBackend<L, M, P0, P1, Error = Error> + Send>,
                 parameters: &SelRerandParameters<P0, P1>,
             ) -> Result<Self, Error> {
                 let mut tree = Self { backend };
@@ -487,7 +499,8 @@ macro_rules! impl_curve_tree_with_backend {
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
             $( $impl_generics )*
-        > std::fmt::Debug for $curve_tree_ty<L, M, P0, P1 $($generics)*>
+            Error: From<crate::Error>,
+        > std::fmt::Debug for $curve_tree_ty<L, M, P0, P1 $($generics)*, Error>
         {
             fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 fmt.debug_struct(stringify!($curve_tree_ty))
@@ -502,7 +515,8 @@ macro_rules! impl_curve_tree_with_backend {
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
             $( $impl_generics )*
-        > $curve_tree_ty<L, M, P0, P1 $($generics)*>
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, M, P0, P1 $($generics)*, Error>
         {
             pub $($async_fn)* fn height(&self) -> NodeLevel {
                 self.backend.height()$($await)*
@@ -551,10 +565,10 @@ macro_rules! impl_curve_tree_with_backend {
                             Some((commitments[tree_index as usize] + delta).into_affine().x)
                         }
                         Some(Inner::Even(_)) => {
-                            return Err(Error::CurveTreeInvalidChildNode {
+                            return Err(crate::Error::CurveTreeInvalidChildNode {
                                 level: child.level(),
                                 index: child.index(),
-                            });
+                            }.into());
                         }
                         None => None,
                     };
@@ -596,10 +610,10 @@ macro_rules! impl_curve_tree_with_backend {
                             Some(Inner::Even(commitments)) => Some(commitments[tree_index as usize]),
                             Some(Inner::Odd(_)) => {
                                 log::error!("An Odd node cannot have an odd child");
-                                return Err(Error::CurveTreeInvalidChildNode {
+                                return Err(crate::Error::CurveTreeInvalidChildNode {
                                     level: child.level(),
                                     index: child.index(),
-                                });
+                                }.into());
                             }
                             None => None,
                         }
@@ -629,7 +643,7 @@ macro_rules! impl_curve_tree_with_backend {
                             ._get_even_x_coord_children_batch(root, &parameters.even_parameters.delta)
                             $($await)*?,
                     })),
-                    None => Err(Error::CurveTreeRootNotFound),
+                    None => Err(crate::Error::CurveTreeRootNotFound.into()),
                 }
             }
 
@@ -648,7 +662,7 @@ macro_rules! impl_curve_tree_with_backend {
                     .get_leaf(leaf_index)
                     $($await)*?
                     .map(|leaf| leaf.0)
-                    .ok_or_else(|| Error::CurveTreeLeafIndexOutOfBounds(leaf_index))?;
+                    .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
                 let mut odd_child = Affine::<P1>::zero();
 
                 // Start at the leaf's location.
@@ -660,10 +674,10 @@ macro_rules! impl_curve_tree_with_backend {
                         .backend
                         .get_inner_node(parent_location)
                         $($await)*?
-                        .ok_or_else(|| Error::CurveTreeNodeNotFound {
+                        .ok_or_else(|| crate::Error::CurveTreeNodeNotFound {
                             level: parent_location.level(),
                             index: parent_location.index(),
-                        })?;
+                        }.into())?;
 
                     match node {
                         Inner::Even(commitments) => {
