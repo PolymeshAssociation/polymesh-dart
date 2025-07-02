@@ -12,7 +12,8 @@ use std::{
 
 use polymesh_dart::{
     curve_tree::{
-        CurveTreeLookup, ProverCurveTree, RootHistory, ValidateCurveTreeRoot, VerifierCurveTree,
+        CurveTreeLookup, FullCurveTree, ProverCurveTree, RootHistory, ValidateCurveTreeRoot,
+        VerifierCurveTree,
     },
     *,
 };
@@ -970,8 +971,8 @@ impl DartChainState {
         })
     }
 
-    pub fn asset_tree(&self) -> &AssetCurveTree {
-        &self.asset_tree
+    pub fn asset_tree(&self) -> &FullCurveTree<ASSET_TREE_L> {
+        &self.asset_tree.tree
     }
 
     pub fn account_tree(&self) -> &VerifierCurveTree<ACCOUNT_TREE_L> {

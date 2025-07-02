@@ -1,4 +1,5 @@
-use std::{collections::HashMap, hash::Hash};
+#[cfg(feature = "std")]
+use std::collections::HashMap;
 
 use codec::{Decode, Encode, MaxEncodedLen};
 use dock_crypto_utils::concat_slices;
@@ -14,7 +15,6 @@ use bounded_collections::{BoundedVec, ConstU32};
 
 use digest::Digest;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
-use indexmap::IndexMap;
 use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
 use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
 use rand::{RngCore, SeedableRng as _};
@@ -259,11 +259,13 @@ pub trait AccountLookup {
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg(feature = "std")]
 pub struct AccountLookupMap {
     enc_to_acct: HashMap<EncryptionPublicKey, AccountPublicKey>,
     acct_to_enc: HashMap<AccountPublicKey, EncryptionPublicKey>,
 }
 
+#[cfg(feature = "std")]
 impl AccountLookup for AccountLookupMap {
     fn get_account_enc_pk(&self, account: &AccountPublicKey) -> Option<EncryptionPublicKey> {
         self.acct_to_enc.get(account).copied()
@@ -274,6 +276,7 @@ impl AccountLookup for AccountLookupMap {
     }
 }
 
+#[cfg(feature = "std")]
 impl AccountLookupMap {
     pub fn new() -> Self {
         Self {
@@ -660,47 +663,57 @@ impl AssetStateCommitment {
 }
 
 /// Represents a tree of asset states in the Dart BP protocol.
+#[cfg(feature = "std")]
 pub struct AssetCurveTree {
-    tree: FullCurveTree<ASSET_TREE_L>,
-    assets: IndexMap<AssetId, AssetState>,
+    pub tree: FullCurveTree<ASSET_TREE_L>,
+    assets: HashMap<AssetId, (LeafIndex, AssetState)>,
 }
 
+#[cfg(feature = "std")]
 impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
-            assets: IndexMap::new(),
+            assets: HashMap::new(),
         })
     }
 
     /// Returns the asset state for the given asset ID, if it exists.
     pub fn get_asset_state(&self, asset_id: AssetId) -> Option<AssetState> {
-        self.assets.get(&asset_id).cloned()
+        self.assets.get(&asset_id).map(|(_, state)| state.clone())
     }
 
     /// Sets the asset state in the tree and returns the index of the asset state.
-    pub fn set_asset_state(&mut self, state: AssetState) -> Result<usize, Error> {
+    pub fn set_asset_state(&mut self, state: AssetState) -> Result<LeafIndex, Error> {
         let asset_id = state.asset_id;
         // Get the new asset state commitment.
         let leaf = state.commitment()?;
 
         // Update or insert the asset state.
-        let entry = self.assets.entry(asset_id);
-        let index = entry.index();
-        entry.insert_entry(state);
+        use std::collections::hash_map::Entry;
+        match self.assets.entry(asset_id) {
+            Entry::Occupied(mut entry) => {
+                let (index, existing_state) = entry.get_mut();
+                *existing_state = state;
+                let index = *index;
+                // Update the leaf in the curve tree.
+                self.tree.update(leaf.as_leaf_value()?, index)?;
 
-        // Update the leaf in the curve tree.
-        self.tree
-            .update(leaf.as_leaf_value()?, index as LeafIndex)?;
-        Ok(index)
+                Ok(index)
+            }
+            Entry::Vacant(entry) => {
+                let index = self.tree.insert(leaf.as_leaf_value()?)?;
+                entry.insert((index, state));
+
+                Ok(index)
+            }
+        }
     }
 
     pub fn get_asset_state_path(&self, asset_id: AssetId) -> Option<CurveTreePath<ASSET_TREE_L>> {
-        let leaf_index = self.assets.get_index_of(&asset_id)?;
-        self.tree
-            .get_path_to_leaf_index(leaf_index as LeafIndex)
-            .ok()
+        let (leaf_index, _) = self.assets.get(&asset_id)?;
+        self.tree.get_path_to_leaf_index(*leaf_index).ok()
     }
 
     pub fn params(&self) -> &CurveTreeParameters {
@@ -1052,7 +1065,7 @@ impl LegBuilder {
         self,
         rng: &mut R,
         ctx: &[u8],
-        asset_tree: &AssetCurveTree,
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
     ) -> Result<SettlementLegProof, Error> {
         let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
         let leg = Leg::new(
@@ -1103,7 +1116,7 @@ impl SettlementBuilder {
     pub fn encryt_and_prove<R: RngCore>(
         self,
         rng: &mut R,
-        asset_tree: &AssetCurveTree,
+        asset_tree: impl CurveTreeLookup<ASSET_TREE_L>,
     ) -> Result<SettlementProof, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
@@ -1113,7 +1126,7 @@ impl SettlementBuilder {
 
         for (idx, leg_builder) in self.legs.into_iter().enumerate() {
             let ctx = (&memo, idx as u8).encode();
-            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, asset_tree)?;
+            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
 
@@ -1184,11 +1197,9 @@ impl SettlementLegProof {
         pk_e: EncryptionPublicKey,
         auditor_enc: Option<EncryptionPublicKey>,
         ctx: &[u8],
-        asset_tree: &AssetCurveTree,
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
     ) -> Result<Self, Error> {
-        let asset_path = asset_tree
-            .get_asset_state_path(leg.asset_id())
-            .ok_or_else(|| Error::AssetStateNotFound(leg.asset_id()))?;
+        let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id() as LeafIndex)?;
 
         let proof = bp_leg::SettlementTxnProof::new(
             rng,
