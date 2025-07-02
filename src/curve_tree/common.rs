@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{Compress, SerializationError, Valid, Validate};
@@ -812,6 +814,20 @@ macro_rules! impl_curve_tree_with_backend {
 
 #[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct LeafValue<P0: SWCurveConfig>(pub(crate) Affine<P0>);
+
+impl<P0: SWCurveConfig + Copy + Send> core::ops::Deref for LeafValue<P0> {
+    type Target = Affine<P0>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<P0: SWCurveConfig + Copy + Send> std::hash::Hash for LeafValue<P0> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl<P0: SWCurveConfig + Copy + Send> Default for LeafValue<P0> {
     fn default() -> Self {

@@ -485,8 +485,8 @@ impl AccountStateCommitment {
         Ok(PallasA::try_from(&self.0)?)
     }
 
-    pub fn as_leaf_value(&self) -> Result<PallasA, Error> {
-        self.get_affine()
+    pub fn as_leaf_value(&self) -> Result<LeafValue<PallasParameters>, Error> {
+        Ok(LeafValue(self.get_affine()?))
     }
 
     pub fn as_commitment(&self) -> Result<BPAccountStateCommitment, Error> {
@@ -654,8 +654,8 @@ impl AssetStateCommitment {
         Ok(PallasA::try_from(&self.0)?)
     }
 
-    pub fn as_leaf_value(&self) -> Result<PallasA, Error> {
-        self.get_affine()
+    pub fn as_leaf_value(&self) -> Result<LeafValue<PallasParameters>, Error> {
+        Ok(LeafValue(self.get_affine()?))
     }
 }
 

@@ -51,7 +51,10 @@ pub trait CurveTreeLookup<const L: usize> {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error>;
 
     /// Returns the path to a leaf in the curve tree by its value.
-    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>, Error>;
+    fn get_path_to_leaf(
+        &self,
+        leaf: LeafValue<PallasParameters>,
+    ) -> Result<CurveTreePath<L>, Error>;
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
@@ -131,13 +134,17 @@ impl<const L: usize> FullCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<LeafIndex, Error> {
-        self.tree.insert_leaf(leaf.into())
+    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<LeafIndex, Error> {
+        self.tree.insert_leaf(leaf)
     }
 
     /// Updates an existing leaf in the curve tree.
-    pub fn update(&mut self, leaf: PallasA, leaf_index: LeafIndex) -> Result<(), Error> {
-        self.tree.update_leaf(leaf_index, leaf.into())
+    pub fn update(
+        &mut self,
+        leaf: LeafValue<PallasParameters>,
+        leaf_index: LeafIndex,
+    ) -> Result<(), Error> {
+        self.tree.update_leaf(leaf_index, leaf)
     }
 
     /// Returns the path to a leaf in the curve tree by its index.
@@ -174,7 +181,7 @@ impl<const L: usize> VerifierCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<LeafIndex, Error> {
+    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<LeafIndex, Error> {
         self.tree.insert_leaf(leaf.into())
     }
 
@@ -192,7 +199,7 @@ impl<const L: usize> VerifierCurveTree<L> {
 /// A Curve Tree for the Prover in the Dart BP protocol.
 pub struct ProverCurveTree<const L: usize> {
     tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
-    leaf_to_index: HashMap<PallasA, u64>,
+    leaf_to_index: HashMap<LeafValue<PallasParameters>, u64>,
 }
 
 impl<const L: usize> ProverCurveTree<L> {
@@ -205,16 +212,16 @@ impl<const L: usize> ProverCurveTree<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<u64, Error> {
-        let leaf_index = self.tree.insert_leaf(leaf.into())? as u64;
+    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<u64, Error> {
+        let leaf_index = self.tree.insert_leaf(leaf)? as u64;
         self.leaf_to_index.insert(leaf, leaf_index);
         Ok(leaf_index)
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
-    pub fn apply_updates(&mut self, leaves: Vec<PallasA>) -> Result<(), Error> {
+    pub fn apply_updates(&mut self, leaves: Vec<LeafValue<PallasParameters>>) -> Result<(), Error> {
         for leaf in &leaves {
-            self.tree.insert_leaf(leaf.into())?;
+            self.tree.insert_leaf(*leaf)?;
         }
         Ok(())
     }
@@ -225,7 +232,10 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
         Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
     }
 
-    fn get_path_to_leaf(&self, leaf: PallasA) -> Result<CurveTreePath<L>, Error> {
+    fn get_path_to_leaf(
+        &self,
+        leaf: LeafValue<PallasParameters>,
+    ) -> Result<CurveTreePath<L>, Error> {
         if let Some(&leaf_index) = self.leaf_to_index.get(&leaf) {
             self.get_path_to_leaf_index(leaf_index)
         } else {

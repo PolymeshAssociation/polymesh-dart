@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use polymesh_dart_common::AssetId;
 
-use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
+use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel, PallasParameters, curve_tree::LeafValue};
 
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]
@@ -13,7 +13,7 @@ pub enum Error {
 
     /// Leaf not found in the curve tree.
     #[error("Leaf not found in the curve tree: {0:?}")]
-    LeafNotFound(ark_pallas::Affine),
+    LeafNotFound(LeafValue<PallasParameters>),
 
     /// Account/Encryption public key already exists.
     #[error("Account/Encryption public key already exists.")]

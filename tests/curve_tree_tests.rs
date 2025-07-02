@@ -3,7 +3,9 @@ use test_log::test;
 use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
-use polymesh_dart::curve_tree::{CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree};
+use polymesh_dart::curve_tree::{
+    CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
+};
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasA, PallasParameters, VestaParameters};
 
@@ -49,7 +51,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: PallasA) -> Result<usize, Error> {
+    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<usize, Error> {
         let leaf_index = self.length;
         self.update(leaf, leaf_index)?;
 
@@ -59,7 +61,12 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Updates an existing leaf in the curve tree.
-    pub fn update(&mut self, leaf: PallasA, leaf_index: usize) -> Result<(), Error> {
+    pub fn update(
+        &mut self,
+        leaf: LeafValue<PallasParameters>,
+        leaf_index: usize,
+    ) -> Result<(), Error> {
+        let leaf = *leaf;
         let cap = self.leaves.len();
         if leaf_index >= cap {
             self.grow(leaf_index);
@@ -70,7 +77,7 @@ impl<const L: usize> CurveTreeOld<L> {
                 *old_leaf = leaf;
             }
             None => {
-                return Err(Error::LeafNotFound(leaf));
+                return Err(Error::LeafNotFound(leaf.into()));
             }
         }
         self.tree.update_leaf(leaf_index, 0, leaf, &self.params);
@@ -104,13 +111,13 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 }
 
-fn create_test_leaf(value: usize) -> PallasA {
+fn create_test_leaf(value: usize) -> LeafValue<PallasParameters> {
     use ark_ec::{AffineRepr, CurveGroup};
     use ark_pallas::Fr as PallasScalar;
 
     // Create a deterministic leaf value for testing
     let scalar = PallasScalar::from(value as u64);
-    (PallasA::generator() * scalar).into_affine()
+    (PallasA::generator() * scalar).into_affine().into()
 }
 
 fn setup_trees() -> (
