@@ -414,25 +414,18 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-        > $curve_tree_ty<L, M, P0, P1, CurveTreeMemoryBackend<L, M, P0, P1>, crate::Error>
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, M, P0, P1, B, Error>
         {
             pub $($async_fn)* fn new(
                 height: NodeLevel,
                 parameters: &SelRerandParameters<P0, P1>,
             ) -> Result<Self, Error> {
-                Ok(Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters)$($await)*?)
+                let backend = B::new(height)$($await)*?;
+                Ok(Self::new_with_backend(backend, parameters)$($await)*?)
             }
-        }
 
-        impl<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig + Copy + Send,
-            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Send,
-            Error: From<crate::Error>,
-        > $curve_tree_ty<L, M, P0, P1, B, Error>
-        {
             pub $($async_fn)* fn new_with_backend(
                 backend: B,
                 parameters: &SelRerandParameters<P0, P1>,
@@ -441,10 +434,11 @@ macro_rules! impl_curve_tree_with_backend {
                     backend,
                     _phantom: std::marker::PhantomData,
                 };
-                tree.update_leaf(0, LeafValue::default(), parameters)$($await)*?;
+                tree.init_root(parameters)$($await)*?;
                 Ok(tree)
             }
         }
+
         impl<
             const L: usize,
             const M: usize,
@@ -466,10 +460,39 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Default,
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, M, P0, P1, B, Error>
+        {
+            pub $($async_fn)* fn default(parameters: &SelRerandParameters<P0, P1>) -> Result<Self, Error> {
+                Ok(Self::new_with_backend(B::default(), parameters)$($await)*?)
+            }
+        }
+
+        impl<
+            const L: usize,
+            const M: usize,
+            P0: SWCurveConfig + Copy + Send,
+            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
             B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
             Error: From<crate::Error>,
         > $curve_tree_ty<L, M, P0, P1, B, Error>
         {
+            /// Initializes the root of the tree by setting the first leaf to the default value.
+            pub $($async_fn)* fn init_root(&mut self, parameters: &SelRerandParameters<P0, P1>) -> Result<(), Error> {
+                // Check if the root node has already been initialized.
+                let root = self.root_node(parameters)$($await)*;
+                if root.is_err() {
+                    // No root node exists, so we initialize it.
+                    self.update_leaf(
+                        0,
+                        LeafValue::<P0>::default(),
+                        parameters,
+                    )$($await)*?;
+                }
+                Ok(())
+            }
+
             pub $($async_fn)* fn height(&self) -> NodeLevel {
                 self.backend.height()$($await)*
             }
