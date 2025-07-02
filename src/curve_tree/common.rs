@@ -382,12 +382,27 @@ impl<
 #[macro_export]
 macro_rules! impl_curve_tree_with_backend {
     (Async, $curve_tree_ty:ident, $curve_tree_backend_trait:ident) => {
+        impl_curve_tree_with_backend!(
+            $curve_tree_ty,
+            $curve_tree_backend_trait,
+            { async },
+            { .await }
+        );
+    };
+    (Sync, $curve_tree_ty:ident, $curve_tree_backend_trait:ident) => {
+        impl_curve_tree_with_backend!(
+            $curve_tree_ty,
+            $curve_tree_backend_trait,
+            { }, { }
+        );
+    };
+    ($curve_tree_ty:ident, $curve_tree_backend_trait:ident, { $($async_fn:tt)* }, { $($await:tt)* }) => {
         pub struct $curve_tree_ty<
             const L: usize,
             const M: usize,
             P0: SWCurveConfig,
             P1: SWCurveConfig,
-            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> = CurveTreeMemoryBackend<L, M, P0, P1>,
             Error: From<crate::Error> = crate::Error,
         > {
             backend: B,
@@ -401,11 +416,11 @@ macro_rules! impl_curve_tree_with_backend {
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
         > $curve_tree_ty<L, M, P0, P1, CurveTreeMemoryBackend<L, M, P0, P1>, crate::Error>
         {
-            pub async fn new(
+            pub $($async_fn)* fn new(
                 height: NodeLevel,
                 parameters: &SelRerandParameters<P0, P1>,
             ) -> Result<Self, Error> {
-                Ok(Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters).await?)
+                Ok(Self::new_with_backend(CurveTreeMemoryBackend::new(height), parameters)$($await)*?)
             }
         }
 
@@ -418,7 +433,7 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error>,
         > $curve_tree_ty<L, M, P0, P1, B, Error>
         {
-            pub async fn new_with_backend(
+            pub $($async_fn)* fn new_with_backend(
                 backend: B,
                 parameters: &SelRerandParameters<P0, P1>,
             ) -> Result<Self, Error> {
@@ -426,81 +441,18 @@ macro_rules! impl_curve_tree_with_backend {
                     backend,
                     _phantom: std::marker::PhantomData,
                 };
-                tree.update_leaf(0, LeafValue::default(), parameters)
-                    .await?;
+                tree.update_leaf(0, LeafValue::default(), parameters)$($await)*?;
                 Ok(tree)
             }
         }
-
-        impl_curve_tree_with_backend!(
-            $curve_tree_ty,
-            $curve_tree_backend_trait,
-            { B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Send, },
-            { , B },
-            { async },
-            { .await }
-        );
-    };
-    (Sync, $curve_tree_ty:ident, $curve_tree_backend_trait:ident) => {
-        pub struct $curve_tree_ty<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig,
-            P1: SWCurveConfig,
-            Error: From<crate::Error> = crate::Error,
-        > {
-            backend: Box<dyn CurveTreeBackend<L, M, P0, P1, Error = Error> + Send>,
-        }
-
         impl<
             const L: usize,
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-        > $curve_tree_ty<L, M, P0, P1, crate::Error>
-        {
-            pub fn new(
-                height: NodeLevel,
-                parameters: &SelRerandParameters<P0, P1>,
-            ) -> Result<Self, Error> {
-                let backend = Box::new(CurveTreeMemoryBackend::new(height));
-                Self::new_with_backend(backend, parameters)
-            }
-        }
-
-        impl<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig + Copy + Send,
-            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
             Error: From<crate::Error>,
-        > $curve_tree_ty<L, M, P0, P1, Error>
-        {
-            pub fn new_with_backend(
-                backend: Box<dyn CurveTreeBackend<L, M, P0, P1, Error = Error> + Send>,
-                parameters: &SelRerandParameters<P0, P1>,
-            ) -> Result<Self, Error> {
-                let mut tree = Self { backend };
-                tree.update_leaf(0, LeafValue::default(), parameters)?;
-                Ok(tree)
-            }
-        }
-
-        impl_curve_tree_with_backend!(
-            $curve_tree_ty,
-            $curve_tree_backend_trait,
-            { }, { }, { }, { }
-        );
-    };
-    ($curve_tree_ty:ident, $curve_tree_backend_trait:ident, { $($impl_generics:tt)* }, { $($generics:tt)* }, { $($async_fn:tt)* }, { $($await:tt)* }) => {
-        impl<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig + Copy + Send,
-            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            $( $impl_generics )*
-            Error: From<crate::Error>,
-        > std::fmt::Debug for $curve_tree_ty<L, M, P0, P1 $($generics)*, Error>
+        > std::fmt::Debug for $curve_tree_ty<L, M, P0, P1, B, Error>
         {
             fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 fmt.debug_struct(stringify!($curve_tree_ty))
@@ -514,9 +466,9 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            $( $impl_generics )*
+            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
             Error: From<crate::Error>,
-        > $curve_tree_ty<L, M, P0, P1 $($generics)*, Error>
+        > $curve_tree_ty<L, M, P0, P1, B, Error>
         {
             pub $($async_fn)* fn height(&self) -> NodeLevel {
                 self.backend.height()$($await)*
