@@ -78,7 +78,7 @@ rand_chacha = { workspace = true, default-features = false }
 digest = { workspace = true, default-features = false }
 blake2 = { workspace = true, default-features = false }
 rayon = { workspace = true, optional = true, default-features = false }
-lazy_static = { workspace = true, default-features = false }
+lazy_static = { workspace = true, default-features = false, optional = true }
 thiserror = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
 hex = { workspace = true, default-features = false }
@@ -135,6 +135,7 @@ no_std = []
 std = [
     "log/std",
     "hex/std",
+    "lazy_static",
     "polymesh-dart-bp?/std",
     "thiserror/std",
     "bounded-collections/std",

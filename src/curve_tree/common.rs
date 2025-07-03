@@ -1,17 +1,16 @@
-use std::hash::Hasher;
-
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{Compress, Read, SerializationError, Valid, Validate, Write};
 use ark_std::Zero;
 use codec::{Decode, Encode};
+use core::hash::Hasher;
 use curve_tree_relations::single_level_select_and_rerandomize::*;
 use scale_info::TypeInfo;
 
 use super::*;
 use crate::error::*;
 
-#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeLocation<const L: usize> {
     Leaf(#[codec(compact)] LeafIndex), // Leaf nodes are identified by their index
     Odd {
@@ -308,9 +307,9 @@ impl<
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> std::fmt::Debug for Inner<M, P0, P1>
+> core::fmt::Debug for Inner<M, P0, P1>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Inner::Even(commitment) => write!(f, "Even({:?})", commitment),
             Inner::Odd(commitment) => write!(f, "Odd({:?})", commitment),
@@ -449,9 +448,9 @@ macro_rules! impl_curve_tree_with_backend {
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
             B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
             Error: From<crate::Error>,
-        > std::fmt::Debug for $curve_tree_ty<L, M, P0, P1, B, Error>
+        > core::fmt::Debug for $curve_tree_ty<L, M, P0, P1, B, Error>
         {
-            fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 fmt.debug_struct(stringify!($curve_tree_ty))
                     .field("backend", &self.backend)
                     .finish()
@@ -823,7 +822,7 @@ impl<P0: SWCurveConfig + Copy + Send> core::ops::Deref for LeafValue<P0> {
     }
 }
 
-impl<P0: SWCurveConfig + Copy + Send> std::hash::Hash for LeafValue<P0> {
+impl<P0: SWCurveConfig + Copy + Send> core::hash::Hash for LeafValue<P0> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
@@ -835,7 +834,7 @@ impl<P0: SWCurveConfig + Copy + Send> Default for LeafValue<P0> {
     }
 }
 
-impl<P0: SWCurveConfig + Copy + Send> std::fmt::Debug for LeafValue<P0> {
+impl<P0: SWCurveConfig + Copy + Send> core::fmt::Debug for LeafValue<P0> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "LeafValue({:?})", self.0)
     }

@@ -1,3 +1,4 @@
+use ark_std::boxed::Box;
 use thiserror::Error;
 
 use polymesh_dart_common::AssetId;
@@ -53,7 +54,7 @@ pub enum Error {
 
     /// Curve tree backend error.
     #[error("Curve tree backend error: {0:?}")]
-    CurveTreeBackendError(Box<dyn std::error::Error + Send + Sync>),
+    CurveTreeBackendError(Box<dyn core::error::Error + Send + Sync>),
 
     /// Curve tree generator not found.
     #[error("Curve tree generator not found.")]

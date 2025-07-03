@@ -37,8 +37,12 @@ ark-secq256k1 = { workspace = true }
 [features]
 default = ["std", "asm", "parallel"]
 
+no_std = [ ]
+
 std = [
     "bulletproofs/std",
+		"curve_tree_relations/std",
+		"ark-std/std",
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]

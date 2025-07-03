@@ -9,6 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::{format, string::String, vec::Vec};
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
@@ -45,8 +46,19 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
+#[cfg(feature = "std")]
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
+}
+
+#[cfg(feature = "std")]
+pub fn dart_gens() -> DartBPGenerators {
+    DART_GENS.clone()
+}
+
+#[cfg(not(feature = "std"))]
+pub fn dart_gens() -> DartBPGenerators {
+    DartBPGenerators::new(DART_GEN_DOMAIN)
 }
 
 #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
@@ -356,7 +368,7 @@ pub struct EncryptionKeyPair {
 impl EncryptionKeyPair {
     /// Generates a new set of encryption keys using the provided RNG.
     pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
-        let (enc, enc_pk) = bp_keys::keygen_enc(rng, DART_GENS.enc_gen());
+        let (enc, enc_pk) = bp_keys::keygen_enc(rng, dart_gens().enc_gen());
         Ok(Self {
             public: EncryptionPublicKey::from_bp_key(enc_pk)?,
             secret: EncryptionSecretKey(enc),
@@ -397,7 +409,7 @@ pub struct AccountKeyPair {
 impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
     pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
-        let (account, account_pk) = bp_keys::keygen_sig(rng, DART_GENS.sig_gen());
+        let (account, account_pk) = bp_keys::keygen_sig(rng, dart_gens().sig_gen());
         Ok(Self {
             public: AccountPublicKey::from_bp_key(account_pk)?,
             secret: AccountSecretKey(account),
@@ -463,7 +475,7 @@ pub struct AccountState(BPAccountState);
 
 impl AccountState {
     pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
-        AccountStateCommitment::from_affine(self.0.commit(DART_GENS.account_comm_key()).0)
+        AccountStateCommitment::from_affine(self.0.commit(dart_gens().account_comm_key()).0)
     }
 }
 
@@ -639,7 +651,7 @@ impl AssetState {
     /// Given commitment key `leaf_comm_key`, the leaf is `leaf_comm_key[0] * role + leaf_comm_key[1] * asset_id + pk`
     /// where `role` equals 1 if `pk` is the public key of mediator else its 0.A
     pub fn commitment(&self) -> Result<AssetStateCommitment, Error> {
-        let leaf_comm_key = DART_GENS.asset_comm_g();
+        let leaf_comm_key = dart_gens().asset_comm_g();
         let comm = if self.is_mediator {
             leaf_comm_key[0]
         } else {
@@ -761,8 +773,8 @@ impl AccountAssetRegistrationProof {
             &account_state.current_state.0,
             account_state_commitment.as_commitment()?,
             ctx,
-            DART_GENS.account_comm_key(),
-            DART_GENS.sig_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().sig_gen(),
         );
         Ok((
             Self {
@@ -783,8 +795,8 @@ impl AccountAssetRegistrationProof {
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             ctx,
-            DART_GENS.account_comm_key(),
-            DART_GENS.sig_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().sig_gen(),
         )?;
         Ok(())
     }
@@ -842,8 +854,8 @@ impl AssetMintingProof {
             current_account_path,
             b"",
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.sig_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().sig_gen(),
         );
         Ok(Self {
             pk,
@@ -886,8 +898,8 @@ impl AssetMintingProof {
             &root,
             b"",
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.sig_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().sig_gen(),
             rng,
         )?;
         Ok(())
@@ -1010,8 +1022,8 @@ impl Leg {
         let (leg_enc, leg_enc_rand) = self.0.encrypt(
             rng,
             &pk_e.get_affine()?,
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
         Ok((
             LegEncrypted {
@@ -1226,10 +1238,10 @@ impl SettlementLegProof {
             asset_path,
             ctx,
             asset_tree.params(),
-            &DART_GENS.asset_comm_g(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
-            &DART_GENS.ped_comm_key(),
+            &dart_gens().asset_comm_g(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
+            &dart_gens().ped_comm_key(),
         );
 
         Ok(Self {
@@ -1266,10 +1278,10 @@ impl SettlementLegProof {
             &root,
             ctx,
             params,
-            &DART_GENS.asset_comm_g(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
-            &DART_GENS.ped_comm_key(),
+            &dart_gens().asset_comm_g(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
+            &dart_gens().ped_comm_key(),
             rng,
         )?;
         Ok(())
@@ -1295,8 +1307,8 @@ impl EphemeralSkEncryption {
                 sender.get_affine()?,
                 receiver.get_affine()?,
                 mediator.get_affine()?,
-                DART_GENS.enc_sig_gen(),
-                DART_GENS.leg_asset_value_gen(),
+                dart_gens().enc_sig_gen(),
+                dart_gens().leg_asset_value_gen(),
             );
         let pk_e = EncryptionPublicKey::from_bp_key(pk_e)?;
         Ok((
@@ -1342,7 +1354,7 @@ impl LegEncrypted {
         log::debug!("Decrypted sk_e: {:?}", sk_e.0.0);
         let leg = self
             .leg_enc
-            .decrypt(&sk_e.0.0, DART_GENS.leg_asset_value_gen());
+            .decrypt(&sk_e.0.0, dart_gens().leg_asset_value_gen());
         Leg(leg)
     }
 }
@@ -1398,9 +1410,9 @@ impl SenderAffirmationProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1442,9 +1454,9 @@ impl SenderAffirmationProof {
             self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
             rng,
         )?;
         Ok(())
@@ -1500,9 +1512,9 @@ impl ReceiverAffirmationProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1544,9 +1556,9 @@ impl ReceiverAffirmationProof {
             self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
             rng,
         )?;
         Ok(())
@@ -1604,9 +1616,9 @@ impl ReceiverClaimProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1648,9 +1660,9 @@ impl ReceiverClaimProof {
             self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
             rng,
         )?;
         Ok(())
@@ -1706,9 +1718,9 @@ impl SenderCounterUpdateProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1750,9 +1762,9 @@ impl SenderCounterUpdateProof {
             self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
             rng,
         )?;
         Ok(())
@@ -1810,9 +1822,9 @@ impl SenderReversalProof {
             current_account_path,
             ctx.as_bytes(),
             tree_lookup.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
         );
 
         Ok(Self {
@@ -1854,9 +1866,9 @@ impl SenderReversalProof {
             self.nullifier.get_affine()?,
             ctx.as_bytes(),
             tree_roots.params(),
-            DART_GENS.account_comm_key(),
-            DART_GENS.enc_sig_gen(),
-            DART_GENS.leg_asset_value_gen(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_sig_gen(),
+            dart_gens().leg_asset_value_gen(),
             rng,
         )?;
         Ok(())
@@ -1891,7 +1903,7 @@ impl MediatorAffirmationProof {
             mediator_sk.secret.0.0,
             accept,
             ctx.as_bytes(),
-            DART_GENS.enc_sig_gen(),
+            dart_gens().enc_sig_gen(),
         );
 
         Ok(Self {
@@ -1911,7 +1923,7 @@ impl MediatorAffirmationProof {
             eph_pk.get_affine()?,
             self.accept,
             ctx.as_bytes(),
-            DART_GENS.enc_sig_gen(),
+            dart_gens().enc_sig_gen(),
         )?;
         Ok(())
     }
@@ -1924,7 +1936,7 @@ mod tests {
     /// Test encode/decode of DartBPGenerators.
     #[test]
     fn test_dart_bp_generators_encode_decode() {
-        let gens = DART_GENS.clone();
+        let gens = dart_gens().clone();
 
         let encoded = gens.encode();
         let decoded: DartBPGenerators = Decode::decode(&mut &encoded[..]).unwrap();

@@ -1,5 +1,3 @@
-use std::mem;
-
 use codec::{
     Decode, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input, MaxEncodedLen, Output,
 };
@@ -7,6 +5,8 @@ use scale_info::{Path, Type, TypeInfo, build::Fields};
 
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::vec::Vec;
+use core::mem;
 
 use crate::{
     curve_tree::{CurveTreeRoot, Inner, LeafValue},
@@ -302,7 +302,7 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
     type Identity = Self;
 
     fn type_info() -> Type {
-        use std::any::type_name;
+        use core::any::type_name;
 
         Type::builder()
             .path(Path::new(type_name::<T>(), module_path!()))

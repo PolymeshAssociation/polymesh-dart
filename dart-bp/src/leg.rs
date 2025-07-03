@@ -7,8 +7,9 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::UniformRand;
+use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
+use core::ops::Neg;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
@@ -23,7 +24,7 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use std::ops::Neg;
+#[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
 pub const SK_EPH_GEN_LABEL: &[u8; 20] = b"ephemeral-secret-key";
@@ -841,7 +842,9 @@ impl<
 
         let mut verifier_transcript = even_verifier.transcript();
 
+        #[cfg(feature = "std")]
         let mut dur = Duration::default();
+        #[cfg(feature = "std")]
         let mut size = 0;
         if is_mediator_present {
             self.resp_eph_pk
@@ -854,6 +857,7 @@ impl<
                 )
                 .unwrap();
         } else {
+            #[cfg(feature = "std")]
             let clock = Instant::now();
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
             aud_proofs
@@ -899,8 +903,11 @@ impl<
                 .resp_K_3_K_1
                 .challenge_contribution(&aud_proofs.K_1, &aud_proofs.K_3, &mut verifier_transcript)
                 .unwrap();
-            dur += clock.elapsed();
-            size = aud_proofs.compressed_size();
+            #[cfg(feature = "std")]
+            {
+                dur += clock.elapsed();
+                size = aud_proofs.compressed_size();
+            }
         }
         self.t_r_leaf
             .serialize_compressed(&mut verifier_transcript)
@@ -967,6 +974,7 @@ impl<
                 )
                 .unwrap();
         } else {
+            #[cfg(feature = "std")]
             let clock = Instant::now();
             let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
             self.resp_leaf
@@ -1004,7 +1012,10 @@ impl<
                 &aud_proofs.K_1,
                 &verifier_challenge,
             ));
-            dur += clock.elapsed();
+            #[cfg(feature = "std")]
+            {
+                dur += clock.elapsed();
+            }
         }
 
         assert!(self.resp_amount.verify(
@@ -1071,6 +1082,7 @@ impl<
             &tree_parameters,
             rng,
         )?;
+        #[cfg(feature = "std")]
         log::info!("Time and size: {:?}, {}", dur, size);
         Ok(())
     }

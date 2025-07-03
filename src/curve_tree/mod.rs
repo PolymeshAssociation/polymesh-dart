@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::ops::Deref;
-
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::Zero;
+#[cfg(feature = "std")]
+use ark_std::collections::HashMap;
+use ark_std::{Zero, vec::Vec};
+use core::ops::Deref;
 
 use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
@@ -113,8 +113,8 @@ pub struct FullCurveTree<const L: usize> {
     tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
 }
 
-impl<const L: usize> std::fmt::Debug for FullCurveTree<L> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<const L: usize> core::fmt::Debug for FullCurveTree<L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("FullCurveTreeStorage")
             .field("tree", &self.tree)
             .finish()
@@ -218,11 +218,13 @@ impl<const L: usize> VerifierCurveTree<L> {
 }
 
 /// A Curve Tree for the Prover in the Dart BP protocol.
+#[cfg(feature = "std")]
 pub struct ProverCurveTree<const L: usize> {
     tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
     leaf_to_index: HashMap<LeafValue<PallasParameters>, u64>,
 }
 
+#[cfg(feature = "std")]
 impl<const L: usize> ProverCurveTree<L> {
     /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
     pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
@@ -248,6 +250,7 @@ impl<const L: usize> ProverCurveTree<L> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
         Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)

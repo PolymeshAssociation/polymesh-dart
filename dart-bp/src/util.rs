@@ -3,6 +3,7 @@ use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
+use ark_std::vec;
 use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::{Prover, R1CSError, R1CSProof, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};

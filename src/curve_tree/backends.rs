@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-
 use ark_ec::models::short_weierstrass::SWCurveConfig;
+use ark_std::{collections::BTreeMap, vec::Vec};
 
 use super::common::*;
 use crate::{LeafIndex, NodeLevel, error::*};
 
 pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
-    Sized + std::fmt::Debug
+    Sized + core::fmt::Debug
 {
     type Error: From<crate::Error>;
 
@@ -46,7 +45,7 @@ pub trait AsyncCurveTreeBackend<
     const M: usize,
     P0: SWCurveConfig,
     P1: SWCurveConfig,
->: Sized + std::fmt::Debug
+>: Sized + core::fmt::Debug
 {
     type Error: From<crate::Error>;
 
@@ -96,7 +95,7 @@ pub struct CurveTreeMemoryBackend<
     height: NodeLevel,
     leafs: Vec<LeafValue<P0>>,
     next_leaf_index: LeafIndex,
-    nodes: HashMap<NodeLocation<L>, Inner<M, P0, P1>>,
+    nodes: BTreeMap<NodeLocation<L>, Inner<M, P0, P1>>,
 }
 
 impl<
@@ -104,9 +103,9 @@ impl<
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> std::fmt::Debug for CurveTreeMemoryBackend<L, M, P0, P1>
+> core::fmt::Debug for CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_struct("CurveTreeMemoryBackend")
             .field("height", &self.height)
             .field("leafs", &self.leafs)
@@ -128,7 +127,7 @@ impl<
             height,
             leafs: Vec::new(),
             next_leaf_index: 0,
-            nodes: HashMap::new(),
+            nodes: BTreeMap::new(),
         }
     }
 }

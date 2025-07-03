@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
 pub type AssetId = u32;
 pub type Balance = u64;
 pub type PendingTxnCounter = u16;

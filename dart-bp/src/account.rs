@@ -28,7 +28,10 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::UniformRand;
+use ark_std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(feature = "std"))]
+use ark_std::string::ToString;
+use ark_std::{UniformRand, vec, vec::Vec};
 use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -36,8 +39,6 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-
-use std::collections::{BTreeMap, BTreeSet};
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
