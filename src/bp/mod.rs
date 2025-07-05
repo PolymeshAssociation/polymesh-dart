@@ -748,7 +748,7 @@ impl AssetCurveTree {
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub account_state_commitment: AccountStateCommitment,
@@ -803,7 +803,7 @@ impl AccountAssetRegistrationProof {
 }
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AssetMintingProof {
     // Public inputs.
     pub pk: AccountPublicKey,
@@ -1164,7 +1164,7 @@ impl SettlementBuilder {
     }
 }
 
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SettlementProof {
     memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
     root: WrappedCanonical<CurveTreeRoot<ASSET_TREE_L>>,
@@ -1197,7 +1197,7 @@ impl SettlementProof {
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SettlementLegProof {
     leg_enc: WrappedCanonical<LegEncrypted>,
 
@@ -1360,7 +1360,7 @@ impl LegEncrypted {
 }
 
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1464,7 +1464,7 @@ impl SenderAffirmationProof {
 }
 
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1566,7 +1566,7 @@ impl ReceiverAffirmationProof {
 }
 
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1670,7 +1670,7 @@ impl ReceiverClaimProof {
 }
 
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1772,7 +1772,7 @@ impl SenderCounterUpdateProof {
 }
 
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
     pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
@@ -1876,7 +1876,7 @@ impl SenderReversalProof {
 }
 
 /// Mediator affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,

@@ -275,10 +275,24 @@ impl_scale_and_type_info!(CurveTreeRoot as Vec<const L: usize>);
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct WrappedCanonical<T> {
     wrapped: Vec<u8>,
     _marker: core::marker::PhantomData<T>,
+}
+
+impl<T> PartialEq for WrappedCanonical<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.wrapped == other.wrapped
+    }
+}
+
+impl<T> Eq for WrappedCanonical<T> {}
+
+impl<T> core::fmt::Debug for WrappedCanonical<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "WrappedCanonical<{}>", core::any::type_name::<T>())
+    }
 }
 
 impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
