@@ -9,7 +9,7 @@ use ark_std::vec::Vec;
 use core::mem;
 
 use crate::{
-    curve_tree::{CurveTreeRoot, Inner, LeafValue},
+    curve_tree::{Inner, LeafValue},
     *,
 };
 
@@ -267,9 +267,6 @@ impl_scale_and_type_info!(LegEncrypted as Vec);
 
 // TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>);
-
-// TypeInfo, SCALE encoding and decoding for `CurveTreeRoot<L>`.
-impl_scale_and_type_info!(CurveTreeRoot as Vec<const L: usize>);
 
 // TypeInfo, SCALE encoding and decoding for `LeafValue<P0>`.
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);

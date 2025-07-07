@@ -4,12 +4,14 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 #[cfg(feature = "std")]
 use ark_std::collections::HashMap;
 use ark_std::{Zero, vec::Vec};
-use core::ops::Deref;
 
 use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
     curve_tree_prover::{CurveTreeWitnessPath, WitnessNode},
 };
+
+use codec::{Decode, Encode};
+use scale_info::TypeInfo;
 
 use super::*;
 use crate::curve_tree::{LeafIndex, NodeLevel};
@@ -24,26 +26,26 @@ pub use common::*;
 pub type CurveTreeParameters = SelRerandParameters<PallasParameters, VestaParameters>;
 pub type CurveTreePath<const L: usize> = CurveTreeWitnessPath<L, PallasParameters, VestaParameters>;
 
-#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct CurveTreeRoot<const L: usize>(pub Root<L, 1, PallasParameters, VestaParameters>);
+#[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(L))]
+pub struct CurveTreeRoot<const L: usize>(
+    pub WrappedCanonical<Root<L, 1, PallasParameters, VestaParameters>>,
+);
+
+impl<const L: usize> CurveTreeRoot<L> {
+    pub fn new(root: &Root<L, 1, PallasParameters, VestaParameters>) -> Result<Self, Error> {
+        Ok(Self(WrappedCanonical::wrap(root)?))
+    }
+
+    /// Decodes the wrapped value back into its original type `T`.
+    pub fn decode(&self) -> Result<Root<L, 1, PallasParameters, VestaParameters>, Error> {
+        self.0.decode()
+    }
+}
 
 #[cfg(feature = "async_tree")]
 impl_curve_tree_with_backend!(Async, AsyncCurveTreeWithBackend, AsyncCurveTreeBackend);
 impl_curve_tree_with_backend!(Sync, CurveTreeWithBackend, CurveTreeBackend);
-
-impl<const L: usize> Deref for CurveTreeRoot<L> {
-    type Target = Root<L, 1, PallasParameters, VestaParameters>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<const L: usize> From<Root<L, 1, PallasParameters, VestaParameters>> for CurveTreeRoot<L> {
-    fn from(root: Root<L, 1, PallasParameters, VestaParameters>) -> Self {
-        Self(root)
-    }
-}
 
 /// A trait for looking up paths in a curve tree.
 pub trait CurveTreeLookup<const L: usize> {
@@ -159,7 +161,7 @@ impl<const L: usize> FullCurveTree<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        Ok(self.tree.root_node()?.into())
+        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
     }
 }
 
@@ -180,7 +182,7 @@ impl<const L: usize> CurveTreeLookup<L> for &FullCurveTree<L> {
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        Ok(self.tree.root_node()?.into())
+        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
     }
 }
 
@@ -213,7 +215,7 @@ impl<const L: usize> VerifierCurveTree<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        Ok(self.tree.root_node()?.into())
+        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
     }
 }
 
@@ -272,6 +274,6 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        Ok(self.tree.root_node()?.into())
+        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
     }
 }

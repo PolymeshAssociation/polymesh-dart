@@ -809,7 +809,7 @@ pub struct AssetMintingProof {
     pub pk: AccountPublicKey,
     pub asset_id: AssetId,
     pub amount: Balance,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -861,7 +861,7 @@ impl AssetMintingProof {
             pk,
             asset_id: account_asset.asset_id,
             amount,
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: mint_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -882,12 +882,12 @@ impl AssetMintingProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for asset minting proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
             self.pk.get_affine()?,
@@ -1156,18 +1156,14 @@ impl SettlementBuilder {
 
         let legs =
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        Ok(SettlementProof {
-            memo,
-            root: WrappedCanonical::wrap(&root)?,
-            legs,
-        })
+        Ok(SettlementProof { memo, root, legs })
     }
 }
 
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SettlementProof {
     memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
-    root: WrappedCanonical<CurveTreeRoot<ASSET_TREE_L>>,
+    root: CurveTreeRoot<ASSET_TREE_L>,
 
     pub legs: BoundedVec<SettlementLegProof, ConstU32<{ SETTLEMENT_MAX_LEGS }>>,
 }
@@ -1178,16 +1174,15 @@ impl SettlementProof {
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !asset_tree.validate_root(&root) {
+        if !asset_tree.validate_root(&self.root) {
             log::error!("Invalid root for settlement proof");
             return Err(Error::CurveTreeRootNotFound);
         }
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            leg.verify(&ctx, &root, params, rng)?;
+            leg.verify(&ctx, &self.root, params, rng)?;
         }
         Ok(())
     }
@@ -1267,6 +1262,8 @@ impl SettlementLegProof {
         params: &CurveTreeParameters,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let root = root.decode()?;
+
         let leg_enc = self.leg_enc.decode()?;
         let pk_e = leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
@@ -1363,7 +1360,7 @@ impl LegEncrypted {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1417,7 +1414,7 @@ impl SenderAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1439,12 +1436,13 @@ impl SenderAffirmationProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender affirmation proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1467,7 +1465,7 @@ impl SenderAffirmationProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1519,7 +1517,7 @@ impl ReceiverAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1541,12 +1539,13 @@ impl ReceiverAffirmationProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver affirmation proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1569,7 +1568,7 @@ impl ReceiverAffirmationProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1623,7 +1622,7 @@ impl ReceiverClaimProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1645,12 +1644,13 @@ impl ReceiverClaimProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for receiver claim proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1673,7 +1673,7 @@ impl ReceiverClaimProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1725,7 +1725,7 @@ impl SenderCounterUpdateProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1747,12 +1747,13 @@ impl SenderCounterUpdateProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender counter update proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1775,7 +1776,7 @@ impl SenderCounterUpdateProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
-    pub root: WrappedCanonical<CurveTreeRoot<ACCOUNT_TREE_L>>,
+    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1829,7 +1830,7 @@ impl SenderReversalProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root: WrappedCanonical::wrap(&root)?,
+            root,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1851,12 +1852,13 @@ impl SenderReversalProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = self.root.decode()?;
         // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&root) {
+        if !tree_roots.validate_root(&self.root) {
             log::error!("Invalid root for sender reversal proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(

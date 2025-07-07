@@ -107,7 +107,7 @@ impl<const L: usize> CurveTreeOld<L> {
 
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> CurveTreeRoot<L> {
-        self.tree.root_node().into()
+        CurveTreeRoot::new(&self.tree.root_node()).expect("Failed to get root node")
     }
 }
 
@@ -145,11 +145,15 @@ fn setup_trees() -> (
 
 /// Compare two roots, printing debug info on mismatch since Root doesn't implement Debug
 fn assert_roots_equal(
-    full_root: &curve_tree_relations::curve_tree::Root<L, 1, PallasParameters, VestaParameters>,
-    storage_root: &curve_tree_relations::curve_tree::Root<L, 1, PallasParameters, VestaParameters>,
+    full_root: &CurveTreeRoot<L>,
+    storage_root: &CurveTreeRoot<L>,
     context: &str,
 ) {
-    let roots_match = match (full_root, storage_root) {
+    let full_root = full_root.decode().expect("Failed to decode full root");
+    let storage_root = storage_root
+        .decode()
+        .expect("Failed to decode storage root");
+    let roots_match = match (&full_root, &storage_root) {
         (
             curve_tree_relations::curve_tree::Root::Even(full),
             curve_tree_relations::curve_tree::Root::Even(storage),
