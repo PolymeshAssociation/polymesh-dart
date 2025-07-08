@@ -1,15 +1,22 @@
 use ark_ec::models::short_weierstrass::SWCurveConfig;
 use ark_std::{collections::BTreeMap, vec::Vec};
+use curve_tree_relations::curve_tree::SelRerandParameters;
 
 use super::common::*;
 use crate::{LeafIndex, NodeLevel, error::*};
 
-pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>:
-    Sized + core::fmt::Debug
+pub trait CurveTreeBackend<
+    const L: usize,
+    const M: usize,
+    P0: SWCurveConfig + Copy,
+    P1: SWCurveConfig + Copy,
+>: Sized
 {
     type Error: From<crate::Error>;
 
-    fn new(height: NodeLevel) -> Result<Self, Self::Error>;
+    fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error>;
+
+    fn parameters(&self) -> &SelRerandParameters<P0, P1>;
 
     fn height(&self) -> NodeLevel;
 
@@ -43,13 +50,18 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, P0: SWCurveConfig, P1
 pub trait AsyncCurveTreeBackend<
     const L: usize,
     const M: usize,
-    P0: SWCurveConfig,
-    P1: SWCurveConfig,
->: Sized + core::fmt::Debug
+    P0: SWCurveConfig + Copy,
+    P1: SWCurveConfig + Copy,
+>: Sized
 {
     type Error: From<crate::Error>;
 
-    fn new(height: NodeLevel) -> impl Future<Output = Result<Self, Self::Error>> + Send;
+    fn new(
+        height: NodeLevel,
+        gens_length: usize,
+    ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
+
+    fn parameters(&self) -> impl Future<Output = &SelRerandParameters<P0, P1>> + Send;
 
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
 
@@ -85,17 +97,17 @@ pub trait AsyncCurveTreeBackend<
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-#[derive(Default)]
 pub struct CurveTreeMemoryBackend<
     const L: usize,
     const M: usize,
-    P0: SWCurveConfig,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField>,
+    P0: SWCurveConfig + Copy,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy,
 > {
     height: NodeLevel,
     leafs: Vec<LeafValue<P0>>,
     next_leaf_index: LeafIndex,
     nodes: BTreeMap<NodeLocation<L>, Inner<M, P0, P1>>,
+    parameters: SelRerandParameters<P0, P1>,
 }
 
 impl<
@@ -122,12 +134,13 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    pub fn new(height: NodeLevel) -> Self {
+    pub fn new(height: NodeLevel, gens_length: usize) -> Self {
         Self {
             height,
             leafs: Vec::new(),
             next_leaf_index: 0,
             nodes: BTreeMap::new(),
+            parameters: SelRerandParameters::new(gens_length, gens_length),
         }
     }
 }
@@ -141,8 +154,12 @@ impl<
 {
     type Error = Error;
 
-    fn new(height: NodeLevel) -> Result<Self, Self::Error> {
-        Ok(CurveTreeMemoryBackend::new(height))
+    fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
+        Ok(CurveTreeMemoryBackend::new(height, gens_length))
+    }
+
+    fn parameters(&self) -> &SelRerandParameters<P0, P1> {
+        &self.parameters
     }
 
     fn height(&self) -> NodeLevel {
@@ -210,8 +227,12 @@ where
 {
     type Error = Error;
 
-    async fn new(height: NodeLevel) -> Result<Self, Self::Error> {
-        Ok(CurveTreeMemoryBackend::new(height))
+    async fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
+        Ok(CurveTreeMemoryBackend::new(height, gens_length))
+    }
+
+    async fn parameters(&self) -> &SelRerandParameters<P0, P1> {
+        &self.parameters
     }
 
     async fn height(&self) -> NodeLevel {

@@ -5,7 +5,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::HashMap;
 use ark_std::{Zero, vec::Vec};
 
-use curve_tree_relations::{
+pub use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
     curve_tree_prover::{CurveTreeWitnessPath, WitnessNode},
 };
@@ -22,6 +22,24 @@ pub use backends::*;
 #[macro_use]
 mod common;
 pub use common::*;
+
+#[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+pub struct WrappedCurveTreeParameters(
+    pub WrappedCanonical<SelRerandParameters<PallasParameters, VestaParameters>>,
+);
+
+impl WrappedCurveTreeParameters {
+    pub fn new(gens_length: usize) -> Result<Self, Error> {
+        let params =
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(gens_length, gens_length);
+        Ok(Self(WrappedCanonical::wrap(&params)?))
+    }
+
+    /// Decodes the wrapped value back into its original type `T`.
+    pub fn decode(&self) -> Result<SelRerandParameters<PallasParameters, VestaParameters>, Error> {
+        self.0.decode()
+    }
+}
 
 pub type CurveTreeParameters = SelRerandParameters<PallasParameters, VestaParameters>;
 pub type CurveTreePath<const L: usize> = CurveTreeWitnessPath<L, PallasParameters, VestaParameters>;
@@ -115,14 +133,6 @@ pub struct FullCurveTree<const L: usize> {
     tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
 }
 
-impl<const L: usize> core::fmt::Debug for FullCurveTree<L> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("FullCurveTreeStorage")
-            .field("tree", &self.tree)
-            .finish()
-    }
-}
-
 impl<const L: usize> FullCurveTree<L> {
     /// Creates a new instance of `FullCurveTree` with the given height and generators length.
     pub fn new_with_capacity(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
@@ -156,7 +166,7 @@ impl<const L: usize> FullCurveTree<L> {
 
     /// Returns the parameters of the curve tree.
     pub fn params(&self) -> &CurveTreeParameters {
-        &self.tree.parameters()
+        self.tree.parameters()
     }
 
     /// Get the root node of the curve tree.
@@ -178,7 +188,7 @@ impl<const L: usize> CurveTreeLookup<L> for &FullCurveTree<L> {
     }
 
     fn params(&self) -> &CurveTreeParameters {
-        &self.tree.parameters()
+        self.tree.parameters()
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
@@ -210,7 +220,7 @@ impl<const L: usize> VerifierCurveTree<L> {
 
     /// Returns the parameters of the curve tree.
     pub fn params(&self) -> &CurveTreeParameters {
-        &self.tree.parameters()
+        self.tree.parameters()
     }
 
     /// Get the root node of the curve tree.
@@ -270,7 +280,7 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     }
 
     fn params(&self) -> &CurveTreeParameters {
-        &self.tree.parameters()
+        self.tree.parameters()
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {

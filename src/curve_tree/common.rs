@@ -407,7 +407,7 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error> = crate::Error,
         > {
             backend: B,
-            parameters: SelRerandParameters<P0, P1>,
+            _marker: core::marker::PhantomData<(P0, P1)>,
         }
 
         impl<
@@ -432,48 +432,17 @@ macro_rules! impl_curve_tree_with_backend {
                 height: NodeLevel,
                 gens_length: usize,
             ) -> Result<Self, Error> {
-                let backend = B::new(height)$($await)*?;
-                Ok(Self::new_with_backend(backend, gens_length)$($await)*?)
+                let backend = B::new(height, gens_length)$($await)*?;
+                Ok(Self::new_with_backend(backend)$($await)*?)
             }
 
             pub $($async_fn)* fn new_with_backend(
                 backend: B,
-                gens_length: usize,
             ) -> Result<Self, Error> {
                 Ok(Self {
                     backend,
-                    parameters: SelRerandParameters::new(gens_length, gens_length),
+                    _marker: core::marker::PhantomData,
                 })
-            }
-        }
-
-        impl<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig + Copy + Send,
-            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
-            Error: From<crate::Error>,
-        > core::fmt::Debug for $curve_tree_ty<L, M, P0, P1, B, Error>
-        {
-            fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                fmt.debug_struct(stringify!($curve_tree_ty))
-                    .field("backend", &self.backend)
-                    .finish()
-            }
-        }
-
-        impl<
-            const L: usize,
-            const M: usize,
-            P0: SWCurveConfig + Copy + Send,
-            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-            B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> + Default,
-            Error: From<crate::Error>,
-        > $curve_tree_ty<L, M, P0, P1, B, Error>
-        {
-            pub $($async_fn)* fn default(gens_length: usize) -> Result<Self, Error> {
-                Ok(Self::new_with_backend(B::default(), gens_length)$($await)*?)
             }
         }
 
@@ -504,8 +473,8 @@ macro_rules! impl_curve_tree_with_backend {
                 self.backend.height()$($await)*
             }
 
-            pub fn parameters(&self) -> &SelRerandParameters<P0, P1> {
-                &self.parameters
+            pub $($async_fn)* fn parameters(&self) -> &SelRerandParameters<P0, P1> {
+                self.backend.parameters()$($await)*
             }
 
             pub $($async_fn)* fn insert_leaf(
@@ -613,18 +582,19 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn root_node(
                 &self,
             ) -> Result<Root<L, M, P0, P1>, Error> {
+                let params = self.parameters()$($await)*;
                 let root = NodeLocation::<L>::root(self.height()$($await)*);
                 match self.backend.get_inner_node(root)$($await)*? {
                     Some(Inner::Even(commitments)) => Ok(Root::Even(RootNode {
                         commitments: commitments.clone(),
                         x_coord_children: self
-                            ._get_odd_x_coord_children_batch(root, &self.parameters.odd_parameters.delta)
+                            ._get_odd_x_coord_children_batch(root, &params.odd_parameters.delta)
                             $($await)*?,
                     })),
                     Some(Inner::Odd(commitments)) => Ok(Root::Odd(RootNode {
                         commitments: commitments.clone(),
                         x_coord_children: self
-                            ._get_even_x_coord_children_batch(root, &self.parameters.even_parameters.delta)
+                            ._get_even_x_coord_children_batch(root, &params.even_parameters.delta)
                             $($await)*?,
                     })),
                     None => Err(crate::Error::CurveTreeRootNotFound.into()),
@@ -651,6 +621,9 @@ macro_rules! impl_curve_tree_with_backend {
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
 
+                // Get the parameters for the tree.
+                let params = self.parameters()$($await)*;
+
                 while !location.is_root(height) {
                     let (parent_location, _) = location.parent();
                     let node = self
@@ -670,7 +643,7 @@ macro_rules! impl_curve_tree_with_backend {
                                     ._get_odd_x_coord_children(
                                         tree_index,
                                         parent_location,
-                                        &self.parameters.odd_parameters.delta,
+                                        &params.odd_parameters.delta,
                                     )
                                     $($await)*?,
                                 child_node_to_randomize: odd_child,
@@ -683,7 +656,7 @@ macro_rules! impl_curve_tree_with_backend {
                                     ._get_even_x_coord_children(
                                         tree_index,
                                         parent_location,
-                                        &self.parameters.even_parameters.delta,
+                                        &params.even_parameters.delta,
                                     )
                                     $($await)*?,
                                 child_node_to_randomize: even_child,
@@ -733,14 +706,16 @@ macro_rules! impl_curve_tree_with_backend {
                                     // We save the old commitment value for updating the parent node.
                                     even_old_child = Some(ChildCommitments::inner(*commitments));
 
+                                    // Get the parameters for the tree.
+                                    let params = self.backend.parameters()$($await)*;
                                     // Update the node.  We pass both the old and new child commitments.
                                     Inner::<M, _, _>::update_even_node::<L>(
                                         commitments,
                                         child_index,
                                         odd_old_child,
                                         odd_new_child,
-                                        &self.parameters.odd_parameters.delta,
-                                        &self.parameters.even_parameters,
+                                        &params.odd_parameters.delta,
+                                        &params.even_parameters,
                                     )?;
 
                                     // Save the new commitment value for updating the parent.
@@ -750,14 +725,16 @@ macro_rules! impl_curve_tree_with_backend {
                                     // We save the old commitment value for updating the parent node.
                                     odd_old_child = Some(ChildCommitments::inner(*commitments));
 
+                                    // Get the parameters for the tree.
+                                    let params = self.backend.parameters()$($await)*;
                                     // Update the node.  We pass both the old and new child commitments.
                                     Inner::<M, _, _>::update_odd_node::<L>(
                                         commitments,
                                         child_index,
                                         even_old_child,
                                         even_new_child,
-                                        &self.parameters.even_parameters.delta,
-                                        &self.parameters.odd_parameters,
+                                        &params.even_parameters.delta,
+                                        &params.odd_parameters,
                                     )?;
 
                                     // Save the new commitment value for updating the parent.
@@ -767,20 +744,22 @@ macro_rules! impl_curve_tree_with_backend {
                             node
                         }
                         None => {
+                            // Get the parameters for the tree.
+                            let params = self.backend.parameters()$($await)*;
                             // If thsi node does not exist, we need to create it.
                             let node = if location.is_even() {
                                 // If the location is even, we create an even node.
                                 Inner::init_empty_even::<L>(
                                     odd_new_child,
-                                    &self.parameters.odd_parameters.delta,
-                                    &self.parameters.even_parameters,
+                                    &params.odd_parameters.delta,
+                                    &params.even_parameters,
                                 )?
                             } else {
                                 // If the location is odd, we create an odd node.
                                 Inner::init_empty_odd::<L>(
                                     even_new_child,
-                                    &self.parameters.even_parameters.delta,
-                                    &self.parameters.odd_parameters,
+                                    &params.even_parameters.delta,
+                                    &params.odd_parameters,
                                 )?
                             };
 

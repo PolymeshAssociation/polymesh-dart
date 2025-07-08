@@ -68,13 +68,22 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(feature = "std")]
-pub fn dart_gens() -> DartBPGenerators {
-    DART_GENS.clone()
+pub fn dart_gens() -> &'static DartBPGenerators {
+    &DART_GENS
 }
 
 #[cfg(not(feature = "std"))]
-pub fn dart_gens() -> DartBPGenerators {
-    DartBPGenerators::new(DART_GEN_DOMAIN)
+static mut DART_GENS: Option<DartBPGenerators> = None;
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn dart_gens() -> &'static DartBPGenerators {
+    unsafe {
+        if DART_GENS.is_none() {
+            DART_GENS = Some(DartBPGenerators::new(DART_GEN_DOMAIN));
+        }
+        DART_GENS.as_ref().unwrap()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
@@ -717,7 +726,7 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
+            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT, ASSET_TREE_GENS)?,
             assets: HashMap::new(),
         })
     }
