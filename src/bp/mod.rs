@@ -1346,6 +1346,14 @@ impl<T: DartLimits> PartialEq for HashedSettlementProof<T> {
 
 impl<T: DartLimits> Eq for HashedSettlementProof<T> {}
 
+/// Counts of the legs and sender/receiver affirmations in a batched settlement.
+#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+pub struct BatchedSettlementCounts {
+    pub leg_count: u32,
+    pub sender_count: u64,
+    pub receiver_count: u64,
+}
+
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
@@ -1377,6 +1385,62 @@ impl<T: DartLimits> PartialEq for BatchedSettlementProof<T> {
 }
 
 impl<T: DartLimits> Eq for BatchedSettlementProof<T> {}
+
+impl<T: DartLimits> BatchedSettlementProof<T> {
+    /// The settlemetn reference using the hash of the settlement.
+    pub fn settlement_ref(&self) -> SettlementRef {
+        SettlementRef::Hash(self.hashed_settlement.hash)
+    }
+
+    /// The settlement creation proof.
+    pub fn settlement_proof(&self) -> &SettlementProof<T> {
+        &self.hashed_settlement.settlement
+    }
+
+    /// Get leg and sender/receiver affirmation counts.
+    pub fn count_leg_affirmations(&self) -> BatchedSettlementCounts {
+        let mut leg_count = 0;
+        let mut sender_count = 0;
+        let mut receiver_count = 0;
+
+        for leg_aff in &self.leg_affirmations {
+            leg_count += 1;
+            if leg_aff.sender.is_some() {
+                sender_count += 1;
+            }
+            if leg_aff.receiver.is_some() {
+                receiver_count += 1;
+            }
+        }
+
+        BatchedSettlementCounts {
+            leg_count,
+            sender_count,
+            receiver_count,
+        }
+    }
+
+    /// Check leg references in affirmation proofs.
+    ///
+    /// Returns `true` if all leg references match the settlement legs.
+    pub fn check_leg_references(&self) -> bool {
+        let settlement = self.settlement_ref();
+        for (idx, leg_aff) in self.leg_affirmations.iter().enumerate() {
+            let leg_ref = LegRef::new(settlement, idx as LegId);
+            if let Some(sender) = &leg_aff.sender {
+                if sender.leg_ref != leg_ref {
+                    return false;
+                }
+            }
+            if let Some(receiver) = &leg_aff.receiver {
+                if receiver.leg_ref != leg_ref {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct EphemeralSkEncryption {
