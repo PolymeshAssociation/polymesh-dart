@@ -1,7 +1,9 @@
+use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::HashMap;
 
 use codec::{Decode, Encode, MaxEncodedLen};
+use curve_tree_relations::curve_tree::Root;
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
@@ -13,7 +15,7 @@ use ark_std::{format, string::String, vec::Vec};
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
-use bounded_collections::{BoundedVec, ConstU32};
+use bounded_collections::{BoundedVec, ConstU32, Get};
 
 use digest::Digest;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
@@ -26,11 +28,25 @@ pub use encode::{CompressedAffine, WrappedCanonical};
 use crate::curve_tree::*;
 use crate::*;
 
+pub trait DartLimits: Clone + core::fmt::Debug {
+    /// The maximum number of legs in a settlement.
+    type MaxSettlementLegs: Get<u32> + Clone + core::fmt::Debug;
+
+    /// The maximum settlement memo length.
+    type MaxSettlementMemoLength: Get<u32> + Clone + core::fmt::Debug;
+}
+
+impl DartLimits for () {
+    type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
+    type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
+}
+
 pub type LeafIndex = u64;
 pub type TreeIndex = u8;
 pub type NodeLevel = u8;
 pub type NodeIndex = LeafIndex;
 pub type ChildIndex = LeafIndex;
+pub type SettlementHash = [u8; 32];
 
 pub type PallasParameters = ark_pallas::PallasConfig;
 pub type VestaParameters = ark_vesta::VestaConfig;
@@ -260,6 +276,11 @@ impl DartBPGenerators {
             h: self.ped_comm_key_h,
         }
     }
+}
+
+pub trait AccountStateUpdate {
+    fn account_state_commitment(&self) -> AccountStateCommitment;
+    fn nullifier(&self) -> AccountStateNullifier;
 }
 
 pub trait AccountLookup {
@@ -869,14 +890,6 @@ impl AssetMintingProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
@@ -903,6 +916,16 @@ impl AssetMintingProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for AssetMintingProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 
@@ -941,7 +964,7 @@ pub enum SettlementRef {
     /// ID based reference.
     ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
-    Hash([u8; 32]),
+    Hash(SettlementHash),
 }
 
 impl From<SettlementId> for SettlementRef {
@@ -1119,16 +1142,18 @@ impl LegBuilder {
     }
 }
 
-pub struct SettlementBuilder {
+pub struct SettlementBuilder<T: DartLimits = ()> {
     memo: Vec<u8>,
     legs: Vec<LegBuilder>,
+    _marker: PhantomData<T>,
 }
 
-impl SettlementBuilder {
+impl<T: DartLimits> SettlementBuilder<T> {
     pub fn new(memo: &[u8]) -> Self {
         Self {
             memo: memo.to_vec(),
             legs: Vec::new(),
+            _marker: PhantomData,
         }
     }
 
@@ -1141,7 +1166,7 @@ impl SettlementBuilder {
         self,
         rng: &mut R,
         asset_tree: impl CurveTreeLookup<ASSET_TREE_L>,
-    ) -> Result<SettlementProof, Error> {
+    ) -> Result<SettlementProof<T>, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         let root = asset_tree.root_node()?;
@@ -1160,15 +1185,31 @@ impl SettlementBuilder {
     }
 }
 
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SettlementProof {
-    memo: BoundedVec<u8, ConstU32<{ MEMO_MAX_LENGTH }>>,
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub struct SettlementProof<T: DartLimits> {
+    pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     root: CurveTreeRoot<ASSET_TREE_L>,
 
-    pub legs: BoundedVec<SettlementLegProof, ConstU32<{ SETTLEMENT_MAX_LEGS }>>,
+    pub legs: BoundedVec<SettlementLegProof, T::MaxSettlementLegs>,
 }
 
-impl SettlementProof {
+impl<T: DartLimits> PartialEq for SettlementProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.memo == other.memo && self.root == other.root && self.legs == other.legs
+    }
+}
+
+impl<T: DartLimits> Eq for SettlementProof<T> {}
+
+impl<T: DartLimits> SettlementProof<T> {
+    pub fn hash(&self) -> SettlementHash {
+        let mut hasher = Blake2s256::new();
+        let data = self.encode();
+        hasher.update(&data);
+        hasher.finalize().into()
+    }
+
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
@@ -1179,10 +1220,11 @@ impl SettlementProof {
             log::error!("Invalid root for settlement proof");
             return Err(Error::CurveTreeRootNotFound);
         }
+        let root = self.root.decode()?;
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            leg.verify(&ctx, &self.root, params, rng)?;
+            leg.verify(&ctx, &root, params, rng)?;
         }
         Ok(())
     }
@@ -1258,12 +1300,10 @@ impl SettlementLegProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
-        root: &CurveTreeRoot<ASSET_TREE_L>,
+        root: &Root<ASSET_TREE_L, 1, PallasParameters, VestaParameters>,
         params: &CurveTreeParameters,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let root = root.decode()?;
-
         let leg_enc = self.leg_enc.decode()?;
         let pk_e = leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
@@ -1284,6 +1324,59 @@ impl SettlementLegProof {
         Ok(())
     }
 }
+
+/// Represents a hashed settlement proof in the Dart BP protocol.
+///
+/// This allows building the settlement off-chain and collecting the leg affirmations
+/// before submitting the settlement to the chain.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub struct HashedSettlementProof<T: DartLimits = ()> {
+    /// The settlement proof containing the memo, root, and legs.
+    pub settlement: SettlementProof<T>,
+    /// The hash of the settlement, used to tie the leg affirmations to this settlement.
+    pub hash: SettlementHash,
+}
+
+impl<T: DartLimits> PartialEq for HashedSettlementProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.settlement == other.settlement && self.hash == other.hash
+    }
+}
+
+impl<T: DartLimits> Eq for HashedSettlementProof<T> {}
+
+/// Represents the affirmation proofs for each leg in a settlement.
+/// This includes the sender, and receiver affirmation proofs.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+pub struct BatchedSettlementLegAffirmations {
+    /// The sender's affirmation proof.
+    pub sender: Option<SenderAffirmationProof>,
+    /// The receiver's affirmation proof.
+    pub receiver: Option<ReceiverAffirmationProof>,
+}
+
+/// A batched settlement proof allows including the sender and receiver affirmation proofs
+/// with the settlement creation proof to reduce the number of transactions
+/// required to finalize a settlement.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub struct BatchedSettlementProof<T: DartLimits = ()> {
+    /// The settlement proof containing the memo, root, and legs.
+    pub hashed_settlement: HashedSettlementProof<T>,
+
+    /// The leg affirmations for each leg in the settlement.
+    pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations, T::MaxSettlementLegs>,
+}
+
+impl<T: DartLimits> PartialEq for BatchedSettlementProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hashed_settlement == other.hashed_settlement
+            && self.leg_affirmations == other.leg_affirmations
+    }
+}
+
+impl<T: DartLimits> Eq for BatchedSettlementProof<T> {}
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct EphemeralSkEncryption {
@@ -1422,14 +1515,6 @@ impl SenderAffirmationProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
@@ -1458,6 +1543,16 @@ impl SenderAffirmationProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for SenderAffirmationProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 
@@ -1525,14 +1620,6 @@ impl ReceiverAffirmationProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
@@ -1561,6 +1648,16 @@ impl ReceiverAffirmationProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for ReceiverAffirmationProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 
@@ -1630,14 +1727,6 @@ impl ReceiverClaimProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
@@ -1666,6 +1755,16 @@ impl ReceiverClaimProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for ReceiverClaimProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 
@@ -1733,14 +1832,6 @@ impl SenderCounterUpdateProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
@@ -1769,6 +1860,16 @@ impl SenderCounterUpdateProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for SenderCounterUpdateProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 
@@ -1838,14 +1939,6 @@ impl SenderReversalProof {
         })
     }
 
-    pub fn account_state_commitment(&self) -> AccountStateCommitment {
-        self.updated_account_state_commitment
-    }
-
-    pub fn nullifier(&self) -> AccountStateNullifier {
-        self.nullifier
-    }
-
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
@@ -1874,6 +1967,16 @@ impl SenderReversalProof {
             rng,
         )?;
         Ok(())
+    }
+}
+
+impl AccountStateUpdate for SenderReversalProof {
+    fn account_state_commitment(&self) -> AccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn nullifier(&self) -> AccountStateNullifier {
+        self.nullifier
     }
 }
 

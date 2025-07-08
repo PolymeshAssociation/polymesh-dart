@@ -403,7 +403,7 @@ impl DartUser {
     pub fn create_settlement(
         &self,
         chain: &mut DartChainState,
-        proof: SettlementProof,
+        proof: SettlementProof<()>,
     ) -> Result<SettlementId> {
         chain.create_settlement(&self.address, proof)
     }
@@ -682,7 +682,7 @@ pub struct DartSettlement {
 }
 
 impl DartSettlement {
-    pub fn from_proof(id: SettlementId, proof: SettlementProof) -> Result<Self> {
+    pub fn from_proof(id: SettlementId, proof: SettlementProof<()>) -> Result<Self> {
         let legs = proof
             .legs
             .into_iter()
@@ -1221,7 +1221,7 @@ impl DartChainState {
     pub fn create_settlement(
         &mut self,
         caller: &SignerAddress,
-        proof: SettlementProof,
+        proof: SettlementProof<()>,
     ) -> Result<SettlementId> {
         self.ensure_caller(caller)?;
 
