@@ -1,8 +1,7 @@
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-#[cfg(feature = "std")]
-use ark_std::collections::HashMap;
+use ark_std::collections::BTreeMap;
 use ark_std::{Zero, vec::Vec};
 
 pub use curve_tree_relations::{
@@ -231,49 +230,79 @@ impl<const L: usize> VerifierCurveTree<L> {
 }
 
 /// A Curve Tree for the Prover in the Dart BP protocol.
-#[cfg(feature = "std")]
-pub struct ProverCurveTree<const L: usize> {
-    tree: CurveTreeWithBackend<L, 1, PallasParameters, VestaParameters>,
-    leaf_to_index: HashMap<LeafValue<PallasParameters>, u64>,
+pub struct ProverCurveTree<
+    const L: usize,
+    P0: SWCurveConfig + Copy + Send = PallasParameters,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send = VestaParameters,
+    B: CurveTreeBackend<L, 1, P0, P1, Error = E> = CurveTreeMemoryBackend<L, 1, P0, P1>,
+    E: From<crate::Error> = crate::Error,
+> {
+    tree: CurveTreeWithBackend<L, 1, P0, P1, B, E>,
+    leaf_to_index: BTreeMap<Vec<u8>, u64>,
 }
 
-#[cfg(feature = "std")]
-impl<const L: usize> ProverCurveTree<L> {
+impl<
+    const L: usize,
+    P0: SWCurveConfig + Copy + Send,
+    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    B: CurveTreeBackend<L, 1, P0, P1, Error = E>,
+    E: From<crate::Error>,
+> ProverCurveTree<L, P0, P1, B, E>
+{
     /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
-    pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
+    pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, E> {
         Ok(Self {
-            tree: CurveTreeWithBackend::new(height, gens_length)?,
-            leaf_to_index: HashMap::new(),
+            tree: CurveTreeWithBackend::<L, 1, P0, P1, B, E>::new(height, gens_length)?,
+            leaf_to_index: BTreeMap::new(),
         })
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<u64, Error> {
+    pub fn insert(&mut self, leaf: LeafValue<P0>) -> Result<u64, E> {
         let leaf_index = self.tree.insert_leaf(leaf)? as u64;
-        self.leaf_to_index.insert(leaf, leaf_index);
+        let leaf_buf = leaf.encode();
+        self.leaf_to_index.insert(leaf_buf, leaf_index);
         Ok(leaf_index)
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
-    pub fn apply_updates(&mut self, leaves: Vec<LeafValue<PallasParameters>>) -> Result<(), Error> {
+    pub fn apply_updates(&mut self, leaves: Vec<LeafValue<P0>>) -> Result<(), E> {
         for leaf in &leaves {
             self.tree.insert_leaf(*leaf)?;
         }
         Ok(())
     }
+
+    /// Apply new leaves from the backend and insert them into `leaf_to_index` map.
+    pub fn apply_new_leaves(&mut self) {
+        let mut last_index = self.leaf_to_index.len() as LeafIndex;
+        while let Ok(Some(leaf)) = self.tree.get_leaf(last_index) {
+            let leaf_buf = leaf.encode();
+            self.leaf_to_index.insert(leaf_buf, last_index as u64);
+            last_index += 1;
+        }
+    }
 }
 
-#[cfg(feature = "std")]
-impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
+impl<
+    const L: usize,
+    B: CurveTreeBackend<L, 1, PallasParameters, VestaParameters, Error = E>,
+    E: From<crate::Error>,
+> CurveTreeLookup<L> for &ProverCurveTree<L, PallasParameters, VestaParameters, B, E>
+{
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
-        Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
+        Ok(self
+            .tree
+            .get_path_to_leaf(leaf_index, 0)
+            .map_err(|_| Error::LeafIndexNotFound(leaf_index))?)
     }
 
     fn get_path_to_leaf(
         &self,
         leaf: LeafValue<PallasParameters>,
     ) -> Result<CurveTreePath<L>, Error> {
-        if let Some(&leaf_index) = self.leaf_to_index.get(&leaf) {
+        let leaf_buf = leaf.encode();
+        if let Some(&leaf_index) = self.leaf_to_index.get(&leaf_buf) {
             self.get_path_to_leaf_index(leaf_index)
         } else {
             Err(Error::LeafNotFound(leaf))
@@ -285,6 +314,11 @@ impl<const L: usize> CurveTreeLookup<L> for &ProverCurveTree<L> {
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
-        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
+        Ok(CurveTreeRoot::new(
+            &self
+                .tree
+                .root_node()
+                .map_err(|_| Error::CurveTreeRootNotFound)?,
+        )?)
     }
 }

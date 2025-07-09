@@ -1,4 +1,3 @@
-use ark_std::boxed::Box;
 use thiserror::Error;
 
 use polymesh_dart_common::AssetId;
@@ -15,6 +14,10 @@ pub enum Error {
     /// Leaf not found in the curve tree.
     #[error("Leaf not found in the curve tree: {0:?}")]
     LeafNotFound(LeafValue<PallasParameters>),
+
+    /// Leaf index not found in the curve tree.
+    #[error("Leaf index not found in the curve tree: {0}")]
+    LeafIndexNotFound(LeafIndex),
 
     /// Account/Encryption public key already exists.
     #[error("Account/Encryption public key already exists.")]
@@ -51,10 +54,6 @@ pub enum Error {
     /// Curve tree node not found at a specific level and index.
     #[error("Curve tree node not found at level {level}, index {index}")]
     CurveTreeNodeNotFound { level: NodeLevel, index: NodeIndex },
-
-    /// Curve tree backend error.
-    #[error("Curve tree backend error: {0:?}")]
-    CurveTreeBackendError(Box<dyn core::error::Error + Send + Sync>),
 
     /// Curve tree generator not found.
     #[error("Curve tree generator not found.")]
