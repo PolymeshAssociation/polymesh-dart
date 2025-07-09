@@ -24,20 +24,21 @@ mod common;
 pub use common::*;
 
 #[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
-pub struct WrappedCurveTreeParameters(
-    pub WrappedCanonical<SelRerandParameters<PallasParameters, VestaParameters>>,
-);
+pub struct WrappedCurveTreeParameters(Vec<u8>);
 
 impl WrappedCurveTreeParameters {
     pub fn new(gens_length: usize) -> Result<Self, Error> {
-        let params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(gens_length, gens_length);
-        Ok(Self(WrappedCanonical::wrap(&params)?))
+        let params = CurveTreeParameters::new(gens_length, gens_length);
+        let mut buf = Vec::new();
+        params.serialize_uncompressed(&mut buf)?;
+        Ok(Self(buf))
     }
 
     /// Decodes the wrapped value back into its original type `T`.
     pub fn decode(&self) -> Result<SelRerandParameters<PallasParameters, VestaParameters>, Error> {
-        self.0.decode()
+        Ok(CurveTreeParameters::deserialize_uncompressed_unchecked(
+            &self.0[..],
+        )?)
     }
 }
 

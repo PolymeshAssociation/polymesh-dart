@@ -708,6 +708,7 @@ macro_rules! impl_curve_tree_with_backend {
 
                                     // Get the parameters for the tree.
                                     let params = self.backend.parameters()$($await)*;
+
                                     // Update the node.  We pass both the old and new child commitments.
                                     Inner::<M, _, _>::update_even_node::<L>(
                                         commitments,
@@ -727,6 +728,7 @@ macro_rules! impl_curve_tree_with_backend {
 
                                     // Get the parameters for the tree.
                                     let params = self.backend.parameters()$($await)*;
+
                                     // Update the node.  We pass both the old and new child commitments.
                                     Inner::<M, _, _>::update_odd_node::<L>(
                                         commitments,
@@ -746,6 +748,7 @@ macro_rules! impl_curve_tree_with_backend {
                         None => {
                             // Get the parameters for the tree.
                             let params = self.backend.parameters()$($await)*;
+
                             // If thsi node does not exist, we need to create it.
                             let node = if location.is_even() {
                                 // If the location is even, we create an even node.
