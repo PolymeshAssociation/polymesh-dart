@@ -252,7 +252,7 @@ impl<
     /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
     pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, E> {
         Ok(Self {
-            tree: CurveTreeWithBackend::<L, 1, P0, P1, B, E>::new(height, gens_length)?,
+            tree: CurveTreeWithBackend::<L, 1, P0, P1, B, E>::new_no_init(height, gens_length)?,
             leaf_to_index: BTreeMap::new(),
         })
     }
