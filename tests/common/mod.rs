@@ -57,8 +57,33 @@ impl DartUserAccountInner {
         })
     }
 
+    pub fn address(&self) -> &SignerAddress {
+        &self.address
+    }
+
     pub fn public_keys(&self) -> AccountPublicKeys {
         self.keys.public_keys()
+    }
+
+    pub fn get_account_asset_state(&self, asset_id: AssetId) -> Result<AccountAssetState> {
+        let asset_state = self
+            .assets
+            .get(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+        Ok(asset_state.clone())
+    }
+
+    pub fn set_account_asset_state(
+        &mut self,
+        asset_id: AssetId,
+        new_state: AccountAssetState,
+    ) -> Result<()> {
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+        *asset_state = new_state;
+        Ok(())
     }
 
     pub fn initialize_asset<R: RngCore + CryptoRng>(
@@ -218,6 +243,32 @@ impl DartUserAccountInner {
         Ok(())
     }
 
+    pub fn decrypt_leg(
+        &self,
+        chain: &DartChainState,
+        leg_ref: &LegRef,
+        role: LegRole,
+    ) -> Result<Leg> {
+        log::info!("Decrypting leg for role: {:?}", role);
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let leg = leg_enc.decrypt(role, &self.keys.enc);
+        log::info!("Decrypted leg: {:?}", leg);
+        Ok(leg)
+    }
+
+    pub fn decrypt_sk_e(
+        &self,
+        chain: &DartChainState,
+        leg_ref: &LegRef,
+        role: LegRole,
+    ) -> Result<EncryptionSecretKey> {
+        log::info!("Decrypting sk_e for role: {:?}", role);
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let sk_e = leg_enc.decrypt_sk_e(role, &self.keys.enc);
+        log::info!("Decrypted sk_e: {:?}", sk_e);
+        Ok(sk_e)
+    }
+
     pub fn receiver_claims<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -330,8 +381,27 @@ impl DartUserAccount {
         Ok(Self(Arc::new(RwLock::new(inner))))
     }
 
+    pub fn address(&self) -> SignerAddress {
+        self.0.read().unwrap().address().clone()
+    }
+
     pub fn public_keys(&self) -> AccountPublicKeys {
         self.0.read().unwrap().public_keys()
+    }
+
+    pub fn get_account_asset_state(&self, asset_id: AssetId) -> Result<AccountAssetState> {
+        self.0.read().unwrap().get_account_asset_state(asset_id)
+    }
+
+    pub fn set_account_asset_state(
+        &self,
+        asset_id: AssetId,
+        new_state: AccountAssetState,
+    ) -> Result<()> {
+        self.0
+            .write()
+            .unwrap()
+            .set_account_asset_state(asset_id, new_state)
     }
 
     pub fn initialize_asset<R: RngCore + CryptoRng>(
@@ -409,6 +479,24 @@ impl DartUserAccount {
             .write()
             .unwrap()
             .mediator_affirmation(rng, chain, leg_ref, accept)
+    }
+
+    pub fn decrypt_leg(
+        &self,
+        chain: &DartChainState,
+        leg_ref: &LegRef,
+        role: LegRole,
+    ) -> Result<Leg> {
+        self.0.read().unwrap().decrypt_leg(chain, leg_ref, role)
+    }
+
+    pub fn decrypt_sk_e(
+        &self,
+        chain: &DartChainState,
+        leg_ref: &LegRef,
+        role: LegRole,
+    ) -> Result<EncryptionSecretKey> {
+        self.0.read().unwrap().decrypt_sk_e(chain, leg_ref, role)
     }
 
     pub fn receiver_claims<R: RngCore + CryptoRng>(
