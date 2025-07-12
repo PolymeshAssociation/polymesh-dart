@@ -288,7 +288,13 @@ impl<T> Eq for WrappedCanonical<T> {}
 
 impl<T> core::fmt::Debug for WrappedCanonical<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "WrappedCanonical<{}>", core::any::type_name::<T>())
+        let len = self.wrapped.len().min(32);
+        write!(
+            f,
+            "WrappedCanonical<{}>({})",
+            core::any::type_name::<T>(),
+            hex::encode(&self.wrapped[..len])
+        )
     }
 }
 
