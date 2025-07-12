@@ -1083,7 +1083,7 @@ impl<
             rng,
         )?;
         #[cfg(feature = "std")]
-        log::info!("Time and size: {:?}, {}", dur, size);
+        log::debug!("Time and size: {:?}, {}", dur, size);
         Ok(())
     }
 }
