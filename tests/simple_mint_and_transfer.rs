@@ -476,5 +476,118 @@ fn test_atomic_swap() -> Result<()> {
 /// 7. The sender reverts their affirmation.
 #[test]
 fn test_reject_after_sender_affirms() -> Result<()> {
+    let mut rng = rand::thread_rng();
+
+    // Setup chain state.
+    let mut chain = DartChainState::new()?;
+
+    // Setup an off-chain curve-tree prover.
+    let mut account_tree = DartProverAccountTree::new()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Step 1: Create an asset issuer, a mediator, and an investor.
+    let users = chain.create_signers(&["AssetIssuer", "Mediator", "Investor"])?;
+    let mut issuer = DartUser::new(&users[0]);
+    let mut mediator = DartUser::new(&users[1]);
+    let mut investor = DartUser::new(&users[2]);
+
+    // Create account keys and register them for all users.
+    let issuer_acct = issuer.create_and_register_account(&mut rng, &mut chain, "1")?;
+    let mediator_acct = mediator.create_and_register_account(&mut rng, &mut chain, "1")?;
+    let investor_acct = investor.create_and_register_account(&mut rng, &mut chain, "1")?;
+
+    // Step 2: The asset issuer creates an asset and mints it to their account.
+    let asset_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
+    let asset_id = issuer.create_asset(&mut chain, asset_mediator)?;
+
+    // Initialize account asset state for the issuer and investor.
+    issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+    investor_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Mint the asset to the issuer's account.
+    issuer_acct.mint_asset(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        asset_id,
+        1000,
+    )?;
+
+    // Step 3: The investor creates and initializes their account for the asset.
+    // (Already done above)
+
+    // Step 4: The asset issuer creates a settlement to transfer assets to the investor.
+    let settlement = SettlementBuilder::new(b"TestReject")
+        .leg(LegBuilder {
+            sender: issuer_acct.public_keys(),
+            receiver: investor_acct.public_keys(),
+            asset_id,
+            amount: 500,
+            mediator: asset_mediator,
+        })
+        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+
+    let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
+    let leg_ref = LegRef::new(settlement_id.into(), 0);
+
+    // End the block to finalize the settlement.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Step 5: The asset issuer affirms the settlement as the sender.
+    issuer_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+        asset_id,
+        500,
+    )?;
+
+    // End the block to finalize the sender affirmation.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Verify the settlement is still pending (waiting for receiver and mediator)
+    assert_eq!(
+        chain.get_settlement_status(settlement_id)?,
+        SettlementStatus::Pending
+    );
+
+    // Step 6: The mediator rejects the settlement.
+    mediator_acct.mediator_affirmation(&mut rng, &mut chain, &leg_ref, false)?;
+
+    // End the block to finalize the mediator rejection.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Verify the settlement is now rejected
+    assert_eq!(
+        chain.get_settlement_status(settlement_id)?,
+        SettlementStatus::Rejected
+    );
+
+    // Step 7: The sender reverts their affirmation.
+    issuer_acct.sender_revert(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+    )?;
+
+    // End the block to finalize the sender revert.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Verify the settlement is still rejected but the sender has finalized their leg
+    assert_eq!(
+        chain.get_settlement_status(settlement_id)?,
+        SettlementStatus::Finalized
+    );
+
     Ok(())
 }
