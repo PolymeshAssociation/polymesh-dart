@@ -127,6 +127,9 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
 /// 8. The investors affirm the settlement.
 /// 9. The mediator affirms the settlement.
 /// 10. The investors claim the assets from the settlement.
+/// 11. The asset issuers need to update their counters (as the sender in the funding settlement) to finalize the funding settlements.
+/// 12. The investors need to update their counters (as the sender in the atomic swap settlement) to finalize the all settlements.
+/// 13. All settlements should be finalized.
 #[test]
 fn test_atomic_swap() -> Result<()> {
     let mut rng = rand::thread_rng();
@@ -214,6 +217,7 @@ fn test_atomic_swap() -> Result<()> {
             mediator: asset1_auditor,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
+    eprintln!("Creating funding settlement: {:?}", funding_settlement1);
     let funding_settlement1_id = issuer1.create_settlement(&mut chain, funding_settlement1)?;
     let funding_leg1_ref = LegRef::new(funding_settlement1_id.into(), 0);
 
@@ -227,6 +231,7 @@ fn test_atomic_swap() -> Result<()> {
             mediator: asset2_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
+    eprintln!("Creating funding settlement: {:?}", funding_settlement2);
     let funding_settlement2_id = issuer2.create_settlement(&mut chain, funding_settlement2)?;
     let funding_leg2_ref = LegRef::new(funding_settlement2_id.into(), 0);
 
@@ -236,6 +241,7 @@ fn test_atomic_swap() -> Result<()> {
 
     // Step 5: The asset issuers, mediator and investors affirm the funding settlements.
     // Funding settlement 1 affirmations
+    eprintln!("Issuer1 affirming funding settlement leg 1");
     issuer1_acct.sender_affirmation(
         &mut rng,
         &mut chain,
@@ -244,6 +250,7 @@ fn test_atomic_swap() -> Result<()> {
         asset1_id,
         1000,
     )?;
+    eprintln!("Investor1 affirming funding settlement leg 1");
     investor1_acct.receiver_affirmation(
         &mut rng,
         &mut chain,
@@ -255,6 +262,7 @@ fn test_atomic_swap() -> Result<()> {
     // Note: Asset1 has an auditor, not a mediator, so no mediator affirmation needed
 
     // Funding settlement 2 affirmations
+    eprintln!("Issuer2 affirming funding settlement leg 2");
     issuer2_acct.sender_affirmation(
         &mut rng,
         &mut chain,
@@ -263,6 +271,7 @@ fn test_atomic_swap() -> Result<()> {
         asset2_id,
         1500,
     )?;
+    eprintln!("Investor2 affirming funding settlement leg 2");
     investor2_acct.receiver_affirmation(
         &mut rng,
         &mut chain,
@@ -271,6 +280,7 @@ fn test_atomic_swap() -> Result<()> {
         asset2_id,
         1500,
     )?;
+    eprintln!("Mediator affirming funding settlement leg 2");
     mediator_acct.mediator_affirmation(&mut rng, &mut chain, &funding_leg2_ref, true)?;
 
     // End the block to finalize the affirmations.
@@ -278,12 +288,14 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Step 6: The investors claim the assets.
+    eprintln!("Investor1 claiming asset1 from funding settlement leg 1");
     investor1_acct.receiver_claims(
         &mut rng,
         &mut chain,
         account_tree.prover_account_tree(),
         &funding_leg1_ref,
     )?;
+    eprintln!("Investor1 claimed asset1 from funding settlement leg 1");
     investor2_acct.receiver_claims(
         &mut rng,
         &mut chain,
@@ -313,6 +325,7 @@ fn test_atomic_swap() -> Result<()> {
             mediator: asset2_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
+    eprintln!("Creating swap settlement: {:?}", swap_settlement);
     let swap_settlement_id = investor1.create_settlement(&mut chain, swap_settlement)?;
     let swap_leg1_ref = LegRef::new(swap_settlement_id.into(), 0);
     let swap_leg2_ref = LegRef::new(swap_settlement_id.into(), 1);
@@ -323,6 +336,7 @@ fn test_atomic_swap() -> Result<()> {
 
     // Step 8: The investors affirm the settlement.
     // Investor1 affirms as sender for leg 1 and receiver for leg 2
+    eprintln!("Investor1 affirming swap settlement leg 1");
     investor1_acct.sender_affirmation(
         &mut rng,
         &mut chain,
@@ -331,6 +345,7 @@ fn test_atomic_swap() -> Result<()> {
         asset1_id,
         500,
     )?;
+    eprintln!("Investor1 affirming swap settlement leg 2");
     investor1_acct.receiver_affirmation(
         &mut rng,
         &mut chain,
@@ -341,6 +356,7 @@ fn test_atomic_swap() -> Result<()> {
     )?;
 
     // Investor2 affirms as receiver for leg 1 and sender for leg 2
+    eprintln!("Investor2 affirming swap settlement leg 1");
     investor2_acct.receiver_affirmation(
         &mut rng,
         &mut chain,
@@ -349,6 +365,7 @@ fn test_atomic_swap() -> Result<()> {
         asset1_id,
         500,
     )?;
+    eprintln!("Investor2 affirming swap settlement leg 2");
     investor2_acct.sender_affirmation(
         &mut rng,
         &mut chain,
@@ -360,6 +377,7 @@ fn test_atomic_swap() -> Result<()> {
 
     // Step 9: The mediator affirms the settlement.
     // Note: Only asset2 has a mediator, asset1 has an auditor
+    eprintln!("Mediator affirming swap settlement leg 2");
     mediator_acct.mediator_affirmation(&mut rng, &mut chain, &swap_leg2_ref, true)?;
 
     // End the block to finalize the affirmations.
@@ -367,12 +385,14 @@ fn test_atomic_swap() -> Result<()> {
     account_tree.apply_updates(&chain)?;
 
     // Step 10: The investors claim the assets from the settlement.
+    eprintln!("Investor1 claiming asset1 from swap settlement leg 1");
     investor1_acct.receiver_claims(
         &mut rng,
         &mut chain,
         account_tree.prover_account_tree(),
         &swap_leg2_ref,
     )?;
+    eprintln!("Investor2 claiming asset2 from swap settlement leg 2");
     investor2_acct.receiver_claims(
         &mut rng,
         &mut chain,
@@ -380,5 +400,81 @@ fn test_atomic_swap() -> Result<()> {
         &swap_leg1_ref,
     )?;
 
+    // End the block to finalize the affirmations.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Step 11: The asset issuers need to update their counters (as the sender in the funding settlement) to finalize the funding settlements.
+    eprintln!("Issuer1 updating sender counter for funding settlement 1");
+    issuer1_acct.sender_counter_update(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg1_ref,
+    )?;
+    eprintln!("Issuer2 updating sender counter for funding settlement 2");
+    issuer2_acct.sender_counter_update(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &funding_leg2_ref,
+    )?;
+
+    // End the block to finalize the affirmations.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Step 12: The investors need to update their counters (as the sender in the atomic swap settlement) to finalize the all settlements.
+    eprintln!("Investor1 updating sender counter for swap settlement leg 1");
+    investor1_acct.sender_counter_update(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg1_ref,
+    )?;
+    eprintln!("Investor2 updating sender counter for swap settlement leg 2");
+    investor2_acct.sender_counter_update(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &swap_leg2_ref,
+    )?;
+
+    // End the block to finalize the affirmations.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Step 13: All settlements should be finalized.
+    eprintln!("Checking settlement statuses...");
+    assert_eq!(
+        chain.get_settlement_status(funding_settlement1_id)?,
+        SettlementStatus::Finalized
+    );
+    assert_eq!(
+        chain.get_settlement_status(funding_settlement2_id)?,
+        SettlementStatus::Finalized
+    );
+    assert_eq!(
+        chain.get_settlement_status(swap_settlement_id)?,
+        SettlementStatus::Finalized
+    );
+
+    Ok(())
+}
+
+/// Test rejecting a settlement after the sender has affirmed it and have the sender revert the affirmation.
+///
+/// This test simulates a scenario where the sender affirms a settlement, but then the settlement is rejected by the mediator.
+///
+/// Steps:
+/// 1. Create an asset issuer, a mediator, and an investor.
+/// 2. The asset issuer creates an asset and mints it to their account.
+/// 3. The investor creates and initializes their account for the asset.
+/// 4. The asset issuer creates a settlement to transfer assets to the investor.
+/// 5. The asset issuer affirms the settlement as the sender.
+/// 6. The mediator rejects the settlement.
+/// 7. The sender reverts their affirmation.
+#[test]
+fn test_reject_after_sender_affirms() -> Result<()> {
     Ok(())
 }
