@@ -1,4 +1,7 @@
+use ark_std::string::String;
 use thiserror::Error;
+
+use crate::{AssetId, Balance};
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
@@ -52,6 +55,14 @@ pub enum Error {
     /// Leg doesn't have a mediator.
     #[error("Leg doesn't have a mediator")]
     LegDoesNotHaveMediator,
+
+    /// Amount is too large.
+    #[error("Amount is too large: {0}")]
+    AmountTooLarge(Balance),
+
+    /// Asset ID is too large.
+    #[error("Asset ID is too large: {0}")]
+    AssetIdTooLarge(AssetId),
 }
 
 impl Error {

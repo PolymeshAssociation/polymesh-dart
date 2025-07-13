@@ -32,7 +32,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::{BTreeMap, BTreeSet};
 #[cfg(not(feature = "std"))]
 use ark_std::string::ToString;
-use ark_std::{UniformRand, vec, vec::Vec};
+use ark_std::{UniformRand, format, vec, vec::Vec};
 use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -3702,11 +3702,11 @@ mod tests {
             let leg = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                Leg::new(pk_other.0, pk.0, Some(pk_a.0), amount, asset_id)
+                Leg::new(pk_other.0, pk.0, Some(pk_a.0), amount, asset_id)?
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                Leg::new(pk.0, pk_other.0, Some(pk_a.0), amount, asset_id)
+                Leg::new(pk.0, pk_other.0, Some(pk_a.0), amount, asset_id)?
             };
             let (leg_enc, enc_rands) = leg.encrypt(&mut rng, &pk_e.0, gen_p_1, gen_p_2);
             legs.push((leg, leg_enc, enc_rands));

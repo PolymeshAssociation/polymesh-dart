@@ -77,16 +77,26 @@ pub struct EphemeralSkEncryption<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> Leg<G> {
-    pub fn new(pk_s: G, pk_r: G, pk_m: Option<G>, amount: Balance, asset_id: AssetId) -> Self {
-        assert!(amount <= MAX_AMOUNT);
-        assert!(asset_id <= MAX_ASSET_ID);
-        Self {
+    pub fn new(
+        pk_s: G,
+        pk_r: G,
+        pk_m: Option<G>,
+        amount: Balance,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        if amount > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        if asset_id > MAX_ASSET_ID {
+            return Err(Error::AssetIdTooLarge(asset_id));
+        }
+        Ok(Self {
             pk_s,
             pk_r,
             pk_m,
             amount,
             asset_id,
-        }
+        })
     }
 
     /// `enc_sig_gen` should be the same as used in creating both the encryption key and signing (affirmation) key
@@ -289,7 +299,7 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
         asset_value_gen,
     )?;
     // Create leg and encrypt it for ephemeral pk
-    let leg = Leg::new(pk_s.0, pk_r.0, pk_m, amount, asset_id);
+    let leg = Leg::new(pk_s.0, pk_r.0, pk_m, amount, asset_id)?;
     let (leg_enc, leg_enc_rand) = leg.encrypt(rng, &pk_e.0, enc_sig_gen, asset_value_gen);
     Ok((
         leg,

@@ -1041,7 +1041,7 @@ impl Leg {
             mediator.map(|m| m.get_affine()).transpose()?,
             amount,
             asset_id,
-        );
+        )?;
         Ok(Self(leg))
     }
 

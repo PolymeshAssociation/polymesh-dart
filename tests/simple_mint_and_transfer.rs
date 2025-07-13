@@ -733,8 +733,7 @@ fn test_reject_after_sender_affirms() -> Result<()> {
 ///
 /// This test should fail because the sender should not be able to affirm as the receiver.
 #[test]
-#[should_panic(expected = "self.resp_leg_pk.verify")]
-fn test_sender_tries_to_affirms_for_receiver() {
+fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
     let mut rng = rand::thread_rng();
 
     // Setup chain state.
@@ -756,43 +755,31 @@ fn test_sender_tries_to_affirms_for_receiver() {
     let mut investor1 = DartUser::new(&users[2]);
 
     // Create account keys and register them for the issuer, auditor, and investor.
-    let issuer_acct = issuer
-        .create_and_register_account(&mut rng, &mut chain, "1")
-        .unwrap();
-    let auditor_acct = auditor
-        .create_and_register_account(&mut rng, &mut chain, "1")
-        .unwrap();
+    let issuer_acct = issuer.create_and_register_account(&mut rng, &mut chain, "1")?;
+    let auditor_acct = auditor.create_and_register_account(&mut rng, &mut chain, "1")?;
     let auditor_enc = auditor_acct.public_keys().enc.clone();
-    let investor1_acct = investor1
-        .create_and_register_account(&mut rng, &mut chain, "1")
-        .unwrap();
+    let investor1_acct = investor1.create_and_register_account(&mut rng, &mut chain, "1")?;
 
     let asset_auditor = AuditorOrMediator::auditor(&auditor_enc);
     // Create a Dart asset with the issuer as the owner and the auditor as the auditor.
-    let asset_id = issuer.create_asset(&mut chain, asset_auditor).unwrap();
+    let asset_id = issuer.create_asset(&mut chain, asset_auditor)?;
 
     // Initialize account asset state for the issuer and investor.
-    issuer_acct
-        .initialize_asset(&mut rng, &mut chain, asset_id)
-        .unwrap();
-    investor1_acct
-        .initialize_asset(&mut rng, &mut chain, asset_id)
-        .unwrap();
+    issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+    investor1_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
 
     // End the block to finalize the new accounts.
-    chain.end_block().unwrap();
-    account_tree.apply_updates(&chain).unwrap();
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
 
     // Mint the asset to the issuer's account.
-    issuer_acct
-        .mint_asset(
-            &mut rng,
-            &mut chain,
-            account_tree.prover_account_tree(),
-            asset_id,
-            1000,
-        )
-        .unwrap();
+    issuer_acct.mint_asset(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        asset_id,
+        1000,
+    )?;
 
     // Create a settlement to transfer some assets from the issuer to the investor.
     let settlement = SettlementBuilder::new(b"Test")
@@ -803,40 +790,35 @@ fn test_sender_tries_to_affirms_for_receiver() {
             amount: 500,
             mediator: asset_auditor,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())
-        .unwrap();
+        .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
-    let settlement_id = issuer.create_settlement(&mut chain, settlement).unwrap();
+    let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
     let leg_ref = LegRef::new(settlement_id.into(), 0);
 
     // End the block to finalize the new accounts.
-    chain.end_block().unwrap();
-    account_tree.apply_updates(&chain).unwrap();
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
 
     // The issuer affirms the settlement as the sender.
-    issuer_acct
-        .sender_affirmation(
-            &mut rng,
-            &mut chain,
-            account_tree.prover_account_tree(),
-            &leg_ref,
-            asset_id,
-            500,
-        )
-        .unwrap();
+    issuer_acct.sender_affirmation(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+        asset_id,
+        500,
+    )?;
 
     // End the block to finalize the new accounts.
-    chain.end_block().unwrap();
-    account_tree.apply_updates(&chain).unwrap();
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
 
     // The issuer tries to affirm the settlement as the receiver, which should fail.
-    let leg_enc = chain.get_settlement_leg(&leg_ref).unwrap().enc.clone();
-    let sk_e = issuer_acct
-        .decrypt_sk_e(&chain, &leg_ref, LegRole::Sender)
-        .unwrap();
+    let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
+    let sk_e = issuer_acct.decrypt_sk_e(&chain, &leg_ref, LegRole::Sender)?;
 
     // Get the issuer's account state for the asset.
-    let mut asset_state = issuer_acct.get_account_asset_state(asset_id).unwrap();
+    let mut asset_state = issuer_acct.get_account_asset_state(asset_id)?;
 
     let proof = ReceiverAffirmationProof::new(
         &mut rng,
@@ -845,9 +827,13 @@ fn test_sender_tries_to_affirms_for_receiver() {
         &leg_enc,
         &mut asset_state,
         account_tree.prover_account_tree(),
-    )
-    .unwrap();
-    chain
-        .receiver_affirmation(&issuer_acct.address(), proof)
-        .unwrap();
+    )?;
+    // This should fail because the issuer is not the receiver.
+    let result = chain.receiver_affirmation(&issuer_acct.address(), proof);
+    assert!(
+        result.is_err(),
+        "Sender should not be able to affirm as receiver"
+    );
+
+    Ok(())
 }
