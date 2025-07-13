@@ -450,8 +450,12 @@ impl AccountKeyPair {
         &self,
         rng: &mut R,
         asset_id: AssetId,
-    ) -> AccountState {
-        AccountState(BPAccountState::new(rng, self.secret.0.0, asset_id))
+    ) -> Result<AccountState, Error> {
+        Ok(AccountState(BPAccountState::new(
+            rng,
+            self.secret.0.0,
+            asset_id,
+        )?))
     }
 }
 
@@ -559,7 +563,7 @@ impl AccountAssetState {
         account: &AccountKeys,
         asset_id: AssetId,
     ) -> Result<Self, Error> {
-        let current_state = account.acct.account_state(rng, asset_id);
+        let current_state = account.acct.account_state(rng, asset_id)?;
         let current_state_commitment = current_state.commitment()?;
         Ok(Self {
             account: *account,
@@ -571,70 +575,74 @@ impl AccountAssetState {
         })
     }
 
-    pub fn mint<R: RngCore + CryptoRng>(&mut self, rng: &mut R, amount: Balance) -> AccountState {
-        let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount));
+    pub fn mint<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        amount: Balance,
+    ) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount)?);
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     pub fn get_sender_affirm_state<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
-    ) -> AccountState {
-        let state = AccountState(self.current_state.0.get_state_for_send(rng, amount));
+    ) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_send(rng, amount)?);
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     pub fn get_receiver_affirm_state<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-    ) -> AccountState {
+    ) -> Result<AccountState, Error> {
         let state = AccountState(self.current_state.0.get_state_for_receive(rng));
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     pub fn get_state_for_claiming_received<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
-    ) -> AccountState {
+    ) -> Result<AccountState, Error> {
         let state = AccountState(
             self.current_state
                 .0
-                .get_state_for_claiming_received(rng, amount),
+                .get_state_for_claiming_received(rng, amount)?,
         );
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     pub fn get_state_for_reversing_send<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         amount: Balance,
-    ) -> AccountState {
+    ) -> Result<AccountState, Error> {
         let state = AccountState(
             self.current_state
                 .0
-                .get_state_for_reversing_send(rng, amount),
+                .get_state_for_reversing_send(rng, amount)?,
         );
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     pub fn get_state_for_decreasing_counter<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-    ) -> AccountState {
+    ) -> Result<AccountState, Error> {
         let state = AccountState(
             self.current_state
                 .0
-                .get_state_for_decreasing_counter(rng, None),
+                .get_state_for_decreasing_counter(rng, None)?,
         );
         self._set_pending_state(state.clone());
-        state
+        Ok(state)
     }
 
     fn _set_pending_state(&mut self, state: AccountState) {
@@ -864,7 +872,7 @@ impl AssetMintingProof {
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
-        let mint_account_state = account_asset.mint(rng, amount);
+        let mint_account_state = account_asset.mint(rng, amount)?;
         let mint_account_commitment = mint_account_state.commitment()?;
 
         let pk = account_asset.account.acct.public;
@@ -1559,7 +1567,7 @@ impl SenderAffirmationProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
-        let new_account_state = account_asset.get_sender_affirm_state(rng, amount);
+        let new_account_state = account_asset.get_sender_affirm_state(rng, amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1665,7 +1673,7 @@ impl ReceiverAffirmationProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
-        let new_account_state = account_asset.get_receiver_affirm_state(rng);
+        let new_account_state = account_asset.get_receiver_affirm_state(rng)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1771,7 +1779,7 @@ impl ReceiverClaimProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
-        let new_account_state = account_asset.get_state_for_claiming_received(rng, amount);
+        let new_account_state = account_asset.get_state_for_claiming_received(rng, amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1877,7 +1885,7 @@ impl SenderCounterUpdateProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
-        let new_account_state = account_asset.get_state_for_decreasing_counter(rng);
+        let new_account_state = account_asset.get_state_for_decreasing_counter(rng)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1983,7 +1991,7 @@ impl SenderReversalProof {
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
     ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
-        let new_account_state = account_asset.get_state_for_reversing_send(rng, amount);
+        let new_account_state = account_asset.get_state_for_reversing_send(rng, amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;

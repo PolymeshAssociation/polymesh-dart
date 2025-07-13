@@ -242,16 +242,20 @@ pub fn create_leaf_for_asset_tree<G: AffineRepr>(
     pk: G,
     is_mediator: bool,
     leaf_comm_key: &[G],
-) -> G {
+) -> Result<G> {
     // TODO: Add version and leaf_comm_key should have another generator
-    assert!(leaf_comm_key.len() >= 2);
-    (if is_mediator {
+    if leaf_comm_key.len() < 2 {
+        return Err(Error::InvalidMediatorOrAuditor(
+            "leaf_comm_key must have at least 2 elements".into(),
+        ));
+    }
+    Ok((if is_mediator {
         leaf_comm_key[0]
     } else {
         G::zero()
     } + (leaf_comm_key[1] * G::ScalarField::from(asset_id))
         + pk)
-        .into_affine()
+        .into_affine())
 }
 
 /// Create leg and ephemeral keys. Encrypt leg and ephemeral secret key.
@@ -279,7 +283,6 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
     DecKey<G>,
     EncKey<G>,
 )> {
-    assert!(pk_a.is_some() ^ pk_m.is_some());
     let (pk_a_m, pk_m) = match (pk_m, pk_a) {
         (Some(pk_m), None) => (pk_m.1, Some(pk_m.0)),
         (None, Some(pk_a)) => (pk_a, None),
@@ -415,10 +418,13 @@ impl<
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
     ) -> Result<Self> {
-        assert!(
-            (leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some())
-                || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some())
-        );
+        if !((leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some())
+            || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some()))
+        {
+            return Err(Error::InvalidMediatorOrAuditor(
+                "Inconsistent mediator/auditor state".into(),
+            ));
+        }
 
         let is_mediator_present = leg_enc.ct_m.is_some();
 
@@ -795,9 +801,15 @@ impl<
         let is_mediator_present = leg_enc.ct_m.is_some();
 
         if is_mediator_present {
-            assert!(self.resp_eph_pk.is_some());
+            if self.resp_eph_pk.is_none() {
+                return Err(Error::ProofVerificationError("Missing resp_eph_pk".into()));
+            }
         } else {
-            assert!(self.auditor_enc_proofs.is_some());
+            if self.auditor_enc_proofs.is_none() {
+                return Err(Error::ProofVerificationError(
+                    "Missing auditor_enc_proofs".into(),
+                ));
+            }
         }
 
         let minus_leaf_comm_key = leaf_comm_key[1].neg();
@@ -923,12 +935,16 @@ impl<
             verifier_transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
         if let Some(ct_m) = &leg_enc.ct_m {
-            assert!(
-                self.resp_eph_pk
-                    .as_ref()
-                    .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
-                    .verify(&ct_m.eph_pk, &enc_sig_gen, &verifier_challenge)
-            );
+            if !self
+                .resp_eph_pk
+                .as_ref()
+                .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
+                .verify(&ct_m.eph_pk, &enc_sig_gen, &verifier_challenge)
+            {
+                return Err(Error::ProofVerificationError(
+                    "resp_eph_pk verification failed".into(),
+                ));
+            }
             // Verify proof of knowledge of opening of leaf commitment and mediator's key encryption (in leg)
             let y = (ct_m.encrypted - self.re_randomized_path.re_randomized_leaf
                 + leaf_comm_key[0])
@@ -955,94 +971,142 @@ impl<
                 &self.t_r_leaf,
                 &verifier_challenge,
             )?;
-            assert!(aud_proofs.resp_K_1.verify(
+            if !aud_proofs.resp_K_1.verify(
                 &aud_proofs.K_1,
                 &ped_comm_key.g,
                 &ped_comm_key.h,
                 &verifier_challenge,
-            ));
-            assert!(aud_proofs.resp_K_2.verify(
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "resp_K_1 verification failed".into(),
+                ));
+            }
+            if !aud_proofs.resp_K_2.verify(
                 &aud_proofs.K_2,
                 &ped_comm_key.g,
                 &ped_comm_key.h,
                 &verifier_challenge,
-            ));
-            assert!(aud_proofs.resp_K_3.verify(
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "resp_K_2 verification failed".into(),
+                ));
+            }
+            if !aud_proofs.resp_K_3.verify(
                 &aud_proofs.K_3,
                 &ped_comm_key.g,
                 &ped_comm_key.h,
                 &verifier_challenge,
-            ));
-            assert!(aud_proofs.resp_K_3_K_1.verify(
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "resp_K_3 verification failed".into(),
+                ));
+            }
+            if !aud_proofs.resp_K_3_K_1.verify(
                 &aud_proofs.K_3,
                 &aud_proofs.K_1,
                 &verifier_challenge,
-            ));
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "resp_K_3_K_1 verification failed".into(),
+                ));
+            }
             #[cfg(feature = "std")]
             {
                 dur += clock.elapsed();
             }
         }
 
-        assert!(self.resp_amount.verify(
+        if !self.resp_amount.verify(
             &self.comm_amount,
             &tree_parameters.even_parameters.pc_gens.B,
             &tree_parameters.even_parameters.pc_gens.B_blinding,
             &verifier_challenge,
-        ));
-        assert!(self.resp_amount_enc_0.verify(
+        ) {
+            return Err(Error::ProofVerificationError(
+                "resp_amount verification failed".into(),
+            ));
+        }
+        if !self.resp_amount_enc_0.verify(
             &leg_enc.ct_amount.eph_pk,
             &enc_sig_gen,
-            &verifier_challenge
-        ));
-        assert!(self.resp_amount_enc_1.verify(
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "resp_amount_enc_0 verification failed".into(),
+            ));
+        }
+        if !self.resp_amount_enc_1.verify(
             &leg_enc.ct_amount.encrypted,
             &eph_pk,
             &asset_value_gen,
-            &verifier_challenge
-        ));
-        assert!(self.resp_asset_id_enc_0.verify(
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "resp_amount_enc_1 verification failed".into(),
+            ));
+        }
+        if !self.resp_asset_id_enc_0.verify(
             &leg_enc.ct_asset_id.eph_pk,
             &enc_sig_gen,
-            &verifier_challenge
-        ));
-        assert!(self.resp_asset_id_enc_1.verify(
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "resp_asset_id_enc_0 verification failed".into(),
+            ));
+        }
+        if !self.resp_asset_id_enc_1.verify(
             &leg_enc.ct_asset_id.encrypted,
             &eph_pk,
             &asset_value_gen,
-            &verifier_challenge
-        ));
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "resp_asset_id_enc_1 verification failed".into(),
+            ));
+        }
 
         // Amount is same
-        assert_eq!(self.resp_amount.response1, self.resp_amount_enc_1.response2);
+        if self.resp_amount.response1 != self.resp_amount_enc_1.response2 {
+            return Err(Error::ProofVerificationError("Amount mismatch".into()));
+        }
         if is_mediator_present {
             // enc randomness is same in leaf as in auditor pk encryption
-            assert_eq!(
-                self.resp_leaf.0[0],
-                self.resp_eph_pk
+            if self.resp_leaf.0[0]
+                != self
+                    .resp_eph_pk
                     .as_ref()
                     .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
                     .response
-            );
+            {
+                return Err(Error::ProofVerificationError(
+                    "Enc randomness mismatch".into(),
+                ));
+            }
             // Asset id is same
-            assert_eq!(self.resp_leaf.0[1], self.resp_asset_id_enc_1.response2);
+            if self.resp_leaf.0[1] != self.resp_asset_id_enc_1.response2 {
+                return Err(Error::ProofVerificationError("Asset ID mismatch".into()));
+            }
         } else {
             let aud_proofs = self.auditor_enc_proofs.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError("Missing auditor enc proofs".into())
             })?;
             // Enc randomness for twisted Elgamal is same
-            assert_eq!(self.resp_leaf.0[0], aud_proofs.resp_K_1.response1);
+            if self.resp_leaf.0[0] != aud_proofs.resp_K_1.response1 {
+                return Err(Error::ProofVerificationError(
+                    "Enc randomness mismatch".into(),
+                ));
+            }
             // Asset id is same
-            assert_eq!(
-                self.resp_asset_id_enc_1.response2,
-                aud_proofs.resp_K_2.response1
-            );
-            assert_eq!(
-                self.resp_asset_id_enc_1.response2,
-                aud_proofs.resp_K_3_K_1.response
-            );
+            if self.resp_asset_id_enc_1.response2 != aud_proofs.resp_K_2.response1 {
+                return Err(Error::ProofVerificationError("Asset ID mismatch".into()));
+            }
+            if self.resp_asset_id_enc_1.response2 != aud_proofs.resp_K_3_K_1.response {
+                return Err(Error::ProofVerificationError("Asset ID mismatch".into()));
+            }
             // Product of enc randomness and asset id is same
-            assert_eq!(self.resp_leaf.0[1], aud_proofs.resp_K_3.response1);
+            if self.resp_leaf.0[1] != aud_proofs.resp_K_3.response1 {
+                return Err(Error::ProofVerificationError("Product mismatch".into()));
+            }
         }
 
         verify_with_rng(
@@ -1172,12 +1236,14 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
-        assert!(self.resp_enc_pk.verify(
-            &ct_m.encrypted,
-            &ct_m.eph_pk,
-            &sig_gen,
-            &verifier_challenge
-        ));
+        if !self
+            .resp_enc_pk
+            .verify(&ct_m.encrypted, &ct_m.eph_pk, &sig_gen, &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "resp_enc_pk verification failed".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -1252,7 +1318,7 @@ pub mod tests {
         let asset_id = 1;
 
         // Mediator key with asset id is added to the tree
-        let leaf = create_leaf_for_asset_tree(asset_id, pk_m.0, true, &leaf_comm_key);
+        let leaf = create_leaf_for_asset_tree(asset_id, pk_m.0, true, &leaf_comm_key)?;
         assert_eq!(
             leaf,
             (leaf_comm_key[0] + (leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_m.0)
@@ -1393,7 +1459,7 @@ pub mod tests {
         let asset_id = 1;
 
         // Auditor key with asset id is added to the tree
-        let leaf = create_leaf_for_asset_tree(asset_id, pk_a_e.0, false, &leaf_comm_key);
+        let leaf = create_leaf_for_asset_tree(asset_id, pk_a_e.0, false, &leaf_comm_key)?;
         assert_eq!(
             leaf,
             ((leaf_comm_key[1] * PallasFr::from(asset_id)) + pk_a_e.0).into_affine()

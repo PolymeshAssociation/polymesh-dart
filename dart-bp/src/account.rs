@@ -114,21 +114,25 @@ pub struct AccountState<G: AffineRepr> {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
 
-// TODO: Convert asserts to errors
-
 impl<G: AffineRepr> AccountState<G> {
-    pub fn new<R: RngCore + CryptoRng>(rng: &mut R, sk: G::ScalarField, asset_id: AssetId) -> Self {
-        assert!(asset_id <= MAX_ASSET_ID);
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        sk: G::ScalarField,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        if asset_id > MAX_ASSET_ID {
+            return Err(Error::AssetIdTooLarge(asset_id));
+        }
         let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
-        Self {
+        Ok(Self {
             sk,
             balance: 0,
             counter: 0,
             asset_id,
             rho,
             randomness,
-        }
+        })
     }
 
     pub fn commit(
@@ -150,21 +154,25 @@ impl<G: AffineRepr> AccountState<G> {
         Ok(AccountStateCommitment(comm.into_affine()))
     }
 
-    pub fn get_state_for_mint<R: RngCore>(&self, rng: &mut R, amount: u64) -> Self {
-        assert!(amount + self.balance <= MAX_AMOUNT);
+    pub fn get_state_for_mint<R: RngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
         let mut new_state = self.clone();
         new_state.balance += amount;
         new_state.refresh_randomness_for_state_change(rng);
-        new_state
+        Ok(new_state)
     }
 
-    pub fn get_state_for_send<R: RngCore>(&self, rng: &mut R, amount: u64) -> Self {
-        assert!(amount <= self.balance);
+    pub fn get_state_for_send<R: RngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
+        if amount > self.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
         let mut new_state = self.clone();
         new_state.balance -= amount;
         new_state.counter += 1;
         new_state.refresh_randomness_for_state_change(rng);
-        new_state
+        Ok(new_state)
     }
 
     pub fn get_state_for_receive<R: RngCore>(&self, rng: &mut R) -> Self {
@@ -174,37 +182,61 @@ impl<G: AffineRepr> AccountState<G> {
         new_state
     }
 
-    pub fn get_state_for_claiming_received<R: RngCore>(&self, rng: &mut R, amount: u64) -> Self {
-        assert!(self.counter > 0);
-        assert!(amount + self.balance <= MAX_AMOUNT);
+    pub fn get_state_for_claiming_received<R: RngCore>(
+        &self,
+        rng: &mut R,
+        amount: u64,
+    ) -> Result<Self> {
+        if self.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
         let mut new_state = self.clone();
         new_state.balance += amount;
         new_state.counter -= 1;
         new_state.refresh_randomness_for_state_change(rng);
-        new_state
+        Ok(new_state)
     }
 
-    pub fn get_state_for_reversing_send<R: RngCore>(&self, rng: &mut R, amount: u64) -> Self {
-        assert!(self.counter > 0);
-        assert!(amount + self.balance <= MAX_AMOUNT);
+    pub fn get_state_for_reversing_send<R: RngCore>(
+        &self,
+        rng: &mut R,
+        amount: u64,
+    ) -> Result<Self> {
+        if self.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
         let mut new_state = self.clone();
         new_state.balance += amount;
         new_state.counter -= 1;
         new_state.refresh_randomness_for_state_change(rng);
-        new_state
+        Ok(new_state)
     }
 
     pub fn get_state_for_decreasing_counter<R: RngCore>(
         &self,
         rng: &mut R,
         decrease_counter_by: Option<PendingTxnCounter>,
-    ) -> Self {
+    ) -> Result<Self> {
         let decrease_counter_by = decrease_counter_by.unwrap_or(1);
-        assert!(self.counter >= decrease_counter_by);
+        if self.counter < decrease_counter_by {
+            return Err(Error::ProofOfBalanceError(
+                "Counter cannot be decreased below zero".to_string(),
+            ));
+        }
         let mut new_state = self.clone();
         new_state.counter -= decrease_counter_by;
         new_state.refresh_randomness_for_state_change(rng);
-        new_state
+        Ok(new_state)
     }
 
     /// Set rho and commitment randomness to new values. Used as each update to the account state
@@ -248,8 +280,16 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         sig_gen: G,
     ) -> Result<Self> {
-        assert_eq!(account.balance, 0);
-        assert_eq!(account.counter, 0);
+        if account.balance != 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Balance must be 0 for registration".to_string(),
+            ));
+        }
+        if account.counter != 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be 0 for registration".to_string(),
+            ));
+        }
 
         // Need to prove that:
         // 1. sk used in commitment is for the registering pk
@@ -346,10 +386,18 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &verifier_challenge,
         )?;
 
-        assert!(self.resp_pk.verify(pk, &sig_gen, &verifier_challenge));
+        if !self.resp_pk.verify(pk, &sig_gen, &verifier_challenge) {
+            return Err(Error::ProofVerificationError(
+                "Public key verification failed".to_string(),
+            ));
+        }
 
         // Sk in account matches the one in public key
-        assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
+        if self.resp_acc.0[0] != self.resp_pk.response {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between account and public key".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -403,7 +451,11 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         sig_null_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
@@ -652,28 +704,55 @@ impl<
             &verifier_challenge,
         )?;
 
-        assert!(
-            self.resp_null
-                .verify(&nullifier, &sig_null_gen, &verifier_challenge,)
-        );
-        assert!(
-            self.resp_pk
-                .verify(&issuer_pk, &sig_null_gen, &verifier_challenge)
-        );
+        if !self
+            .resp_null
+            .verify(&nullifier, &sig_null_gen, &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Nullifier verification failed".to_string(),
+            ));
+        }
+        if !self
+            .resp_pk
+            .verify(&issuer_pk, &sig_null_gen, &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Issuer public key verification failed".to_string(),
+            ));
+        }
 
         // Sk and counter in leaf match the ones in updated account commitment
-        assert_eq!(self.resp_leaf.0[0], self.resp_acc_new.0[0]);
-        assert_eq!(self.resp_leaf.0[2], self.resp_acc_new.0[2]);
+        if self.resp_leaf.0[0] != self.resp_acc_new.0[0] {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leaf and new account".to_string(),
+            ));
+        }
+        if self.resp_leaf.0[2] != self.resp_acc_new.0[2] {
+            return Err(Error::ProofVerificationError(
+                "Counter mismatch between leaf and new account".to_string(),
+            ));
+        }
         // Balance in leaf is less than the one in the new account commitment by `increase_bal_by`
-        assert_eq!(
-            self.resp_leaf.0[1] + (verifier_challenge * F0::from(increase_bal_by)),
-            self.resp_acc_new.0[1]
-        );
+        if self.resp_leaf.0[1] + (verifier_challenge * F0::from(increase_bal_by))
+            != self.resp_acc_new.0[1]
+        {
+            return Err(Error::ProofVerificationError(
+                "Balance increase verification failed".to_string(),
+            ));
+        }
 
         // rho matches the one in nullifier
-        assert_eq!(self.resp_leaf.0[3], self.resp_null.response);
+        if self.resp_leaf.0[3] != self.resp_null.response {
+            return Err(Error::ProofVerificationError(
+                "Rho mismatch between leaf and nullifier".to_string(),
+            ));
+        }
         // Sk in leaf matches the one in public key
-        assert_eq!(self.resp_leaf.0[0], self.resp_pk.response);
+        if self.resp_leaf.0[0] != self.resp_pk.response {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leaf and public key".to_string(),
+            ));
+        }
 
         Ok(verify_with_rng(
             even_verifier,
@@ -753,7 +832,11 @@ impl<
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
@@ -1022,24 +1105,42 @@ impl<
         );
 
         // Balance in leaf (old account) is same as in the old balance commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
+        if self.resp_leaf.0[1] != self.resp_old_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in leaf does not match old balance commitment".to_string(),
+            ));
+        }
         // Balance in new account commitment is same as in the new balance commitment
-        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
+        if self.resp_acc_new.0[1] != self.resp_new_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in new account does not match new balance commitment".to_string(),
+            ));
+        }
         // Counter in new account commitment is 1 more than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2],
-            self.resp_leaf.0[2] + verifier_challenge
-        );
+        if self.resp_acc_new.0[2] != self.resp_leaf.0[2] + verifier_challenge {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf + 1".to_string(),
+            ));
+        }
 
         // Amount in leg is same as amount in commitment
-        assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
+        if self.resp_leg_amount.response2 != self.resp_amount.response1 {
+            return Err(Error::ProofVerificationError(
+                "Amount in leg does not match amount commitment".to_string(),
+            ));
+        }
 
         // sk_e matches in all 3 encryptions
-        assert_eq!(
-            self.resp_leg_amount.response1,
-            self.resp_leg_asset_id.response1
-        );
-        assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
+        if self.resp_leg_amount.response1 != self.resp_leg_asset_id.response1 {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leg and asset-id commitment".to_string(),
+            ));
+        }
+        if self.resp_leg_amount.response1 != self.resp_leg_pk.response1 {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leg and public key".to_string(),
+            ));
+        }
 
         verify_with_rng(
             even_verifier,
@@ -1101,7 +1202,11 @@ impl<
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
@@ -1290,25 +1395,46 @@ impl<
         );
 
         // Balance in leaf (old account) is same as in the updated account commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_acc_new.0[1]);
+        if self.resp_leaf.0[1] != self.resp_acc_new.0[1] {
+            return Err(Error::ProofVerificationError(
+                "Balance mismatch between leaf and new account".to_string(),
+            ));
+        }
 
         // Counter in new account commitment is 1 more than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2],
-            self.resp_leaf.0[2] + verifier_challenge
-        );
+        if self.resp_acc_new.0[2] != self.resp_leaf.0[2] + verifier_challenge {
+            return Err(Error::ProofVerificationError(
+                "Counter increment verification failed".to_string(),
+            ));
+        }
 
         // rho matches the one in nullifier
-        assert_eq!(self.resp_leaf.0[4], self.resp_null.response);
+        if self.resp_leaf.0[4] != self.resp_null.response {
+            return Err(Error::ProofVerificationError(
+                "Rho mismatch between leaf and nullifier".to_string(),
+            ));
+        }
 
         // Asset id in leg is same as in account commitment
-        assert_eq!(self.resp_leg_asset_id.response2, self.resp_acc_new.0[3]);
+        if self.resp_leg_asset_id.response2 != self.resp_acc_new.0[3] {
+            return Err(Error::ProofVerificationError(
+                "Asset ID mismatch between leg and account commitment".to_string(),
+            ));
+        }
 
         // sk in account comm matches the one in pk
-        assert_eq!(self.resp_leg_pk.response2, self.resp_leaf.0[0]);
+        if self.resp_leg_pk.response2 != self.resp_leaf.0[0] {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between account and public key".to_string(),
+            ));
+        }
 
         // sk_e matches in both encryptions
-        assert_eq!(self.resp_leg_pk.response1, self.resp_leg_asset_id.response1);
+        if self.resp_leg_pk.response1 != self.resp_leg_asset_id.response1 {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leg and asset ID".to_string(),
+            ));
+        }
 
         odd_verifier.verify_with_rng(
             &self.odd_proof,
@@ -1391,7 +1517,11 @@ impl<
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
@@ -1673,24 +1803,42 @@ impl<
         );
 
         // Balance in leaf (old account) is same as in the old balance commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
+        if self.resp_leaf.0[1] != self.resp_old_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in leaf does not match old balance commitment".to_string(),
+            ));
+        }
         // Balance in new account commitment is same as in the new balance commitment
-        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
+        if self.resp_acc_new.0[1] != self.resp_new_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in new account does not match new balance commitment".to_string(),
+            ));
+        }
         // Counter in new account commitment is 1 less than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2] + verifier_challenge,
-            self.resp_leaf.0[2]
-        );
+        if self.resp_acc_new.0[2] + verifier_challenge != self.resp_leaf.0[2] {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf - 1".to_string(),
+            ));
+        }
 
         // Amount in leg is same as amount in commitment
-        assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
+        if self.resp_leg_amount.response2 != self.resp_amount.response1 {
+            return Err(Error::ProofVerificationError(
+                "Amount in leg does not match amount commitment".to_string(),
+            ));
+        }
 
         // sk_e matches in all 3 encryptions
-        assert_eq!(
-            self.resp_leg_amount.response1,
-            self.resp_leg_asset_id.response1
-        );
-        assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
+        if self.resp_leg_amount.response1 != self.resp_leg_asset_id.response1 {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leg and asset-id commitment".to_string(),
+            ));
+        }
+        if self.resp_leg_amount.response1 != self.resp_leg_pk.response1 {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between leg and public key".to_string(),
+            ));
+        }
 
         odd_verifier.verify_with_rng(
             &self.odd_proof,
@@ -1756,7 +1904,11 @@ impl<
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
@@ -1945,13 +2097,18 @@ impl<
         );
 
         // Balance in leaf (old account) is same as in the updated account commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_acc_new.0[1]);
+        if self.resp_leaf.0[1] != self.resp_acc_new.0[1] {
+            return Err(Error::ProofVerificationError(
+                "Balance mismatch between leaf and new account".to_string(),
+            ));
+        }
 
         // Counter in new account commitment is 1 less than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2] + verifier_challenge,
-            self.resp_leaf.0[2]
-        );
+        if self.resp_acc_new.0[2] + verifier_challenge != self.resp_leaf.0[2] {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf - 1".to_string(),
+            ));
+        }
 
         odd_verifier.verify_with_rng(
             &self.odd_proof,
@@ -2034,7 +2191,11 @@ impl<
         sig_null_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        assert_eq!(account.asset_id, updated_account.asset_id);
+        if account.asset_id != updated_account.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account".to_string(),
+            ));
+        }
 
         let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
             initialize_curve_tree_prover(
@@ -2289,24 +2450,42 @@ impl<
         );
 
         // Balance in leaf (old account) is same as in the old balance commitment
-        assert_eq!(self.resp_leaf.0[1], self.resp_old_bal.response1);
+        if self.resp_leaf.0[1] != self.resp_old_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in leaf does not match old balance commitment".to_string(),
+            ));
+        }
         // Balance in new account commitment is same as in the new balance commitment
-        assert_eq!(self.resp_acc_new.0[1], self.resp_new_bal.response1);
+        if self.resp_acc_new.0[1] != self.resp_new_bal.response1 {
+            return Err(Error::ProofVerificationError(
+                "Balance in new account does not match new balance commitment".to_string(),
+            ));
+        }
         // Counter in new account commitment is 1 less than the one in the leaf commitment
-        assert_eq!(
-            self.resp_acc_new.0[2] + verifier_challenge,
-            self.resp_leaf.0[2]
-        );
+        if self.resp_acc_new.0[2] + verifier_challenge != self.resp_leaf.0[2] {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf - 1".to_string(),
+            ));
+        }
 
         // Amount in leg is same as amount in commitment
-        assert_eq!(self.resp_leg_amount.response2, self.resp_amount.response1);
+        if self.resp_leg_amount.response2 != self.resp_amount.response1 {
+            return Err(Error::ProofVerificationError(
+                "Amount in leg does not match amount commitment".to_string(),
+            ));
+        }
 
         // sk_e matches in all 3 encryptions
-        assert_eq!(
-            self.resp_leg_amount.response1,
-            self.resp_leg_asset_id.response1
-        );
-        assert_eq!(self.resp_leg_amount.response1, self.resp_leg_pk.response1);
+        if self.resp_leg_amount.response1 != self.resp_leg_asset_id.response1 {
+            return Err(Error::ProofVerificationError(
+                "sk_e does not match in leg asset-id encryptions".to_string(),
+            ));
+        }
+        if self.resp_leg_amount.response1 != self.resp_leg_pk.response1 {
+            return Err(Error::ProofVerificationError(
+                "sk_e does not match in leg encryptions".to_string(),
+            ));
+        }
 
         odd_verifier.verify_with_rng(
             &self.odd_proof,
@@ -2449,16 +2628,32 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             &self.t_acc,
             &verifier_challenge,
         )?;
-        assert!(
-            self.resp_null
-                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
-        );
-        assert!(self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge));
+        if !self
+            .resp_null
+            .verify(&self.nullifier, &sig_null_gen, &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Nullifier proof verification failed".to_string(),
+            ));
+        }
+        if !self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge) {
+            return Err(Error::ProofVerificationError(
+                "Public key proof verification failed".to_string(),
+            ));
+        }
 
         // rho matches the one in nullifier
-        assert_eq!(self.resp_acc.0[1], self.resp_null.response);
+        if self.resp_acc.0[1] != self.resp_null.response {
+            return Err(Error::ProofVerificationError(
+                "Rho in account does not match the one in nullifier".to_string(),
+            ));
+        }
         // Sk in account matches the one in public key
-        assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
+        if self.resp_acc.0[0] != self.resp_pk.response {
+            return Err(Error::ProofVerificationError(
+                "Sk in account does not match the one in public key".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -2498,11 +2693,16 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         sig_null_gen: G,
         asset_value_gen: G,
     ) -> Result<Self> {
-        assert_eq!(legs.len(), eph_keys.len());
-        assert_eq!(
-            legs.len(),
-            sender_in_leg_indices.len() + receiver_in_leg_indices.len()
-        );
+        if legs.len() != eph_keys.len() {
+            return Err(Error::ProofGenerationError(
+                "Number of legs and eph keys do not match".to_string(),
+            ));
+        }
+        if legs.len() != (sender_in_leg_indices.len() + receiver_in_leg_indices.len()) {
+            return Err(Error::ProofGenerationError(
+                "Number of legs and indices for sender and receiver do not match".to_string(),
+            ));
+        }
 
         let num_pending_txns = legs.len();
         // Need to prove that:
@@ -2726,11 +2926,31 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         sig_null_gen: G,
         asset_value_gen: G,
     ) -> Result<()> {
-        assert_eq!(legs.len(), self.resp_asset_id.len());
-        assert_eq!(sender_in_leg_indices.len(), self.resp_pk_send.len());
-        assert_eq!(receiver_in_leg_indices.len(), self.resp_pk_recv.len());
-        assert_eq!(sender_in_leg_indices.len(), self.resp_sent_amount.0.len());
-        assert_eq!(receiver_in_leg_indices.len(), self.resp_recv_amount.0.len());
+        if legs.len() != self.resp_asset_id.len() {
+            return Err(Error::ProofVerificationError(
+                "Legs and asset ID responses length mismatch".to_string(),
+            ));
+        }
+        if sender_in_leg_indices.len() != self.resp_pk_send.len() {
+            return Err(Error::ProofVerificationError(
+                "Sender indices and responses length mismatch".to_string(),
+            ));
+        }
+        if receiver_in_leg_indices.len() != self.resp_pk_recv.len() {
+            return Err(Error::ProofVerificationError(
+                "Receiver indices and responses length mismatch".to_string(),
+            ));
+        }
+        if sender_in_leg_indices.len() != self.resp_sent_amount.0.len() {
+            return Err(Error::ProofVerificationError(
+                "Sender indices and sent amount responses length mismatch".to_string(),
+            ));
+        }
+        if receiver_in_leg_indices.len() != self.resp_recv_amount.0.len() {
+            return Err(Error::ProofVerificationError(
+                "Receiver indices and received amount responses length mismatch".to_string(),
+            ));
+        }
 
         let num_pending_txns = legs.len();
 
@@ -2834,46 +3054,69 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             &self.t_acc,
             &verifier_challenge,
         )?;
-        assert!(
-            self.resp_null
-                .verify(&self.nullifier, &sig_null_gen, &verifier_challenge,)
-        );
-        assert!(self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge));
+        if !self
+            .resp_null
+            .verify(&self.nullifier, &sig_null_gen, &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Nullifier verification failed".to_string(),
+            ));
+        }
+        if !self.resp_pk.verify(&pk, &sig_null_gen, &verifier_challenge) {
+            return Err(Error::ProofVerificationError(
+                "Public key verification failed".to_string(),
+            ));
+        }
 
         let mut y_recv = G::Group::zero();
         let mut y_sent = G::Group::zero();
         for i in 0..num_pending_txns {
             // TODO: This `y` is already computed above so avoid
             let y = legs[i].ct_asset_id.encrypted.into_group() - h_at;
-            assert!(self.resp_asset_id[i].verify(
+            if !self.resp_asset_id[i].verify(
                 &y.into_affine(),
                 &legs[i].ct_asset_id.eph_pk,
-                &verifier_challenge
-            ));
+                &verifier_challenge,
+            ) {
+                return Err(Error::ProofVerificationError(format!(
+                    "Asset ID verification failed for leg {}",
+                    i
+                )));
+            }
 
             if receiver_in_leg_indices.contains(&i) {
                 let comm = self
                     .resp_pk_recv
                     .get(&i)
                     .ok_or_else(|| Error::ProofOfBalanceError(format!("Missing pk recv: {i}")))?;
-                assert!(comm.verify(
+                if !comm.verify(
                     &legs[i].ct_r.encrypted,
                     &legs[i].ct_r.eph_pk,
                     &sig_null_gen,
-                    &verifier_challenge
-                ));
+                    &verifier_challenge,
+                ) {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Receiver public key verification failed for leg {}",
+                        i
+                    )));
+                }
                 y_recv += &legs[i].ct_amount.encrypted;
             } else if sender_in_leg_indices.contains(&i) {
                 let comm = self
                     .resp_pk_send
                     .get(&i)
                     .ok_or_else(|| Error::ProofOfBalanceError(format!("Missing pk send: {i}")))?;
-                assert!(comm.verify(
+                if !comm.verify(
                     &legs[i].ct_s.encrypted,
                     &legs[i].ct_s.eph_pk,
                     &sig_null_gen,
-                    &verifier_challenge
-                ));
+                    &verifier_challenge,
+                ) {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Sender public key verification failed for leg {}",
+                        i
+                    )));
+                }
                 y_sent += &legs[i].ct_amount.encrypted;
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
@@ -2899,9 +3142,17 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         )?;
 
         // rho matches the one in nullifier
-        assert_eq!(self.resp_acc.0[1], self.resp_null.response);
+        if self.resp_acc.0[1] != self.resp_null.response {
+            return Err(Error::ProofVerificationError(
+                "Rho mismatch between account and nullifier".to_string(),
+            ));
+        }
         // Sk in account matches the one in public key
-        assert_eq!(self.resp_acc.0[0], self.resp_pk.response);
+        if self.resp_acc.0[0] != self.resp_pk.response {
+            return Err(Error::ProofVerificationError(
+                "Secret key mismatch between account and public key".to_string(),
+            ));
+        }
 
         let mut resp_recv_amount_offset = 0;
         let mut resp_send_amount_offset = 0;
@@ -2913,28 +3164,46 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .get(&i)
                     .ok_or_else(|| Error::ProofOfBalanceError(format!("Missing pk recv: {i}")))?;
                 // sk_e is same
-                assert_eq!(comm.response1, self.resp_asset_id[i].response);
-                assert_eq!(
-                    comm.response1,
-                    self.resp_recv_amount.0[resp_recv_amount_offset]
-                );
+                if comm.response1 != self.resp_asset_id[i].response {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk_e mismatch in leg {i} for receiver"
+                    )));
+                }
+                if comm.response1 != self.resp_recv_amount.0[resp_recv_amount_offset] {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk_e mismatch in leg {i} for receiver amount"
+                    )));
+                }
                 resp_recv_amount_offset += 1;
                 // sk is same
-                assert_eq!(comm.response2, self.resp_acc.0[0]);
+                if comm.response2 != self.resp_acc.0[0] {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk mismatch in leg {i} for receiver"
+                    )));
+                }
             } else if sender_in_leg_indices.contains(&i) {
                 let comm = self
                     .resp_pk_send
                     .get(&i)
                     .ok_or_else(|| Error::ProofOfBalanceError(format!("Missing pk send: {i}")))?;
                 // sk_e is same
-                assert_eq!(comm.response1, self.resp_asset_id[i].response);
-                assert_eq!(
-                    comm.response1,
-                    self.resp_sent_amount.0[resp_send_amount_offset]
-                );
+                if comm.response1 != self.resp_asset_id[i].response {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk_e mismatch in leg {i} for sender"
+                    )));
+                }
+                if comm.response1 != self.resp_sent_amount.0[resp_send_amount_offset] {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk_e mismatch in leg {i} for sender amount"
+                    )));
+                }
                 resp_send_amount_offset += 1;
                 // sk is same
-                assert_eq!(comm.response2, self.resp_acc.0[0]);
+                if comm.response2 != self.resp_acc.0[0] {
+                    return Err(Error::ProofVerificationError(format!(
+                        "sk mismatch in leg {i} for sender"
+                    )));
+                }
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"
@@ -3008,7 +3277,7 @@ mod tests {
         let clock = Instant::now();
         // Issuer creates account to mint to
         // Knowledge and correctness (both balance and counter 0, sk-pk relation) can be proven using Schnorr protocol
-        let account = AccountState::new(&mut rng, sk_i.0, asset_id);
+        let account = AccountState::new(&mut rng, sk_i.0, asset_id)?;
         let account_comm = account.commit(&*account_comm_key)?;
 
         let nonce = b"test-nonce-0";
@@ -3056,7 +3325,7 @@ mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_mint(&mut rng, increase_bal_by);
+        let updated_account = account.get_state_for_mint(&mut rng, increase_bal_by)?;
         let updated_account_comm = updated_account.commit(&*account_comm_key)?;
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
@@ -3151,7 +3420,7 @@ mod tests {
             )?;
 
         // Sender account
-        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id)?;
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree =
@@ -3163,7 +3432,7 @@ mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_send(&mut rng, amount);
+        let updated_account = account.get_state_for_send(&mut rng, amount)?;
         let updated_account_comm = updated_account.commit(&*account_comm_key)?;
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
@@ -3258,7 +3527,7 @@ mod tests {
             )?;
 
         // Receiver account
-        let mut account = AccountState::new(&mut rng, sk_r.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk_r.0, asset_id)?;
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree =
@@ -3360,7 +3629,7 @@ mod tests {
             )?;
 
         // Receiver account
-        let mut account = AccountState::new(&mut rng, sk_r.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk_r.0, asset_id)?;
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3372,7 +3641,7 @@ mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_claiming_received(&mut rng, amount);
+        let updated_account = account.get_state_for_claiming_received(&mut rng, amount)?;
         let updated_account_comm = updated_account.commit(&*account_comm_key)?;
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
@@ -3437,7 +3706,6 @@ mod tests {
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
         let gen_p_2 = PallasA::rand(&mut rng);
-        let _leaf_comm_key = PallasA::rand(&mut rng);
         let account_comm_key = (0..6).map(|_| PallasA::rand(&mut rng)).collect::<Vec<_>>();
 
         let (
@@ -3463,7 +3731,7 @@ mod tests {
         )?;
 
         // Sender account with non-zero counter
-        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id)?;
         account.balance = 50;
         account.counter = 1;
 
@@ -3474,7 +3742,7 @@ mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_decreasing_counter(&mut rng, None);
+        let updated_account = account.get_state_for_decreasing_counter(&mut rng, None)?;
         let updated_account_comm = updated_account.commit(&*account_comm_key)?;
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
@@ -3561,7 +3829,7 @@ mod tests {
             )?;
 
         // Sender account
-        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk_s.0, asset_id)?;
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3572,7 +3840,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let clock = Instant::now();
-        let updated_account = account.get_state_for_reversing_send(&mut rng, amount);
+        let updated_account = account.get_state_for_reversing_send(&mut rng, amount)?;
         let updated_account_comm = updated_account.commit(&*account_comm_key)?;
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
@@ -3634,7 +3902,7 @@ mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, gen_p);
         // Account exists with some balance and pending txns
-        let mut account = AccountState::new(&mut rng, sk.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk.0, asset_id)?;
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(&*account_comm_key)?;
@@ -3679,7 +3947,7 @@ mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, gen_p_1);
         // Account exists with some balance and pending txns
-        let mut account = AccountState::new(&mut rng, sk.0, asset_id);
+        let mut account = AccountState::new(&mut rng, sk.0, asset_id)?;
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(&*account_comm_key)?;
