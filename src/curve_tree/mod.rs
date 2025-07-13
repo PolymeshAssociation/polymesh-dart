@@ -27,7 +27,7 @@ pub struct WrappedCurveTreeParameters(Vec<u8>);
 
 impl WrappedCurveTreeParameters {
     pub fn new(gens_length: usize) -> Result<Self, Error> {
-        let params = CurveTreeParameters::new(gens_length, gens_length);
+        let params = CurveTreeParameters::new(gens_length, gens_length)?;
         let mut buf = Vec::new();
         params.serialize_uncompressed(&mut buf)?;
         Ok(Self(buf))

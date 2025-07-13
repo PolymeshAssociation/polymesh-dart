@@ -35,15 +35,15 @@ impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
 
 impl<const L: usize> CurveTreeOld<L> {
     /// Creates a new instance of `FullCurveTree` with the given height and generators length.
-    pub fn new_with_capacity(height: usize, gens_length: usize) -> Self {
-        let params = SelRerandParameters::new(gens_length, gens_length);
-        Self {
+    pub fn new_with_capacity(height: usize, gens_length: usize) -> Result<Self, Error> {
+        let params = SelRerandParameters::new(gens_length, gens_length)?;
+        Ok(Self {
             tree: CurveTree::from_leaves(&[PallasA::zero()], &params, Some(height)),
             leaves: vec![],
             length: 0,
             height,
             params,
-        }
+        })
     }
 
     pub fn height(&self) -> usize {
@@ -125,7 +125,8 @@ fn setup_trees() -> (
     FullCurveTree<L>,
     SelRerandParameters<PallasParameters, VestaParameters>,
 ) {
-    let full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH);
+    let full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH)
+        .expect("Failed to create full tree");
     assert!(full_tree.height() == HEIGHT as usize);
     let params = full_tree.params().clone();
     let storage_tree = FullCurveTree::<L>::new_with_capacity(HEIGHT, GENS_LENGTH)

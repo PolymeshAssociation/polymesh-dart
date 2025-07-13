@@ -134,14 +134,14 @@ impl<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 > CurveTreeMemoryBackend<L, M, P0, P1>
 {
-    pub fn new(height: NodeLevel, gens_length: usize) -> Self {
-        Self {
+    pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
+        Ok(Self {
             height,
             leafs: Vec::new(),
             next_leaf_index: 0,
             nodes: BTreeMap::new(),
-            parameters: SelRerandParameters::new(gens_length, gens_length),
-        }
+            parameters: SelRerandParameters::new(gens_length, gens_length)?,
+        })
     }
 }
 
@@ -155,7 +155,7 @@ impl<
     type Error = Error;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
-        Ok(CurveTreeMemoryBackend::new(height, gens_length))
+        Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
     }
 
     fn parameters(&self) -> &SelRerandParameters<P0, P1> {
@@ -228,7 +228,7 @@ where
     type Error = Error;
 
     async fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
-        Ok(CurveTreeMemoryBackend::new(height, gens_length))
+        Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
     }
 
     async fn parameters(&self) -> &SelRerandParameters<P0, P1> {
