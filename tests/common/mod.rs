@@ -135,8 +135,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -187,8 +187,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -230,8 +230,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Mediator decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Mediator, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Mediator, &self.keys.enc)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
         // Create the mediator affirmation proof.
@@ -251,7 +251,7 @@ impl DartUserAccountInner {
     ) -> Result<Leg> {
         log::info!("Decrypting leg for role: {:?}", role);
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg = leg_enc.decrypt(role, &self.keys.enc);
+        let leg = leg_enc.decrypt(role, &self.keys.enc)?;
         log::info!("Decrypted leg: {:?}", leg);
         Ok(leg)
     }
@@ -264,7 +264,7 @@ impl DartUserAccountInner {
     ) -> Result<EncryptionSecretKey> {
         log::info!("Decrypting sk_e for role: {:?}", role);
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(role, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(role, &self.keys.enc)?;
         log::info!("Decrypted sk_e: {:?}", sk_e);
         Ok(sk_e)
     }
@@ -278,8 +278,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg for claim");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 
@@ -314,8 +314,8 @@ impl DartUserAccountInner {
         leg_ref: &LegRef,
     ) -> Result<()> {
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
 
         // Get the asset state for the account.
@@ -343,8 +343,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg for reversal");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc);
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc);
+        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 

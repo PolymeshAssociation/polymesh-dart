@@ -7,6 +7,9 @@ pub mod leg;
 pub mod macros;
 pub mod util;
 
+mod error;
+pub use error::Error;
+
 pub use polymesh_dart_common::{
     AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
 };

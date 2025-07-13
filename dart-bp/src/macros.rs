@@ -3,123 +3,98 @@ macro_rules! take_challenge_contrib_of_schnorr_t_values_for_common_state_change 
     ($self: ident, $leg_enc: ident, $is_sender: expr, $nullifier: expr, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_transcript: ident) => {
         $self
             .t_r_leaf
-            .serialize_compressed(&mut $verifier_transcript)
-            .unwrap();
+            .serialize_compressed(&mut $verifier_transcript)?;
         $self
             .t_acc_new
-            .serialize_compressed(&mut $verifier_transcript)
-            .unwrap();
-        $self
-            .resp_null
-            .challenge_contribution(&$sig_null_gen, &$nullifier, &mut $verifier_transcript)
-            .unwrap();
-        $self
-            .resp_leg_asset_id
-            .challenge_contribution(
-                &$leg_enc.ct_asset_id.eph_pk,
-                &$asset_value_gen,
-                &$leg_enc.ct_asset_id.encrypted,
-                &mut $verifier_transcript,
-            )
-            .unwrap();
-        $self
-            .resp_leg_pk
-            .challenge_contribution(
-                if $is_sender {
-                    &$leg_enc.ct_s.eph_pk
-                } else {
-                    &$leg_enc.ct_r.eph_pk
-                },
-                &$sig_null_gen,
-                if $is_sender {
-                    &$leg_enc.ct_s.encrypted
-                } else {
-                    &$leg_enc.ct_r.encrypted
-                },
-                &mut $verifier_transcript,
-            )
-            .unwrap();
+            .serialize_compressed(&mut $verifier_transcript)?;
+        $self.resp_null.challenge_contribution(
+            &$sig_null_gen,
+            &$nullifier,
+            &mut $verifier_transcript,
+        )?;
+        $self.resp_leg_asset_id.challenge_contribution(
+            &$leg_enc.ct_asset_id.eph_pk,
+            &$asset_value_gen,
+            &$leg_enc.ct_asset_id.encrypted,
+            &mut $verifier_transcript,
+        )?;
+        $self.resp_leg_pk.challenge_contribution(
+            if $is_sender {
+                &$leg_enc.ct_s.eph_pk
+            } else {
+                &$leg_enc.ct_r.eph_pk
+            },
+            &$sig_null_gen,
+            if $is_sender {
+                &$leg_enc.ct_s.encrypted
+            } else {
+                &$leg_enc.ct_r.encrypted
+            },
+            &mut $verifier_transcript,
+        )?;
     };
 }
 
 #[macro_export]
 macro_rules! take_challenge_contrib_of_schnorr_t_values_for_balance_change {
     ($self: ident, $leg_enc: ident, $pc_gens: path, $asset_value_gen: ident, $verifier_transcript: ident) => {
-        $self
-            .resp_old_bal
-            .challenge_contribution(
-                &$pc_gens.B,
-                &$pc_gens.B_blinding,
-                &$self.comm_bal_old,
-                &mut $verifier_transcript,
-            )
-            .unwrap();
-        $self
-            .resp_new_bal
-            .challenge_contribution(
-                &$pc_gens.B,
-                &$pc_gens.B_blinding,
-                &$self.comm_bal_new,
-                &mut $verifier_transcript,
-            )
-            .unwrap();
-        $self
-            .resp_amount
-            .challenge_contribution(
-                &$pc_gens.B,
-                &$pc_gens.B_blinding,
-                &$self.comm_amount,
-                &mut $verifier_transcript,
-            )
-            .unwrap();
-        $self
-            .resp_leg_amount
-            .challenge_contribution(
-                &$leg_enc.ct_amount.eph_pk,
-                &$asset_value_gen,
-                &$leg_enc.ct_amount.encrypted,
-                &mut $verifier_transcript,
-            )
-            .unwrap();
+        $self.resp_old_bal.challenge_contribution(
+            &$pc_gens.B,
+            &$pc_gens.B_blinding,
+            &$self.comm_bal_old,
+            &mut $verifier_transcript,
+        )?;
+        $self.resp_new_bal.challenge_contribution(
+            &$pc_gens.B,
+            &$pc_gens.B_blinding,
+            &$self.comm_bal_new,
+            &mut $verifier_transcript,
+        )?;
+        $self.resp_amount.challenge_contribution(
+            &$pc_gens.B,
+            &$pc_gens.B_blinding,
+            &$self.comm_amount,
+            &mut $verifier_transcript,
+        )?;
+        $self.resp_leg_amount.challenge_contribution(
+            &$leg_enc.ct_amount.eph_pk,
+            &$asset_value_gen,
+            &$leg_enc.ct_amount.encrypted,
+            &mut $verifier_transcript,
+        )?;
     };
 }
 
 #[macro_export]
 macro_rules! verify_schnorr_for_common_state_change {
     ($self: ident, $leg_enc: ident, $is_sender: expr, $account_comm_key: ident, $updated_account_commitment: expr, $nullifier: expr, $pc_gens: path, $sig_null_gen: ident, $asset_value_gen: ident, $verifier_challenge: ident) => {
-        $self
-            .resp_leaf
-            .is_valid(
-                &[
-                    $account_comm_key.sk_gen(),
-                    $account_comm_key.balance_gen(),
-                    $account_comm_key.counter_gen(),
-                    $account_comm_key.asset_id_gen(),
-                    $account_comm_key.rho_gen(),
-                    $account_comm_key.randomness_gen(),
-                    $pc_gens.B_blinding,
-                ],
-                &$self.re_randomized_path.re_randomized_leaf,
-                &$self.t_r_leaf,
-                &$verifier_challenge,
-            )
-            .unwrap();
-        $self
-            .resp_acc_new
-            .is_valid(
-                &[
-                    $account_comm_key.sk_gen(),
-                    $account_comm_key.balance_gen(),
-                    $account_comm_key.counter_gen(),
-                    $account_comm_key.asset_id_gen(),
-                    $account_comm_key.rho_gen(),
-                    $account_comm_key.randomness_gen(),
-                ],
-                &$updated_account_commitment.0,
-                &$self.t_acc_new,
-                &$verifier_challenge,
-            )
-            .unwrap();
+        $self.resp_leaf.is_valid(
+            &[
+                $account_comm_key.sk_gen(),
+                $account_comm_key.balance_gen(),
+                $account_comm_key.counter_gen(),
+                $account_comm_key.asset_id_gen(),
+                $account_comm_key.rho_gen(),
+                $account_comm_key.randomness_gen(),
+                $pc_gens.B_blinding,
+            ],
+            &$self.re_randomized_path.re_randomized_leaf,
+            &$self.t_r_leaf,
+            &$verifier_challenge,
+        )?;
+        $self.resp_acc_new.is_valid(
+            &[
+                $account_comm_key.sk_gen(),
+                $account_comm_key.balance_gen(),
+                $account_comm_key.counter_gen(),
+                $account_comm_key.asset_id_gen(),
+                $account_comm_key.rho_gen(),
+                $account_comm_key.randomness_gen(),
+            ],
+            &$updated_account_commitment.0,
+            &$self.t_acc_new,
+            &$verifier_challenge,
+        )?;
         assert!(
             $self
                 .resp_null

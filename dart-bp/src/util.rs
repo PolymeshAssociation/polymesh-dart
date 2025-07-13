@@ -1,11 +1,12 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
+use crate::error::*;
 use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use ark_std::vec;
 use bulletproofs::PedersenGens;
-use bulletproofs::r1cs::{Prover, R1CSError, R1CSProof, Verifier};
+use bulletproofs::r1cs::{Prover, R1CSProof, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
@@ -40,12 +41,10 @@ pub fn initialize_curve_tree_prover<
     F0,
 ) {
     let even_transcript = MerlinTranscript::new(even_label);
-    let mut even_prover: Prover<_, Affine<G0>> =
-        Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
+    let mut even_prover = Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
 
     let odd_transcript = MerlinTranscript::new(odd_label);
-    let mut odd_prover: Prover<_, Affine<G1>> =
-        Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
+    let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
 
     let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
         &mut even_prover,
@@ -123,7 +122,7 @@ pub fn enforce_balance_change_prover<
     amount: Balance,
     has_balance_decreased: bool,
     even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
-) -> ((F0, Affine<G0>), (F0, Affine<G0>), (F0, Affine<G0>)) {
+) -> Result<((F0, Affine<G0>), (F0, Affine<G0>), (F0, Affine<G0>))> {
     // Commit to amount, old and new balance
     // TODO: It makes sense to commit to all these in a single vector commitment
     let r_bal_old = F0::rand(rng);
@@ -143,8 +142,7 @@ pub fn enforce_balance_change_prover<
             var_bal_old.into(),
             var_bal_new.into(),
             var_amount.into(),
-        )
-        .unwrap();
+        )?;
     } else {
         // new - odl balance is correct
         difference(
@@ -152,8 +150,7 @@ pub fn enforce_balance_change_prover<
             var_bal_new.into(),
             var_bal_old.into(),
             var_amount.into(),
-        )
-        .unwrap();
+        )?;
     }
     // new balance does not overflow
     range_proof(
@@ -161,13 +158,12 @@ pub fn enforce_balance_change_prover<
         var_bal_new.into(),
         Some(new_bal),
         AMOUNT_BITS.into(),
-    )
-    .unwrap();
-    (
+    )?;
+    Ok((
         (r_bal_old, comm_bal_old),
         (r_bal_new, comm_bal_new),
         (r_amount, comm_amount),
-    )
+    ))
 }
 
 /// Enforce that balance has correctly changed. If `has_balance_decreased` is true, then `old_bal - new_bal = amount` else `new_bal - old_bal = amount`
@@ -177,7 +173,7 @@ pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarF
     comm_amount: Affine<G0>,
     has_balance_decreased: bool,
     even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-) {
+) -> Result<()> {
     let var_bal_old = even_verifier.commit(comm_bal_old);
     let var_bal_new = even_verifier.commit(comm_bal_new);
     let var_amount = even_verifier.commit(comm_amount);
@@ -188,19 +184,19 @@ pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarF
             var_bal_old.into(),
             var_bal_new.into(),
             var_amount.into(),
-        )
-        .unwrap();
+        )?;
     } else {
         difference(
             even_verifier,
             var_bal_new.into(),
             var_bal_old.into(),
             var_amount.into(),
-        )
-        .unwrap();
+        )?;
     }
 
-    range_proof(even_verifier, var_bal_new.into(), None, AMOUNT_BITS.into()).unwrap();
+    range_proof(even_verifier, var_bal_new.into(), None, AMOUNT_BITS.into())?;
+
+    Ok(())
 }
 
 /// Generate commitment to randomness (Schnorr step 1) for state change excluding changes related to amount and balances
@@ -229,14 +225,14 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     sig_null_gen: Affine<G0>,
     asset_value_gen: Affine<G0>,
     mut prover_transcript: &mut MerlinTranscript,
-) -> (
+) -> Result<(
     Affine<G0>,
     SchnorrCommitment<Affine<G0>>,
     SchnorrCommitment<Affine<G0>>,
     PokDiscreteLogProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
-) {
+)> {
     let nullifier = account.nullifier(sig_null_gen);
 
     // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
@@ -309,48 +305,38 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     );
 
     // Add challenge contribution of each of the above commitments to the transcript
-    t_r_leaf
-        .challenge_contribution(&mut prover_transcript)
-        .unwrap();
-    t_acc_new
-        .challenge_contribution(&mut prover_transcript)
-        .unwrap();
-    t_null
-        .challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)
-        .unwrap();
-    t_leg_asset_id
-        .challenge_contribution(
-            &leg_enc.ct_asset_id.eph_pk,
-            &asset_value_gen,
-            &leg_enc.ct_asset_id.encrypted,
-            &mut prover_transcript,
-        )
-        .unwrap();
-    t_leg_pk
-        .challenge_contribution(
-            if is_sender {
-                &leg_enc.ct_s.eph_pk
-            } else {
-                &leg_enc.ct_r.eph_pk
-            },
-            &sig_null_gen,
-            if is_sender {
-                &leg_enc.ct_s.encrypted
-            } else {
-                &leg_enc.ct_r.encrypted
-            },
-            &mut prover_transcript,
-        )
-        .unwrap();
+    t_r_leaf.challenge_contribution(&mut prover_transcript)?;
+    t_acc_new.challenge_contribution(&mut prover_transcript)?;
+    t_null.challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)?;
+    t_leg_asset_id.challenge_contribution(
+        &leg_enc.ct_asset_id.eph_pk,
+        &asset_value_gen,
+        &leg_enc.ct_asset_id.encrypted,
+        &mut prover_transcript,
+    )?;
+    t_leg_pk.challenge_contribution(
+        if is_sender {
+            &leg_enc.ct_s.eph_pk
+        } else {
+            &leg_enc.ct_r.eph_pk
+        },
+        &sig_null_gen,
+        if is_sender {
+            &leg_enc.ct_s.encrypted
+        } else {
+            &leg_enc.ct_r.encrypted
+        },
+        &mut prover_transcript,
+    )?;
 
-    (
+    Ok((
         nullifier,
         t_r_leaf,
         t_acc_new,
         t_null,
         t_leg_asset_id,
         t_leg_pk,
-    )
+    ))
 }
 
 /// Generate commitment to randomness (Schnorr step 1) for state change just related to amount and balances
@@ -379,12 +365,12 @@ pub fn generate_schnorr_t_values_for_balance_change<
     pc_gens: &PedersenGens<Affine<G0>>,
     asset_value_gen: Affine<G0>,
     mut prover_transcript: &mut MerlinTranscript,
-) -> (
+) -> Result<(
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
-) {
+)> {
     // Schnorr commitment for proving knowledge of old account balance
     let t_old_bal = PokPedersenCommitmentProtocol::init(
         account.balance.into(),
@@ -426,39 +412,31 @@ pub fn generate_schnorr_t_values_for_balance_change<
     );
 
     // Add challenge contribution of each of the above commitments to the transcript
-    t_old_bal
-        .challenge_contribution(
-            &pc_gens.B,
-            &pc_gens.B_blinding,
-            comm_bal_old,
-            &mut prover_transcript,
-        )
-        .unwrap();
-    t_new_bal
-        .challenge_contribution(
-            &pc_gens.B,
-            &pc_gens.B_blinding,
-            comm_bal_new,
-            &mut prover_transcript,
-        )
-        .unwrap();
-    t_amount
-        .challenge_contribution(
-            &pc_gens.B,
-            &pc_gens.B_blinding,
-            comm_amount,
-            &mut prover_transcript,
-        )
-        .unwrap();
-    t_leg_amount
-        .challenge_contribution(
-            &leg_enc.ct_amount.eph_pk,
-            &asset_value_gen,
-            &leg_enc.ct_amount.encrypted,
-            &mut prover_transcript,
-        )
-        .unwrap();
-    (t_old_bal, t_new_bal, t_amount, t_leg_amount)
+    t_old_bal.challenge_contribution(
+        &pc_gens.B,
+        &pc_gens.B_blinding,
+        comm_bal_old,
+        &mut prover_transcript,
+    )?;
+    t_new_bal.challenge_contribution(
+        &pc_gens.B,
+        &pc_gens.B_blinding,
+        comm_bal_new,
+        &mut prover_transcript,
+    )?;
+    t_amount.challenge_contribution(
+        &pc_gens.B,
+        &pc_gens.B_blinding,
+        comm_amount,
+        &mut prover_transcript,
+    )?;
+    t_leg_amount.challenge_contribution(
+        &leg_enc.ct_amount.eph_pk,
+        &asset_value_gen,
+        &leg_enc.ct_amount.encrypted,
+        &mut prover_transcript,
+    )?;
+    Ok((t_old_bal, t_new_bal, t_amount, t_leg_amount))
 }
 
 /// Generate responses (Schnorr step 3) for state change excluding changes related to amount and balances
@@ -475,51 +453,47 @@ pub fn generate_schnorr_responses_for_common_state_change<
     t_leg_asset_id: PokPedersenCommitmentProtocol<Affine<G0>>,
     t_leg_pk: PokPedersenCommitmentProtocol<Affine<G0>>,
     prover_challenge: &F0,
-) -> (
+) -> Result<(
     SchnorrResponse<Affine<G0>>,
     SchnorrResponse<Affine<G0>>,
     PokDiscreteLog<Affine<G0>>,
     PokPedersenCommitment<Affine<G0>>,
     PokPedersenCommitment<Affine<G0>>,
-) {
+)> {
     // TODO: Eliminate duplicate responses
-    let resp_leaf = t_r_leaf
-        .response(
-            &[
-                account.sk,
-                account.balance.into(),
-                account.counter.into(),
-                account.asset_id.into(),
-                account.rho,
-                account.randomness,
-                leaf_rerandomization,
-            ],
-            prover_challenge,
-        )
-        .unwrap();
-    let resp_acc_new = t_acc_new
-        .response(
-            &[
-                updated_account.sk,
-                updated_account.balance.into(),
-                updated_account.counter.into(),
-                updated_account.asset_id.into(),
-                updated_account.rho,
-                updated_account.randomness,
-            ],
-            prover_challenge,
-        )
-        .unwrap();
+    let resp_leaf = t_r_leaf.response(
+        &[
+            account.sk,
+            account.balance.into(),
+            account.counter.into(),
+            account.asset_id.into(),
+            account.rho,
+            account.randomness,
+            leaf_rerandomization,
+        ],
+        prover_challenge,
+    )?;
+    let resp_acc_new = t_acc_new.response(
+        &[
+            updated_account.sk,
+            updated_account.balance.into(),
+            updated_account.counter.into(),
+            updated_account.asset_id.into(),
+            updated_account.rho,
+            updated_account.randomness,
+        ],
+        prover_challenge,
+    )?;
     let resp_null = t_null.gen_proof(prover_challenge);
     let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(prover_challenge);
     let resp_leg_pk = t_leg_pk.clone().gen_proof(prover_challenge);
-    (
+    Ok((
         resp_leaf,
         resp_acc_new,
         resp_null,
         resp_leg_asset_id,
         resp_leg_pk,
-    )
+    ))
 }
 
 /// Generate responses (Schnorr step 3) for state change just related to amount and balances
@@ -555,7 +529,7 @@ pub fn prove<
     even_prover: Prover<MerlinTranscript, Affine<G0>>,
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
-) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
     let mut rng = rand::thread_rng();
     prove_with_rng(even_prover, odd_prover, tree_params, &mut rng)
 }
@@ -572,7 +546,7 @@ pub fn prove_with_rng<
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
     rng: &mut R,
-) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>), R1CSError> {
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
         || even_prover.prove(&tree_params.even_parameters.bp_gens),
@@ -601,7 +575,7 @@ pub fn verify<
     even_proof: &R1CSProof<Affine<G0>>,
     odd_proof: &R1CSProof<Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
-) -> Result<(), R1CSError> {
+) -> Result<()> {
     let mut rng = rand::thread_rng();
     verify_with_rng(
         even_verifier,
@@ -627,7 +601,7 @@ pub fn verify_with_rng<
     odd_proof: &R1CSProof<Affine<G1>>,
     tree_params: &SelRerandParameters<G0, G1>,
     rng: &mut R,
-) -> Result<(), R1CSError> {
+) -> Result<()> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {

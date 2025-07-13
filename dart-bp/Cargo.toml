@@ -12,14 +12,13 @@ log = { workspace = true, default-features = false }
 digest = { workspace = true, default-features = false }
 blake2 = { workspace = true, default-features = false }
 rayon = { workspace = true, default-features = false, optional = true }
+thiserror = { workspace = true, default-features = false }
 
 ark-ff = { workspace = true, default-features = false }
 ark-ec = { workspace = true, default-features = false }
 ark-serialize = { workspace = true, default-features = false }
 ark-std = { workspace = true, default-features = false }
 dock_crypto_utils = { workspace = true, default-features = false }
-#verifiable_encryption = { workspace = true, default-features = false }
-#equality_across_groups = { workspace = true, default-features = false }
 schnorr_pok = { workspace = true, default-features = false }
 
 # Curve tree dependencies
@@ -37,13 +36,23 @@ ark-secq256k1 = { workspace = true }
 [features]
 default = ["std", "asm", "parallel"]
 
-no_std = [ ]
+no_std = []
 
 std = [
-    "bulletproofs/std",
-		"curve_tree_relations/std",
-		"ark-std/std",
+	"bulletproofs/std",
+	"curve_tree_relations/std",
+	"ark-std/std",
+	"thiserror/std",
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
-parallel = ["rayon", "ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "bulletproofs/parallel", "curve_tree_relations/parallel", "dock_crypto_utils/parallel", "schnorr_pok/parallel"]
+parallel = [
+	"rayon",
+	"ark-ec/parallel",
+	"ark-ff/parallel",
+	"ark-std/parallel",
+	"bulletproofs/parallel",
+	"curve_tree_relations/parallel",
+	"dock_crypto_utils/parallel",
+	"schnorr_pok/parallel",
+]

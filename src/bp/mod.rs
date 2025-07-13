@@ -505,7 +505,7 @@ pub struct AccountState(BPAccountState);
 
 impl AccountState {
     pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
-        AccountStateCommitment::from_affine(self.0.commit(dart_gens().account_comm_key()).0)
+        AccountStateCommitment::from_affine(self.0.commit(dart_gens().account_comm_key())?.0)
     }
 }
 
@@ -805,7 +805,7 @@ impl AccountAssetRegistrationProof {
             ctx,
             dart_gens().account_comm_key(),
             dart_gens().sig_gen(),
-        );
+        )?;
         Ok((
             Self {
                 account: account.acct.public,
@@ -886,7 +886,7 @@ impl AssetMintingProof {
             tree_lookup.params(),
             dart_gens().account_comm_key(),
             dart_gens().sig_gen(),
-        );
+        )?;
         Ok(Self {
             pk,
             asset_id: account_asset.asset_id,
@@ -1288,7 +1288,7 @@ impl SettlementLegProof {
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
             &dart_gens().ped_comm_key(),
-        );
+        )?;
 
         Ok(Self {
             leg_enc: WrappedCanonical::wrap(&leg_enc)?,
@@ -1472,7 +1472,7 @@ impl EphemeralSkEncryption {
                 mediator.get_affine()?,
                 dart_gens().enc_sig_gen(),
                 dart_gens().leg_asset_value_gen(),
-            );
+            )?;
         let pk_e = EncryptionPublicKey::from_bp_key(pk_e)?;
         Ok((
             Self {
@@ -1495,30 +1495,37 @@ pub struct LegEncrypted {
 }
 
 impl LegEncrypted {
-    pub fn decrypt_sk_e(&self, role: LegRole, keys: &EncryptionKeyPair) -> EncryptionSecretKey {
+    pub fn decrypt_sk_e(
+        &self,
+        role: LegRole,
+        keys: &EncryptionKeyPair,
+    ) -> Result<EncryptionSecretKey, Error> {
         let sk = keys.secret.0.0;
         let sk_e = match role {
-            LegRole::Sender => self.ephemeral_key.enc.decrypt_for_sender::<Blake2b512>(sk),
+            LegRole::Sender => self
+                .ephemeral_key
+                .enc
+                .decrypt_for_sender::<Blake2b512>(sk)?,
             LegRole::Receiver => self
                 .ephemeral_key
                 .enc
-                .decrypt_for_receiver::<Blake2b512>(sk),
+                .decrypt_for_receiver::<Blake2b512>(sk)?,
             LegRole::Auditor | LegRole::Mediator => self
                 .ephemeral_key
                 .enc
-                .decrypt_for_mediator_or_auditor::<Blake2b512>(sk),
+                .decrypt_for_mediator_or_auditor::<Blake2b512>(sk)?,
         };
-        EncryptionSecretKey(bp_keys::DecKey(sk_e))
+        Ok(EncryptionSecretKey(bp_keys::DecKey(sk_e)))
     }
 
     /// Decrypts the leg using the provided secret key and role.
-    pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Leg {
-        let sk_e = self.decrypt_sk_e(role, keys);
+    pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Result<Leg, Error> {
+        let sk_e = self.decrypt_sk_e(role, keys)?;
         log::debug!("Decrypted sk_e: {:?}", sk_e.0.0);
         let leg = self
             .leg_enc
-            .decrypt(&sk_e.0.0, dart_gens().leg_asset_value_gen());
-        Leg(leg)
+            .decrypt(&sk_e.0.0, dart_gens().leg_asset_value_gen())?;
+        Ok(Leg(leg))
     }
 }
 
@@ -1576,7 +1583,7 @@ impl SenderAffirmationProof {
             dart_gens().account_comm_key(),
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -1681,7 +1688,7 @@ impl ReceiverAffirmationProof {
             dart_gens().account_comm_key(),
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -1788,7 +1795,7 @@ impl ReceiverClaimProof {
             dart_gens().account_comm_key(),
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -1893,7 +1900,7 @@ impl SenderCounterUpdateProof {
             dart_gens().account_comm_key(),
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -2000,7 +2007,7 @@ impl SenderReversalProof {
             dart_gens().account_comm_key(),
             dart_gens().enc_sig_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -2082,7 +2089,7 @@ impl MediatorAffirmationProof {
             accept,
             ctx.as_bytes(),
             dart_gens().enc_sig_gen(),
-        );
+        )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),

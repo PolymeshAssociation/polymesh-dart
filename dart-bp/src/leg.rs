@@ -1,3 +1,4 @@
+use crate::error::*;
 use crate::keys::{DecKey, EncKey};
 use crate::util::{
     initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
@@ -8,7 +9,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{UniformRand, vec, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, R1CSError, R1CSProof};
+use bulletproofs::r1cs::{ConstraintSystem, R1CSProof};
 use core::ops::Neg;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -138,7 +139,7 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         pk_a_m: G,
         enc_gen: G,
         h: G,
-    ) -> (Self, G::ScalarField, DecKey<G>, EncKey<G>) {
+    ) -> Result<(Self, G::ScalarField, DecKey<G>, EncKey<G>)> {
         // Use twisted-Elgamal encryption.
         // Generate random k and then [(pk_s * k), (pk_r * k), (pk_a_m * k), (g*k + h*pre_sk_e)]
         // Hash h*pre_sk_e to get the ephemeral secret key sk_e, ephemeral public key is g*sk_e
@@ -152,12 +153,10 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
         let key_m_a = (pk_a_m * k).into_affine();
 
         let mut h_p_bytes = vec![];
-        h_p.into_affine()
-            .serialize_compressed(&mut h_p_bytes)
-            .unwrap();
+        h_p.into_affine().serialize_compressed(&mut h_p_bytes)?;
         let sk_e = hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes);
         let pk_e = (enc_gen * sk_e).into_affine();
-        (
+        Ok((
             Self {
                 encrypted,
                 key_s,
@@ -167,51 +166,62 @@ impl<G: AffineRepr> EphemeralSkEncryption<G> {
             k,
             DecKey(sk_e),
             EncKey(pk_e),
-        )
+        ))
     }
 
-    pub fn decrypt_for_sender<D: FullDigest>(&self, sk: G::ScalarField) -> G::ScalarField {
+    pub fn decrypt_for_sender<D: FullDigest>(&self, sk: G::ScalarField) -> Result<G::ScalarField> {
         self.decrypt::<D>(sk, self.key_s)
     }
 
-    pub fn decrypt_for_receiver<D: FullDigest>(&self, sk: G::ScalarField) -> G::ScalarField {
+    pub fn decrypt_for_receiver<D: FullDigest>(
+        &self,
+        sk: G::ScalarField,
+    ) -> Result<G::ScalarField> {
         self.decrypt::<D>(sk, self.key_r)
     }
 
     pub fn decrypt_for_mediator_or_auditor<D: FullDigest>(
         &self,
         sk: G::ScalarField,
-    ) -> G::ScalarField {
+    ) -> Result<G::ScalarField> {
         self.decrypt::<D>(sk, self.key_m_a)
     }
 
-    fn decrypt<D: FullDigest>(&self, sk: G::ScalarField, enc_key: G) -> G::ScalarField {
-        let g_k = (enc_key * sk.inverse().unwrap()).into_affine();
+    fn decrypt<D: FullDigest>(&self, sk: G::ScalarField, enc_key: G) -> Result<G::ScalarField> {
+        let g_k = (enc_key
+            * sk.inverse()
+                .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?)
+        .into_affine();
         let h_p = (self.encrypted.into_group() - g_k).into_affine();
         let mut h_p_bytes = vec![];
-        h_p.serialize_compressed(&mut h_p_bytes).unwrap();
-        hash_to_field::<G::ScalarField, D>(SK_EPH_GEN_LABEL, &h_p_bytes)
+        h_p.serialize_compressed(&mut h_p_bytes)?;
+        Ok(hash_to_field::<G::ScalarField, D>(
+            SK_EPH_GEN_LABEL,
+            &h_p_bytes,
+        ))
     }
 }
 
 impl<G: AffineRepr> LegEncryption<G> {
-    pub fn decrypt(&self, sk_e: &G::ScalarField, asset_value_gen: G) -> Leg<G> {
+    pub fn decrypt(&self, sk_e: &G::ScalarField, asset_value_gen: G) -> Result<Leg<G>> {
         let pk_s = self.ct_s.decrypt(sk_e);
         let pk_r = self.ct_r.decrypt(sk_e);
         let pk_m = self.ct_m.as_ref().map(|ct_m| ct_m.decrypt(sk_e));
         let amount = self.ct_amount.decrypt(sk_e);
         let asset_id = self.ct_asset_id.decrypt(sk_e);
         let base = asset_value_gen.into_group();
-        let amount = solve_discrete_log_bsgs_alt(MAX_AMOUNT, base, amount.into_group()).unwrap();
+        let amount = solve_discrete_log_bsgs_alt(MAX_AMOUNT, base, amount.into_group())
+            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
         let asset_id =
-            solve_discrete_log_bsgs_alt(MAX_ASSET_ID as u64, base, asset_id.into_group()).unwrap();
-        Leg {
+            solve_discrete_log_bsgs_alt(MAX_ASSET_ID as u64, base, asset_id.into_group())
+                .ok_or_else(|| Error::DecryptionFailed("Discrete log `asset_id` failed.".into()))?;
+        Ok(Leg {
             pk_m,
             pk_s,
             pk_r,
             amount,
             asset_id: asset_id as u32,
-        }
+        })
     }
 }
 
@@ -250,7 +260,7 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
     pk_a: Option<G>,
     enc_sig_gen: G,
     asset_value_gen: G,
-) -> (
+) -> Result<(
     Leg<G>,
     LegEncryption<G>,
     LegEncryptionRandomness<G>,
@@ -258,13 +268,15 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
     G::ScalarField,
     DecKey<G>,
     EncKey<G>,
-) {
+)> {
     assert!(pk_a.is_some() ^ pk_m.is_some());
-    let (pk_a_m, pk_m) = if pk_m.is_some() {
-        let pk_m = pk_m.unwrap();
-        (pk_m.1, Some(pk_m.0))
-    } else {
-        (pk_a.unwrap(), None)
+    let (pk_a_m, pk_m) = match (pk_m, pk_a) {
+        (Some(pk_m), None) => (pk_m.1, Some(pk_m.0)),
+        (None, Some(pk_a)) => (pk_a, None),
+        (None, None) => Err(Error::InvalidMediatorOrAuditor(
+            "No mediator or auditor".into(),
+        ))?,
+        (Some(_), Some(_)) => Err(Error::InvalidMediatorOrAuditor("Can't have both".into()))?,
     };
     // Create ephemeral encryption keypair and encrypt ephemeral sk for each party
     // Passing `asset_value_gen` to `EphemeralSkEncryption::new` is incidental and could be a new generator as well.
@@ -275,11 +287,11 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
         pk_a_m,
         enc_sig_gen,
         asset_value_gen,
-    );
+    )?;
     // Create leg and encrypt it for ephemeral pk
     let leg = Leg::new(pk_s.0, pk_r.0, pk_m, amount, asset_id);
     let (leg_enc, leg_enc_rand) = leg.encrypt(rng, &pk_e.0, enc_sig_gen, asset_value_gen);
-    (
+    Ok((
         leg,
         leg_enc,
         leg_enc_rand,
@@ -287,7 +299,7 @@ pub fn initialize_leg_for_settlement<R: RngCore + CryptoRng, G: AffineRepr, D: F
         eph_ek_enc_r,
         sk_e,
         pk_e,
-    )
+    ))
 }
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
@@ -392,7 +404,7 @@ impl<
         enc_sig_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
-    ) -> Self {
+    ) -> Result<Self> {
         assert!(
             (leg.pk_m.is_some() && leg_enc.ct_m.is_some() && leg_enc_rand.2.is_some())
                 || (leg.pk_m.is_none() && leg_enc.ct_m.is_none() && auditor_enc_key.is_some())
@@ -413,19 +425,13 @@ impl<
             );
 
         let mut leg_instance = vec![];
-        leg_enc.serialize_compressed(&mut leg_instance).unwrap();
-        eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
-        nonce.serialize_compressed(&mut leg_instance).unwrap();
-        tree_parameters
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
-        leaf_comm_key
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
-        enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
-        asset_value_gen
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
+        leg_enc.serialize_compressed(&mut leg_instance)?;
+        eph_sk_enc.serialize_compressed(&mut leg_instance)?;
+        nonce.serialize_compressed(&mut leg_instance)?;
+        tree_parameters.serialize_compressed(&mut leg_instance)?;
+        leaf_comm_key.serialize_compressed(&mut leg_instance)?;
+        enc_sig_gen.serialize_compressed(&mut leg_instance)?;
+        asset_value_gen.serialize_compressed(&mut leg_instance)?;
         // TODO: Hash comm_amount and re_randomized_path as well
 
         even_prover
@@ -442,8 +448,7 @@ impl<
             var_amount.into(),
             Some(leg.amount),
             AMOUNT_BITS.into(),
-        )
-        .unwrap();
+        )?;
 
         // Blinding (for Schnorr) for the randomness used in Elgamal encryption of mediator key in leg encryption
         let r_a_blinding = F0::rand(rng);
@@ -476,8 +481,13 @@ impl<
             );
 
             // For proving knowledge of randomness used in encryption of mediator key in leg encryption. For relation: g * r = ct_m.eph_pk
-            let t_eph_pk =
-                PokDiscreteLogProtocol::init(leg_enc_rand.2.unwrap(), r_a_blinding, &enc_sig_gen);
+            let t_eph_pk = PokDiscreteLogProtocol::init(
+                leg_enc_rand.2.ok_or_else(|| {
+                    Error::InvalidMediatorOrAuditor("Missing r3 randomness".into())
+                })?,
+                r_a_blinding,
+                &enc_sig_gen,
+            );
             (t_r_leaf, Some(t_eph_pk), None)
         } else {
             // When settlement has auditor
@@ -594,113 +604,95 @@ impl<
 
         let mut prover_transcript = even_prover.transcript();
 
-        if is_mediator_present {
+        if let Some(ct_m) = &leg_enc.ct_m {
             t_eph_pk
                 .as_ref()
-                .unwrap()
-                .challenge_contribution(
-                    &enc_sig_gen,
-                    &leg_enc.ct_m.as_ref().unwrap().eph_pk,
-                    &mut prover_transcript,
-                )
-                .unwrap();
+                .ok_or_else(|| Error::ProofGenerationError("Missing t_eph_pk".into()))?
+                .challenge_contribution(&enc_sig_gen, &ct_m.eph_pk, &mut prover_transcript)?;
         } else {
             let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) =
-                for_auditor_enc_proofs.as_ref().unwrap();
-            K_1.serialize_compressed(&mut prover_transcript).unwrap();
-            K_2.serialize_compressed(&mut prover_transcript).unwrap();
-            K_3.serialize_compressed(&mut prover_transcript).unwrap();
-            t_K_1
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &K_1,
-                    &mut prover_transcript,
-                )
-                .unwrap();
-            t_K_2
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &K_2,
-                    &mut prover_transcript,
-                )
-                .unwrap();
-            t_K_3
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &K_3,
-                    &mut prover_transcript,
-                )
-                .unwrap();
-            t_K_3_K_1
-                .challenge_contribution(&K_1, &K_3, &mut prover_transcript)
-                .unwrap();
+                for_auditor_enc_proofs.as_ref().ok_or_else(|| {
+                    Error::ProofGenerationError("Missing auditor enc proof".into())
+                })?;
+            K_1.serialize_compressed(&mut prover_transcript)?;
+            K_2.serialize_compressed(&mut prover_transcript)?;
+            K_3.serialize_compressed(&mut prover_transcript)?;
+            t_K_1.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &K_1,
+                &mut prover_transcript,
+            )?;
+            t_K_2.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &K_2,
+                &mut prover_transcript,
+            )?;
+            t_K_3.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &K_3,
+                &mut prover_transcript,
+            )?;
+            t_K_3_K_1.challenge_contribution(&K_1, &K_3, &mut prover_transcript)?;
         }
-        t_r_leaf
-            .challenge_contribution(&mut prover_transcript)
-            .unwrap();
-        t_amount
-            .challenge_contribution(
-                &tree_parameters.even_parameters.pc_gens.B,
-                &tree_parameters.even_parameters.pc_gens.B_blinding,
-                &comm_amount,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_amount_enc_0
-            .challenge_contribution(
-                &enc_sig_gen,
-                &leg_enc.ct_amount.eph_pk,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_amount_enc_1
-            .challenge_contribution(
-                &eph_pk,
-                &asset_value_gen,
-                &leg_enc.ct_amount.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_asset_id_enc_0
-            .challenge_contribution(
-                &enc_sig_gen,
-                &leg_enc.ct_asset_id.eph_pk,
-                &mut prover_transcript,
-            )
-            .unwrap();
-        t_asset_id_enc_1
-            .challenge_contribution(
-                &eph_pk,
-                &asset_value_gen,
-                &leg_enc.ct_asset_id.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
+        t_r_leaf.challenge_contribution(&mut prover_transcript)?;
+        t_amount.challenge_contribution(
+            &tree_parameters.even_parameters.pc_gens.B,
+            &tree_parameters.even_parameters.pc_gens.B_blinding,
+            &comm_amount,
+            &mut prover_transcript,
+        )?;
+        t_amount_enc_0.challenge_contribution(
+            &enc_sig_gen,
+            &leg_enc.ct_amount.eph_pk,
+            &mut prover_transcript,
+        )?;
+        t_amount_enc_1.challenge_contribution(
+            &eph_pk,
+            &asset_value_gen,
+            &leg_enc.ct_amount.encrypted,
+            &mut prover_transcript,
+        )?;
+        t_asset_id_enc_0.challenge_contribution(
+            &enc_sig_gen,
+            &leg_enc.ct_asset_id.eph_pk,
+            &mut prover_transcript,
+        )?;
+        t_asset_id_enc_1.challenge_contribution(
+            &eph_pk,
+            &asset_value_gen,
+            &leg_enc.ct_asset_id.encrypted,
+            &mut prover_transcript,
+        )?;
 
         let prover_challenge = prover_transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
         // TODO: Eliminate duplicate responses
         let (resp_leaf, resp_eph_pk, auditor_enc_proofs) = if is_mediator_present {
-            let resp_leaf = t_r_leaf
-                .response(
-                    &[
-                        leg_enc_rand.2.unwrap(),
-                        leg.asset_id.into(),
-                        rerandomization,
-                    ],
-                    &prover_challenge,
-                )
-                .unwrap();
+            let resp_leaf = t_r_leaf.response(
+                &[
+                    leg_enc_rand.2.ok_or_else(|| {
+                        Error::ProofGenerationError("Missing r3 randomness".into())
+                    })?,
+                    leg.asset_id.into(),
+                    rerandomization,
+                ],
+                &prover_challenge,
+            )?;
             (
                 resp_leaf,
-                Some(t_eph_pk.unwrap().gen_proof(&prover_challenge)),
+                Some(
+                    t_eph_pk
+                        .ok_or_else(|| Error::ProofGenerationError("Missing t_eph_pk".into()))?
+                        .gen_proof(&prover_challenge),
+                ),
                 None,
             )
         } else {
-            let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) = for_auditor_enc_proofs.unwrap();
+            let (K_1, K_2, K_3, t_K_1, t_K_2, t_K_3, t_K_3_K_1) = for_auditor_enc_proofs
+                .ok_or_else(|| Error::ProofGenerationError("Missing auditor enc proof".into()))?;
             let proofs = AuditorEncProofs {
                 K_1,
                 K_2,
@@ -710,16 +702,14 @@ impl<
                 resp_K_3: t_K_3.gen_proof(&prover_challenge),
                 resp_K_3_K_1: t_K_3_K_1.gen_proof(&prover_challenge),
             };
-            let resp_leaf = t_r_leaf
-                .response(
-                    &[
-                        eph_sk_enc_rand,
-                        at * eph_sk_enc_rand,
-                        rerandomization * eph_sk_enc_rand,
-                    ],
-                    &prover_challenge,
-                )
-                .unwrap();
+            let resp_leaf = t_r_leaf.response(
+                &[
+                    eph_sk_enc_rand,
+                    at * eph_sk_enc_rand,
+                    rerandomization * eph_sk_enc_rand,
+                ],
+                &prover_challenge,
+            )?;
             (resp_leaf, None, Some(proofs))
         };
         let resp_amount = t_amount.gen_proof(&prover_challenge);
@@ -729,9 +719,9 @@ impl<
         let resp_asset_id_enc_1 = t_asset_id_enc_1.clone().gen_proof(&prover_challenge);
 
         let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng).unwrap();
+            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
 
-        Self {
+        Ok(Self {
             even_proof,
             odd_proof,
             re_randomized_path,
@@ -745,7 +735,7 @@ impl<
             resp_amount_enc_1,
             resp_asset_id_enc_0,
             resp_asset_id_enc_1,
-        }
+        })
     }
 
     #[cfg(feature = "std")]
@@ -761,7 +751,7 @@ impl<
         enc_sig_gen: Affine<G0>,
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
-    ) -> Result<(), R1CSError> {
+    ) -> Result<()> {
         let mut rng = rand::thread_rng();
         self.verify_with_rng(
             leg_enc,
@@ -791,7 +781,7 @@ impl<
         asset_value_gen: Affine<G0>,
         ped_comm_key: &PedersenCommitmentKey<Affine<G0>>,
         rng: &mut R,
-    ) -> Result<(), R1CSError> {
+    ) -> Result<()> {
         let is_mediator_present = leg_enc.ct_m.is_some();
 
         if is_mediator_present {
@@ -812,19 +802,13 @@ impl<
         );
 
         let mut leg_instance = vec![];
-        leg_enc.serialize_compressed(&mut leg_instance).unwrap();
-        eph_sk_enc.serialize_compressed(&mut leg_instance).unwrap();
-        nonce.serialize_compressed(&mut leg_instance).unwrap();
-        tree_parameters
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
-        leaf_comm_key
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
-        enc_sig_gen.serialize_compressed(&mut leg_instance).unwrap();
-        asset_value_gen
-            .serialize_compressed(&mut leg_instance)
-            .unwrap();
+        leg_enc.serialize_compressed(&mut leg_instance)?;
+        eph_sk_enc.serialize_compressed(&mut leg_instance)?;
+        nonce.serialize_compressed(&mut leg_instance)?;
+        tree_parameters.serialize_compressed(&mut leg_instance)?;
+        leaf_comm_key.serialize_compressed(&mut leg_instance)?;
+        enc_sig_gen.serialize_compressed(&mut leg_instance)?;
+        asset_value_gen.serialize_compressed(&mut leg_instance)?;
 
         even_verifier
             .transcript()
@@ -837,8 +821,7 @@ impl<
             var_amount.into(),
             None,
             AMOUNT_BITS.into(),
-        )
-        .unwrap();
+        )?;
 
         let mut verifier_transcript = even_verifier.transcript();
 
@@ -846,63 +829,49 @@ impl<
         let mut dur = Duration::default();
         #[cfg(feature = "std")]
         let mut size = 0;
-        if is_mediator_present {
+        if let Some(ct_m) = &leg_enc.ct_m {
             self.resp_eph_pk
                 .as_ref()
-                .unwrap()
-                .challenge_contribution(
-                    &enc_sig_gen,
-                    &leg_enc.ct_m.as_ref().unwrap().eph_pk,
-                    &mut verifier_transcript,
-                )
-                .unwrap();
+                .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
+                .challenge_contribution(&enc_sig_gen, &ct_m.eph_pk, &mut verifier_transcript)?;
         } else {
             #[cfg(feature = "std")]
             let clock = Instant::now();
-            let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
+            let aud_proofs = self.auditor_enc_proofs.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("Missing auditor enc proofs".into())
+            })?;
             aud_proofs
                 .K_1
-                .serialize_compressed(&mut verifier_transcript)
-                .unwrap();
+                .serialize_compressed(&mut verifier_transcript)?;
             aud_proofs
                 .K_2
-                .serialize_compressed(&mut verifier_transcript)
-                .unwrap();
+                .serialize_compressed(&mut verifier_transcript)?;
             aud_proofs
                 .K_3
-                .serialize_compressed(&mut verifier_transcript)
-                .unwrap();
-            aud_proofs
-                .resp_K_1
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &aud_proofs.K_1,
-                    &mut verifier_transcript,
-                )
-                .unwrap();
-            aud_proofs
-                .resp_K_2
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &aud_proofs.K_2,
-                    &mut verifier_transcript,
-                )
-                .unwrap();
-            aud_proofs
-                .resp_K_3
-                .challenge_contribution(
-                    &ped_comm_key.g,
-                    &ped_comm_key.h,
-                    &aud_proofs.K_3,
-                    &mut verifier_transcript,
-                )
-                .unwrap();
-            aud_proofs
-                .resp_K_3_K_1
-                .challenge_contribution(&aud_proofs.K_1, &aud_proofs.K_3, &mut verifier_transcript)
-                .unwrap();
+                .serialize_compressed(&mut verifier_transcript)?;
+            aud_proofs.resp_K_1.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &aud_proofs.K_1,
+                &mut verifier_transcript,
+            )?;
+            aud_proofs.resp_K_2.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &aud_proofs.K_2,
+                &mut verifier_transcript,
+            )?;
+            aud_proofs.resp_K_3.challenge_contribution(
+                &ped_comm_key.g,
+                &ped_comm_key.h,
+                &aud_proofs.K_3,
+                &mut verifier_transcript,
+            )?;
+            aud_proofs.resp_K_3_K_1.challenge_contribution(
+                &aud_proofs.K_1,
+                &aud_proofs.K_3,
+                &mut verifier_transcript,
+            )?;
             #[cfg(feature = "std")]
             {
                 dur += clock.elapsed();
@@ -910,85 +879,72 @@ impl<
             }
         }
         self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)
-            .unwrap();
-        self.resp_amount
-            .challenge_contribution(
-                &tree_parameters.even_parameters.pc_gens.B,
-                &tree_parameters.even_parameters.pc_gens.B_blinding,
-                &self.comm_amount,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_amount_enc_0
-            .challenge_contribution(
-                &enc_sig_gen,
-                &leg_enc.ct_amount.eph_pk,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_amount_enc_1
-            .challenge_contribution(
-                &eph_pk,
-                &asset_value_gen,
-                &&leg_enc.ct_amount.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_asset_id_enc_0
-            .challenge_contribution(
-                &enc_sig_gen,
-                &leg_enc.ct_asset_id.eph_pk,
-                &mut verifier_transcript,
-            )
-            .unwrap();
-        self.resp_asset_id_enc_1
-            .challenge_contribution(
-                &eph_pk,
-                &asset_value_gen,
-                &&leg_enc.ct_asset_id.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+            .serialize_compressed(&mut verifier_transcript)?;
+        self.resp_amount.challenge_contribution(
+            &tree_parameters.even_parameters.pc_gens.B,
+            &tree_parameters.even_parameters.pc_gens.B_blinding,
+            &self.comm_amount,
+            &mut verifier_transcript,
+        )?;
+        self.resp_amount_enc_0.challenge_contribution(
+            &enc_sig_gen,
+            &leg_enc.ct_amount.eph_pk,
+            &mut verifier_transcript,
+        )?;
+        self.resp_amount_enc_1.challenge_contribution(
+            &eph_pk,
+            &asset_value_gen,
+            &&leg_enc.ct_amount.encrypted,
+            &mut verifier_transcript,
+        )?;
+        self.resp_asset_id_enc_0.challenge_contribution(
+            &enc_sig_gen,
+            &leg_enc.ct_asset_id.eph_pk,
+            &mut verifier_transcript,
+        )?;
+        self.resp_asset_id_enc_1.challenge_contribution(
+            &eph_pk,
+            &asset_value_gen,
+            &&leg_enc.ct_asset_id.encrypted,
+            &mut verifier_transcript,
+        )?;
 
         let verifier_challenge =
             verifier_transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
-        if is_mediator_present {
-            let ct_m = leg_enc.ct_m.as_ref().unwrap();
-            assert!(self.resp_eph_pk.as_ref().unwrap().verify(
-                &ct_m.eph_pk,
-                &enc_sig_gen,
-                &verifier_challenge
-            ));
+        if let Some(ct_m) = &leg_enc.ct_m {
+            assert!(
+                self.resp_eph_pk
+                    .as_ref()
+                    .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
+                    .verify(&ct_m.eph_pk, &enc_sig_gen, &verifier_challenge)
+            );
             // Verify proof of knowledge of opening of leaf commitment and mediator's key encryption (in leg)
             let y = (ct_m.encrypted - self.re_randomized_path.re_randomized_leaf
                 + leaf_comm_key[0])
                 .into_affine();
-            self.resp_leaf
-                .is_valid(
-                    &[eph_pk, minus_leaf_comm_key, minus_B_blinding],
-                    &y,
-                    &self.t_r_leaf,
-                    &verifier_challenge,
-                )
-                .unwrap();
+            self.resp_leaf.is_valid(
+                &[eph_pk, minus_leaf_comm_key, minus_B_blinding],
+                &y,
+                &self.t_r_leaf,
+                &verifier_challenge,
+            )?;
         } else {
             #[cfg(feature = "std")]
             let clock = Instant::now();
-            let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
-            self.resp_leaf
-                .is_valid(
-                    &[
-                        self.re_randomized_path.re_randomized_leaf,
-                        minus_leaf_comm_key,
-                        minus_B_blinding,
-                    ],
-                    &eph_sk_enc.key_m_a,
-                    &self.t_r_leaf,
-                    &verifier_challenge,
-                )
-                .unwrap();
+            let aud_proofs = self.auditor_enc_proofs.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("Missing auditor enc proofs".into())
+            })?;
+            self.resp_leaf.is_valid(
+                &[
+                    self.re_randomized_path.re_randomized_leaf,
+                    minus_leaf_comm_key,
+                    minus_B_blinding,
+                ],
+                &eph_sk_enc.key_m_a,
+                &self.t_r_leaf,
+                &verifier_challenge,
+            )?;
             assert!(aud_proofs.resp_K_1.verify(
                 &aud_proofs.K_1,
                 &ped_comm_key.g,
@@ -1053,12 +1009,17 @@ impl<
             // enc randomness is same in leaf as in auditor pk encryption
             assert_eq!(
                 self.resp_leaf.0[0],
-                self.resp_eph_pk.as_ref().unwrap().response
+                self.resp_eph_pk
+                    .as_ref()
+                    .ok_or_else(|| Error::ProofVerificationError("Missing resp_eph_pk".into()))?
+                    .response
             );
             // Asset id is same
             assert_eq!(self.resp_leaf.0[1], self.resp_asset_id_enc_1.response2);
         } else {
-            let aud_proofs = self.auditor_enc_proofs.as_ref().unwrap();
+            let aud_proofs = self.auditor_enc_proofs.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("Missing auditor enc proofs".into())
+            })?;
             // Enc randomness for twisted Elgamal is same
             assert_eq!(self.resp_leaf.0[0], aud_proofs.resp_K_1.response1);
             // Asset id is same
@@ -1107,9 +1068,11 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         accept: bool,
         nonce: &[u8],
         sig_gen: G,
-    ) -> Self {
-        assert!(leg_enc.ct_m.is_some());
-        let ct_m = leg_enc.ct_m.as_ref().unwrap();
+    ) -> Result<Self> {
+        let ct_m = leg_enc
+            .ct_m
+            .as_ref()
+            .ok_or_else(|| Error::LegDoesNotHaveMediator)?;
 
         let mut prover_transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
         // Need to prove that mediator knows its secret key in the encryption of its public key
@@ -1123,14 +1086,12 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             G::ScalarField::rand(rng),
             &sig_gen,
         );
-        t_enc_pk
-            .challenge_contribution(
-                &ct_m.eph_pk,
-                &sig_gen,
-                &ct_m.encrypted,
-                &mut prover_transcript,
-            )
-            .unwrap();
+        t_enc_pk.challenge_contribution(
+            &ct_m.eph_pk,
+            &sig_gen,
+            &ct_m.encrypted,
+            &mut prover_transcript,
+        )?;
 
         // Hash the mediator's response
         if accept {
@@ -1142,10 +1103,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         }
 
         let mut extra_instance = vec![];
-        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        eph_pk.serialize_compressed(&mut extra_instance).unwrap();
-        nonce.serialize_compressed(&mut extra_instance).unwrap();
-        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance)?;
+        eph_pk.serialize_compressed(&mut extra_instance)?;
+        nonce.serialize_compressed(&mut extra_instance)?;
+        sig_gen.serialize_compressed(&mut extra_instance)?;
 
         prover_transcript
             .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
@@ -1154,7 +1115,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             prover_transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
         let resp_enc_pk = t_enc_pk.gen_proof(&prover_challenge);
-        Self { resp_enc_pk }
+        Ok(Self { resp_enc_pk })
     }
 
     /// `sig_gen` is the generator used when creating signing key. `sig_gen -> g` in report.
@@ -1165,20 +1126,20 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         accept: bool,
         nonce: &[u8],
         sig_gen: G,
-    ) -> Result<(), R1CSError> {
-        assert!(leg_enc.ct_m.is_some());
-        let ct_m = leg_enc.ct_m.as_ref().unwrap();
+    ) -> Result<()> {
+        let ct_m = leg_enc
+            .ct_m
+            .as_ref()
+            .ok_or_else(|| Error::LegDoesNotHaveMediator)?;
 
         let mut verifier_transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
-        self.resp_enc_pk
-            .challenge_contribution(
-                &ct_m.eph_pk,
-                &sig_gen,
-                &ct_m.encrypted,
-                &mut verifier_transcript,
-            )
-            .unwrap();
+        self.resp_enc_pk.challenge_contribution(
+            &ct_m.eph_pk,
+            &sig_gen,
+            &ct_m.encrypted,
+            &mut verifier_transcript,
+        )?;
 
         // Verifier should also hash the mediator's response
         if accept {
@@ -1190,10 +1151,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         }
 
         let mut extra_instance = vec![];
-        leg_enc.serialize_compressed(&mut extra_instance).unwrap();
-        eph_pk.serialize_compressed(&mut extra_instance).unwrap();
-        nonce.serialize_compressed(&mut extra_instance).unwrap();
-        sig_gen.serialize_compressed(&mut extra_instance).unwrap();
+        leg_enc.serialize_compressed(&mut extra_instance)?;
+        eph_pk.serialize_compressed(&mut extra_instance)?;
+        nonce.serialize_compressed(&mut extra_instance)?;
+        sig_gen.serialize_compressed(&mut extra_instance)?;
 
         verifier_transcript
             .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
@@ -1253,7 +1214,7 @@ pub mod tests {
     }
 
     #[test]
-    fn leg_verification_with_mediator() {
+    fn leg_verification_with_mediator() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -1313,7 +1274,7 @@ pub mod tests {
                 None,
                 gen_p_1,
                 gen_p_2,
-            );
+            )?;
 
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
@@ -1337,25 +1298,23 @@ pub mod tests {
             gen_p_1,
             gen_p_2,
             &comm_key,
-        );
+        )?;
 
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-        proof
-            .verify(
-                leg_enc.clone(),
-                eph_sk_enc.clone(),
-                pk_e.0,
-                &root,
-                nonce,
-                &asset_tree_params,
-                &leaf_comm_key,
-                gen_p_1,
-                gen_p_2,
-                &comm_key,
-            )
-            .unwrap();
+        proof.verify(
+            leg_enc.clone(),
+            eph_sk_enc.clone(),
+            pk_e.0,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &leaf_comm_key,
+            gen_p_1,
+            gen_p_2,
+            &comm_key,
+        )?;
 
         let verifier_time = clock.elapsed();
 
@@ -1377,24 +1336,26 @@ pub mod tests {
 
         // All parties decrypt to the same ephemeral secret key
         assert_eq!(
-            eph_sk_enc.decrypt_for_sender::<Blake2b512>(sk_s_e.0),
+            eph_sk_enc.decrypt_for_sender::<Blake2b512>(sk_s_e.0)?,
             sk_e.0
         );
         assert_eq!(
-            eph_sk_enc.decrypt_for_receiver::<Blake2b512>(sk_r_e.0),
+            eph_sk_enc.decrypt_for_receiver::<Blake2b512>(sk_r_e.0)?,
             sk_e.0
         );
         assert_eq!(
-            eph_sk_enc.decrypt_for_mediator_or_auditor::<Blake2b512>(sk_m_e.0),
+            eph_sk_enc.decrypt_for_mediator_or_auditor::<Blake2b512>(sk_m_e.0)?,
             sk_e.0
         );
 
         // Leg can be decrypted with ephemeral secret key
-        assert_eq!(leg_enc.decrypt(&sk_e.0, gen_p_2), leg)
+        assert_eq!(leg_enc.decrypt(&sk_e.0, gen_p_2)?, leg);
+
+        Ok(())
     }
 
     #[test]
-    fn leg_verification_with_auditor() {
+    fn leg_verification_with_auditor() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -1453,7 +1414,7 @@ pub mod tests {
                 Some(pk_a_e.0),
                 gen_p_1,
                 gen_p_2,
-            );
+            )?;
 
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
@@ -1477,25 +1438,23 @@ pub mod tests {
             gen_p_1,
             gen_p_2,
             &comm_key,
-        );
+        )?;
 
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-        proof
-            .verify(
-                leg_enc.clone(),
-                eph_sk_enc.clone(),
-                pk_e.0,
-                &root,
-                nonce,
-                &asset_tree_params,
-                &leaf_comm_key,
-                gen_p_1,
-                gen_p_2,
-                &comm_key,
-            )
-            .unwrap();
+        proof.verify(
+            leg_enc.clone(),
+            eph_sk_enc.clone(),
+            pk_e.0,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &leaf_comm_key,
+            gen_p_1,
+            gen_p_2,
+            &comm_key,
+        )?;
 
         let verifier_time = clock.elapsed();
 
@@ -1517,24 +1476,26 @@ pub mod tests {
 
         // All parties decrypt to the same ephemeral secret key
         assert_eq!(
-            eph_sk_enc.decrypt_for_sender::<Blake2b512>(sk_s_e.0),
+            eph_sk_enc.decrypt_for_sender::<Blake2b512>(sk_s_e.0)?,
             sk_e.0
         );
         assert_eq!(
-            eph_sk_enc.decrypt_for_receiver::<Blake2b512>(sk_r_e.0),
+            eph_sk_enc.decrypt_for_receiver::<Blake2b512>(sk_r_e.0)?,
             sk_e.0
         );
         assert_eq!(
-            eph_sk_enc.decrypt_for_mediator_or_auditor::<Blake2b512>(sk_a_e.0),
+            eph_sk_enc.decrypt_for_mediator_or_auditor::<Blake2b512>(sk_a_e.0)?,
             sk_e.0
         );
 
         // Leg can be decrypted with ephemeral secret key
-        assert_eq!(leg_enc.decrypt(&sk_e.0, gen_p_2), leg)
+        assert_eq!(leg_enc.decrypt(&sk_e.0, gen_p_2)?, leg);
+
+        Ok(())
     }
 
     #[test]
-    fn mediator_action() {
+    fn mediator_action() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         // TODO: Generate by hashing public string
@@ -1562,7 +1523,7 @@ pub mod tests {
                 None,
                 gen_p_1,
                 gen_p_2,
-            );
+            )?;
 
         let nonce = b"test-nonce";
 
@@ -1579,14 +1540,12 @@ pub mod tests {
             accept,
             nonce,
             gen_p_1,
-        );
+        )?;
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
 
-        proof
-            .verify(leg_enc.clone(), pk_e.0, accept, nonce, gen_p_1)
-            .unwrap();
+        proof.verify(leg_enc.clone(), pk_e.0, accept, nonce, gen_p_1)?;
 
         let verifier_time = clock.elapsed();
 
@@ -1596,5 +1555,7 @@ pub mod tests {
             prover_time,
             verifier_time
         );
+
+        Ok(())
     }
 }
