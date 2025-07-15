@@ -28,7 +28,7 @@ curve_tree_relations = { workspace = true, default-features = false }
 [dev-dependencies]
 test-log = { workspace = true }
 criterion = { workspace = true }
-ark-pallas = { workspace = true }
+ark-pallas = { workspace = true, features = ["curve"] }
 ark-vesta = { workspace = true }
 ark-secp256k1 = { workspace = true }
 ark-secq256k1 = { workspace = true }

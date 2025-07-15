@@ -1299,7 +1299,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let asset_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         let comm_key = PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"test");
 
@@ -1440,7 +1440,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let asset_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         let comm_key = PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"test");
 

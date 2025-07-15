@@ -3263,7 +3263,7 @@ mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p = PallasA::rand(&mut rng);
@@ -3387,7 +3387,7 @@ mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
@@ -3494,7 +3494,7 @@ mod tests {
         // Create public params (generators, etc)
 
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
@@ -3597,7 +3597,7 @@ mod tests {
         const L: usize = 512;
 
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
@@ -3701,7 +3701,7 @@ mod tests {
         const L: usize = 512;
 
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
@@ -3798,7 +3798,7 @@ mod tests {
         const L: usize = 512;
 
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS);
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)?;
 
         // TODO: Generate by hashing public string
         let gen_p_1 = PallasA::rand(&mut rng);
