@@ -65,7 +65,7 @@ macro_rules! impl_scale_and_type_info {
             fn type_info() -> Type {
                 Type::builder()
                     .path(Path::new(stringify!($type), module_path!()))
-                    .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>().type_name(concat!("Encoded", stringify!($type)))))
+                    .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
             }
         }
 
@@ -321,12 +321,23 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
     fn type_info() -> Type {
         use core::any::type_name;
 
+        let mut ty_name = type_name::<T>();
+        // Strip any generic parameters if they exist.
+        if let Some(pos) = ty_name.find('<') {
+            ty_name = &ty_name[..pos];
+        }
+        // Strip the module path if it exists.
+        let (module_path, ident) = if let Some(pos) = ty_name.rfind("::") {
+            let module_path = &ty_name[..pos];
+            let ident = &ty_name[pos + 2..];
+            (module_path, ident)
+        } else {
+            ("", ty_name)
+        };
+
         Type::builder()
-            .path(Path::new(type_name::<T>(), module_path!()))
-            .composite(
-                Fields::unnamed()
-                    .field(|f| f.ty::<Vec<u8>>().type_name("EncodedWrappedCanonical<T>")),
-            )
+            .path(Path::new(ident, module_path))
+            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
     }
 }
 
