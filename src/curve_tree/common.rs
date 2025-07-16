@@ -415,6 +415,22 @@ macro_rules! impl_curve_tree_with_backend {
             const M: usize,
             P0: SWCurveConfig + Copy + Send,
             P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+            B: Clone + $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
+            Error: From<crate::Error>,
+        > Clone for $curve_tree_ty<L, M, P0, P1, B, Error>
+        {
+            fn clone(&self) -> Self {
+                Self {
+                    backend: self.backend.clone(),
+                    _marker: core::marker::PhantomData,
+                }
+            }
+        }
+        impl<
+            const L: usize,
+            const M: usize,
+            P0: SWCurveConfig + Copy + Send,
+            P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
             B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error>,
             Error: From<crate::Error>,
         > $curve_tree_ty<L, M, P0, P1, B, Error>
@@ -794,6 +810,34 @@ macro_rules! impl_curve_tree_with_backend {
                     self.backend.set_height(level)$($await)*?;
                 }
                 Ok(())
+            }
+        }
+
+        impl<
+            const L: usize,
+            B: $curve_tree_backend_trait<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, Error = Error>,
+            Error: From<crate::Error>,
+        > $curve_tree_ty<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, B, Error>
+        {
+            pub $($async_fn)* fn get_path_and_root(
+                &self,
+                leaf_index: LeafIndex,
+            ) -> Result<LeafPathAndRoot<L>, Error> {
+                // Get the leaf and path for the given leaf index.
+                let leaf = self
+                    .backend
+                    .get_leaf(leaf_index)
+                    $($await)*?
+                    .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
+                let path = self.get_path_to_leaf(leaf_index, 0)$($await)*?;
+                let root = CurveTreeRoot::new(&self.root_node()$($await)*?)?;
+                Ok(LeafPathAndRoot {
+                    leaf,
+                    leaf_index,
+                    path,
+                    root,
+                    params: self.parameters()$($await)*,
+                })
             }
         }
     };

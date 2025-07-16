@@ -3,7 +3,48 @@ use ark_std::{collections::BTreeMap, vec::Vec};
 use curve_tree_relations::curve_tree::SelRerandParameters;
 
 use super::common::*;
-use crate::{LeafIndex, NodeLevel, error::*};
+use crate::{
+    LeafIndex, NodeLevel, PallasParameters,
+    curve_tree::{CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot},
+    error::*,
+};
+
+pub struct LeafPathAndRoot<'p, const L: usize> {
+    pub leaf: LeafValue<PallasParameters>,
+    pub leaf_index: LeafIndex,
+    pub path: CurveTreePath<L>,
+    pub root: CurveTreeRoot<L>,
+    pub params: &'p CurveTreeParameters,
+}
+
+impl<'p, const L: usize> CurveTreeLookup<L> for LeafPathAndRoot<'p, L> {
+    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
+        if self.leaf_index == leaf_index {
+            Ok(self.path.clone())
+        } else {
+            Err(Error::LeafIndexNotFound(leaf_index))
+        }
+    }
+
+    fn get_path_to_leaf(
+        &self,
+        leaf: LeafValue<PallasParameters>,
+    ) -> Result<CurveTreePath<L>, Error> {
+        if self.leaf == leaf {
+            Ok(self.path.clone())
+        } else {
+            Err(Error::LeafNotFound(leaf))
+        }
+    }
+
+    fn params(&self) -> &CurveTreeParameters {
+        self.params
+    }
+
+    fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
+        Ok(self.root.clone())
+    }
+}
 
 pub trait CurveTreeBackend<
     const L: usize,
