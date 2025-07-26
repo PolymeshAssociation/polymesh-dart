@@ -29,10 +29,8 @@ enum Commands {
 
     /// Create a new DART account for a signer
     CreateAccount {
-        /// Name of the signer who owns the account
-        signer: String,
-        /// Name of the account
-        account: String,
+        /// Signer and account name in format signer-account
+        signer_account: String,
     },
 
     /// Create a new asset
@@ -42,10 +40,8 @@ enum Commands {
         /// Type of auditor/mediator (auditor or mediator)
         #[arg(value_enum)]
         auditor_type: AuditorType,
-        /// Signer name for the auditor/mediator
-        auditor_signer: String,
-        /// Account name for the auditor/mediator
-        auditor_account: String,
+        /// Signer and account for the auditor/mediator in format signer-account (defaults to account "0" if not provided)
+        auditor_signer_account: String,
     },
 
     /// End the current block (record tree roots)
@@ -53,20 +49,16 @@ enum Commands {
 
     /// Register a DART account with an asset
     RegisterAccount {
-        /// Signer name
-        signer: String,
-        /// Account name
-        account: String,
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Asset ID
         asset_id: AssetId,
     },
 
     /// Mint assets (only asset issuer can do this)
     MintAssets {
-        /// Issuer signer name
-        issuer: String,
-        /// Account name
-        account: String,
+        /// Issuer signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Asset ID
         asset_id: AssetId,
         /// Amount to mint
@@ -77,16 +69,14 @@ enum Commands {
     CreateSettlement {
         /// Venue ID for the settlement
         venue_id: String,
-        /// Settlement legs in format: sender_signer:sender_account:receiver_signer:receiver_account:asset_id:amount
+        /// Settlement legs in format: sender_signer[-sender_account]:receiver_signer[-receiver_account]:asset_id:amount
         legs: Vec<String>,
     },
 
     /// Affirm a settlement leg as sender
     SenderAffirm {
-        /// Signer name
-        signer: String,
-        /// Account name
-        account: String,
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Settlement ID
         settlement_id: SettlementId,
         /// Leg index
@@ -99,10 +89,8 @@ enum Commands {
 
     /// Affirm a settlement leg as receiver
     ReceiverAffirm {
-        /// Signer name
-        signer: String,
-        /// Account name
-        account: String,
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Settlement ID
         settlement_id: SettlementId,
         /// Leg index
@@ -115,10 +103,8 @@ enum Commands {
 
     /// Affirm a settlement leg as mediator
     MediatorAffirm {
-        /// Signer name
-        signer: String,
-        /// Account name
-        account: String,
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Settlement ID
         settlement_id: SettlementId,
         /// Leg index
@@ -130,10 +116,8 @@ enum Commands {
 
     /// Claim assets as receiver
     ReceiverClaim {
-        /// Signer name
-        signer: String,
-        /// Account name
-        account: String,
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        signer_account: String,
         /// Settlement ID
         settlement_id: SettlementId,
         /// Leg index
@@ -183,8 +167,12 @@ fn main() -> Result<()> {
             println!("Created signer: {} (ID: {})", signer.name, signer.id);
         }
 
-        Commands::CreateAccount { signer, account } => {
-            let account_info = db.create_dart_account(&mut rng, &signer, &account)?;
+        Commands::CreateAccount { signer_account } => {
+            let (signer, account) = parse_signer_account(&signer_account);
+            let account_name = account
+                .ok_or_else(|| anyhow::anyhow!("Account name is required for CreateAccount"))?;
+
+            let account_info = db.create_dart_account(&mut rng, &signer, &account_name)?;
             println!(
                 "Created account '{}' for signer '{}' (ID: {})",
                 account_info.name, signer, account_info.id
@@ -194,9 +182,11 @@ fn main() -> Result<()> {
         Commands::CreateAsset {
             issuer,
             auditor_type,
-            auditor_signer,
-            auditor_account,
+            auditor_signer_account,
         } => {
+            let (auditor_signer, auditor_account) = parse_signer_account(&auditor_signer_account);
+            let auditor_account = auditor_account.unwrap_or_else(|| "0".to_string());
+
             let auditor_account_info = db.get_dart_account(&auditor_signer, &auditor_account)?;
             let auditor_keys = db.get_account_public_keys(&auditor_account_info)?;
 
@@ -207,14 +197,15 @@ fn main() -> Result<()> {
 
             let asset = db.create_asset(&issuer, auditor)?;
             println!(
-                "Created asset {} with issuer '{}' and {} '{}'",
+                "Created asset {} with issuer '{}' and {} '{}:{}'",
                 asset.asset_id,
                 issuer,
                 match auditor_type {
                     AuditorType::Auditor => "auditor",
                     AuditorType::Mediator => "mediator",
                 },
-                auditor_signer
+                auditor_signer,
+                auditor_account
             );
         }
 
@@ -224,10 +215,10 @@ fn main() -> Result<()> {
         }
 
         Commands::RegisterAccount {
-            signer,
-            account,
+            signer_account,
             asset_id,
         } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
             db.register_account_with_asset(&mut rng, &signer, &account, asset_id)?;
             println!(
                 "Registered account '{}:{}' with asset {}",
@@ -236,15 +227,15 @@ fn main() -> Result<()> {
         }
 
         Commands::MintAssets {
-            issuer,
-            account,
+            signer_account,
             asset_id,
             amount,
         } => {
-            db.mint_assets(&mut rng, &issuer, &account, asset_id, amount)?;
+            let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
+            db.mint_assets(&mut rng, &signer, &account, asset_id, amount)?;
             println!(
-                "Minted {} units of asset {} for issuer '{}:{}'",
-                amount, asset_id, issuer, account,
+                "Minted {} units of asset {} for account '{}:{}'",
+                amount, asset_id, signer, account
             );
         }
 
@@ -254,16 +245,22 @@ fn main() -> Result<()> {
 
             for leg_str in legs {
                 let parts: Vec<&str> = leg_str.split(':').collect();
-                if parts.len() != 6 {
-                    return Err(anyhow::anyhow!("Invalid leg format. Expected: sender_signer:sender_account:receiver_signer:receiver_account:asset_id:amount"));
+                if parts.len() != 4 {
+                    return Err(anyhow::anyhow!("Invalid leg format. Expected: sender_signer[-sender_account]:receiver_signer[-receiver_account]:asset_id:amount"));
                 }
 
-                let sender_signer = parts[0].to_string();
-                let sender_account = parts[1].to_string();
-                let receiver_signer = parts[2].to_string();
-                let receiver_account = parts[3].to_string();
-                let asset_id = parts[4].parse()?;
-                let amount = parts[5].parse()?;
+                let sender_signer_account = parts[0];
+                let receiver_signer_account = parts[1];
+                let asset_id: AssetId = parts[2].parse()?;
+                let amount: Balance = parts[3].parse()?;
+
+                // Parse sender
+                let (sender_signer, sender_account) =
+                    resolve_signer_account(&db, sender_signer_account, Some(asset_id))?;
+
+                // Parse receiver
+                let (receiver_signer, receiver_account) =
+                    resolve_signer_account(&db, receiver_signer_account, Some(asset_id))?;
 
                 settlement_legs.push((
                     sender_signer,
@@ -283,13 +280,13 @@ fn main() -> Result<()> {
         }
 
         Commands::SenderAffirm {
-            signer,
-            account,
+            signer_account,
             settlement_id,
             leg_index,
             asset_id,
             amount,
         } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
             db.sender_affirmation(
                 &mut rng,
                 &signer,
@@ -306,13 +303,13 @@ fn main() -> Result<()> {
         }
 
         Commands::ReceiverAffirm {
-            signer,
-            account,
+            signer_account,
             settlement_id,
             leg_index,
             asset_id,
             amount,
         } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
             db.receiver_affirmation(
                 &mut rng,
                 &signer,
@@ -329,12 +326,13 @@ fn main() -> Result<()> {
         }
 
         Commands::MediatorAffirm {
-            signer,
-            account,
+            signer_account,
             settlement_id,
             leg_index,
             accept,
         } => {
+            let (signer, account) = parse_signer_account(&signer_account);
+            let account = account.unwrap_or_else(|| "0".to_string());
             db.mediator_affirmation(
                 &mut rng,
                 &signer,
@@ -354,11 +352,11 @@ fn main() -> Result<()> {
         }
 
         Commands::ReceiverClaim {
-            signer,
-            account,
+            signer_account,
             settlement_id,
             leg_index,
         } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, None)?;
             db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index)?;
             println!(
                 "Receiver '{}:{}' claimed settlement {} leg {}",
@@ -400,4 +398,52 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_signer_account(signer_account: &str) -> (String, Option<String>) {
+    match signer_account.split_once('-') {
+        Some((signer, account)) => (signer.to_string(), Some(account.to_string())),
+        None => (signer_account.to_string(), None),
+    }
+}
+
+fn find_account_by_asset(
+    db: &DartTestingDb,
+    signer_name: &str,
+    asset_id: AssetId,
+) -> Result<String> {
+    let accounts = db.list_dart_accounts(Some(signer_name))?;
+
+    for (_, account_info) in accounts {
+        // Check if this account is registered with the asset
+        if let Ok(_) = db.get_account_asset_state(&account_info, asset_id) {
+            return Ok(account_info.name);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "No account found for signer '{}' registered with asset {}",
+        signer_name,
+        asset_id
+    ))
+}
+
+fn resolve_signer_account(
+    db: &DartTestingDb,
+    signer_account: &str,
+    asset_id: Option<AssetId>,
+) -> Result<(String, String)> {
+    let (signer, account_opt) = parse_signer_account(signer_account);
+
+    let account = match account_opt {
+        Some(account) => account,
+        None => {
+            let asset_id = asset_id.ok_or_else(|| {
+                anyhow::anyhow!("Account name is required when asset_id is not provided")
+            })?;
+            find_account_by_asset(db, &signer, asset_id)?
+        }
+    };
+
+    Ok((signer, account))
 }

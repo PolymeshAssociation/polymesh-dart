@@ -625,7 +625,7 @@ impl DartTestingDb {
         Ok(())
     }
 
-    fn get_account_asset_state(&self, account_info: &DartAccountInfo, asset_id: AssetId) -> Result<AccountAssetState> {
+    pub fn get_account_asset_state(&self, account_info: &DartAccountInfo, asset_id: AssetId) -> Result<AccountAssetState> {
         let mut stmt = self.conn.prepare(
             "SELECT aas.id, aas.account_db_id, aas.asset_db_id, aas.state_data 
              FROM account_asset_states aas
