@@ -35,8 +35,6 @@ run end-block
 
 run sender-affirm issuer 0 0 0 0 500
 
-run end-block
-
 run receiver-affirm investor 0 0 0 0 500
 
 run mediator-affirm mediator 0 0 0 -a

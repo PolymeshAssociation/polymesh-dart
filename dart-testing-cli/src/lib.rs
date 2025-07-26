@@ -151,6 +151,7 @@ impl DartTestingDb {
 
     fn drop_tables(&self) -> Result<()> {
         let tables = [
+            "pending_account_commitments",
             "account_asset_states",
             "settlement_legs", 
             "settlements",
@@ -323,6 +324,15 @@ impl DartTestingDb {
             [],
         )?;
 
+        // Pending account commitments table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_account_commitments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                commitment_data BLOB NOT NULL
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -477,6 +487,25 @@ impl DartTestingDb {
 
     // End block operation
     pub fn end_block(&mut self) -> Result<()> {
+        // Process all pending account commitments
+        let mut stmt = self.conn.prepare(
+            "SELECT commitment_data FROM pending_account_commitments ORDER BY id"
+        )?;
+        
+        let commitment_rows = stmt.query_map([], |row| {
+            Ok(row.get::<_, Vec<u8>>(0)?)
+        })?;
+        
+        // Insert all pending commitments into account tree
+        for commitment_data in commitment_rows {
+            let commitment_data = commitment_data?;
+            let commitment = AccountStateCommitment::decode(&mut commitment_data.as_slice())?;
+            self.account_tree.insert_leaf(commitment.as_leaf_value()?)?;
+        }
+        
+        // Clear pending commitments
+        self.conn.execute("DELETE FROM pending_account_commitments", [])?;
+        
         // Get current tree roots
         let asset_root = CurveTreeRoot::new(&self.asset_tree.root_node()?)?;
         let account_root = CurveTreeRoot::new(&self.account_tree.root_node()?)?;
@@ -492,8 +521,12 @@ impl DartTestingDb {
         &mut self, 
         commitment: AccountStateCommitment
     ) -> Result<()> {
-        // Insert into account tree
-        self.account_tree.insert_leaf(commitment.as_leaf_value()?)?;
+        // Store commitment in pending table instead of directly inserting into tree
+        let commitment_data = commitment.encode();
+        self.conn.execute(
+            "INSERT INTO pending_account_commitments (commitment_data) VALUES (?1)",
+            params![commitment_data],
+        )?;
         
         Ok(())
     }
