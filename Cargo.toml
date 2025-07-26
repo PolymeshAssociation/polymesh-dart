@@ -105,9 +105,14 @@ bulletproofs = { workspace = true, default-features = false, optional = true }
 curve_tree_relations = { workspace = true, default-features = false, optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 anyhow = { workspace = true }
 test-log = { workspace = true }
 rand = { workspace = true }
+
+[[bench]]
+name = "proof_benchmark"
+harness = false
 
 [features]
 default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
