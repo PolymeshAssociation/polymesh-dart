@@ -433,7 +433,7 @@ macro_rules! impl_curve_tree_with_backend {
             B: $curve_tree_backend_trait<L, M, P0, P1, Error = Error> = CurveTreeMemoryBackend<L, M, P0, P1>,
             Error: From<crate::Error> = crate::Error,
         > {
-            backend: B,
+            pub backend: B,
             _marker: core::marker::PhantomData<(P0, P1)>,
         }
 
