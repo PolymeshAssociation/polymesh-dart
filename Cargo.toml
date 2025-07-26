@@ -3,14 +3,11 @@ name = "polymesh-dart"
 version = "0.1.0"
 edition = "2024"
 description = "Polymesh DART assets."
-authors = [ "Polymesh Association" ]
+authors = ["Polymesh Association"]
 license-file = "LICENSE.pdf"
 
 [workspace]
-members = [
-    "dart-bp",
-    "dart-common",
-]
+members = ["dart-bp", "dart-testing-cli", "dart-common"]
 
 [patch.crates-io]
 # Curve tree dependencies
@@ -27,6 +24,7 @@ schnorr_pok = { path = "../crypto/schnorr_pok" }
 #schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
 
 [workspace.dependencies]
+polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
 polymesh-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
 polymesh-dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
 
@@ -85,7 +83,9 @@ hex = { workspace = true, default-features = false }
 
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
-scale-info = { workspace = true, default-features = false, features = ["derive"] }
+scale-info = { workspace = true, default-features = false, features = [
+    "derive",
+] }
 bounded-collections = { workspace = true, default-features = false }
 
 # dart-bp dependencies

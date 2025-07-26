@@ -1,0 +1,39 @@
+[package]
+name = "dart-testing-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+polymesh-dart = { workspace = true, default-features = false, features = [
+    "backend_bp",
+] }
+polymesh-dart-common = { workspace = true, default-features = false }
+
+# common dependencies
+rand_core = { workspace = true, default-features = false }
+rand_chacha = { workspace = true, default-features = false }
+digest = { workspace = true, default-features = false }
+blake2 = { workspace = true, default-features = false }
+lazy_static = { workspace = true, default-features = false }
+thiserror = { workspace = true, default-features = false }
+log = { workspace = true, default-features = false }
+hex = { workspace = true, default-features = false }
+
+# CLI
+anyhow = { workspace = true }
+env_logger = { version = "0.11" }
+rand = { workspace = true }
+rusqlite = { version = "0.37.0" }
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+# Substrate/SCALE deps.
+codec = { workspace = true, default-features = false, features = ["derive"] }
+
+[features]
+default = ["std", "asm", "parallel"]
+
+std = ["log/std", "hex/std", "polymesh-dart/std", "thiserror/std", "codec/std"]
+
+asm = ["polymesh-dart/asm"]
+parallel = ["polymesh-dart/parallel"]
