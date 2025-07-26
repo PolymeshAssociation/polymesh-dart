@@ -504,7 +504,7 @@ impl AccountKeys {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct AccountState(BPAccountState);
 
 impl AccountState {

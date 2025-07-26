@@ -396,6 +396,33 @@ macro_rules! impl_curve_tree_with_backend {
             $curve_tree_backend_trait,
             { }, { }
         );
+
+        impl<
+            const L: usize,
+            B: $curve_tree_backend_trait<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, Error = Error>,
+            Error: From<crate::Error>,
+        > CurveTreeLookup<L> for &$curve_tree_ty<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, B, Error>
+        {
+            fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, error::Error> {
+                Ok($curve_tree_ty::get_path_to_leaf(self,leaf_index, 0).map_err(|_| error::Error::LeafIndexNotFound(leaf_index))?)
+            }
+
+            fn get_path_to_leaf(
+                &self,
+                leaf: LeafValue<PallasParameters>,
+            ) -> Result<CurveTreePath<L>, error::Error> {
+                Err(error::Error::LeafNotFound(leaf))
+            }
+
+            fn params(&self) -> &CurveTreeParameters {
+                self.parameters()
+            }
+
+            fn root_node(&self) -> Result<CurveTreeRoot<L>, error::Error> {
+                let root = $curve_tree_ty::root_node(self).map_err(|_| error::Error::CurveTreeRootNotFound)?;
+                Ok(CurveTreeRoot::new(&root)?)
+            }
+        }
     };
     ($curve_tree_ty:ident, $curve_tree_backend_trait:ident, { $($async_fn:tt)* }, { $($await:tt)* }) => {
         pub struct $curve_tree_ty<

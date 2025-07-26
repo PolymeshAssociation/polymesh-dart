@@ -265,6 +265,9 @@ impl TypeInfo for AssetCommitmentKey {
 // TypeInfo, SCALE encoding and decoding for `LegEncrypted`.
 impl_scale_and_type_info!(LegEncrypted as Vec);
 
+// TypeInfo, SCALE encoding and decoding for `AccountState`.
+impl_scale_and_type_info!(AccountState as Vec);
+
 // TypeInfo, SCALE encoding and decoding for `Inner<M, P0, P1>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, P0: SWCurveConfig, P1: SWCurveConfig>);
 
