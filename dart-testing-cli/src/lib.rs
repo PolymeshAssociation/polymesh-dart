@@ -391,6 +391,15 @@ impl DartTestingDb {
             [],
         )?;
 
+        // Account nullifiers table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS account_nullifiers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nullifier_data BLOB NOT NULL UNIQUE
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -607,6 +616,29 @@ impl DartTestingDb {
         Ok(())
     }
 
+    fn ensure_nullifier_unique(&self, nullifier: &AccountStateNullifier) -> Result<()> {
+        let nullifier_data = nullifier.encode();
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM account_nullifiers WHERE nullifier_data = ?1",
+            params![nullifier_data],
+            |row| row.get(0),
+        )?;
+
+        if count > 0 {
+            return Err(anyhow!("Nullifier has already been used"));
+        }
+        Ok(())
+    }
+
+    fn add_nullifier(&mut self, nullifier: AccountStateNullifier) -> Result<()> {
+        let nullifier_data = nullifier.encode();
+        self.conn.execute(
+            "INSERT INTO account_nullifiers (nullifier_data) VALUES (?1)",
+            params![nullifier_data],
+        )?;
+        Ok(())
+    }
+
     // Asset registration operations
     pub fn register_account_with_asset<R: RngCore + CryptoRng>(
         &mut self,
@@ -687,6 +719,10 @@ impl DartTestingDb {
         // Create minting proof
         let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
 
+        // Ensure the nullifier is unique
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
         // Verify proof
         proof.verify(&self.account_roots, rng)?;
 
@@ -704,6 +740,9 @@ impl DartTestingDb {
         // Update account asset state
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+        // Add the nullifier to burn the old commitment.
+        self.add_nullifier(nullifier)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
@@ -884,6 +923,10 @@ impl DartTestingDb {
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
 
+        // Ensure the nullifier is unique
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET sender_status = 'Affirmed' 
@@ -894,6 +937,9 @@ impl DartTestingDb {
         // Commit the pending state change and save the state.
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+        // Add the nullifier to burn the old commitment.
+        self.add_nullifier(nullifier)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
@@ -961,6 +1007,10 @@ impl DartTestingDb {
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
 
+        // Ensure the nullifier is unique
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET receiver_status = 'Affirmed' 
@@ -971,6 +1021,9 @@ impl DartTestingDb {
         // Commit the pending state change and save the state.
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+        // Add the nullifier to burn the old commitment.
+        self.add_nullifier(nullifier)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
@@ -1064,6 +1117,10 @@ impl DartTestingDb {
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
 
+        // Ensure the nullifier is unique
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET receiver_status = 'Finalized' 
@@ -1074,6 +1131,9 @@ impl DartTestingDb {
         // Update account asset state
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+        // Add the nullifier to burn the old commitment.
+        self.add_nullifier(nullifier)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
