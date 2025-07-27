@@ -12,35 +12,35 @@ function run() {
 
 run init
 
-run create-signer issuer
-run create-signer investor
-run create-signer mediator
+run create-signer -n issuer
+run create-signer -n investor
+run create-signer -n mediator
 
-run create-account issuer-0
-run create-account investor-0
-run create-account mediator-0
+run create-account -s issuer-0
+run create-account -s investor-0
+run create-account -s mediator-0
 
-run create-asset issuer mediator mediator
+run create-asset -s issuer --type mediator --auditor mediator
 
-run register-account issuer-0 0
-run register-account investor-0 0
-
-run end-block
-
-run mint-assets issuer-0 0 1000
-
-run create-settlement test issuer-0:investor-0:0:500
+run register-account -s issuer-0 --asset 0
+run register-account -s investor-0 --asset 0
 
 run end-block
 
-run sender-affirm issuer-0 0 0 0 500
+run mint-assets -s issuer-0 --asset 0 --amount 1000
 
-run receiver-affirm investor-0 0 0 0 500
-
-run mediator-affirm mediator 0 0 -a
+run create-settlement -v test --leg issuer-0:investor-0:0:500
 
 run end-block
 
-run receiver-claim investor-0 0 0
+run sender-affirm -s issuer-0 --settlement 0 --leg 0 --asset 0 --amount 500
+
+run receiver-affirm -s investor-0 --settlement 0 --leg 0 --asset 0 --amount 500
+
+run mediator-affirm -s mediator --settlement 0 --leg 0 --accept
+
+run end-block
+
+run receiver-claim -s investor-0 --settlement 0 --leg 0
 
 run end-block

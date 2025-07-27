@@ -24,23 +24,27 @@ enum Commands {
     /// Create a new signer
     CreateSigner {
         /// Name of the signer
+        #[arg(short, long)]
         name: String,
     },
 
     /// Create a new DART account for a signer
     CreateAccount {
         /// Signer and account name in format signer-account
+        #[arg(short, long)]
         signer_account: String,
     },
 
     /// Create a new asset
     CreateAsset {
         /// Name of the issuer signer
-        issuer: String,
+        #[arg(short, long)]
+        signer: String,
         /// Type of auditor/mediator (auditor or mediator)
-        #[arg(value_enum)]
+        #[arg(short = 't', long = "type", value_enum)]
         auditor_type: AuditorType,
         /// Signer and account for the auditor/mediator in format signer-account (defaults to account "0" if not provided)
+        #[arg(short = 'a', long = "auditor")]
         auditor_signer_account: String,
     },
 
@@ -50,64 +54,84 @@ enum Commands {
     /// Register a DART account with an asset
     RegisterAccount {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Asset ID
+        #[arg(short, long = "asset")]
         asset_id: AssetId,
     },
 
     /// Mint assets (only asset issuer can do this)
     MintAssets {
         /// Issuer signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Asset ID
+        #[arg(short, long = "asset")]
         asset_id: AssetId,
         /// Amount to mint
+        #[arg(short = 'm', long)]
         amount: Balance,
     },
 
     /// Create a settlement with legs
     CreateSettlement {
         /// Venue ID for the settlement
+        #[arg(short, long)]
         venue_id: String,
         /// Settlement legs in format: sender_signer[-sender_account]:receiver_signer[-receiver_account]:asset_id:amount
+        #[arg(short, long = "leg")]
         legs: Vec<String>,
     },
 
     /// Affirm a settlement leg as sender
     SenderAffirm {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Settlement ID
+        #[arg(long = "settlement")]
         settlement_id: SettlementId,
         /// Leg index
+        #[arg(short, long = "leg")]
         leg_index: LegId,
         /// Asset ID
+        #[arg(short, long = "asset")]
         asset_id: AssetId,
         /// Amount
+        #[arg(short = 'm', long)]
         amount: Balance,
     },
 
     /// Affirm a settlement leg as receiver
     ReceiverAffirm {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Settlement ID
+        #[arg(long = "settlement")]
         settlement_id: SettlementId,
         /// Leg index
+        #[arg(short, long = "leg")]
         leg_index: LegId,
         /// Asset ID
+        #[arg(short, long = "asset")]
         asset_id: AssetId,
         /// Amount
+        #[arg(short = 'm', long)]
         amount: Balance,
     },
 
     /// Affirm a settlement leg as mediator
     MediatorAffirm {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Settlement ID
+        #[arg(long = "settlement")]
         settlement_id: SettlementId,
         /// Leg index
+        #[arg(short, long = "leg")]
         leg_index: LegId,
         /// Accept or reject the settlement
         #[arg(short, long, action)]
@@ -117,11 +141,17 @@ enum Commands {
     /// Claim assets as receiver
     ReceiverClaim {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
         signer_account: String,
         /// Settlement ID
+        #[arg(long = "settlement")]
         settlement_id: SettlementId,
         /// Leg index
+        #[arg(short, long = "leg")]
         leg_index: LegId,
+        /// Asset ID (optional, will be used to help find the account)
+        #[arg(short, long = "asset")]
+        asset_id: Option<AssetId>,
     },
 
     /// List all signers
@@ -130,6 +160,7 @@ enum Commands {
     /// List DART accounts
     ListAccounts {
         /// Optional signer name to filter by
+        #[arg(short, long)]
         signer: Option<String>,
     },
 
@@ -139,6 +170,7 @@ enum Commands {
     /// Get settlement status
     GetSettlement {
         /// Settlement ID
+        #[arg(short, long)]
         settlement_id: SettlementId,
     },
 }
@@ -180,7 +212,7 @@ fn main() -> Result<()> {
         }
 
         Commands::CreateAsset {
-            issuer,
+            signer,
             auditor_type,
             auditor_signer_account,
         } => {
@@ -195,11 +227,11 @@ fn main() -> Result<()> {
                 AuditorType::Mediator => AuditorOrMediator::mediator(&auditor_keys),
             };
 
-            let asset = db.create_asset(&issuer, auditor)?;
+            let asset = db.create_asset(&signer, auditor)?;
             println!(
                 "Created asset {} with issuer '{}' and {} '{}:{}'",
                 asset.asset_id,
-                issuer,
+                signer,
                 match auditor_type {
                     AuditorType::Auditor => "auditor",
                     AuditorType::Mediator => "mediator",
@@ -355,8 +387,9 @@ fn main() -> Result<()> {
             signer_account,
             settlement_id,
             leg_index,
+            asset_id,
         } => {
-            let (signer, account) = resolve_signer_account(&db, &signer_account, None)?;
+            let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
             db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index)?;
             println!(
                 "Receiver '{}:{}' claimed settlement {} leg {}",
