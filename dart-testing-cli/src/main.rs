@@ -168,6 +168,38 @@ enum Commands {
         asset_id: Option<AssetId>,
     },
 
+    /// Update sender counter for executed settlement
+    SenderCounterUpdate {
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
+        signer_account: String,
+        /// Settlement ID
+        #[arg(long = "settlement")]
+        settlement_id: SettlementId,
+        /// Leg index
+        #[arg(short, long = "leg")]
+        leg_index: LegId,
+        /// Asset ID (optional, will be used to help find the account)
+        #[arg(short, long = "asset")]
+        asset_id: Option<AssetId>,
+    },
+
+    /// Reverse sender affirmation for rejected settlement
+    SenderReversal {
+        /// Signer and account in format signer-account (account optional, will find by asset_id)
+        #[arg(short, long)]
+        signer_account: String,
+        /// Settlement ID
+        #[arg(long = "settlement")]
+        settlement_id: SettlementId,
+        /// Leg index
+        #[arg(short, long = "leg")]
+        leg_index: LegId,
+        /// Asset ID (optional, will be used to help find the account)
+        #[arg(short, long = "asset")]
+        asset_id: Option<AssetId>,
+    },
+
     /// List all signers
     ListSigners,
 
@@ -419,6 +451,34 @@ fn main() -> Result<()> {
             db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index)?;
             println!(
                 "Receiver '{}:{}' claimed settlement {} leg {}",
+                signer, account, settlement_id, leg_index
+            );
+        }
+
+        Commands::SenderCounterUpdate {
+            signer_account,
+            settlement_id,
+            leg_index,
+            asset_id,
+        } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
+            db.sender_counter_update(&mut rng, &signer, &account, settlement_id, leg_index)?;
+            println!(
+                "Sender '{}:{}' updated counter for settlement {} leg {}",
+                signer, account, settlement_id, leg_index
+            );
+        }
+
+        Commands::SenderReversal {
+            signer_account,
+            settlement_id,
+            leg_index,
+            asset_id,
+        } => {
+            let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
+            db.sender_reversal(&mut rng, &signer, &account, settlement_id, leg_index)?;
+            println!(
+                "Sender '{}:{}' reversed affirmation for settlement {} leg {}",
                 signer, account, settlement_id, leg_index
             );
         }

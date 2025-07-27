@@ -14,6 +14,96 @@ use polymesh_dart::*;
 mod sqlite_curve_tree;
 use sqlite_curve_tree::{AccountCurveTree, AccountRootHistory, AssetCurveTree, AssetRootHistory};
 
+/// The affirmation status for each party in a DART settlement leg.
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
+pub enum AffirmationStatus {
+    /// The leg is pending affirmation.
+    Pending,
+    /// The leg has been affirmed by the sender, receiver, and mediator.
+    Affirmed,
+    /// The leg has been rejected by one party.
+    Rejected,
+    /// The leg has been finalized by all parties.
+    Finalized,
+}
+
+impl AffirmationStatus {
+    /// Merge two affirmation statuses together.
+    pub fn merge(self, other: AffirmationStatus) -> Result<AffirmationStatus> {
+        use AffirmationStatus::*;
+        match (self, other) {
+            (Pending, Pending) => Ok(Pending),
+            (Pending, Affirmed) => Ok(Pending),
+            (Pending, Rejected) => Ok(Rejected),
+            (Pending, Finalized) => Err(anyhow!("Cannot go from pending to finalized")),
+
+            (Affirmed, Pending) => Ok(Pending),
+            (Affirmed, Affirmed) => Ok(Affirmed),
+            (Affirmed, Rejected) => Ok(Rejected),
+            (Affirmed, Finalized) => Ok(Affirmed),
+
+            (Rejected, Pending) => Ok(Rejected),
+            (Rejected, Affirmed) => Ok(Rejected),
+            (Rejected, Rejected) => Ok(Rejected),
+            (Rejected, Finalized) => Err(anyhow!("Cannot go from rejected to finalized")),
+
+            (Finalized, Pending) => Err(anyhow!("Cannot go from finalized to pending")),
+            (Finalized, Affirmed) => Ok(Affirmed),
+            (Finalized, Rejected) => Err(anyhow!("Cannot go from finalized to rejected")),
+            (Finalized, Finalized) => Ok(Finalized),
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "Pending" => Ok(AffirmationStatus::Pending),
+            "Affirmed" => Ok(AffirmationStatus::Affirmed),
+            "Rejected" => Ok(AffirmationStatus::Rejected),
+            "Finalized" => Ok(AffirmationStatus::Finalized),
+            _ => Err(anyhow!("Invalid affirmation status: {}", s)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AffirmationStatus::Pending => "Pending",
+            AffirmationStatus::Affirmed => "Affirmed",
+            AffirmationStatus::Rejected => "Rejected",
+            AffirmationStatus::Finalized => "Finalized",
+        }
+    }
+}
+
+/// Settlement status for a DART settlement.
+#[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
+pub enum SettlementStatus {
+    Pending,
+    Executed,
+    Rejected,
+    Finalized,
+}
+
+impl SettlementStatus {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "Pending" => Ok(SettlementStatus::Pending),
+            "Executed" => Ok(SettlementStatus::Executed),
+            "Rejected" => Ok(SettlementStatus::Rejected),
+            "Finalized" => Ok(SettlementStatus::Finalized),
+            _ => Err(anyhow!("Invalid settlement status: {}", s)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SettlementStatus::Pending => "Pending",
+            SettlementStatus::Executed => "Executed",
+            SettlementStatus::Rejected => "Rejected",
+            SettlementStatus::Finalized => "Finalized",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ProofAction {
     /// Write proof to file instead of applying
@@ -872,6 +962,21 @@ impl DartTestingDb {
         amount: Balance,
         mut proof_action: ProofAction,
     ) -> Result<()> {
+        // Check settlement is in pending state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Pending {
+            return Err(anyhow!("Settlement is not in pending state"));
+        }
+
+        // Check sender affirmation status
+        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if sender_status != AffirmationStatus::Pending {
+            return Err(anyhow!(
+                "Sender has already affirmed or settlement leg is not in pending state"
+            ));
+        }
+
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
@@ -954,6 +1059,22 @@ impl DartTestingDb {
         amount: Balance,
         mut proof_action: ProofAction,
     ) -> Result<()> {
+        // Check settlement is in pending state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Pending {
+            return Err(anyhow!("Settlement is not in pending state"));
+        }
+
+        // Check receiver affirmation status
+        let (_, receiver_status, _) =
+            self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if receiver_status != AffirmationStatus::Pending {
+            return Err(anyhow!(
+                "Receiver has already affirmed or settlement leg is not in pending state"
+            ));
+        }
+
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
@@ -1033,6 +1154,25 @@ impl DartTestingDb {
         leg_index: LegId,
         accept: bool,
     ) -> Result<()> {
+        // Check settlement is in pending state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Pending {
+            return Err(anyhow!("Settlement is not in pending state"));
+        }
+
+        // Check mediator affirmation status
+        let (_, _, mediator_status) =
+            self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if mediator_status.is_none() {
+            return Err(anyhow!("No mediator for this leg"));
+        }
+        if mediator_status != Some(AffirmationStatus::Pending) {
+            return Err(anyhow!(
+                "Mediator has already affirmed or rejected this leg"
+            ));
+        }
+
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
@@ -1078,6 +1218,20 @@ impl DartTestingDb {
         settlement_id: SettlementId,
         leg_index: LegId,
     ) -> Result<()> {
+        // Check settlement is in executed state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Executed {
+            return Err(anyhow!("Settlement is not in executed state"));
+        }
+
+        // Check receiver affirmation status
+        let (_, receiver_status, _) =
+            self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if receiver_status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Receiver has not affirmed this leg"));
+        }
+
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
@@ -1170,26 +1324,33 @@ impl DartTestingDb {
         for row in rows {
             let (sender_status, receiver_status, mediator_status) = row?;
 
-            if sender_status != "Affirmed" && sender_status != "Finalized" {
-                all_affirmed = false;
-                all_finalized = false;
+            let sender = AffirmationStatus::from_str(&sender_status)?;
+            let receiver = AffirmationStatus::from_str(&receiver_status)?;
+            let mediator = mediator_status
+                .map(|s| AffirmationStatus::from_str(&s))
+                .transpose()?;
+
+            // Calculate the combined leg status using merge logic
+            let mut leg_status = sender.merge(receiver)?;
+            if let Some(med_status) = mediator {
+                leg_status = leg_status.merge(med_status)?;
             }
-            if receiver_status != "Affirmed" && receiver_status != "Finalized" {
-                all_affirmed = false;
-                all_finalized = false;
-            }
-            if let Some(med_status) = mediator_status {
-                if med_status == "Rejected" {
-                    any_rejected = true;
-                }
-                if med_status != "Affirmed" && med_status != "Finalized" {
+
+            match leg_status {
+                AffirmationStatus::Pending => {
                     all_affirmed = false;
                     all_finalized = false;
                 }
-            }
-
-            if sender_status != "Finalized" || receiver_status != "Finalized" {
-                all_finalized = false;
+                AffirmationStatus::Rejected => {
+                    any_rejected = true;
+                    all_affirmed = false;
+                }
+                AffirmationStatus::Affirmed => {
+                    all_finalized = false;
+                }
+                AffirmationStatus::Finalized => {
+                    // This leg is finalized
+                }
             }
         }
 
@@ -1305,6 +1466,34 @@ impl DartTestingDb {
         Ok(status)
     }
 
+    fn get_leg_affirmation_statuses(
+        &self,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<(
+        AffirmationStatus,
+        AffirmationStatus,
+        Option<AffirmationStatus>,
+    )> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sender_status, receiver_status, mediator_status FROM settlement_legs 
+             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
+        )?;
+
+        let (sender_str, receiver_str, mediator_str): (String, String, Option<String>) = stmt
+            .query_row(params![settlement_id, leg_index], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+
+        let sender_status = AffirmationStatus::from_str(&sender_str)?;
+        let receiver_status = AffirmationStatus::from_str(&receiver_str)?;
+        let mediator_status = mediator_str
+            .map(|s| AffirmationStatus::from_str(&s))
+            .transpose()?;
+
+        Ok((sender_status, receiver_status, mediator_status))
+    }
+
     /// Handle account state update proof verification and insertion.
     pub fn handle_account_state_update_proof<R: RngCore + CryptoRng>(
         &mut self,
@@ -1335,6 +1524,155 @@ impl DartTestingDb {
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
+
+        Ok(())
+    }
+
+    pub fn sender_counter_update<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        signer_name: &str,
+        account_name: &str,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<()> {
+        // Check settlement is in executed state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Executed {
+            return Err(anyhow!("Settlement is not in executed state"));
+        }
+
+        // Check sender affirmation status
+        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if sender_status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Sender has not affirmed this leg"));
+        }
+
+        let account_info = self.get_dart_account(signer_name, account_name)?;
+        let account_keys = account_info.account_keys()?;
+
+        // Get settlement leg
+        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
+        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
+
+        // Decrypt leg
+        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
+        let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
+        let asset_id = leg.asset_id();
+
+        // Get and update account asset state
+        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
+
+        // Create sender counter update proof
+        let proof = SenderCounterUpdateProof::new(
+            rng,
+            &leg_ref,
+            sk_e,
+            &encrypted_leg,
+            &mut asset_state,
+            &self.account_tree,
+        )?;
+
+        // Update the account state with the pending state change.
+        self.update_account_asset_state(&account_info, &asset_state)?;
+
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the sender counter update proof
+                proof.verify(&encrypted_leg, roots, rng)?;
+
+                Ok(())
+            },
+        )?;
+
+        // Update settlement leg status
+        self.conn.execute(
+            "UPDATE settlement_legs SET sender_status = 'Finalized' 
+             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+            params![settlement_id, leg_index],
+        )?;
+
+        self.check_and_update_settlement_status(settlement_id)?;
+
+        Ok(())
+    }
+
+    pub fn sender_reversal<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        signer_name: &str,
+        account_name: &str,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<()> {
+        // Check settlement is in rejected state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Rejected {
+            return Err(anyhow!("Settlement is not in rejected state"));
+        }
+
+        // Check sender affirmation status
+        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if sender_status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Sender has not affirmed this leg"));
+        }
+
+        let account_info = self.get_dart_account(signer_name, account_name)?;
+        let account_keys = account_info.account_keys()?;
+
+        // Get settlement leg
+        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
+        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
+
+        // Decrypt leg
+        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
+        let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
+        let asset_id = leg.asset_id();
+        let amount = leg.amount();
+
+        // Get and update account asset state
+        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
+
+        // Create sender reversal proof
+        let proof = SenderReversalProof::new(
+            rng,
+            &leg_ref,
+            amount,
+            sk_e,
+            &encrypted_leg,
+            &mut asset_state,
+            &self.account_tree,
+        )?;
+
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the sender reversal proof
+                proof.verify(&encrypted_leg, roots, rng)?;
+
+                Ok(())
+            },
+        )?;
+
+        // Update settlement leg status
+        self.conn.execute(
+            "UPDATE settlement_legs SET sender_status = 'Finalized' 
+             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+            params![settlement_id, leg_index],
+        )?;
+
+        self.check_and_update_settlement_status(settlement_id)?;
 
         Ok(())
     }

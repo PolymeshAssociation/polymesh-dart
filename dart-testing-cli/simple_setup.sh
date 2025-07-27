@@ -47,4 +47,6 @@ run end-block
 
 run receiver-claim -s investor-0 --settlement 0 --leg 0
 
+run sender-counter-update -s issuer-0 --settlement 0 --leg 0
+
 run end-block
