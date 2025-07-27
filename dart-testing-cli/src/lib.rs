@@ -685,7 +685,7 @@ impl DartTestingDb {
 
         // Store the account asset state
         asset_state.commit_pending_state()?;
-        self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+        self.update_account_asset_state(&account_info, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
@@ -719,12 +719,19 @@ impl DartTestingDb {
         // Create minting proof
         let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
 
-        // Ensure the nullifier is unique
-        let nullifier = proof.nullifier();
-        self.ensure_nullifier_unique(&nullifier)?;
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the minting proof
+                proof.verify(roots, rng)?;
 
-        // Verify proof
-        proof.verify(&self.account_roots, rng)?;
+                Ok(())
+            },
+        )?;
 
         // Update asset total supply
         asset_info.total_supply = asset_info
@@ -736,16 +743,6 @@ impl DartTestingDb {
             "UPDATE assets SET total_supply = ?1 WHERE asset_id = ?2",
             params![asset_info.total_supply, asset_id],
         )?;
-
-        // Update account asset state
-        asset_state.commit_pending_state()?;
-        self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
-
-        // Add the nullifier to burn the old commitment.
-        self.add_nullifier(nullifier)?;
-
-        // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
 
         Ok(())
     }
@@ -777,9 +774,9 @@ impl DartTestingDb {
     fn update_account_asset_state(
         &mut self,
         account_info: &DartAccountInfo,
-        asset_id: AssetId,
         state: &AccountAssetState,
     ) -> Result<()> {
+        let asset_id = state.asset_id;
         let state_db = AccountAssetStateDb::from_state(state.clone());
         let state_data = state_db.encode();
 
@@ -908,7 +905,7 @@ impl DartTestingDb {
             )?;
 
             // Update the account state with the pending state change.
-            self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+            self.update_account_asset_state(&account_info, &asset_state)?;
 
             proof
         };
@@ -920,12 +917,19 @@ impl DartTestingDb {
             return Ok(());
         }
 
-        // Verify proof
-        proof.verify(&encrypted_leg, &self.account_roots, rng)?;
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the sender affirmation proof
+                proof.verify(&encrypted_leg, roots, rng)?;
 
-        // Ensure the nullifier is unique
-        let nullifier = proof.nullifier();
-        self.ensure_nullifier_unique(&nullifier)?;
+                Ok(())
+            },
+        )?;
 
         // Update settlement leg status
         self.conn.execute(
@@ -933,16 +937,6 @@ impl DartTestingDb {
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-
-        // Commit the pending state change and save the state.
-        asset_state.commit_pending_state()?;
-        self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
-
-        // Add the nullifier to burn the old commitment.
-        self.add_nullifier(nullifier)?;
-
-        // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
 
         self.check_and_update_settlement_status(settlement_id)?;
 
@@ -992,7 +986,7 @@ impl DartTestingDb {
             )?;
 
             // Update the account state with the pending state change.
-            self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+            self.update_account_asset_state(&account_info, &asset_state)?;
 
             proof
         };
@@ -1004,12 +998,19 @@ impl DartTestingDb {
             return Ok(());
         }
 
-        // Verify proof
-        proof.verify(&encrypted_leg, &self.account_roots, rng)?;
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the receiver affirmation proof
+                proof.verify(&encrypted_leg, roots, rng)?;
 
-        // Ensure the nullifier is unique
-        let nullifier = proof.nullifier();
-        self.ensure_nullifier_unique(&nullifier)?;
+                Ok(())
+            },
+        )?;
 
         // Update settlement leg status
         self.conn.execute(
@@ -1017,16 +1018,6 @@ impl DartTestingDb {
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-
-        // Commit the pending state change and save the state.
-        asset_state.commit_pending_state()?;
-        self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
-
-        // Add the nullifier to burn the old commitment.
-        self.add_nullifier(nullifier)?;
-
-        // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
 
         self.check_and_update_settlement_status(settlement_id)?;
 
@@ -1114,12 +1105,19 @@ impl DartTestingDb {
             &self.account_tree,
         )?;
 
-        // Verify proof
-        proof.verify(&encrypted_leg, &self.account_roots, rng)?;
+        // Verify the proof and handle the account state update.
+        self.handle_account_state_update_proof(
+            &account_info,
+            &mut asset_state,
+            &proof,
+            rng,
+            |roots, rng| {
+                // Verify the receiver claim proof.
+                proof.verify(&encrypted_leg, roots, rng)?;
 
-        // Ensure the nullifier is unique
-        let nullifier = proof.nullifier();
-        self.ensure_nullifier_unique(&nullifier)?;
+                Ok(())
+            },
+        )?;
 
         // Update settlement leg status
         self.conn.execute(
@@ -1127,16 +1125,6 @@ impl DartTestingDb {
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-
-        // Update account asset state
-        asset_state.commit_pending_state()?;
-        self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
-
-        // Add the nullifier to burn the old commitment.
-        self.add_nullifier(nullifier)?;
-
-        // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
 
         self.check_and_update_settlement_status(settlement_id)?;
 
@@ -1315,5 +1303,39 @@ impl DartTestingDb {
             .prepare("SELECT status FROM settlements WHERE settlement_id = ?1")?;
         let status = stmt.query_row(params![settlement_id], |row| row.get::<_, String>(0))?;
         Ok(status)
+    }
+
+    /// Handle account state update proof verification and insertion.
+    pub fn handle_account_state_update_proof<R: RngCore + CryptoRng>(
+        &mut self,
+        account_info: &DartAccountInfo,
+        asset_state: &mut AccountAssetState,
+        proof: &impl AccountStateUpdate,
+        rng: &mut R,
+        verify: impl FnOnce(&AccountRootHistory, &mut R) -> Result<()>,
+    ) -> Result<()> {
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Verify the account state update proof.
+        verify(&self.account_roots, rng)?;
+
+        // Insert the update account state commitment into the account curve tree.
+        let account_commitment = proof.account_state_commitment();
+        // Append the account commitment to the account tree
+        self.append_account_commitment(account_commitment)?;
+
+        // Add the nullifier to burn the old commitment.
+        self.add_nullifier(nullifier)?;
+
+        // Commit the pending state change and save the state.
+        asset_state.commit_pending_state()?;
+        self.update_account_asset_state(&account_info, &asset_state)?;
+
+        // Append the account commitment to the account tree
+        self.append_account_commitment(asset_state.current_state_commitment)?;
+
+        Ok(())
     }
 }
