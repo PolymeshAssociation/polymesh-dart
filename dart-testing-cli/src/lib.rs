@@ -960,7 +960,7 @@ impl DartTestingDb {
         leg_index: LegId,
         asset_id: AssetId,
         amount: Balance,
-        mut proof_action: ProofAction,
+        proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in pending state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -977,73 +977,165 @@ impl DartTestingDb {
             ));
         }
 
-        let account_info = self.get_dart_account(signer_name, account_name)?;
-        let account_keys = account_info.account_keys()?;
-
-        // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-
-        // Get and update account asset state
-        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-
-        let proof = if let Some(proof) = proof_action.get_proof()? {
-            proof
-        } else {
-            // Decrypt leg and verify sender
-            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
-            let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
-
-            if leg.asset_id() != asset_id || leg.amount() != amount {
-                return Err(anyhow!("Leg details don't match provided asset_id/amount"));
-            }
-
-            // Create sender affirmation proof
-            let proof = SenderAffirmationProof::new(
-                rng,
-                &leg_ref,
-                amount,
-                sk_e,
-                &encrypted_leg,
-                &mut asset_state,
-                &self.account_tree,
-            )?;
-
-            // Update the account state with the pending state change.
-            self.update_account_asset_state(&account_info, &asset_state)?;
-
-            proof
-        };
-
-        // If proof action is to generate only, save proof and return
-        if !proof_action.apply_proof() {
-            // Save proof to file if requested
-            proof_action.save_proof(&proof)?;
-            return Ok(());
-        }
-
-        // Verify the proof and handle the account state update.
-        self.handle_account_state_update_proof(
-            &account_info,
-            &mut asset_state,
-            &proof,
+        self.handle_settlement_state_update_proof(
             rng,
-            |roots, rng| {
-                // Verify the sender affirmation proof
-                proof.verify(&encrypted_leg, roots, rng)?;
+            signer_name,
+            account_name,
+            settlement_id,
+            leg_index,
+            LegRole::Sender,
+            proof_action,
+            |_account_keys, leg_ref, leg_enc, leg, sk_e, account_state, account_tree, rng| {
+                if leg.asset_id() != asset_id || leg.amount() != amount {
+                    return Err(anyhow!("Leg details don't match provided asset_id/amount"));
+                }
 
+                // Generate sender affirmation proof
+                Ok(SenderAffirmationProof::new(
+                    rng,
+                    &leg_ref,
+                    amount,
+                    sk_e,
+                    leg_enc,
+                    account_state,
+                    account_tree,
+                )?)
+            },
+            |proof, leg_enc, roots, rng| {
+                // Verify the sender affirmation proof
+                proof.verify(&leg_enc, roots, rng)?;
+                Ok(())
+            },
+            |conn, settlement_id, leg_index| {
+                // Update settlement leg status
+                conn.execute(
+                    "UPDATE settlement_legs SET sender_status = 'Affirmed' 
+                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                    params![settlement_id, leg_index],
+                )?;
                 Ok(())
             },
         )?;
 
-        // Update settlement leg status
-        self.conn.execute(
-            "UPDATE settlement_legs SET sender_status = 'Affirmed' 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
-            params![settlement_id, leg_index],
+        Ok(())
+    }
+
+    pub fn sender_counter_update<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        signer_name: &str,
+        account_name: &str,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<()> {
+        // Check settlement is in executed state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Executed {
+            return Err(anyhow!("Settlement is not in executed state"));
+        }
+
+        // Check sender affirmation status
+        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if sender_status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Sender has not affirmed this leg"));
+        }
+
+        self.handle_settlement_state_update_proof(
+            rng,
+            signer_name,
+            account_name,
+            settlement_id,
+            leg_index,
+            LegRole::Sender,
+            ProofAction::GenerateAndApply, // Always generate and apply proof
+            |_account_keys, leg_ref, leg_enc, _leg, sk_e, account_state, account_tree, rng| {
+                // Create sender counter update proof
+                Ok(SenderCounterUpdateProof::new(
+                    rng,
+                    &leg_ref,
+                    sk_e,
+                    &leg_enc,
+                    account_state,
+                    account_tree,
+                )?)
+            },
+            |proof, leg_enc, roots, rng| {
+                // Verify the sender counter update proof
+                proof.verify(&leg_enc, roots, rng)?;
+                Ok(())
+            },
+            |conn, settlement_id, leg_index| {
+                // Update settlement leg status
+                conn.execute(
+                    "UPDATE settlement_legs SET sender_status = 'Finalized' 
+                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                    params![settlement_id, leg_index],
+                )?;
+                Ok(())
+            },
         )?;
 
-        self.check_and_update_settlement_status(settlement_id)?;
+        Ok(())
+    }
+
+    pub fn sender_reversal<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        signer_name: &str,
+        account_name: &str,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<()> {
+        // Check settlement is in rejected state
+        let settlement_status = self.get_settlement_status(settlement_id)?;
+        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
+        if settlement_status != SettlementStatus::Rejected {
+            return Err(anyhow!("Settlement is not in rejected state"));
+        }
+
+        // Check sender affirmation status
+        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
+        if sender_status != AffirmationStatus::Affirmed {
+            return Err(anyhow!("Sender has not affirmed this leg"));
+        }
+
+        self.handle_settlement_state_update_proof(
+            rng,
+            signer_name,
+            account_name,
+            settlement_id,
+            leg_index,
+            LegRole::Sender,
+            ProofAction::GenerateAndApply, // Always generate and apply proof
+            |_account_keys, leg_ref, leg_enc, leg, sk_e, account_state, account_tree, rng| {
+                let amount = leg.amount();
+                // Create sender reversal proof
+                Ok(SenderReversalProof::new(
+                    rng,
+                    &leg_ref,
+                    amount,
+                    sk_e,
+                    &leg_enc,
+                    account_state,
+                    account_tree,
+                )?)
+            },
+            |proof, leg_enc, roots, rng| {
+                // Verify the sender reversal proof
+                proof.verify(&leg_enc, roots, rng)?;
+                Ok(())
+            },
+            |conn, settlement_id, leg_index| {
+                // Update settlement leg status
+                conn.execute(
+                    "UPDATE settlement_legs SET sender_status = 'Finalized' 
+                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                    params![settlement_id, leg_index],
+                )?;
+                Ok(())
+            },
+        )?;
 
         Ok(())
     }
@@ -1057,7 +1149,7 @@ impl DartTestingDb {
         leg_index: LegId,
         asset_id: AssetId,
         amount: Balance,
-        mut proof_action: ProofAction,
+        proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in pending state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -1075,72 +1167,44 @@ impl DartTestingDb {
             ));
         }
 
-        let account_info = self.get_dart_account(signer_name, account_name)?;
-        let account_keys = account_info.account_keys()?;
-
-        // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-
-        // Get and update account asset state
-        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-
-        let proof = if let Some(proof) = proof_action.get_proof()? {
-            proof
-        } else {
-            // Decrypt leg and verify receiver
-            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Receiver, &account_keys.enc)?;
-            let leg = encrypted_leg.decrypt(LegRole::Receiver, &account_keys.enc)?;
-
-            if leg.asset_id() != asset_id || leg.amount() != amount {
-                return Err(anyhow!("Leg details don't match provided asset_id/amount"));
-            }
-
-            // Create receiver affirmation proof
-            let proof = ReceiverAffirmationProof::new(
-                rng,
-                &leg_ref,
-                sk_e,
-                &encrypted_leg,
-                &mut asset_state,
-                &self.account_tree,
-            )?;
-
-            // Update the account state with the pending state change.
-            self.update_account_asset_state(&account_info, &asset_state)?;
-
-            proof
-        };
-
-        // If proof action is to generate only, save proof and return
-        if !proof_action.apply_proof() {
-            // Save proof to file if requested
-            proof_action.save_proof(&proof)?;
-            return Ok(());
-        }
-
-        // Verify the proof and handle the account state update.
-        self.handle_account_state_update_proof(
-            &account_info,
-            &mut asset_state,
-            &proof,
+        self.handle_settlement_state_update_proof(
             rng,
-            |roots, rng| {
-                // Verify the receiver affirmation proof
-                proof.verify(&encrypted_leg, roots, rng)?;
+            signer_name,
+            account_name,
+            settlement_id,
+            leg_index,
+            LegRole::Receiver,
+            proof_action,
+            |_account_keys, leg_ref, leg_enc, leg, sk_e, asset_state, account_tree, rng| {
+                if leg.asset_id() != asset_id || leg.amount() != amount {
+                    return Err(anyhow!("Leg details don't match provided asset_id/amount"));
+                }
 
+                // Create receiver affirmation proof
+                Ok(ReceiverAffirmationProof::new(
+                    rng,
+                    &leg_ref,
+                    sk_e,
+                    &leg_enc,
+                    asset_state,
+                    account_tree,
+                )?)
+            },
+            |proof, leg_enc, roots, rng| {
+                // Verify the receiver affirmation proof
+                proof.verify(&leg_enc, roots, rng)?;
+                Ok(())
+            },
+            |conn, settlement_id, leg_index| {
+                // Update settlement leg status
+                conn.execute(
+                    "UPDATE settlement_legs SET receiver_status = 'Affirmed' 
+                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                    params![settlement_id, leg_index],
+                )?;
                 Ok(())
             },
         )?;
-
-        // Update settlement leg status
-        self.conn.execute(
-            "UPDATE settlement_legs SET receiver_status = 'Affirmed' 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
-            params![settlement_id, leg_index],
-        )?;
-
-        self.check_and_update_settlement_status(settlement_id)?;
 
         Ok(())
     }
@@ -1232,55 +1296,41 @@ impl DartTestingDb {
             return Err(anyhow!("Receiver has not affirmed this leg"));
         }
 
-        let account_info = self.get_dart_account(signer_name, account_name)?;
-        let account_keys = account_info.account_keys()?;
-
-        // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-
-        // Decrypt leg
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Receiver, &account_keys.enc)?;
-        let leg = encrypted_leg.decrypt(LegRole::Receiver, &account_keys.enc)?;
-        let asset_id = leg.asset_id();
-        let amount = leg.amount();
-
-        // Get and update account asset state
-        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-
-        // Create receiver claim proof
-        let proof = ReceiverClaimProof::new(
+        self.handle_settlement_state_update_proof(
             rng,
-            &leg_ref,
-            amount,
-            sk_e,
-            &encrypted_leg,
-            &mut asset_state,
-            &self.account_tree,
-        )?;
-
-        // Verify the proof and handle the account state update.
-        self.handle_account_state_update_proof(
-            &account_info,
-            &mut asset_state,
-            &proof,
-            rng,
-            |roots, rng| {
-                // Verify the receiver claim proof.
-                proof.verify(&encrypted_leg, roots, rng)?;
-
+            signer_name,
+            account_name,
+            settlement_id,
+            leg_index,
+            LegRole::Receiver,
+            ProofAction::GenerateAndApply, // Always generate and apply proof
+            |_account_keys, leg_ref, leg_enc, leg, sk_e, asset_state, account_tree, rng| {
+                // Create receiver claim proof
+                Ok(ReceiverClaimProof::new(
+                    rng,
+                    &leg_ref,
+                    leg.amount(),
+                    sk_e,
+                    &leg_enc,
+                    asset_state,
+                    account_tree,
+                )?)
+            },
+            |proof, leg_enc, roots, rng| {
+                // Verify the receiver claim proof
+                proof.verify(&leg_enc, roots, rng)?;
+                Ok(())
+            },
+            |conn, settlement_id, leg_index| {
+                // Update settlement leg status
+                conn.execute(
+                    "UPDATE settlement_legs SET receiver_status = 'Finalized' 
+                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                    params![settlement_id, leg_index],
+                )?;
                 Ok(())
             },
         )?;
-
-        // Update settlement leg status
-        self.conn.execute(
-            "UPDATE settlement_legs SET receiver_status = 'Finalized' 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
-            params![settlement_id, leg_index],
-        )?;
-
-        self.check_and_update_settlement_status(settlement_id)?;
 
         Ok(())
     }
@@ -1528,54 +1578,73 @@ impl DartTestingDb {
         Ok(())
     }
 
-    pub fn sender_counter_update<R: RngCore + CryptoRng>(
+    pub fn handle_settlement_state_update_proof<
+        R: RngCore + CryptoRng,
+        T: Encode + Decode + AccountStateUpdate,
+    >(
         &mut self,
         rng: &mut R,
         signer_name: &str,
         account_name: &str,
         settlement_id: SettlementId,
         leg_index: LegId,
+        role: LegRole,
+        mut proof_action: ProofAction,
+        gen_proof: impl FnOnce(
+            &AccountKeys,
+            LegRef,
+            &LegEncrypted,
+            &Leg,
+            EncryptionSecretKey,
+            &mut AccountAssetState,
+            &AccountCurveTree,
+            &mut R,
+        ) -> Result<T>,
+        verify_proof: impl FnOnce(&T, &LegEncrypted, &AccountRootHistory, &mut R) -> Result<()>,
+        update_leg_status: impl FnOnce(&Connection, SettlementId, LegId) -> Result<()>,
     ) -> Result<()> {
-        // Check settlement is in executed state
-        let settlement_status = self.get_settlement_status(settlement_id)?;
-        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
-        if settlement_status != SettlementStatus::Executed {
-            return Err(anyhow!("Settlement is not in executed state"));
-        }
-
-        // Check sender affirmation status
-        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
-        if sender_status != AffirmationStatus::Affirmed {
-            return Err(anyhow!("Sender has not affirmed this leg"));
-        }
-
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-
-        // Decrypt leg
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
-        let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
+        let leg = encrypted_leg.decrypt(role, &account_keys.enc)?;
         let asset_id = leg.asset_id();
 
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
 
-        // Create sender counter update proof
-        let proof = SenderCounterUpdateProof::new(
-            rng,
-            &leg_ref,
-            sk_e,
-            &encrypted_leg,
-            &mut asset_state,
-            &self.account_tree,
-        )?;
+        let proof: T = if let Some(proof) = proof_action.get_proof()? {
+            proof
+        } else {
+            // Decrypt leg and verify sender
+            let sk_e = encrypted_leg.decrypt_sk_e(role, &account_keys.enc)?;
 
-        // Update the account state with the pending state change.
-        self.update_account_asset_state(&account_info, &asset_state)?;
+            // Create sender affirmation proof
+            let proof = gen_proof(
+                &account_keys,
+                leg_ref,
+                &encrypted_leg,
+                &leg,
+                sk_e,
+                &mut asset_state,
+                &self.account_tree,
+                rng,
+            )?;
+
+            // Update the account state with the pending state change.
+            self.update_account_asset_state(&account_info, &asset_state)?;
+
+            proof
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            // Save proof to file if requested
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
 
         // Verify the proof and handle the account state update.
         self.handle_account_state_update_proof(
@@ -1584,93 +1653,15 @@ impl DartTestingDb {
             &proof,
             rng,
             |roots, rng| {
-                // Verify the sender counter update proof
-                proof.verify(&encrypted_leg, roots, rng)?;
+                // Verify the sender affirmation proof
+                verify_proof(&proof, &encrypted_leg, roots, rng)?;
 
                 Ok(())
             },
         )?;
 
         // Update settlement leg status
-        self.conn.execute(
-            "UPDATE settlement_legs SET sender_status = 'Finalized' 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
-            params![settlement_id, leg_index],
-        )?;
-
-        self.check_and_update_settlement_status(settlement_id)?;
-
-        Ok(())
-    }
-
-    pub fn sender_reversal<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        signer_name: &str,
-        account_name: &str,
-        settlement_id: SettlementId,
-        leg_index: LegId,
-    ) -> Result<()> {
-        // Check settlement is in rejected state
-        let settlement_status = self.get_settlement_status(settlement_id)?;
-        let settlement_status = SettlementStatus::from_str(&settlement_status)?;
-        if settlement_status != SettlementStatus::Rejected {
-            return Err(anyhow!("Settlement is not in rejected state"));
-        }
-
-        // Check sender affirmation status
-        let (sender_status, _, _) = self.get_leg_affirmation_statuses(settlement_id, leg_index)?;
-        if sender_status != AffirmationStatus::Affirmed {
-            return Err(anyhow!("Sender has not affirmed this leg"));
-        }
-
-        let account_info = self.get_dart_account(signer_name, account_name)?;
-        let account_keys = account_info.account_keys()?;
-
-        // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-
-        // Decrypt leg
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
-        let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
-        let asset_id = leg.asset_id();
-        let amount = leg.amount();
-
-        // Get and update account asset state
-        let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-
-        // Create sender reversal proof
-        let proof = SenderReversalProof::new(
-            rng,
-            &leg_ref,
-            amount,
-            sk_e,
-            &encrypted_leg,
-            &mut asset_state,
-            &self.account_tree,
-        )?;
-
-        // Verify the proof and handle the account state update.
-        self.handle_account_state_update_proof(
-            &account_info,
-            &mut asset_state,
-            &proof,
-            rng,
-            |roots, rng| {
-                // Verify the sender reversal proof
-                proof.verify(&encrypted_leg, roots, rng)?;
-
-                Ok(())
-            },
-        )?;
-
-        // Update settlement leg status
-        self.conn.execute(
-            "UPDATE settlement_legs SET sender_status = 'Finalized' 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
-            params![settlement_id, leg_index],
-        )?;
+        update_leg_status(&self.conn, settlement_id, leg_index)?;
 
         self.check_and_update_settlement_status(settlement_id)?;
 
