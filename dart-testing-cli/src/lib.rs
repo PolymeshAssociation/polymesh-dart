@@ -1,16 +1,73 @@
-use anyhow::{Result, anyhow};
-use rusqlite::{Connection, params};
-use serde::{Serialize, Deserialize};
-use std::path::Path;
+use anyhow::{anyhow, Result};
+use codec::{Decode, Encode};
+use rand_core::{CryptoRng, RngCore};
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use rand_core::{RngCore, CryptoRng};
-use codec::{Encode, Decode};
 
-use polymesh_dart::*;
 use polymesh_dart::curve_tree::CurveTreeRoot;
+use polymesh_dart::*;
 
 mod sqlite_curve_tree;
-use sqlite_curve_tree::{AssetCurveTree, AccountCurveTree, AssetRootHistory, AccountRootHistory};
+use sqlite_curve_tree::{AccountCurveTree, AccountRootHistory, AssetCurveTree, AssetRootHistory};
+
+#[derive(Debug)]
+pub enum ProofAction {
+    /// Write proof to file instead of applying
+    GenerateOnly(File),
+    /// Read proof from file and apply
+    ApplyOnly(Vec<u8>),
+    /// Generate and apply proof
+    GenerateAndApply,
+}
+
+impl ProofAction {
+    pub fn new(write: Option<PathBuf>, read: Option<PathBuf>) -> Result<Self> {
+        match (write, read) {
+            (Some(write_path), None) => {
+                let file = File::create(write_path)?;
+                Ok(ProofAction::GenerateOnly(file))
+            }
+            (None, Some(read_path)) => {
+                let proof = std::fs::read(read_path)?;
+                Ok(ProofAction::ApplyOnly(proof))
+            }
+            (Some(_), Some(_)) => Err(anyhow!("Cannot specify both write and read paths")),
+            (None, None) => Ok(ProofAction::GenerateAndApply),
+        }
+    }
+
+    pub fn get_proof<T: Decode>(&self) -> Result<Option<T>> {
+        match self {
+            ProofAction::GenerateOnly(_) => Ok(None), // No proof generated yet
+            ProofAction::ApplyOnly(proof) => T::decode(&mut proof.as_slice())
+                .map(Some)
+                .map_err(|e| anyhow!("Failed to decode proof: {}", e)),
+            ProofAction::GenerateAndApply => Ok(None), // No proof generated yet
+        }
+    }
+
+    pub fn save_proof<T: Encode>(&mut self, proof: &T) -> Result<()> {
+        match self {
+            ProofAction::GenerateOnly(file) => {
+                file.write_all(&proof.encode())?;
+                Ok(())
+            }
+            ProofAction::ApplyOnly(_) => Ok(()),
+            ProofAction::GenerateAndApply => Ok(()),
+        }
+    }
+
+    pub fn apply_proof(&self) -> bool {
+        match self {
+            ProofAction::ApplyOnly(_) | ProofAction::GenerateAndApply => true,
+            ProofAction::GenerateOnly(_) => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignerInfo {
@@ -23,9 +80,9 @@ pub struct DartAccountInfo {
     pub id: i64,
     pub signer_id: i64,
     pub name: String,
-    pub account_key: Vec<u8>, // SCALE encoded AccountPublicKey
+    pub account_key: Vec<u8>,    // SCALE encoded AccountPublicKey
     pub encryption_key: Vec<u8>, // SCALE encoded EncryptionPublicKey
-    pub key_seed: String, // Random seed used to generate AccountKeys
+    pub key_seed: String,        // Random seed used to generate AccountKeys
 }
 
 impl DartAccountInfo {
@@ -107,7 +164,7 @@ impl AccountAssetStateDb {
             current_state: state.current_state,
             current_state_commitment: state.current_state_commitment,
             current_tx_id: state.current_tx_id,
-            pending_state: state.pending_state
+            pending_state: state.pending_state,
         }
     }
 }
@@ -123,12 +180,12 @@ pub struct DartTestingDb {
 impl DartTestingDb {
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let conn = Arc::new(Connection::open(db_path)?);
-        
+
         let asset_tree = AssetCurveTree::new(conn.clone())?;
         let account_tree = AccountCurveTree::new(conn.clone())?;
         let asset_roots = AssetRootHistory::new(conn.clone());
         let account_roots = AccountRootHistory::new(conn.clone());
-        
+
         let db = Self {
             conn,
             asset_roots,
@@ -145,7 +202,7 @@ impl DartTestingDb {
     pub fn initialize_db(&self) -> Result<()> {
         self.drop_tables()?;
         self.create_tables()?;
-        
+
         Ok(())
     }
 
@@ -153,22 +210,23 @@ impl DartTestingDb {
         let tables = [
             "pending_account_commitments",
             "account_asset_states",
-            "settlement_legs", 
+            "settlement_legs",
             "settlements",
             "account_root_history",
-            "asset_root_history", 
+            "asset_root_history",
             "asset_registered_accounts",
             "account_inner_nodes",
             "asset_inner_nodes",
             "account_leaves",
-            "asset_leaves", 
+            "asset_leaves",
             "assets",
-            "dart_accounts", 
-            "signers"
+            "dart_accounts",
+            "signers",
         ];
-        
+
         for table in &tables {
-            self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), [])?;
+            self.conn
+                .execute(&format!("DROP TABLE IF EXISTS {}", table), [])?;
         }
         Ok(())
     }
@@ -338,10 +396,8 @@ impl DartTestingDb {
 
     // Signer operations
     pub fn create_signer(&mut self, name: &str) -> Result<SignerInfo> {
-        self.conn.execute(
-            "INSERT INTO signers (name) VALUES (?1)",
-            params![name],
-        )?;
+        self.conn
+            .execute("INSERT INTO signers (name) VALUES (?1)", params![name])?;
 
         let id = self.conn.last_insert_rowid();
         Ok(SignerInfo {
@@ -351,7 +407,9 @@ impl DartTestingDb {
     }
 
     pub fn get_signer_by_name(&self, name: &str) -> Result<SignerInfo> {
-        let mut stmt = self.conn.prepare("SELECT id, name FROM signers WHERE name = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM signers WHERE name = ?1")?;
         let signer = stmt.query_row(params![name], |row| {
             Ok(SignerInfo {
                 id: row.get(0)?,
@@ -363,18 +421,18 @@ impl DartTestingDb {
 
     // Dart account operations
     pub fn create_dart_account<R: RngCore + CryptoRng>(
-        &mut self, 
+        &mut self,
         rng: &mut R,
-        signer_name: &str, 
-        account_name: &str
+        signer_name: &str,
+        account_name: &str,
     ) -> Result<DartAccountInfo> {
         let signer = self.get_signer_by_name(signer_name)?;
-        
+
         // Generate a random seed for account keys
         let mut key_seed = [0u8; 32];
         rng.fill_bytes(&mut key_seed);
         let key_seed = hex::encode(key_seed);
-        
+
         let account_keys = AccountKeys::from_seed(&key_seed)?;
         let public_keys = account_keys.public_keys();
 
@@ -384,7 +442,13 @@ impl DartTestingDb {
         self.conn.execute(
             "INSERT INTO dart_accounts (signer_id, name, account_key, encryption_key, key_seed) 
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![signer.id, account_name, account_key_bytes, encryption_key_bytes, key_seed],
+            params![
+                signer.id,
+                account_name,
+                account_key_bytes,
+                encryption_key_bytes,
+                key_seed
+            ],
         )?;
 
         let id = self.conn.last_insert_rowid();
@@ -398,14 +462,18 @@ impl DartTestingDb {
         })
     }
 
-    pub fn get_dart_account(&self, signer_name: &str, account_name: &str) -> Result<DartAccountInfo> {
+    pub fn get_dart_account(
+        &self,
+        signer_name: &str,
+        account_name: &str,
+    ) -> Result<DartAccountInfo> {
         let mut stmt = self.conn.prepare(
             "SELECT da.id, da.signer_id, da.name, da.account_key, da.encryption_key, da.key_seed
              FROM dart_accounts da
              JOIN signers s ON da.signer_id = s.id
-             WHERE s.name = ?1 AND da.name = ?2"
+             WHERE s.name = ?1 AND da.name = ?2",
         )?;
-        
+
         let account = stmt.query_row(params![signer_name, account_name], |row| {
             Ok(DartAccountInfo {
                 id: row.get(0)?,
@@ -419,21 +487,28 @@ impl DartTestingDb {
         Ok(account)
     }
 
-    pub fn get_account_public_keys(&self, account_info: &DartAccountInfo) -> Result<AccountPublicKeys> {
+    pub fn get_account_public_keys(
+        &self,
+        account_info: &DartAccountInfo,
+    ) -> Result<AccountPublicKeys> {
         let acct = AccountPublicKey::decode(&mut account_info.account_key.as_slice())?;
         let enc = EncryptionPublicKey::decode(&mut account_info.encryption_key.as_slice())?;
         Ok(AccountPublicKeys { acct, enc })
     }
 
     // Asset operations
-    pub fn create_asset(&mut self, issuer_signer_name: &str, auditor: AuditorOrMediator) -> Result<AssetInfo> {
+    pub fn create_asset(
+        &mut self,
+        issuer_signer_name: &str,
+        auditor: AuditorOrMediator,
+    ) -> Result<AssetInfo> {
         let signer = self.get_signer_by_name(issuer_signer_name)?;
-        
+
         // Get next asset ID
         let asset_id: AssetId = self.conn.query_row(
             "SELECT COALESCE(MAX(asset_id), -1) + 1 FROM assets",
             [],
-            |row| row.get(0)
+            |row| row.get(0),
         )?;
 
         let auditor_bytes = auditor.encode();
@@ -445,11 +520,12 @@ impl DartTestingDb {
         )?;
 
         let id = self.conn.last_insert_rowid();
-        
+
         // Update the asset tree
         let asset_state = self.create_asset_state(asset_id, &auditor)?;
         let leaf_index = asset_id as _;
-        self.asset_tree.update_leaf(leaf_index, asset_state.commitment()?.as_leaf_value()?)?;
+        self.asset_tree
+            .update_leaf(leaf_index, asset_state.commitment()?.as_leaf_value()?)?;
 
         Ok(AssetInfo {
             id,
@@ -460,7 +536,11 @@ impl DartTestingDb {
         })
     }
 
-    fn create_asset_state(&self, asset_id: AssetId, auditor: &AuditorOrMediator) -> Result<AssetState> {
+    fn create_asset_state(
+        &self,
+        asset_id: AssetId,
+        auditor: &AuditorOrMediator,
+    ) -> Result<AssetState> {
         let (is_mediator, pk) = match auditor {
             AuditorOrMediator::Auditor(pk) => (false, pk.clone()),
             AuditorOrMediator::Mediator(pk) => (true, pk.acct.into()),
@@ -472,7 +552,7 @@ impl DartTestingDb {
         let mut stmt = self.conn.prepare(
             "SELECT id, asset_id, issuer_signer_id, auditor_or_mediator, total_supply FROM assets WHERE asset_id = ?1"
         )?;
-        
+
         let asset = stmt.query_row(params![asset_id], |row| {
             Ok(AssetInfo {
                 id: row.get(0)?,
@@ -488,96 +568,96 @@ impl DartTestingDb {
     // End block operation
     pub fn end_block(&mut self) -> Result<()> {
         // Process all pending account commitments
-        let mut stmt = self.conn.prepare(
-            "SELECT commitment_data FROM pending_account_commitments ORDER BY id"
-        )?;
-        
-        let commitment_rows = stmt.query_map([], |row| {
-            Ok(row.get::<_, Vec<u8>>(0)?)
-        })?;
-        
+        let mut stmt = self
+            .conn
+            .prepare("SELECT commitment_data FROM pending_account_commitments ORDER BY id")?;
+
+        let commitment_rows = stmt.query_map([], |row| Ok(row.get::<_, Vec<u8>>(0)?))?;
+
         // Insert all pending commitments into account tree
         for commitment_data in commitment_rows {
             let commitment_data = commitment_data?;
             let commitment = AccountStateCommitment::decode(&mut commitment_data.as_slice())?;
             self.account_tree.insert_leaf(commitment.as_leaf_value()?)?;
         }
-        
+
         // Clear pending commitments
-        self.conn.execute("DELETE FROM pending_account_commitments", [])?;
-        
+        self.conn
+            .execute("DELETE FROM pending_account_commitments", [])?;
+
         // Get current tree roots
         let asset_root = CurveTreeRoot::new(&self.asset_tree.root_node()?)?;
         let account_root = CurveTreeRoot::new(&self.account_tree.root_node()?)?;
-        
+
         // Store roots in database
         self.asset_roots.add_root(&asset_root)?;
         self.account_roots.add_root(&account_root)?;
-        
+
         Ok(())
     }
 
-    fn append_account_commitment(
-        &mut self, 
-        commitment: AccountStateCommitment
-    ) -> Result<()> {
+    fn append_account_commitment(&mut self, commitment: AccountStateCommitment) -> Result<()> {
         // Store commitment in pending table instead of directly inserting into tree
         let commitment_data = commitment.encode();
         self.conn.execute(
             "INSERT INTO pending_account_commitments (commitment_data) VALUES (?1)",
             params![commitment_data],
         )?;
-        
+
         Ok(())
     }
 
     // Asset registration operations
     pub fn register_account_with_asset<R: RngCore + CryptoRng>(
-        &mut self, 
+        &mut self,
         rng: &mut R,
-        signer_name: &str, 
-        account_name: &str, 
-        asset_id: AssetId
+        signer_name: &str,
+        account_name: &str,
+        asset_id: AssetId,
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let asset_info = self.get_asset_by_id(asset_id)?;
-        
+
         // Check if already registered
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM asset_registered_accounts WHERE account_db_id = ?1 AND asset_db_id = ?2",
             params![account_info.id, asset_info.id],
             |row| row.get(0)
         )?;
-        
+
         if count > 0 {
-            return Err(anyhow!("Account {} is already registered with asset {}", account_name, asset_id));
+            return Err(anyhow!(
+                "Account {} is already registered with asset {}",
+                account_name,
+                asset_id
+            ));
         }
-        
+
         // Create registration proof and initial state
         let account_keys = account_info.account_keys()?;
         let (proof, mut asset_state) = AccountAssetRegistrationProof::new(
-            rng, 
-            &account_keys, 
-            asset_id, 
-            signer_name.as_bytes()
+            rng,
+            &account_keys,
+            asset_id,
+            signer_name.as_bytes(),
         )?;
-        
+
         // Verify the proof
         proof.verify(signer_name.as_bytes())?;
-        
+
         // Register in database
         self.conn.execute(
             "INSERT INTO asset_registered_accounts (account_db_id, asset_db_id) VALUES (?1, ?2)",
             params![account_info.id, asset_info.id],
         )?;
-        
+
         // Store the account asset state
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
-        
+
         Ok(())
     }
 
@@ -591,48 +671,58 @@ impl DartTestingDb {
     ) -> Result<()> {
         let account_info = self.get_dart_account(issuer_signer_name, account_name)?;
         let mut asset_info = self.get_asset_by_id(asset_id)?;
-        
+
         // Verify issuer owns the asset
         if asset_info.issuer_signer_id != account_info.signer_id {
-            return Err(anyhow!("Signer {} is not the issuer of asset {}", issuer_signer_name, asset_id));
+            return Err(anyhow!(
+                "Signer {} is not the issuer of asset {}",
+                issuer_signer_name,
+                asset_id
+            ));
         }
-        
+
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-        
+
         // Create minting proof
         let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
-        
+
         // Verify proof
         proof.verify(&self.account_roots, rng)?;
-        
+
         // Update asset total supply
-        asset_info.total_supply = asset_info.total_supply.checked_add(amount)
+        asset_info.total_supply = asset_info
+            .total_supply
+            .checked_add(amount)
             .ok_or_else(|| anyhow!("Asset supply overflow"))?;
-        
+
         self.conn.execute(
             "UPDATE assets SET total_supply = ?1 WHERE asset_id = ?2",
             params![asset_info.total_supply, asset_id],
         )?;
-        
+
         // Update account asset state
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
-        
+
         Ok(())
     }
 
-    pub fn get_account_asset_state(&self, account_info: &DartAccountInfo, asset_id: AssetId) -> Result<AccountAssetState> {
+    pub fn get_account_asset_state(
+        &self,
+        account_info: &DartAccountInfo,
+        asset_id: AssetId,
+    ) -> Result<AccountAssetState> {
         let mut stmt = self.conn.prepare(
             "SELECT aas.id, aas.account_db_id, aas.asset_db_id, aas.state_data 
              FROM account_asset_states aas
              JOIN assets a ON aas.asset_db_id = a.id
-             WHERE aas.account_db_id = ?1 AND a.asset_id = ?2"
+             WHERE aas.account_db_id = ?1 AND a.asset_id = ?2",
         )?;
-        
+
         let state_info = stmt.query_row(params![account_info.id, asset_id], |row| {
             Ok(AccountAssetStateInfo {
                 id: row.get(0)?,
@@ -641,20 +731,25 @@ impl DartTestingDb {
                 state_data: row.get(3)?,
             })
         })?;
-        
+
         state_info.get_state(account_info)
     }
 
-    fn update_account_asset_state(&mut self, account_info: &DartAccountInfo, asset_id: AssetId, state: &AccountAssetState) -> Result<()> {
+    fn update_account_asset_state(
+        &mut self,
+        account_info: &DartAccountInfo,
+        asset_id: AssetId,
+        state: &AccountAssetState,
+    ) -> Result<()> {
         let state_db = AccountAssetStateDb::from_state(state.clone());
         let state_data = state_db.encode();
-        
+
         self.conn.execute(
             "INSERT OR REPLACE INTO account_asset_states(account_db_id, asset_db_id, state_data) VALUES (?1, (SELECT id FROM assets WHERE asset_id = ?2), ?3)
             ON CONFLICT(account_db_id, asset_db_id) DO UPDATE SET state_data = ?3",
             params![account_info.id, asset_id, state_data],
         )?;
-        
+
         Ok(())
     }
 
@@ -666,16 +761,19 @@ impl DartTestingDb {
         legs: Vec<(String, String, String, String, AssetId, Balance)>, // (sender_signer, sender_account, receiver_signer, receiver_account, asset_id, amount)
     ) -> Result<SettlementId> {
         let mut leg_builders = Vec::new();
-        
-        for (sender_signer, sender_account, receiver_signer, receiver_account, asset_id, amount) in legs {
+
+        for (sender_signer, sender_account, receiver_signer, receiver_account, asset_id, amount) in
+            legs
+        {
             let sender_info = self.get_dart_account(&sender_signer, &sender_account)?;
             let receiver_info = self.get_dart_account(&receiver_signer, &receiver_account)?;
             let asset_info = self.get_asset_by_id(asset_id)?;
-            
+
             let sender_keys = self.get_account_public_keys(&sender_info)?;
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
-            let auditor = AuditorOrMediator::decode(&mut asset_info.auditor_or_mediator.as_slice())?;
-            
+            let auditor =
+                AuditorOrMediator::decode(&mut asset_info.auditor_or_mediator.as_slice())?;
+
             leg_builders.push(LegBuilder {
                 sender: sender_keys,
                 receiver: receiver_keys,
@@ -684,46 +782,46 @@ impl DartTestingDb {
                 mediator: auditor,
             });
         }
-        
+
         let settlement = SettlementBuilder::<()>::new(venue_id.as_bytes());
         let mut builder = settlement;
         for leg in leg_builders {
             builder = builder.leg(leg);
         }
         let settlement = builder.encryt_and_prove(rng, &self.asset_tree.0)?;
-        
+
         // Verify settlement proof
         settlement.verify(&self.asset_roots, rng)?;
-        
+
         // Get next settlement ID
         let settlement_id: SettlementId = self.conn.query_row(
             "SELECT COALESCE(MAX(settlement_id), -1) + 1 FROM settlements",
             [],
-            |row| row.get(0)
+            |row| row.get(0),
         )?;
-        
+
         // Store settlement
         self.conn.execute(
             "INSERT INTO settlements (settlement_id, status) VALUES (?1, 'Pending')",
             params![settlement_id],
         )?;
-        
+
         let settlement_db_id = self.conn.last_insert_rowid();
-        
+
         // Store settlement legs
         for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
             // For encrypted leg, try SCALE encoding first
             let encrypted_leg = leg_proof.leg_enc()?.encode();
             let has_mediator = leg_proof.has_mediator()?;
-            
+            let mediator_status = if has_mediator { Some("Pending") } else { None };
+
             self.conn.execute(
                 "INSERT INTO settlement_legs (settlement_db_id, leg_index, encrypted_leg, sender_status, receiver_status, mediator_status) 
                  VALUES (?1, ?2, ?3, 'Pending', 'Pending', ?4)",
-                params![settlement_db_id, leg_index as u32, encrypted_leg, 
-                       if has_mediator { Some("Pending") } else { None }],
+                params![settlement_db_id, leg_index as u32, encrypted_leg, mediator_status],
             )?;
         }
-        
+
         Ok(settlement_id)
     }
 
@@ -736,55 +834,72 @@ impl DartTestingDb {
         leg_index: LegId,
         asset_id: AssetId,
         amount: Balance,
+        mut proof_action: ProofAction,
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
-        
+
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-        
-        // Decrypt leg and verify sender
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
-        let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
-        
-        if leg.asset_id() != asset_id || leg.amount() != amount {
-            return Err(anyhow!("Leg details don't match provided asset_id/amount"));
-        }
-        
+
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-        
-        // Create sender affirmation proof
-        let proof = SenderAffirmationProof::new(
-            rng,
-            &leg_ref,
-            amount,
-            sk_e,
-            &encrypted_leg,
-            &mut asset_state,
-            &self.account_tree,
-        )?;
-        
+
+        let proof = if let Some(proof) = proof_action.get_proof()? {
+            proof
+        } else {
+            // Decrypt leg and verify sender
+            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Sender, &account_keys.enc)?;
+            let leg = encrypted_leg.decrypt(LegRole::Sender, &account_keys.enc)?;
+
+            if leg.asset_id() != asset_id || leg.amount() != amount {
+                return Err(anyhow!("Leg details don't match provided asset_id/amount"));
+            }
+
+            // Create sender affirmation proof
+            let proof = SenderAffirmationProof::new(
+                rng,
+                &leg_ref,
+                amount,
+                sk_e,
+                &encrypted_leg,
+                &mut asset_state,
+                &self.account_tree,
+            )?;
+
+            // Update the account state with the pending state change.
+            self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+            proof
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            // Save proof to file if requested
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
+
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
-        
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET sender_status = 'Affirmed' 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-        
-        // Update account asset state
+
+        // Commit the pending state change and save the state.
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
-        
+
         self.check_and_update_settlement_status(settlement_id)?;
-        
+
         Ok(())
     }
 
@@ -797,54 +912,71 @@ impl DartTestingDb {
         leg_index: LegId,
         asset_id: AssetId,
         amount: Balance,
+        mut proof_action: ProofAction,
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
-        
+
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-        
-        // Decrypt leg and verify receiver
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Receiver, &account_keys.enc)?;
-        let leg = encrypted_leg.decrypt(LegRole::Receiver, &account_keys.enc)?;
-        
-        if leg.asset_id() != asset_id || leg.amount() != amount {
-            return Err(anyhow!("Leg details don't match provided asset_id/amount"));
-        }
-        
+
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-        
-        // Create receiver affirmation proof
-        let proof = ReceiverAffirmationProof::new(
-            rng,
-            &leg_ref,
-            sk_e,
-            &encrypted_leg,
-            &mut asset_state,
-            &self.account_tree,
-        )?;
-        
+
+        let proof = if let Some(proof) = proof_action.get_proof()? {
+            proof
+        } else {
+            // Decrypt leg and verify receiver
+            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Receiver, &account_keys.enc)?;
+            let leg = encrypted_leg.decrypt(LegRole::Receiver, &account_keys.enc)?;
+
+            if leg.asset_id() != asset_id || leg.amount() != amount {
+                return Err(anyhow!("Leg details don't match provided asset_id/amount"));
+            }
+
+            // Create receiver affirmation proof
+            let proof = ReceiverAffirmationProof::new(
+                rng,
+                &leg_ref,
+                sk_e,
+                &encrypted_leg,
+                &mut asset_state,
+                &self.account_tree,
+            )?;
+
+            // Update the account state with the pending state change.
+            self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
+
+            proof
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            // Save proof to file if requested
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
+
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
-        
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET receiver_status = 'Affirmed' 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-        
-        // Update account asset state
+
+        // Commit the pending state change and save the state.
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
-        
+
         self.check_and_update_settlement_status(settlement_id)?;
-        
+
         Ok(())
     }
 
@@ -859,15 +991,15 @@ impl DartTestingDb {
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
-        
+
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-        
+
         // Decrypt leg
         let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Mediator, &account_keys.enc)?;
         let _leg = encrypted_leg.decrypt(LegRole::Mediator, &account_keys.enc)?;
-        
+
         // Create mediator affirmation proof
         let proof = MediatorAffirmationProof::new(
             rng,
@@ -877,10 +1009,10 @@ impl DartTestingDb {
             &account_keys.acct,
             accept,
         )?;
-        
+
         // Verify proof
         proof.verify(&encrypted_leg)?;
-        
+
         // Update settlement leg status
         let status = if accept { "Affirmed" } else { "Rejected" };
         self.conn.execute(
@@ -888,9 +1020,9 @@ impl DartTestingDb {
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?2) AND leg_index = ?3",
             params![status, settlement_id, leg_index],
         )?;
-        
+
         self.check_and_update_settlement_status(settlement_id)?;
-        
+
         Ok(())
     }
 
@@ -904,20 +1036,20 @@ impl DartTestingDb {
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
-        
+
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-        
+
         // Decrypt leg
         let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Receiver, &account_keys.enc)?;
         let leg = encrypted_leg.decrypt(LegRole::Receiver, &account_keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
-        
+
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
-        
+
         // Create receiver claim proof
         let proof = ReceiverClaimProof::new(
             rng,
@@ -928,39 +1060,42 @@ impl DartTestingDb {
             &mut asset_state,
             &self.account_tree,
         )?;
-        
+
         // Verify proof
         proof.verify(&encrypted_leg, &self.account_roots, rng)?;
-        
+
         // Update settlement leg status
         self.conn.execute(
             "UPDATE settlement_legs SET receiver_status = 'Finalized' 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
             params![settlement_id, leg_index],
         )?;
-        
+
         // Update account asset state
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, asset_id, &asset_state)?;
 
         // Append the account commitment to the account tree
         self.append_account_commitment(asset_state.current_state_commitment)?;
-        
+
         self.check_and_update_settlement_status(settlement_id)?;
-        
+
         Ok(())
     }
 
-    fn get_encrypted_leg(&self, settlement_id: SettlementId, leg_index: LegId) -> Result<LegEncrypted> {
+    fn get_encrypted_leg(
+        &self,
+        settlement_id: SettlementId,
+        leg_index: LegId,
+    ) -> Result<LegEncrypted> {
         let mut stmt = self.conn.prepare(
             "SELECT encrypted_leg FROM settlement_legs 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
         )?;
-        
-        let encrypted_leg_data: Vec<u8> = stmt.query_row(params![settlement_id, leg_index], |row| {
-            row.get(0)
-        })?;
-        
+
+        let encrypted_leg_data: Vec<u8> =
+            stmt.query_row(params![settlement_id, leg_index], |row| row.get(0))?;
+
         let encrypted_leg = LegEncrypted::decode(&mut encrypted_leg_data.as_slice())?;
         Ok(encrypted_leg)
     }
@@ -969,9 +1104,9 @@ impl DartTestingDb {
         // Get all legs for this settlement
         let mut stmt = self.conn.prepare(
             "SELECT sender_status, receiver_status, mediator_status FROM settlement_legs 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1)"
+             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1)",
         )?;
-        
+
         let rows = stmt.query_map(params![settlement_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -979,14 +1114,14 @@ impl DartTestingDb {
                 row.get::<_, Option<String>>(2)?,
             ))
         })?;
-        
+
         let mut all_affirmed = true;
         let mut any_rejected = false;
         let mut all_finalized = true;
-        
+
         for row in rows {
             let (sender_status, receiver_status, mediator_status) = row?;
-            
+
             if sender_status != "Affirmed" && sender_status != "Finalized" {
                 all_affirmed = false;
                 all_finalized = false;
@@ -1004,12 +1139,12 @@ impl DartTestingDb {
                     all_finalized = false;
                 }
             }
-            
+
             if sender_status != "Finalized" || receiver_status != "Finalized" {
                 all_finalized = false;
             }
         }
-        
+
         let new_status = if any_rejected {
             "Rejected"
         } else if all_finalized {
@@ -1019,25 +1154,27 @@ impl DartTestingDb {
         } else {
             "Pending"
         };
-        
+
         self.conn.execute(
             "UPDATE settlements SET status = ?1 WHERE settlement_id = ?2",
             params![new_status, settlement_id],
         )?;
-        
+
         Ok(())
     }
 
     // Utility methods
     pub fn list_signers(&self) -> Result<Vec<SignerInfo>> {
-        let mut stmt = self.conn.prepare("SELECT id, name FROM signers ORDER BY name")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM signers ORDER BY name")?;
         let rows = stmt.query_map([], |row| {
             Ok(SignerInfo {
                 id: row.get(0)?,
                 name: row.get(1)?,
             })
         })?;
-        
+
         let mut signers = Vec::new();
         for signer in rows {
             signers.push(signer?);
@@ -1045,7 +1182,10 @@ impl DartTestingDb {
         Ok(signers)
     }
 
-    pub fn list_dart_accounts(&self, signer_name: Option<&str>) -> Result<Vec<(String, DartAccountInfo)>> {
+    pub fn list_dart_accounts(
+        &self,
+        signer_name: Option<&str>,
+    ) -> Result<Vec<(String, DartAccountInfo)>> {
         let query = if signer_name.is_some() {
             "SELECT da.id, da.signer_id, da.name, da.account_key, da.encryption_key, da.key_seed, s.name
              FROM dart_accounts da
@@ -1058,22 +1198,22 @@ impl DartTestingDb {
              JOIN signers s ON da.signer_id = s.id
              ORDER BY s.name, da.name"
         };
-        
+
         let mut stmt = self.conn.prepare(query)?;
-        
+
         let account_iter = if let Some(signer) = signer_name {
             stmt.query_map(params![signer], Self::map_account_row)?
         } else {
             stmt.query_map([], Self::map_account_row)?
         };
-        
+
         let mut accounts = Vec::new();
         for account in account_iter {
             accounts.push(account?);
         }
         Ok(accounts)
     }
-    
+
     fn map_account_row(row: &rusqlite::Row) -> rusqlite::Result<(String, DartAccountInfo)> {
         Ok((
             row.get::<_, String>(6)?, // signer name
@@ -1084,7 +1224,7 @@ impl DartTestingDb {
                 account_key: row.get(3)?,
                 encryption_key: row.get(4)?,
                 key_seed: row.get(5)?,
-            }
+            },
         ))
     }
 
@@ -1101,7 +1241,7 @@ impl DartTestingDb {
                 total_supply: row.get(4)?,
             })
         })?;
-        
+
         let mut assets = Vec::new();
         for asset in rows {
             assets.push(asset?);
@@ -1110,10 +1250,10 @@ impl DartTestingDb {
     }
 
     pub fn get_settlement_status(&self, settlement_id: SettlementId) -> Result<String> {
-        let mut stmt = self.conn.prepare("SELECT status FROM settlements WHERE settlement_id = ?1")?;
-        let status = stmt.query_row(params![settlement_id], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status FROM settlements WHERE settlement_id = ?1")?;
+        let status = stmt.query_row(params![settlement_id], |row| row.get::<_, String>(0))?;
         Ok(status)
     }
 }

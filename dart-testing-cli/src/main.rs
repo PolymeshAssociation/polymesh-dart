@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dart_testing_cli::*;
@@ -101,6 +103,12 @@ enum Commands {
         /// Amount
         #[arg(short = 'm', long)]
         amount: Balance,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Affirm a settlement leg as receiver
@@ -120,6 +128,12 @@ enum Commands {
         /// Amount
         #[arg(short = 'm', long)]
         amount: Balance,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Affirm a settlement leg as mediator
@@ -317,8 +331,13 @@ fn main() -> Result<()> {
             leg_index,
             asset_id,
             amount,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
             db.sender_affirmation(
                 &mut rng,
                 &signer,
@@ -327,6 +346,7 @@ fn main() -> Result<()> {
                 leg_index,
                 asset_id,
                 amount,
+                proof_action,
             )?;
             println!(
                 "Sender '{}:{}' affirmed settlement {} leg {}",
@@ -340,8 +360,13 @@ fn main() -> Result<()> {
             leg_index,
             asset_id,
             amount,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
             db.receiver_affirmation(
                 &mut rng,
                 &signer,
@@ -350,6 +375,7 @@ fn main() -> Result<()> {
                 leg_index,
                 asset_id,
                 amount,
+                proof_action,
             )?;
             println!(
                 "Receiver '{}:{}' affirmed settlement {} leg {}",
