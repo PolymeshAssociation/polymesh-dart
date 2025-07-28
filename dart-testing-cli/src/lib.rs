@@ -736,6 +736,7 @@ impl DartTestingDb {
         signer_name: &str,
         account_name: &str,
         asset_id: AssetId,
+        mut proof_action: ProofAction
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let asset_info = self.get_asset_by_id(asset_id)?;
@@ -755,14 +756,31 @@ impl DartTestingDb {
             ));
         }
 
-        // Create registration proof and initial state
-        let account_keys = account_info.account_keys()?;
-        let (proof, mut asset_state) = AccountAssetRegistrationProof::new(
-            rng,
-            &account_keys,
-            asset_id,
-            signer_name.as_bytes(),
-        )?;
+        let (proof, mut asset_state) = if let Some(proof) = proof_action.get_proof()? {
+            // Get and update account asset state
+            let asset_state = self.get_account_asset_state(&account_info, asset_id)?;
+            (proof, asset_state)
+        } else {
+            let account_keys = account_info.account_keys()?;
+            // Create registration proof and initial state.
+            let (proof, asset_state) = AccountAssetRegistrationProof::new(
+                rng,
+                &account_keys,
+                asset_id,
+                signer_name.as_bytes(),
+            )?;
+
+            // Update the account state with the pending state change.
+            self.update_account_asset_state(&account_info, &asset_state)?;
+
+            (proof, asset_state)
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
 
         // Verify the proof
         proof.verify(signer_name.as_bytes())?;
@@ -790,6 +808,7 @@ impl DartTestingDb {
         account_name: &str,
         asset_id: AssetId,
         amount: Balance,
+        mut proof_action: ProofAction
     ) -> Result<()> {
         let account_info = self.get_dart_account(issuer_signer_name, account_name)?;
         let mut asset_info = self.get_asset_by_id(asset_id)?;
@@ -806,8 +825,23 @@ impl DartTestingDb {
         // Get and update account asset state
         let mut asset_state = self.get_account_asset_state(&account_info, asset_id)?;
 
-        // Create minting proof
-        let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
+        let proof = if let Some(proof) = proof_action.get_proof()? {
+            proof
+        } else {
+            // Create minting proof
+            let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
+
+            // Update the account state with the pending state change.
+            self.update_account_asset_state(&account_info, &asset_state)?;
+
+            proof
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
 
         // Verify the proof and handle the account state update.
         self.handle_account_state_update_proof(
@@ -880,12 +914,12 @@ impl DartTestingDb {
     }
 
     // Settlement operations
-    pub fn create_settlement<R: RngCore + CryptoRng>(
+    pub fn create_settlement_gen_proof<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         venue_id: &str,
         legs: Vec<(String, String, String, String, AssetId, Balance)>, // (sender_signer, sender_account, receiver_signer, receiver_account, asset_id, amount)
-    ) -> Result<SettlementId> {
+    ) -> Result<SettlementProof<()>> {
         let mut leg_builders = Vec::new();
 
         for (sender_signer, sender_account, receiver_signer, receiver_account, asset_id, amount) in
@@ -909,14 +943,23 @@ impl DartTestingDb {
             });
         }
 
-        let settlement = SettlementBuilder::<()>::new(venue_id.as_bytes());
+        let settlement = SettlementBuilder::new(venue_id.as_bytes());
         let mut builder = settlement;
         for leg in leg_builders {
             builder = builder.leg(leg);
         }
         let settlement = builder.encryt_and_prove(rng, &self.asset_tree.0)?;
 
-        // Verify settlement proof
+        Ok(settlement)
+    }
+
+    // Settlement operations
+    pub fn create_settlement_verify_proof<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        settlement: SettlementProof<()>,
+    ) -> Result<SettlementId> {
+         // Verify settlement proof
         settlement.verify(&self.asset_roots, rng)?;
 
         // Get next settlement ID
@@ -1027,6 +1070,7 @@ impl DartTestingDb {
         account_name: &str,
         settlement_id: SettlementId,
         leg_index: LegId,
+        proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in executed state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -1048,7 +1092,7 @@ impl DartTestingDb {
             settlement_id,
             leg_index,
             LegRole::Sender,
-            ProofAction::GenerateAndApply, // Always generate and apply proof
+            proof_action,
             |_account_keys, leg_ref, leg_enc, _leg, sk_e, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::new(
@@ -1086,6 +1130,7 @@ impl DartTestingDb {
         account_name: &str,
         settlement_id: SettlementId,
         leg_index: LegId,
+        proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in rejected state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -1107,7 +1152,7 @@ impl DartTestingDb {
             settlement_id,
             leg_index,
             LegRole::Sender,
-            ProofAction::GenerateAndApply, // Always generate and apply proof
+            proof_action,
             |_account_keys, leg_ref, leg_enc, leg, sk_e, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
@@ -1217,6 +1262,7 @@ impl DartTestingDb {
         settlement_id: SettlementId,
         leg_index: LegId,
         accept: bool,
+        mut proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in pending state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -1244,19 +1290,30 @@ impl DartTestingDb {
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
 
-        // Decrypt leg
-        let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Mediator, &account_keys.enc)?;
-        let _leg = encrypted_leg.decrypt(LegRole::Mediator, &account_keys.enc)?;
+        let proof = if let Some(proof) = proof_action.get_proof()? {
+            proof
+        } else {
+            // Decrypt leg
+            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Mediator, &account_keys.enc)?;
+            let _leg = encrypted_leg.decrypt(LegRole::Mediator, &account_keys.enc)?;
 
-        // Create mediator affirmation proof
-        let proof = MediatorAffirmationProof::new(
-            rng,
-            &leg_ref,
-            sk_e,
-            &encrypted_leg,
-            &account_keys.acct,
-            accept,
-        )?;
+            // Create mediator affirmation proof
+            MediatorAffirmationProof::new(
+                rng,
+                &leg_ref,
+                sk_e,
+                &encrypted_leg,
+                &account_keys.acct,
+                accept,
+            )?
+        };
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            // Save proof to file if requested
+            proof_action.save_proof(&proof)?;
+            return Ok(());
+        }
 
         // Verify proof
         proof.verify(&encrypted_leg)?;
@@ -1281,6 +1338,7 @@ impl DartTestingDb {
         account_name: &str,
         settlement_id: SettlementId,
         leg_index: LegId,
+        proof_action: ProofAction,
     ) -> Result<()> {
         // Check settlement is in executed state
         let settlement_status = self.get_settlement_status(settlement_id)?;
@@ -1303,7 +1361,7 @@ impl DartTestingDb {
             settlement_id,
             leg_index,
             LegRole::Receiver,
-            ProofAction::GenerateAndApply, // Always generate and apply proof
+            proof_action,
             |_account_keys, leg_ref, leg_enc, leg, sk_e, asset_state, account_tree, rng| {
                 // Create receiver claim proof
                 Ok(ReceiverClaimProof::new(

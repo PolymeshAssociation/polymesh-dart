@@ -61,6 +61,12 @@ enum Commands {
         /// Asset ID
         #[arg(short, long = "asset")]
         asset_id: AssetId,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Mint assets (only asset issuer can do this)
@@ -74,6 +80,12 @@ enum Commands {
         /// Amount to mint
         #[arg(short = 'm', long)]
         amount: Balance,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Create a settlement with legs
@@ -84,6 +96,12 @@ enum Commands {
         /// Settlement legs in format: sender_signer[-sender_account]:receiver_signer[-receiver_account]:asset_id:amount
         #[arg(short, long = "leg")]
         legs: Vec<String>,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Affirm a settlement leg as sender
@@ -150,6 +168,12 @@ enum Commands {
         /// Accept or reject the settlement
         #[arg(short, long, action)]
         accept: bool,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Claim assets as receiver
@@ -166,6 +190,12 @@ enum Commands {
         /// Asset ID (optional, will be used to help find the account)
         #[arg(short, long = "asset")]
         asset_id: Option<AssetId>,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Update sender counter for executed settlement
@@ -182,6 +212,12 @@ enum Commands {
         /// Asset ID (optional, will be used to help find the account)
         #[arg(short, long = "asset")]
         asset_id: Option<AssetId>,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// Reverse sender affirmation for rejected settlement
@@ -198,6 +234,12 @@ enum Commands {
         /// Asset ID (optional, will be used to help find the account)
         #[arg(short, long = "asset")]
         asset_id: Option<AssetId>,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
     },
 
     /// List all signers
@@ -295,9 +337,14 @@ fn main() -> Result<()> {
         Commands::RegisterAccount {
             signer_account,
             asset_id,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
-            db.register_account_with_asset(&mut rng, &signer, &account, asset_id)?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
+            db.register_account_with_asset(&mut rng, &signer, &account, asset_id, proof_action)?;
             println!(
                 "Registered account '{}:{}' with asset {}",
                 signer, account, asset_id
@@ -308,18 +355,25 @@ fn main() -> Result<()> {
             signer_account,
             asset_id,
             amount,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, Some(asset_id))?;
-            db.mint_assets(&mut rng, &signer, &account, asset_id, amount)?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
+            db.mint_assets(&mut rng, &signer, &account, asset_id, amount, proof_action)?;
             println!(
                 "Minted {} units of asset {} for account '{}:{}'",
                 amount, asset_id, signer, account
             );
         }
 
-        Commands::CreateSettlement { venue_id, legs } => {
+        Commands::CreateSettlement { venue_id, legs, write, read } => {
             let leg_count = legs.len();
             let mut settlement_legs = Vec::new();
+
+            let mut proof_action = ProofAction::new(write, read)?;
 
             for leg_str in legs {
                 let parts: Vec<&str> = leg_str.split(':').collect();
@@ -350,11 +404,24 @@ fn main() -> Result<()> {
                 ));
             }
 
-            let settlement_id = db.create_settlement(&mut rng, &venue_id, settlement_legs)?;
-            println!(
-                "Created settlement {} with {} legs",
-                settlement_id, leg_count
-            );
+            let proof = if let Some(proof) = proof_action.get_proof()? {
+                proof
+            } else {
+                db.create_settlement_gen_proof(&mut rng, &venue_id, settlement_legs)?
+            };
+
+            if proof_action.apply_proof() {
+                let settlement_id = db.create_settlement_verify_proof(&mut rng, proof)?;
+                println!(
+                    "Created settlement {} with {} legs",
+                    settlement_id, leg_count
+                );
+            } else {
+                // If proof action is to generate only, save proof and return
+                proof_action.save_proof(&proof)?;
+                println!("Created settlement proof with {} legs", leg_count);
+                return Ok(());
+            }
         }
 
         Commands::SenderAffirm {
@@ -420,8 +487,13 @@ fn main() -> Result<()> {
             settlement_id,
             leg_index,
             accept,
+            write,
+            read,
         } => {
             let (signer, account) = parse_signer_account(&signer_account);
+
+            let proof_action = ProofAction::new(write, read)?;
+
             let account = account.unwrap_or_else(|| "0".to_string());
             db.mediator_affirmation(
                 &mut rng,
@@ -430,6 +502,7 @@ fn main() -> Result<()> {
                 settlement_id,
                 leg_index,
                 accept,
+                proof_action,
             )?;
             println!(
                 "Mediator '{}:{}' {} settlement {} leg {}",
@@ -446,9 +519,14 @@ fn main() -> Result<()> {
             settlement_id,
             leg_index,
             asset_id,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
-            db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index)?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
+            db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
             println!(
                 "Receiver '{}:{}' claimed settlement {} leg {}",
                 signer, account, settlement_id, leg_index
@@ -460,9 +538,14 @@ fn main() -> Result<()> {
             settlement_id,
             leg_index,
             asset_id,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
-            db.sender_counter_update(&mut rng, &signer, &account, settlement_id, leg_index)?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
+            db.sender_counter_update(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
             println!(
                 "Sender '{}:{}' updated counter for settlement {} leg {}",
                 signer, account, settlement_id, leg_index
@@ -474,9 +557,14 @@ fn main() -> Result<()> {
             settlement_id,
             leg_index,
             asset_id,
+            write,
+            read,
         } => {
             let (signer, account) = resolve_signer_account(&db, &signer_account, asset_id)?;
-            db.sender_reversal(&mut rng, &signer, &account, settlement_id, leg_index)?;
+
+            let proof_action = ProofAction::new(write, read)?;
+
+            db.sender_reversal(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
             println!(
                 "Sender '{}:{}' reversed affirmation for settlement {} leg {}",
                 signer, account, settlement_id, leg_index
