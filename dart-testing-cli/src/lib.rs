@@ -109,13 +109,21 @@ pub enum ProofAction {
     /// Write proof to file instead of applying
     GenerateOnly(File),
     /// Read proof from file and apply
-    ApplyOnly(Vec<u8>),
+    ApplyOnly {
+        /// Serialized proof data to apply.
+        proof: Vec<u8>,
+        /// If true, only verify the proof without applying it.
+        dry_run: bool,
+    },
     /// Generate and apply proof
-    GenerateAndApply,
+    GenerateAndApply {
+        /// If true, only generate and verify the proof without applying it.
+        dry_run: bool,
+    },
 }
 
 impl ProofAction {
-    pub fn new(write: Option<PathBuf>, read: Option<PathBuf>) -> Result<Self> {
+    pub fn new(write: Option<PathBuf>, read: Option<PathBuf>, dry_run: bool) -> Result<Self> {
         match (write, read) {
             (Some(write_path), None) => {
                 let file = File::create(write_path)?;
@@ -123,20 +131,25 @@ impl ProofAction {
             }
             (None, Some(read_path)) => {
                 let proof = std::fs::read(read_path)?;
-                Ok(ProofAction::ApplyOnly(proof))
+                Ok(ProofAction::ApplyOnly {
+                    proof,
+                    dry_run,
+                })
             }
             (Some(_), Some(_)) => Err(anyhow!("Cannot specify both write and read paths")),
-            (None, None) => Ok(ProofAction::GenerateAndApply),
+            (None, None) => Ok(ProofAction::GenerateAndApply {
+                dry_run,
+            }),
         }
     }
 
     pub fn get_proof<T: Decode>(&self) -> Result<Option<T>> {
         match self {
             ProofAction::GenerateOnly(_) => Ok(None), // No proof generated yet
-            ProofAction::ApplyOnly(proof) => T::decode(&mut proof.as_slice())
+            ProofAction::ApplyOnly { proof, .. } => T::decode(&mut proof.as_slice())
                 .map(Some)
                 .map_err(|e| anyhow!("Failed to decode proof: {}", e)),
-            ProofAction::GenerateAndApply => Ok(None), // No proof generated yet
+            ProofAction::GenerateAndApply { .. } => Ok(None), // No proof generated yet
         }
     }
 
@@ -146,15 +159,23 @@ impl ProofAction {
                 file.write_all(&proof.encode())?;
                 Ok(())
             }
-            ProofAction::ApplyOnly(_) => Ok(()),
-            ProofAction::GenerateAndApply => Ok(()),
+            ProofAction::ApplyOnly { .. } => Ok(()),
+            ProofAction::GenerateAndApply { .. } => Ok(()),
         }
     }
 
     pub fn apply_proof(&self) -> bool {
         match self {
-            ProofAction::ApplyOnly(_) | ProofAction::GenerateAndApply => true,
+            ProofAction::ApplyOnly { .. } | ProofAction::GenerateAndApply { .. } => true,
             ProofAction::GenerateOnly(_) => false,
+        }
+    }
+
+    pub fn is_dry_run(&self) -> bool {
+        match self {
+            ProofAction::ApplyOnly { dry_run, .. } => *dry_run,
+            ProofAction::GenerateAndApply { dry_run } => *dry_run,
+            ProofAction::GenerateOnly(_) => false, // No dry run for generation
         }
     }
 }
@@ -785,6 +806,11 @@ impl DartTestingDb {
         // Verify the proof
         proof.verify(signer_name.as_bytes())?;
 
+        if proof_action.is_dry_run() {
+            // If dry run, just verify and return
+            return Ok(());
+        }
+
         // Register in database
         self.conn.execute(
             "INSERT INTO asset_registered_accounts (account_db_id, asset_db_id) VALUES (?1, ?2)",
@@ -848,6 +874,7 @@ impl DartTestingDb {
             &account_info,
             &mut asset_state,
             &proof,
+            proof_action.is_dry_run(),
             rng,
             |roots, rng| {
                 // Verify the minting proof
@@ -856,6 +883,11 @@ impl DartTestingDb {
                 Ok(())
             },
         )?;
+
+        if proof_action.is_dry_run() {
+            // If dry run, just verify and return
+            return Ok(());
+        }
 
         // Update asset total supply
         asset_info.total_supply = asset_info
@@ -1318,6 +1350,11 @@ impl DartTestingDb {
         // Verify proof
         proof.verify(&encrypted_leg)?;
 
+        if proof_action.is_dry_run() {
+            // If dry run, just verify and return
+            return Ok(());
+        }
+
         // Update settlement leg status
         let status = if accept { "Affirmed" } else { "Rejected" };
         self.conn.execute(
@@ -1608,6 +1645,7 @@ impl DartTestingDb {
         account_info: &DartAccountInfo,
         asset_state: &mut AccountAssetState,
         proof: &impl AccountStateUpdate,
+        dry_run: bool,
         rng: &mut R,
         verify: impl FnOnce(&AccountRootHistory, &mut R) -> Result<()>,
     ) -> Result<()> {
@@ -1617,6 +1655,11 @@ impl DartTestingDb {
 
         // Verify the account state update proof.
         verify(&self.account_roots, rng)?;
+
+        if dry_run {
+            // If dry run, just verify and return
+            return Ok(());
+        }
 
         // Insert the update account state commitment into the account curve tree.
         let account_commitment = proof.account_state_commitment();
@@ -1709,6 +1752,7 @@ impl DartTestingDb {
             &account_info,
             &mut asset_state,
             &proof,
+            proof_action.is_dry_run(),
             rng,
             |roots, rng| {
                 // Verify the sender affirmation proof
@@ -1717,6 +1761,11 @@ impl DartTestingDb {
                 Ok(())
             },
         )?;
+
+        if proof_action.is_dry_run() {
+            // If dry run, just verify and return
+            return Ok(());
+        }
 
         // Update settlement leg status
         update_leg_status(&self.conn, settlement_id, leg_index)?;

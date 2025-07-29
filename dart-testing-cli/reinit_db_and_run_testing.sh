@@ -7,7 +7,7 @@ function run() {
     # Debug
     #cargo run -- "$@"
     # Release
-    cargo run --quiet --release -- "$@" || exit 1
+    /bin/time -f "time: user: %U, rea: %e" cargo run --quiet --release -- "$@" || exit 1
 }
 
 run init
