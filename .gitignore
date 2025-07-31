@@ -4,4 +4,5 @@ Cargo.lock
 .VSCODE
 .DS_Store
 .idea
+*.dat
 *.db
