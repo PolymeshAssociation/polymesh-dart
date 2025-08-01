@@ -426,17 +426,29 @@ impl AssetRootHistory {
         Self { db }
     }
 
-    pub fn add_root(&mut self, root: &CurveTreeRoot<ASSET_TREE_L>) -> Result<()> {
+    pub fn add_root(&mut self, block: polymesh_dart::BlockNumber, root: &CurveTreeRoot<ASSET_TREE_L>) -> Result<()> {
         let root_bytes = Encode::encode(root);
         let mut stmt = self
             .db
-            .prepare("INSERT INTO asset_root_history (root_data) VALUES (?1)")?;
-        stmt.execute([root_bytes])?;
+            .prepare("INSERT INTO asset_root_history (block_number, root_data) VALUES (?1, ?2)")?;
+        stmt.execute((block as i64, root_bytes))?;
         Ok(())
     }
 }
 
 impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetRootHistory {
+    fn get_block_root(&self, block: polymesh_dart::BlockNumber) -> Option<CurveTreeRoot<ASSET_TREE_L>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")
+            .ok()?;
+        let root_data: Vec<u8> = stmt
+            .query_row([block as i64], |row| row.get(0))
+            .ok()?;
+        // The root was encoded as CurveTreeRoot, so decode it directly
+        Decode::decode(&mut root_data.as_slice()).ok()
+    }
+
     fn validate_root(&self, root: &CurveTreeRoot<ASSET_TREE_L>) -> bool {
         let mut stmt = self
             .db
@@ -462,17 +474,29 @@ impl AccountRootHistory {
         Self { db }
     }
 
-    pub fn add_root(&mut self, root: &CurveTreeRoot<ACCOUNT_TREE_L>) -> Result<()> {
+    pub fn add_root(&mut self, block: polymesh_dart::BlockNumber, root: &CurveTreeRoot<ACCOUNT_TREE_L>) -> Result<()> {
         let root_bytes = Encode::encode(root);
         let mut stmt = self
             .db
-            .prepare("INSERT INTO account_root_history (root_data) VALUES (?1)")?;
-        stmt.execute([root_bytes])?;
+            .prepare("INSERT INTO account_root_history (block_number, root_data) VALUES (?1, ?2)")?;
+        stmt.execute((block as i64, root_bytes))?;
         Ok(())
     }
 }
 
 impl ValidateCurveTreeRoot<ACCOUNT_TREE_L> for &AccountRootHistory {
+    fn get_block_root(&self, block: polymesh_dart::BlockNumber) -> Option<CurveTreeRoot<ACCOUNT_TREE_L>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")
+            .ok()?;
+        let root_data: Vec<u8> = stmt
+            .query_row([block as i64], |row| row.get(0))
+            .ok()?;
+        // The root was encoded as CurveTreeRoot, so decode it directly
+        Decode::decode(&mut root_data.as_slice()).ok()
+    }
+
     fn validate_root(&self, root: &CurveTreeRoot<ACCOUNT_TREE_L>) -> bool {
         let mut stmt = self
             .db

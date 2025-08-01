@@ -87,6 +87,9 @@ pub trait CurveTreeLookup<const L: usize> {
 ///
 /// This allows verifying proofs against older tree roots.
 pub trait ValidateCurveTreeRoot<const L: usize> {
+    /// Returns the root of the curve tree for a given block number.
+    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>>;
+
     /// Validates the root of the curve tree.
     fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool;
 
@@ -95,7 +98,8 @@ pub trait ValidateCurveTreeRoot<const L: usize> {
 }
 
 pub struct RootHistory<const L: usize> {
-    roots: Vec<CurveTreeRoot<L>>,
+    block_roots: BTreeMap<BlockNumber, CurveTreeRoot<L>>,
+    next_block_number: BlockNumber,
     history_length: usize,
     params: CurveTreeParameters,
 }
@@ -104,7 +108,8 @@ impl<const L: usize> RootHistory<L> {
     /// Creates a new instance of `RootHistory` with the given history length and parameters.
     pub fn new(history_length: usize, params: &CurveTreeParameters) -> Self {
         Self {
-            roots: Vec::with_capacity(history_length),
+            block_roots: BTreeMap::new(),
+            next_block_number: 0,
             history_length,
             params: params.clone(),
         }
@@ -112,16 +117,26 @@ impl<const L: usize> RootHistory<L> {
 
     /// Adds a new root to the history.
     pub fn add_root(&mut self, root: CurveTreeRoot<L>) {
-        if self.roots.len() >= self.history_length {
-            self.roots.remove(0);
+        let block_number = self.next_block_number;
+        self.next_block_number += 1;
+
+        if self.block_roots.len() >= self.history_length {
+            let to_remove = block_number - self.history_length as BlockNumber;
+            self.block_roots.remove(&to_remove);
         }
-        self.roots.push(root);
+        self.block_roots.insert(block_number, root);
     }
 }
 
 impl<const L: usize> ValidateCurveTreeRoot<L> for &RootHistory<L> {
+    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>> {
+        self.block_roots.get(&block).cloned()
+    }
+
     fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool {
-        self.roots.contains(root)
+        self.block_roots
+            .values()
+            .any(|r| r == root)
     }
 
     fn params(&self) -> &CurveTreeParameters {

@@ -437,6 +437,7 @@ impl DartTestingDb {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS asset_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                block_number INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],
@@ -446,6 +447,7 @@ impl DartTestingDb {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS account_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                block_number INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],
@@ -512,6 +514,25 @@ impl DartTestingDb {
         )?;
 
         Ok(())
+    }
+
+    /// Get the next block number from the database.
+    /// This is used to track the current block number for root history.
+    pub fn get_next_block_number(&self) -> Result<BlockNumber> {
+        // query both of the root history tables for the maximum block number
+        let asset_max: i64 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(block_number), 0) FROM asset_root_history", [], |row| {
+                row.get(0)
+            })?;
+        let account_max: i64 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(block_number), 0) FROM account_root_history", [], |row| {
+                row.get(0)
+            })?;
+        // The next block number is the maximum of both tables + 1
+        let next_block = std::cmp::max(asset_max, account_max) + 1;
+        Ok(next_block as BlockNumber)
     }
 
     // Signer operations
@@ -710,8 +731,9 @@ impl DartTestingDb {
         let account_root = CurveTreeRoot::new(&self.account_tree.root_node()?)?;
 
         // Store roots in database
-        self.asset_roots.add_root(&asset_root)?;
-        self.account_roots.add_root(&account_root)?;
+        let block_number = self.get_next_block_number()?;
+        self.asset_roots.add_root(block_number, &asset_root)?;
+        self.account_roots.add_root(block_number, &account_root)?;
 
         Ok(())
     }
