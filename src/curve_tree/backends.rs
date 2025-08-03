@@ -1,10 +1,13 @@
 use ark_ec::models::short_weierstrass::SWCurveConfig;
 use ark_std::{collections::BTreeMap, vec::Vec};
-use curve_tree_relations::curve_tree::SelRerandParameters;
+use curve_tree_relations::curve_tree::{
+    Root,
+    SelRerandParameters
+};
 
 use super::common::*;
 use crate::{
-    LeafIndex, NodeLevel, PallasParameters,
+    BlockNumber, LeafIndex, NodeLevel, PallasParameters,
     curve_tree::{CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot},
     error::*,
 };
@@ -13,6 +16,7 @@ pub struct LeafPathAndRoot<'p, const L: usize> {
     pub leaf: LeafValue<PallasParameters>,
     pub leaf_index: LeafIndex,
     pub path: CurveTreePath<L>,
+    pub block_number: BlockNumber,
     pub root: CurveTreeRoot<L>,
     pub params: &'p CurveTreeParameters,
 }
@@ -44,6 +48,10 @@ impl<'p, const L: usize> CurveTreeLookup<L> for LeafPathAndRoot<'p, L> {
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         Ok(self.root.clone())
     }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        Ok(self.block_number)
+    }
 }
 
 pub trait CurveTreeBackend<
@@ -54,10 +62,24 @@ pub trait CurveTreeBackend<
 >: Sized
 {
     type Error: From<crate::Error>;
+    type BlockNumber: From<BlockNumber> + Into<BlockNumber> + Copy;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error>;
 
     fn parameters(&self) -> &SelRerandParameters<P0, P1>;
+
+    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error>;
+
+    fn set_block_number(&mut self, _block_number: BlockNumber) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn store_root(&mut self, root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error>;
+
+    fn fetch_root(
+        &self,
+        block_number: Self::BlockNumber,
+    ) -> Result<Root<L, M, P0, P1>, Self::Error>;
 
     fn height(&self) -> NodeLevel;
 
@@ -96,6 +118,7 @@ pub trait AsyncCurveTreeBackend<
 >: Sized
 {
     type Error: From<crate::Error>;
+    type BlockNumber: From<BlockNumber> + Into<BlockNumber> + Copy;
 
     fn new(
         height: NodeLevel,
@@ -103,6 +126,26 @@ pub trait AsyncCurveTreeBackend<
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     fn parameters(&self) -> impl Future<Output = &SelRerandParameters<P0, P1>> + Send;
+
+    fn get_block_number(
+        &self,
+    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send;
+
+    fn set_block_number(&mut self, _block_number: BlockNumber) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            Ok(())
+        }
+    }
+
+    fn store_root(
+        &mut self,
+        root: Root<L, M, P0, P1>,
+    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send;
+
+    fn fetch_root(
+        &self,
+        block_number: Self::BlockNumber,
+    ) -> impl Future<Output = Result<Root<L, M, P0, P1>, Self::Error>> + Send;
 
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
 
@@ -148,6 +191,8 @@ pub struct CurveTreeMemoryBackend<
     leafs: Vec<LeafValue<P0>>,
     next_leaf_index: LeafIndex,
     nodes: BTreeMap<NodeLocation<L>, Inner<M, P0, P1>>,
+    block_number: BlockNumber,
+    roots: BTreeMap<BlockNumber, Root<L, M, P0, P1>>,
     parameters: SelRerandParameters<P0, P1>,
 }
 
@@ -164,6 +209,7 @@ impl<
             .field("leafs", &self.leafs)
             .field("next_leaf_index", &self.next_leaf_index)
             .field("nodes", &self.nodes)
+            .field("block_number", &self.block_number)
             .finish()
     }
 }
@@ -181,6 +227,8 @@ impl<
             leafs: Vec::new(),
             next_leaf_index: 0,
             nodes: BTreeMap::new(),
+            block_number: 0,
+            roots: BTreeMap::new(),
             parameters: SelRerandParameters::new(gens_length, gens_length)?,
         })
     }
@@ -194,6 +242,7 @@ impl<
 > CurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
 {
     type Error = Error;
+    type BlockNumber = BlockNumber;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
@@ -201,6 +250,32 @@ impl<
 
     fn parameters(&self) -> &SelRerandParameters<P0, P1> {
         &self.parameters
+    }
+
+    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
+        Ok(self.block_number)
+    }
+
+    fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
+        self.block_number = block_number;
+        Ok(())
+    }
+
+    fn store_root(&mut self, root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error> {
+        let block_number = self.block_number + 1;
+        self.block_number = block_number;
+        eprintln!("Storing root for block number: {}", block_number);
+        self.roots.insert(block_number, root);
+        Ok(block_number)
+    }
+
+    fn fetch_root(
+        &self,
+        block_number: Self::BlockNumber,
+    ) -> Result<Root<L, M, P0, P1>, Self::Error> {
+        eprintln!("Fetching root for block number: {}", block_number);
+        self.roots.get(&block_number).cloned()
+            .ok_or(Error::CurveTreeRootNotFound)
     }
 
     fn height(&self) -> NodeLevel {
@@ -267,6 +342,7 @@ where
     Self: CurveTreeBackend<L, M, P0, P1, Error = Error>,
 {
     type Error = Error;
+    type BlockNumber = BlockNumber;
 
     async fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
@@ -274,6 +350,34 @@ where
 
     async fn parameters(&self) -> &SelRerandParameters<P0, P1> {
         &self.parameters
+    }
+
+    async fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
+        Ok(self.block_number)
+    }
+
+    async fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
+        self.block_number = block_number;
+        Ok(())
+    }
+
+    async fn store_root(
+        &mut self,
+        root: Root<L, M, P0, P1>,
+    ) -> Result<Self::BlockNumber, Self::Error> {
+        let block_number = self.block_number + 1;
+        self.block_number = block_number;
+        eprintln!("Storing root for block number: {}", block_number);
+        self.roots.insert(block_number, root);
+        Ok(block_number)
+    }
+
+    async fn fetch_root(
+        &self,
+        block_number: Self::BlockNumber,
+    ) -> Result<Root<L, M, P0, P1>, Self::Error> {
+        eprintln!("Fetching root for block number: {}", block_number);
+        self.roots.get(&block_number).cloned().ok_or(Error::CurveTreeRootNotFound)
     }
 
     async fn height(&self) -> NodeLevel {

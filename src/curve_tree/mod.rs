@@ -81,17 +81,23 @@ pub trait CurveTreeLookup<const L: usize> {
 
     /// Returns the root node of the curve tree.
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error>;
+
+    /// Returns the block number associated with the current state of the tree.
+    fn get_block_number(&self) -> Result<BlockNumber, Error>;
 }
 
 /// Check if the tree root is valid.
 ///
 /// This allows verifying proofs against older tree roots.
 pub trait ValidateCurveTreeRoot<const L: usize> {
-    /// Returns the root of the curve tree for a given block number.
-    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>>;
+    type BlockNumber: From<BlockNumber> + Copy;
 
-    /// Validates the root of the curve tree.
-    fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool;
+    /// Returns the root of the curve tree for a given block number.
+    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>>;
+
+    fn validate_root(&self, _root: &CurveTreeRoot<L>) -> bool {
+        false
+    }
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
@@ -129,14 +135,10 @@ impl<const L: usize> RootHistory<L> {
 }
 
 impl<const L: usize> ValidateCurveTreeRoot<L> for &RootHistory<L> {
-    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>> {
-        self.block_roots.get(&block).cloned()
-    }
+    type BlockNumber = BlockNumber;
 
-    fn validate_root(&self, root: &CurveTreeRoot<L>) -> bool {
-        self.block_roots
-            .values()
-            .any(|r| r == root)
+    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>> {
+        self.block_roots.get(&block).cloned()
     }
 
     fn params(&self) -> &CurveTreeParameters {
@@ -188,6 +190,21 @@ impl<const L: usize> FullCurveTree<L> {
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
     }
+
+    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
+        self.tree.set_block_number(block_number)?;
+        Ok(())
+    }
+
+    pub fn store_root(&mut self) -> Result<(), Error> {
+        self.tree.store_root()?;
+        Ok(())
+    }
+
+    pub fn fetch_root(&self, block: BlockNumber) -> Result<CurveTreeRoot<L>, Error> {
+        let root = self.tree.fetch_root(block)?;
+        Ok(CurveTreeRoot::new(&root)?)
+    }
 }
 
 impl<const L: usize> CurveTreeLookup<L> for &FullCurveTree<L> {
@@ -208,6 +225,10 @@ impl<const L: usize> CurveTreeLookup<L> for &FullCurveTree<L> {
 
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
+    }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        Ok(self.tree.get_block_number()?)
     }
 }
 
@@ -241,6 +262,34 @@ impl<const L: usize> VerifierCurveTree<L> {
     /// Get the root node of the curve tree.
     pub fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
         Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
+    }
+
+    pub fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        Ok(self.tree.get_block_number()?)
+    }
+
+    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
+        self.tree.set_block_number(block_number)?;
+        Ok(())
+    }
+
+    pub fn store_root(&mut self) -> Result<(), Error> {
+        self.tree.store_root()?;
+        Ok(())
+    }
+}
+
+impl<const L: usize> ValidateCurveTreeRoot<L> for &VerifierCurveTree<L> {
+    type BlockNumber = BlockNumber;
+
+    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>> {
+        self.tree.fetch_root(block).ok().map(|root| {
+            CurveTreeRoot::new(&root).expect("Failed to create CurveTreeRoot from block root")
+        })
+    }
+
+    fn params(&self) -> &CurveTreeParameters {
+        self.tree.parameters()
     }
 }
 
@@ -278,6 +327,15 @@ impl<
         let leaf_buf = leaf.encode();
         self.leaf_to_index.insert(leaf_buf, leaf_index);
         Ok(leaf_index)
+    }
+
+    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), E> {
+        self.tree.set_block_number(block_number)?;
+        Ok(())
+    }
+
+    pub fn store_root(&mut self) -> Result<BlockNumber, E> {
+        self.tree.store_root()
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
@@ -335,5 +393,10 @@ impl<
                 .root_node()
                 .map_err(|_| Error::CurveTreeRootNotFound)?,
         )?)
+    }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        Ok(self.tree.get_block_number()
+            .map_err(|_| Error::CurveTreeBlockNumberNotFound)?)
     }
 }

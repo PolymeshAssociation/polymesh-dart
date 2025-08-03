@@ -70,6 +70,10 @@ pub enum Error {
     /// Arkworks serialization error.
     #[error("Arkworks serialization error: {0}")]
     ArkworksSerializationError(ark_serialize::SerializationError),
+
+    /// Curve tree block number not found.
+    #[error("Curve tree block number not found.")]
+    CurveTreeBlockNumberNotFound,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

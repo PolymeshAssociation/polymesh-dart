@@ -13,7 +13,7 @@ use std::{
 
 use polymesh_dart::{
     curve_tree::{
-        CurveTreeLookup, FullCurveTree, ProverCurveTree, RootHistory, ValidateCurveTreeRoot,
+        CurveTreeLookup, FullCurveTree, ProverCurveTree, ValidateCurveTreeRoot,
         VerifierCurveTree,
     },
     *,
@@ -1137,6 +1137,7 @@ impl DartProverAccountTree {
     }
 
     pub fn apply_updates(&mut self, chain: &DartChainState) -> Result<()> {
+        let block_number = chain.get_block_number();
         let new_leafs = chain.get_new_account_leafs(self.last_leaf_index);
         log::info!(
             "Applying {} new account leafs to the prover account tree",
@@ -1145,6 +1146,10 @@ impl DartProverAccountTree {
         for leaf in new_leafs {
             self.account_tree.insert(leaf.as_leaf_value()?)?;
             self.last_leaf_index += 1;
+        }
+        self.account_tree.set_block_number(block_number)?;
+        if let Err(err) = self.account_tree.store_root() {
+            log::error!("Failed to store prover account tree root: {}", err);
         }
         log::info!(
             "Prover account tree now has {} leaves",
@@ -1162,15 +1167,14 @@ pub struct DartChainState {
     /// Account owner map.
     account_owners: HashMap<AccountPublicKey, SignerAddress>,
 
+    block_number: BlockNumber,
     asset_tree: AssetCurveTree,
-    asset_roots: RootHistory<ASSET_TREE_L>,
     next_asset_id: AssetId,
     asset_details: HashMap<AssetId, DartAssetDetails>,
 
     /// Accounts initialized with assets.
     account_assets: HashSet<(AccountPublicKey, AssetId)>,
     account_tree: VerifierCurveTree<ACCOUNT_TREE_L>,
-    account_roots: RootHistory<ACCOUNT_TREE_L>,
     account_nullifiers: HashSet<AccountStateNullifier>,
 
     /// Account leafs in the order they have been inserted.
@@ -1195,13 +1199,12 @@ impl DartChainState {
             accounts: AccountLookupMap::new(),
             account_owners: HashMap::new(),
 
-            asset_roots: RootHistory::new(10, asset_tree.params()),
+            block_number: 0,
             asset_tree,
             next_asset_id: 0,
             asset_details: HashMap::new(),
 
             account_assets: HashSet::new(),
-            account_roots: RootHistory::new(10, account_tree.params()),
             account_tree,
             account_nullifiers: HashSet::new(),
             account_leafs: Vec::new(),
@@ -1224,6 +1227,10 @@ impl DartChainState {
         &self.account_leafs
     }
 
+    pub fn get_block_number(&self) -> BlockNumber {
+        self.block_number
+    }
+
     pub fn get_new_account_leafs(&self, last_idx: usize) -> &[AccountStateCommitment] {
         if last_idx >= self.account_leafs.len() {
             log::info!("No new account leafs to return");
@@ -1243,8 +1250,13 @@ impl DartChainState {
             self.account_tree.insert(commitment.as_leaf_value()?)?;
             self.account_leafs.push(commitment);
         }
+        // Make sure the curve tree are using the same block number.
+        self.block_number += 1;
+        self.asset_tree.set_block_number(self.block_number)?;
+        self.account_tree.set_block_number(self.block_number)?;
         // Push the current account tree root to the history.
-        self.account_roots.add_root(self.account_tree.root_node()?);
+        self.asset_tree.store_root()?;
+        self.account_tree.store_root()?;
 
         Ok(())
     }
@@ -1330,7 +1342,7 @@ impl DartChainState {
         self.asset_tree.set_asset_state(asset_state)?;
         self.asset_details.insert(asset_id, asset_details.clone());
         // Push the current asset tree root to the history.
-        self.asset_roots.add_root(self.asset_tree.root_node()?);
+        self.asset_tree.store_root()?;
 
         Ok(asset_details)
     }
@@ -1438,7 +1450,7 @@ impl DartChainState {
         let mut rng = rand::thread_rng();
         // Verify the minting proof.
         proof
-            .verify(&self.account_roots, &mut rng)
+            .verify(&self.account_tree, &mut rng)
             .context("Invalid minting proof")?;
 
         // Add the new account state commitment to the account tree.
@@ -1469,7 +1481,7 @@ impl DartChainState {
         let mut rng = rand::thread_rng();
         // verify the settlement proof.
         proof
-            .verify(&self.asset_roots, &mut rng)
+            .verify(&self.asset_tree, &mut rng)
             .context("Invalid settlement proof")?;
 
         // Allocate a new settlement ID.
@@ -1542,7 +1554,7 @@ impl DartChainState {
 
         let mut rng = rand::thread_rng();
         // Verify the sender affirmation proof and update the settlement status.
-        settlement.sender_affirmation(&proof, &self.account_roots, &mut rng)?;
+        settlement.sender_affirmation(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1579,7 +1591,7 @@ impl DartChainState {
 
         let mut rng = rand::thread_rng();
         // Verify the receiver affirmation proof and update the settlement status.
-        settlement.receiver_affirmation(&proof, &self.account_roots, &mut rng)?;
+        settlement.receiver_affirmation(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1644,7 +1656,7 @@ impl DartChainState {
 
         let mut rng = rand::thread_rng();
         // Verify the sender counter update proof and update the settlement status.
-        settlement.sender_counter_update(&proof, &self.account_roots, &mut rng)?;
+        settlement.sender_counter_update(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1685,7 +1697,7 @@ impl DartChainState {
 
         let mut rng = rand::thread_rng();
         // Verify the sender reversal proof and update the settlement status.
-        settlement.sender_revert(&proof, &self.account_roots, &mut rng)?;
+        settlement.sender_revert(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;
@@ -1722,7 +1734,7 @@ impl DartChainState {
 
         let mut rng = rand::thread_rng();
         // Verify the receiver claim proof and update the settlement status.
-        settlement.receiver_claim(&proof, &self.account_roots, &mut rng)?;
+        settlement.receiver_claim(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;

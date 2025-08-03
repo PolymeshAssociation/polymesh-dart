@@ -783,6 +783,33 @@ impl AssetCurveTree {
     pub fn root_node(&self) -> Result<CurveTreeRoot<ASSET_TREE_L>, Error> {
         self.tree.root_node()
     }
+
+    pub fn set_block_number(
+        &mut self,
+        block_number: BlockNumber,
+    ) -> Result<(), Error> {
+        self.tree.set_block_number(block_number)?;
+        Ok(())
+    }
+
+    pub fn store_root(
+        &mut self,
+    ) -> Result<(), Error> {
+        self.tree.store_root()?;
+        Ok(())
+    }
+}
+
+impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetCurveTree {
+    type BlockNumber = BlockNumber;
+
+    fn get_block_root(&self, block_number: BlockNumber) -> Option<CurveTreeRoot<ASSET_TREE_L>> {
+        self.tree.fetch_root(block_number).ok()
+    }
+
+    fn params(&self) -> &CurveTreeParameters {
+        self.tree.params()
+    }
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
@@ -847,7 +874,7 @@ pub struct AssetMintingProof {
     pub pk: AccountPublicKey,
     pub asset_id: AssetId,
     pub amount: Balance,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -880,7 +907,8 @@ impl AssetMintingProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
+        eprintln!("Mint proof root block: {}", root_block);
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
@@ -899,7 +927,7 @@ impl AssetMintingProof {
             pk,
             asset_id: account_asset.asset_id,
             amount,
-            root,
+            root_block,
             updated_account_state_commitment: mint_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -912,12 +940,16 @@ impl AssetMintingProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        eprintln!(
+            "Verifying asset minting proof for root block {}",
+            self.root_block
+        );
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for asset minting proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
             self.pk.get_affine()?,
@@ -1186,7 +1218,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
     ) -> Result<SettlementProof<T>, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        let root = asset_tree.root_node()?;
+        let root_block = asset_tree.get_block_number()?;
 
         let mut legs = Vec::with_capacity(self.legs.len());
 
@@ -1198,7 +1230,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
 
         let legs =
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        Ok(SettlementProof { memo, root, legs })
+        Ok(SettlementProof { memo, root_block, legs })
     }
 }
 
@@ -1206,14 +1238,14 @@ impl<T: DartLimits> SettlementBuilder<T> {
 #[scale_info(skip_type_params(T))]
 pub struct SettlementProof<T: DartLimits> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
-    root: CurveTreeRoot<ASSET_TREE_L>,
+    root_block: BlockNumber,
 
     pub legs: BoundedVec<SettlementLegProof, T::MaxSettlementLegs>,
 }
 
 impl<T: DartLimits> PartialEq for SettlementProof<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.memo == other.memo && self.root == other.root && self.legs == other.legs
+        self.memo == other.memo && self.root_block == other.root_block && self.legs == other.legs
     }
 }
 
@@ -1232,12 +1264,12 @@ impl<T: DartLimits> SettlementProof<T> {
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !asset_tree.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = asset_tree.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for settlement proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
@@ -1541,7 +1573,7 @@ impl LegEncrypted {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderAffirmationProof {
     pub leg_ref: LegRef,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1574,7 +1606,7 @@ impl SenderAffirmationProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
@@ -1595,7 +1627,7 @@ impl SenderAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root,
+            root_block,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1609,13 +1641,13 @@ impl SenderAffirmationProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for sender affirmation proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
-
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
+ 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1648,7 +1680,7 @@ impl AccountStateUpdate for SenderAffirmationProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverAffirmationProof {
     pub leg_ref: LegRef,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1680,7 +1712,7 @@ impl ReceiverAffirmationProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
@@ -1700,7 +1732,7 @@ impl ReceiverAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root,
+            root_block,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1714,12 +1746,12 @@ impl ReceiverAffirmationProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for receiver affirmation proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -1753,7 +1785,7 @@ impl AccountStateUpdate for ReceiverAffirmationProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct ReceiverClaimProof {
     pub leg_ref: LegRef,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1786,7 +1818,7 @@ impl ReceiverClaimProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
@@ -1807,7 +1839,7 @@ impl ReceiverClaimProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root,
+            root_block,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1821,12 +1853,12 @@ impl ReceiverClaimProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for receiver claim proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -1860,7 +1892,7 @@ impl AccountStateUpdate for ReceiverClaimProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderCounterUpdateProof {
     pub leg_ref: LegRef,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1892,7 +1924,7 @@ impl SenderCounterUpdateProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
@@ -1912,7 +1944,7 @@ impl SenderCounterUpdateProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root,
+            root_block,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1926,12 +1958,12 @@ impl SenderCounterUpdateProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for sender counter update proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -1965,7 +1997,7 @@ impl AccountStateUpdate for SenderCounterUpdateProof {
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SenderReversalProof {
     pub leg_ref: LegRef,
-    pub root: CurveTreeRoot<ACCOUNT_TREE_L>,
+    pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
@@ -1998,7 +2030,7 @@ impl SenderReversalProof {
         let current_account_path = tree_lookup
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
-        let root = tree_lookup.root_node()?;
+        let root_block = tree_lookup.get_block_number()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
@@ -2019,7 +2051,7 @@ impl SenderReversalProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root,
+            root_block,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -2033,12 +2065,12 @@ impl SenderReversalProof {
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        // Validate the root of the curve tree.
-        if !tree_roots.validate_root(&self.root) {
+        // Get the curve tree root.
+        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for sender reversal proof");
-            return Err(Error::CurveTreeRootNotFound);
-        }
-        let root = self.root.decode()?;
+            Error::CurveTreeRootNotFound
+        })?;
+        let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;

@@ -407,7 +407,13 @@ fn main() -> Result<()> {
             );
         }
 
-        Commands::CreateSettlement { venue_id, legs, write, read , dry_run } => {
+        Commands::CreateSettlement {
+            venue_id,
+            legs,
+            write,
+            read,
+            dry_run,
+        } => {
             let leg_count = legs.len();
             let mut settlement_legs = Vec::new();
 
@@ -568,7 +574,14 @@ fn main() -> Result<()> {
 
             let proof_action = ProofAction::new(write, read, dry_run)?;
 
-            db.receiver_claim(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
+            db.receiver_claim(
+                &mut rng,
+                &signer,
+                &account,
+                settlement_id,
+                leg_index,
+                proof_action,
+            )?;
             println!(
                 "Receiver '{}:{}' claimed settlement {} leg {}",
                 signer, account, settlement_id, leg_index
@@ -588,7 +601,14 @@ fn main() -> Result<()> {
 
             let proof_action = ProofAction::new(write, read, dry_run)?;
 
-            db.sender_counter_update(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
+            db.sender_counter_update(
+                &mut rng,
+                &signer,
+                &account,
+                settlement_id,
+                leg_index,
+                proof_action,
+            )?;
             println!(
                 "Sender '{}:{}' updated counter for settlement {} leg {}",
                 signer, account, settlement_id, leg_index
@@ -608,7 +628,14 @@ fn main() -> Result<()> {
 
             let proof_action = ProofAction::new(write, read, dry_run)?;
 
-            db.sender_reversal(&mut rng, &signer, &account, settlement_id, leg_index, proof_action)?;
+            db.sender_reversal(
+                &mut rng,
+                &signer,
+                &account,
+                settlement_id,
+                leg_index,
+                proof_action,
+            )?;
             println!(
                 "Sender '{}:{}' reversed affirmation for settlement {} leg {}",
                 signer, account, settlement_id, leg_index

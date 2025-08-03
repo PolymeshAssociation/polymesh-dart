@@ -131,15 +131,10 @@ impl ProofAction {
             }
             (None, Some(read_path)) => {
                 let proof = std::fs::read(read_path)?;
-                Ok(ProofAction::ApplyOnly {
-                    proof,
-                    dry_run,
-                })
+                Ok(ProofAction::ApplyOnly { proof, dry_run })
             }
             (Some(_), Some(_)) => Err(anyhow!("Cannot specify both write and read paths")),
-            (None, None) => Ok(ProofAction::GenerateAndApply {
-                dry_run,
-            }),
+            (None, None) => Ok(ProofAction::GenerateAndApply { dry_run }),
         }
     }
 
@@ -520,16 +515,16 @@ impl DartTestingDb {
     /// This is used to track the current block number for root history.
     pub fn get_next_block_number(&self) -> Result<BlockNumber> {
         // query both of the root history tables for the maximum block number
-        let asset_max: i64 = self
-            .conn
-            .query_row("SELECT COALESCE(MAX(block_number), 0) FROM asset_root_history", [], |row| {
-                row.get(0)
-            })?;
-        let account_max: i64 = self
-            .conn
-            .query_row("SELECT COALESCE(MAX(block_number), 0) FROM account_root_history", [], |row| {
-                row.get(0)
-            })?;
+        let asset_max: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(block_number), 0) FROM asset_root_history",
+            [],
+            |row| row.get(0),
+        )?;
+        let account_max: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(block_number), 0) FROM account_root_history",
+            [],
+            |row| row.get(0),
+        )?;
         // The next block number is the maximum of both tables + 1
         let next_block = std::cmp::max(asset_max, account_max) + 1;
         Ok(next_block as BlockNumber)
@@ -779,7 +774,7 @@ impl DartTestingDb {
         signer_name: &str,
         account_name: &str,
         asset_id: AssetId,
-        mut proof_action: ProofAction
+        mut proof_action: ProofAction,
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let asset_info = self.get_asset_by_id(asset_id)?;
@@ -856,7 +851,7 @@ impl DartTestingDb {
         account_name: &str,
         asset_id: AssetId,
         amount: Balance,
-        mut proof_action: ProofAction
+        mut proof_action: ProofAction,
     ) -> Result<()> {
         let account_info = self.get_dart_account(issuer_signer_name, account_name)?;
         let mut asset_info = self.get_asset_by_id(asset_id)?;
@@ -1013,7 +1008,7 @@ impl DartTestingDb {
         rng: &mut R,
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
-         // Verify settlement proof
+        // Verify settlement proof
         settlement.verify(&self.asset_roots, rng)?;
 
         // Get next settlement ID
