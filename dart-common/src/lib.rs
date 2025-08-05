@@ -8,6 +8,8 @@ pub type BlockNumber = u32;
 pub type SettlementId = u64;
 pub type LegId = u8;
 
+pub type NullifierSkGenCounter = u16;
+
 pub const AMOUNT_BITS: u16 = 48;
 
 pub const MAX_AMOUNT: u64 = (1 << AMOUNT_BITS) - 1;

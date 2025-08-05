@@ -6,8 +6,14 @@ pub mod keys;
 pub mod leg;
 pub mod macros;
 pub mod util;
+pub mod utils_new;
 
 mod error;
+pub mod account_registration;
+pub mod account_new;
+pub mod leg_new;
+pub mod poseidon_impls;
+
 pub use error::Error;
 
 pub use polymesh_dart_common::{
@@ -15,6 +21,8 @@ pub use polymesh_dart_common::{
 };
 
 // TODO: The ephemeral public key created during instance should be added to the transcript.
+
+// TODO: General question: Should i be hashing a generator/commitment every time i use it so that the instance is always hashed in order of invoking the protocol?
 
 // Venue creating settlement
 // - takes sender key, receiver key, amount, asset id, and auditor/mediator key

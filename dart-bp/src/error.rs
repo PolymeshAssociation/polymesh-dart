@@ -63,6 +63,10 @@ pub enum Error {
     /// Asset ID is too large.
     #[error("Asset ID is too large: {0}")]
     AssetIdTooLarge(AssetId),
+
+    /// Couldn't solve discrete log for chunk
+    #[error("Couldn't solve discrete log for chunk index {0}")]
+    SolvingDiscreteLogFailed(usize),
 }
 
 impl Error {

@@ -1,7 +1,7 @@
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{UniformRand, vec::Vec};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRngCore};
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
@@ -17,17 +17,17 @@ pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
 // NOTE that the generators used in both keys is same for now but will be made different soon.
 
-pub fn keygen_sig<R: RngCore + CryptoRng, PK: AffineRepr>(
+pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
-    g: PK,
+    j: PK,
 ) -> (SigKey<PK>, VerKey<PK>) {
     let s = PK::ScalarField::rand(rng);
-    let p = g * s;
+    let p = j * s;
     (SigKey(s), VerKey(p.into_affine()))
 }
 
 // NOTE: Same as above but just in case we need to use a diff. scheme
-pub fn keygen_enc<R: RngCore + CryptoRng, PK: AffineRepr>(
+pub fn keygen_enc<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
     g: PK,
 ) -> (DecKey<PK>, EncKey<PK>) {

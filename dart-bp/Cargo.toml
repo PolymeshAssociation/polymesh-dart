@@ -25,6 +25,12 @@ schnorr_pok = { workspace = true, default-features = false }
 bulletproofs = { workspace = true, default-features = false }
 curve_tree_relations = { workspace = true, default-features = false }
 
+# Poseidon dependencies
+#arkworks-r1cs-gadgets = {git = "https://github.com/tangle-network/zero-knowledge-gadgets", default-features = false}
+ark-crypto-primitives = { version = "0.4.0", default-features = false, features = ["crh", "r1cs"] }
+ark-relations = { version = "0.4.0", default-features = false }
+ark-r1cs-std = { version = "0.4.0", default-features = false }
+
 [dev-dependencies]
 test-log = { workspace = true }
 criterion = { workspace = true }
@@ -43,6 +49,10 @@ std = [
 	"curve_tree_relations/std",
 	"ark-std/std",
 	"thiserror/std",
+#	"arkworks-r1cs-gadgets/std",
+	"ark-crypto-primitives/std",
+	"ark-relations/std",
+	"ark-r1cs-std/std",
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
@@ -55,4 +65,7 @@ parallel = [
 	"curve_tree_relations/parallel",
 	"dock_crypto_utils/parallel",
 	"schnorr_pok/parallel",
+#	"arkworks-r1cs-gadgets/parallel",
+	"ark-crypto-primitives/parallel",
+	"ark-r1cs-std/parallel",
 ]

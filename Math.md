@@ -52,7 +52,7 @@ $Com_{leg}$ should commit to auditor public key $pk_A$ since during auditor's ap
 For the Curve Tree used for auditor, the tree leaf is a non-hiding commitment to the auditor public key and asset type.
 
 $$
-Leaf = g1 * pk_a.x + g2 * pk_a.y + g3 * at
+Leaf = g_1 * pk_a.x + g_2 * pk_a.y + g_3 * at
 $$
 
 Chain verifies the commitment and proof and sender/receiver/auditor get $sk_e$ from their respective $\alpha$
@@ -488,25 +488,73 @@ each $sk_{e, i}$ can be chosen to be much larger than $2^b$. To prevent this eac
 
 -----------------------------------------------
 
+
+$$C_1 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho}.g_6^s$$
+
+$$C_2 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^2}.g_6^{s^2}$$
+
+$$C_3 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^3}.g_6^{s^3}$$
+
+$$C_4 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^4}.g_6^{s^4}$$
+
+$$C_i = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^i}.g_6^{s^i}$$
+
+---------------
+
+$$C_1 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho}.g_6^s$$
+
+$$C_2 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^2}.g_6^{s^2}$$
+
+$$C_3 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^4}.g_6^{s^4}$$
+
+$$C_4 = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^8}.g_6^{s^8}$$
+
+$$C_i = g_1^{sk}.g_2^v.g_3^c.g_4^a.g_5^{rho^{2^{i-1}}}.g_6^{s^{2^{i-1}}}$$
+
+---------------------------------------------------
+
+$G_p, G_q$ are groups with order $p, q$ respectively.
+
+$g, g_i \in G_p$. $h, h_i \in G_q$
+
+$sk_T \in Z_p, pk_T = g^{sk_T}, pk_T \in G_p$
+
+User keys: $sk \in Z_q, pk = h^{sk}, pk \in G_q$
+
+User commitments: $C = h^{sk}...h_i^{\rho}$, $C \in G_q, \rho \in Z_q$
+
+User picks random $r \in Z_p$, creates $g^r = P, pk_T^r = Y$. Now $P, Y \in G_p$.
+
+User computes coordinates of $P$ as $(x,y)$ and commits to them in $D = h_1^x.h_2^y.h_3^u$ for some randomness u. Now $x, y \in Z_q, D \in G_q$
+
+User posts $Y$ on chain with a proof that:
+1. $pk_T^r = Y$ ($pk_T$ was used and something else) 
+2. $(x,y)$ are valid coordinates of $g^r$ and committed in $D$.
+3. $x$ equals $\rho$. This is done from usual Sigma protocol
+
+Note that step 2 involves doing a scalar multiplication in circuit and doing the curve point membership (curve equation) check
+
+---------------------------------------
+
+
 $$ g * v_0 + g_1 * v_1  $$
 
 $$
-
 pk_e = g * sk_e \\
 
-(g*r, pk_e*r + pk_s)
+(g*r, pk_e*r + pk_s) \\
 
 sk_s * g == pk_s \\
 
 g * r', w * r' + pk_s \\
 
 g * r' = C_1 \\
+
 w * r' + pk_s = C_2 \\
 
 C_2 - w * r' = pk_s \\
 
 C_2 - w * r' = g * sk_s
-
 $$
 
 

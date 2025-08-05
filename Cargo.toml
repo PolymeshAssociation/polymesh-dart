@@ -17,11 +17,11 @@ curve_tree_relations = { package = "relations", path = "../curve-trees/relations
 #bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 #curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 
-dock_crypto_utils = { path = "../crypto/utils" }
-schnorr_pok = { path = "../crypto/schnorr_pok" }
+#dock_crypto_utils = { path = "../crypto/utils" }
+#schnorr_pok = { path = "../crypto/schnorr_pok" }
 
-#dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
-#schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
+dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
+schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }

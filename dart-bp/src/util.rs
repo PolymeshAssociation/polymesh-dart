@@ -144,7 +144,7 @@ pub fn enforce_balance_change_prover<
             var_amount.into(),
         )?;
     } else {
-        // new - odl balance is correct
+        // new - old balance is correct
         difference(
             even_prover,
             var_bal_new.into(),
