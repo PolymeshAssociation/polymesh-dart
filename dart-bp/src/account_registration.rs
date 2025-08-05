@@ -5,13 +5,12 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 // use arkworks_r1cs_gadgets::poseidon::{PoseidonGadget, FieldHasherGadget};
-use crate::account::{TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
-use crate::account_new::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
 use crate::error::*;
 use crate::poseidon_impls::poseidon_old::{
     Poseidon_hash_2_constraints_simple, PoseidonParams, SboxType,
 };
-use crate::utils_new::bp_gens_for_vec_commitment;
+use crate::util::bp_gens_for_vec_commitment;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
 use ark_crypto_primitives::{
@@ -770,7 +769,7 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::account_new::NUM_GENERATORS;
+    use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_old::tests::get_poseidon_params;
     use ark_crypto_primitives::sponge::Absorb;
