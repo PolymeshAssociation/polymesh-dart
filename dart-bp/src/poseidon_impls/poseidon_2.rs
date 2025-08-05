@@ -154,6 +154,7 @@ impl<F: PrimeField> Poseidon2<F> {
         }
     }
 
+    #[allow(dead_code)]
     fn matmul_m4(&self, input: &mut[F]) {
         let t = self.params.t;
         let t4 = t / 4;
@@ -462,7 +463,7 @@ mod tests {
         let bp_gens = BulletproofGens::new(2048, 1);
 
         let (proof, commitments) = {
-            let mut prover_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
+            let prover_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
             let mut comms = vec![];
@@ -492,7 +493,7 @@ mod tests {
             (proof, comms)
         };
 
-        let mut verifier_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
+        let verifier_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
         let mut verifier = Verifier::new(verifier_transcript);
 
         let mut vars = vec![];

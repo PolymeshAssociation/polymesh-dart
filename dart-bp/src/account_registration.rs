@@ -771,7 +771,6 @@ pub mod tests {
     use super::*;
     use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
-    use crate::poseidon_impls::poseidon_old::tests::get_poseidon_params;
     use ark_crypto_primitives::sponge::Absorb;
     use ark_ff::{Field, PrimeField};
     use ark_std::UniformRand;
@@ -849,11 +848,11 @@ pub mod tests {
         assert_eq!(b, b_var.value().unwrap());
         assert_eq!(c, c_var.value().unwrap());
 
-        cs.finalize();
+        // cs.finalize();
         // Can't get constraints as its private. Work with matrices.
-        let mats = cs.to_matrices().unwrap();
-        let cs_inner = cs.into_inner();
-        println!("{}", cs_inner.is_some());
+        // let mats = cs.to_matrices().unwrap();
+        // let cs_inner = cs.into_inner();
+        // println!("{}", cs_inner.is_some());
         // TODO:
     }
 

@@ -1099,11 +1099,12 @@ pub mod tests {
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use rand_core::CryptoRngCore;
     use std::time::Instant;
+    use crate::account_registration::tests::setup_comm_key;
+    use crate::account::AccountCommitmentKeyTrait;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
-    type VestaA = ark_vesta::Affine;
     type PallasFr = ark_pallas::Fr;
 
     /// Generate account signing and encryption keys for all sender, receiver, and auditor.
@@ -1262,7 +1263,7 @@ pub mod tests {
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
-        let (proof) = SettlementTxnProof::new(
+        let proof = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -1314,7 +1315,7 @@ pub mod tests {
         assert_eq!(b, amount);
 
         let mut index = 0;
-        for (_, (d, e)) in keys_auditor.into_iter().chain(keys_mediator.into_iter()) {
+        for (_, (d, _)) in keys_auditor.into_iter().chain(keys_mediator.into_iter()) {
             let (p1, p2, a, b) = leg_enc.decrypt_given_key(&d.0, index, enc_gen).unwrap();
             assert_eq!(p1, pk_s.0);
             assert_eq!(p2, pk_r.0);
@@ -1322,5 +1323,109 @@ pub mod tests {
             assert_eq!(b, amount);
             index += 1;
         }
+
+        log::info!("total proof size = {}", proof.compressed_size());
+        log::info!(
+            "total prover time = {:?}, total verifier time = {:?}",
+            prover_time,
+            verifier_time
+        );
+    }
+
+    #[test]
+    fn mediator_action() {
+        let mut rng = rand::thread_rng();
+
+        // TODO: Generate by hashing public string
+        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_gen = PallasA::rand(&mut rng);
+
+
+        // Account signing (affirmation) keys
+        let (sk_s, pk_s) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_r, pk_r) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        // Encryption keys
+        let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let asset_id = 1;
+        let amount = 100;
+
+        let num_auditors = 2;
+        let num_mediators = 3;
+        let keys_auditor = (0..num_auditors)
+            .map(|_| {
+                (
+                    keygen_sig(&mut rng, account_comm_key.sk_gen()),
+                    keygen_enc(&mut rng, enc_key_gen),
+                )
+            })
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| {
+                (
+                    keygen_sig(&mut rng, account_comm_key.sk_gen()),
+                    keygen_enc(&mut rng, enc_key_gen),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut keys = Vec::with_capacity(num_auditors + num_mediators);
+        keys.extend(
+            keys_auditor
+                .iter()
+                .map(|(_, (s, k))| (true, k.0, s.0))
+                .into_iter(),
+        );
+        keys.extend(
+            keys_mediator
+                .iter()
+                .map(|(_, (s, k))| (false, k.0, s.0))
+                .into_iter(),
+        );
+
+
+
+        // Venue has successfully created the settlement and leg commitment has been stored on chain
+        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone().into_iter().map(|(_, k, _)| k).collect(), amount, asset_id).unwrap();
+        let (leg_enc, _) = leg
+            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+
+        let nonce = b"test-nonce";
+
+        // Mediator "accept"ing in this case
+        let accept = true;
+
+        // Choosing second mediator
+        let mediator_index_in_keys = num_auditors + 2;
+
+        let clock = Instant::now();
+        let proof = MediatorTxnProof::new(
+            &mut rng,
+            leg_enc.clone(),
+            asset_id,
+            keys[mediator_index_in_keys].2,
+            accept,
+            mediator_index_in_keys,
+            nonce,
+            enc_gen,
+        ).unwrap();
+        let prover_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        proof.verify(leg_enc.clone(), accept, mediator_index_in_keys, nonce, enc_gen).unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        log::info!("proof size = {}", proof.compressed_size());
+        log::info!(
+            "prover time = {:?}, verifier time = {:?}",
+            prover_time,
+            verifier_time
+        );
     }
 }

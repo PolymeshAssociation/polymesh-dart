@@ -334,7 +334,7 @@ mod tests {
 
         // Prover side
         let (proof, commitments) = {
-            let mut prover_transcript = MerlinTranscript::new(b"Poseidon_perm_cube_optimz");
+            let prover_transcript = MerlinTranscript::new(b"Poseidon_perm_cube_optimz");
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
             let mut comms = vec![];
@@ -367,7 +367,7 @@ mod tests {
         };
 
         // Verifier side
-        let mut verifier_transcript = MerlinTranscript::new(b"Poseidon_perm_cube_optimz");
+        let verifier_transcript = MerlinTranscript::new(b"Poseidon_perm_cube_optimz");
         let mut verifier = Verifier::new(verifier_transcript);
         let mut vars = vec![];
         for i in 0..width {

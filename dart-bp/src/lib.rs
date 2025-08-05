@@ -2,7 +2,6 @@
 #![allow(non_snake_case)]
 
 pub mod keys;
-pub mod macros;
 pub mod util;
 
 mod error;

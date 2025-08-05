@@ -484,17 +484,18 @@ pub mod tests {
     use std::time::Instant;
     use ark_serialize::CanonicalSerialize;
     use bulletproofs::BulletproofGens;
+    use rand_core::CryptoRngCore;
 
     type PallasA = ark_pallas::Affine;
     type Fr = ark_pallas::Fr;
 
-    pub fn get_poseidon_params<R: rand::Rng>(rng: &mut R, width: usize) -> PoseidonParams<Fr> {
+    pub fn get_poseidon_params<R: CryptoRngCore>(rng: &mut R, width: usize) -> PoseidonParams<Fr> {
         let full_rounds = 8;
         let partial_rounds = 140;
         PoseidonParams::new(width, full_rounds, partial_rounds)
     }
 
-    pub fn poseidon_perm<R: rand::Rng>(
+    pub fn poseidon_perm<R: CryptoRngCore>(
         rng: &mut R,
         sbox_type: &SboxType<Fr>,
         transcript_label: &'static [u8],
@@ -515,7 +516,7 @@ pub mod tests {
         let bp_gens = BulletproofGens::new(2048, 1);
 
         let (proof, commitments) = {
-            let mut prover_transcript = MerlinTranscript::new(transcript_label);
+            let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
             let mut comms = vec![];
@@ -548,7 +549,7 @@ pub mod tests {
             (proof, comms)
         };
 
-        let mut verifier_transcript = MerlinTranscript::new(transcript_label);
+        let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
         let mut vars = vec![];
         for i in 0..width {
@@ -569,13 +570,12 @@ pub mod tests {
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
     }
 
-    pub fn poseidon_hash_2<R: rand::Rng>(
+    pub fn poseidon_hash_2<R: CryptoRngCore>(
         rng: &mut R,
         sbox_type: &SboxType<Fr>,
         transcript_label: &'static [u8],
     ) {
         let s_params = get_poseidon_params(rng, 6);
-        let width = s_params.width;
         let total_rounds = s_params.get_total_rounds();
 
         let xl = Fr::rand(rng);
@@ -592,7 +592,7 @@ pub mod tests {
         let bp_gens = BulletproofGens::new(2048, 1);
 
         let (proof, commitments) = {
-            let mut prover_transcript = MerlinTranscript::new(transcript_label);
+            let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
             let mut comms = vec![];
@@ -634,7 +634,7 @@ pub mod tests {
             (proof, comms)
         };
 
-        let mut verifier_transcript = MerlinTranscript::new(transcript_label);
+        let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
 
         let var_l = verifier.commit(commitments[0]);
@@ -663,13 +663,12 @@ pub mod tests {
         println!("Verification time is {:?}", end);
     }
 
-    pub fn poseidon_hash_2_simple<R: rand::Rng>(
+    pub fn poseidon_hash_2_simple<R: CryptoRngCore>(
         rng: &mut R,
         sbox_type: &SboxType<Fr>,
         transcript_label: &'static [u8],
     ) {
         let s_params = get_poseidon_params(rng, 3);
-        let width = s_params.width;
         let total_rounds = s_params.get_total_rounds();
 
         let xl = Fr::rand(rng);
@@ -681,7 +680,7 @@ pub mod tests {
         let bp_gens = BulletproofGens::new(2048, 1);
 
         let (proof, commitments) = {
-            let mut prover_transcript = MerlinTranscript::new(transcript_label);
+            let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
             let mut comms = vec![];
@@ -727,7 +726,7 @@ pub mod tests {
             (proof, comms)
         };
 
-        let mut verifier_transcript = MerlinTranscript::new(transcript_label);
+        let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
 
         let var_l = verifier.commit(commitments[0]);
