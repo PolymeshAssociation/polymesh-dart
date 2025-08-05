@@ -1,17 +1,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(non_snake_case)]
 
-pub mod account;
 pub mod keys;
-pub mod leg;
 pub mod macros;
 pub mod util;
-pub mod utils_new;
 
 mod error;
 pub mod account_registration;
-pub mod account_new;
-pub mod leg_new;
+pub mod account;
+pub mod leg;
 pub mod poseidon_impls;
 
 pub use error::Error;
