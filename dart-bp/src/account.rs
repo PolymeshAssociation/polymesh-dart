@@ -2830,7 +2830,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         t_acc.challenge_contribution(&mut prover_transcript)?;
         t_null.challenge_contribution(&sig_null_gen, &nullifier, &mut prover_transcript)?;
-        t_pk.challenge_contribution(&sig_null_gen, &pk, &mut prover_transcript)?;
+        t_pk.challenge_contribution(&sig_null_gen, pk, &mut prover_transcript)?;
 
         for i in 0..num_pending_txns {
             let y = legs[i].1.ct_asset_id.encrypted.into_group() - h_at;
@@ -3220,7 +3220,6 @@ mod tests {
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, initialize_leg_for_settlement};
-    use SenderReverseTxnProof;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;

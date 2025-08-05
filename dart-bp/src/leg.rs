@@ -484,7 +484,7 @@ impl<
         let (t_r_leaf, t_eph_pk, for_auditor_enc_proofs) = if is_mediator_present {
             // When settlement has mediator
 
-            // Notation: `enc_sig_gen` denotes `enc_sig_gen`
+            // Notation: `g` denotes `enc_sig_gen`
 
             // Since we have Elgamal encryption of mediator pk as (g * r, (pk_e * r) + pk_M)) as (C0, C1),
             // we substitute C1 - (pk_e * r) for pk_M in r_leaf to get
