@@ -2963,7 +2963,7 @@ fn ensure_same_accounts<G: AffineRepr>(
 pub mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
-    use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
+    use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::Leg;
     use crate::leg::tests::setup_keys;
     use ark_ff::PrimeField;
@@ -3147,7 +3147,7 @@ pub mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,
@@ -3252,7 +3252,7 @@ pub mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,
@@ -3355,7 +3355,7 @@ pub mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,
@@ -3459,7 +3459,7 @@ pub mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,
@@ -3559,7 +3559,7 @@ pub mod tests {
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,

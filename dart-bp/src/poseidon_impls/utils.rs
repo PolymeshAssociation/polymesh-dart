@@ -1,4 +1,4 @@
-use ark_ff::{Field, One, Zero};
+use ark_ff::{Field};
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Variable};
 use bulletproofs::r1cs::linear_combination::AllocatedScalar;
 use bulletproofs::errors::R1CSError;
