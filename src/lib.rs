@@ -11,7 +11,7 @@ pub use error::Error;
 pub mod curve_tree;
 
 pub use polymesh_dart_common::{
-    ACCOUNT_TREE_GENS, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, AMOUNT_BITS, ASSET_TREE_GENS,
+    ACCOUNT_TREE_GENS, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ASSET_ID_BITS, ASSET_TREE_GENS,
     ASSET_TREE_HEIGHT, ASSET_TREE_L, AssetId, Balance, BlockNumber, LegId, MAX_AMOUNT,
     MAX_ASSET_ID, MAX_CURVE_TREE_GENS, PendingTxnCounter, SettlementId,
 };

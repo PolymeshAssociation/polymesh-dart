@@ -918,10 +918,10 @@ impl AssetMintingProof {
             &mint_account_state.0,
             mint_account_commitment.as_commitment()?,
             current_account_path,
+            &tree_lookup.root_node()?,
             b"",
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().sig_gen(),
         )?;
         Ok(Self {
             pk,

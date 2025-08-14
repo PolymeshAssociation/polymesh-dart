@@ -22,6 +22,7 @@ curve_tree_relations = { package = "relations", path = "../curve-trees/relations
 
 dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
 schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
+#equality_across_groups = { git = "https://github.com/PolymeshAssociation/crypto" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
@@ -52,6 +53,7 @@ rayon = { version = "1.5.3", default-features = false }
 
 dock_crypto_utils = { version = "0.22.0", default-features = false }
 schnorr_pok = { version = "0.22.0", default-features = false }
+#equality_across_groups = { version = "0.2.0", default-features = false }
 
 # Curve tree dependencies
 bulletproofs = { version = "2.0.0", default-features = false }

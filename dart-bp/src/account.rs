@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use ark_std::collections::{BTreeMap, BTreeSet};
 // use ark_crypto_primitives::crh::poseidon::TwoToOneCRH;
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
@@ -24,6 +24,7 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
@@ -37,6 +38,7 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use crate::account_registration::RegTxnProofAlt;
 
 pub const NUM_GENERATORS: usize = 7;
 
@@ -172,6 +174,44 @@ where
             },
             counter,
         ))
+    }
+
+    /// To be used when using [`RegTxnProofAlt`]
+    pub fn new_alt<R: CryptoRngCore, G2: SWCurveConfig<BaseField = G::ScalarField, ScalarField = G::BaseField>>(
+        rng: &mut R,
+        sk: G::ScalarField,
+        asset_id: AssetId,
+        pk_T_gen: Affine<G2>,
+    ) -> Result<(Self, G2::ScalarField, G2::ScalarField)> {
+        if asset_id > MAX_ASSET_ID {
+            return Err(Error::AssetIdTooLarge(asset_id));
+        }
+        let mut r_1 = G2::ScalarField::rand(rng);
+        while r_1.is_zero() {
+            r_1 = G2::ScalarField::rand(rng);
+        }
+        let mut r_2 = G2::ScalarField::rand(rng);
+        while r_2.is_zero() {
+            r_2 = G2::ScalarField::rand(rng);
+        }
+        let p_1 = (pk_T_gen * r_1).into_affine();
+        let p_2 = (pk_T_gen * r_2).into_affine();
+        // r_1 and r_2 can't be 0 so unwrap is fine
+        let rho = *p_1.x().unwrap();
+        let randomness = *p_2.x().unwrap();
+        let current_rho = rho.square();
+
+        Ok(
+            (Self {
+                sk,
+                balance: 0,
+                counter: 0,
+                asset_id,
+                rho,
+                current_rho,
+                randomness,
+            }, r_1, r_2),
+        )
     }
 
     pub fn commit(
@@ -352,18 +392,12 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
-        if account.asset_id != updated_account.asset_id {
-            return Err(Error::ProofGenerationError(
-                "Asset ID mismatch between old and new account".to_string(),
-            ));
-        }
-
-        debug_assert_eq!(account.rho, updated_account.rho);
-        debug_assert_eq!(account.randomness.square(), updated_account.randomness);
+        ensure_same_accounts(account, updated_account)?;
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
@@ -377,6 +411,8 @@ impl<
         let mut transcript = even_prover.transcript();
 
         let mut extra_instance = vec![];
+        root.serialize_compressed(&mut extra_instance)?;
+        re_randomized_path.serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
         issuer_pk.serialize_compressed(&mut extra_instance)?;
         account.asset_id.serialize_compressed(&mut extra_instance)?;
@@ -552,7 +588,7 @@ impl<
         increase_bal_by: Balance,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
-        account_tree: &Root<L, 1, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -562,13 +598,16 @@ impl<
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
             self.re_randomized_path.clone(),
-            account_tree,
+            root,
             account_tree_params,
         );
 
         let mut verifier_transcript = even_verifier.transcript();
 
         let mut extra_instance = vec![];
+        root.serialize_compressed(&mut extra_instance)?;
+        self.re_randomized_path
+            .serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
         issuer_pk.serialize_compressed(&mut extra_instance)?;
         asset_id.serialize_compressed(&mut extra_instance)?;
@@ -904,6 +943,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         is_sender: bool,
         has_balance_changed: bool,
@@ -931,8 +971,9 @@ impl<
                 account_tree_params,
             );
 
-        // Reconsider: Should tree root be hashed in?
         let mut extra_instance = vec![];
+        root.serialize_compressed(&mut extra_instance)?;
+        re_randomized_path.serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
         leg_enc.serialize_compressed(&mut extra_instance)?;
         updated_account_commitment.serialize_compressed(&mut extra_instance)?;
@@ -1187,6 +1228,10 @@ impl<
         );
 
         let mut extra_instance = vec![];
+        root.serialize_compressed(&mut extra_instance)?;
+        proof
+            .re_randomized_path
+            .serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
         leg_enc.serialize_compressed(&mut extra_instance)?;
         updated_account_commitment.serialize_compressed(&mut extra_instance)?;
@@ -1416,6 +1461,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1443,6 +1489,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             true,
             true,
@@ -1581,6 +1628,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1605,6 +1653,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             false,
             false,
@@ -1712,6 +1761,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1739,6 +1789,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             false,
             true,
@@ -1878,6 +1929,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1902,6 +1954,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             true,
             true,
@@ -2009,6 +2062,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -2036,6 +2090,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             true,
             true,
@@ -2175,6 +2230,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -2199,6 +2255,7 @@ impl<
             updated_account,
             updated_account_commitment,
             leaf_path,
+            root,
             nonce,
             false,
             false,
@@ -2938,22 +2995,33 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 }
 
 fn ensure_same_accounts<G: AffineRepr>(
-    state1: &AccountState<G>,
-    state2: &AccountState<G>,
+    old_state: &AccountState<G>,
+    new_state: &AccountState<G>,
 ) -> Result<()> {
-    if state1.sk != state2.sk {
+    if old_state.sk != new_state.sk {
         return Err(Error::ProofGenerationError(
             "Secret key mismatch between old and new account states".to_string(),
         ));
     }
-    if state1.asset_id != state2.asset_id {
+    if old_state.asset_id != new_state.asset_id {
         return Err(Error::ProofGenerationError(
             "Asset ID mismatch between old and new account states".to_string(),
         ));
     }
-    if state1.rho != state2.rho {
+    if old_state.rho != new_state.rho {
         return Err(Error::ProofGenerationError(
             "Initial rho mismatch between old and new account states".to_string(),
+        ));
+    }
+    // Reconsider: Should I be checking such expensive relations
+    if old_state.current_rho * old_state.rho != new_state.current_rho {
+        return Err(Error::ProofGenerationError(
+            "Randomness not correctly constructed".to_string(),
+        ));
+    }
+    if old_state.randomness.square() != new_state.randomness {
+        return Err(Error::ProofGenerationError(
+            "Randomness not correctly constructed".to_string(),
         ));
     }
     Ok(())
@@ -3092,6 +3160,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3183,6 +3252,8 @@ pub mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = AffirmAsSenderTxnProof::new(
             &mut rng,
             amount,
@@ -3192,6 +3263,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3203,8 +3275,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
@@ -3287,6 +3357,8 @@ pub mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
             &mut rng,
             leg_enc.clone(),
@@ -3295,6 +3367,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3306,8 +3379,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
@@ -3390,6 +3461,8 @@ pub mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = ClaimReceivedTxnProof::new(
             &mut rng,
             amount,
@@ -3399,6 +3472,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3410,8 +3484,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
@@ -3493,6 +3565,8 @@ pub mod tests {
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new(
             &mut rng,
             leg_enc.clone(),
@@ -3501,6 +3575,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3512,8 +3587,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
@@ -3594,6 +3667,8 @@ pub mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = SenderReverseTxnProof::new(
             &mut rng,
             amount,
@@ -3603,6 +3678,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3614,8 +3690,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
@@ -3697,6 +3771,8 @@ pub mod tests {
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = account_tree.root_node();
+
         let (proof, nullifier) = ReceiverCounterUpdateTxnProof::new(
             &mut rng,
             leg_enc.clone(),
@@ -3705,6 +3781,7 @@ pub mod tests {
             &updated_account,
             updated_account_comm,
             path,
+            &root,
             nonce,
             &account_tree_params,
             account_comm_key.clone(),
@@ -3716,8 +3793,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        let root = account_tree.root_node();
 
         proof
             .verify(
