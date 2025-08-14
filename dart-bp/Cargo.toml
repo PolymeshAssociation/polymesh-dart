@@ -20,6 +20,8 @@ ark-serialize = { workspace = true, default-features = false }
 ark-std = { workspace = true, default-features = false }
 dock_crypto_utils = { workspace = true, default-features = false }
 schnorr_pok = { workspace = true, default-features = false }
+#equality_across_groups = { workspace = true, default-features = false }
+crypto-bigint = { version = "0.6.0-rc.6", default-features = false, features = ["zeroize", "alloc", "rand_core"] }
 
 # Curve tree dependencies
 bulletproofs = { workspace = true, default-features = false }
@@ -38,6 +40,7 @@ ark-pallas = { workspace = true, features = ["curve"] }
 ark-vesta = { workspace = true }
 ark-secp256k1 = { workspace = true }
 ark-secq256k1 = { workspace = true }
+env_logger = { version = "0.11" }
 
 [features]
 default = ["std", "asm", "parallel"]
@@ -53,6 +56,7 @@ std = [
 	"ark-crypto-primitives/std",
 	"ark-relations/std",
 	"ark-r1cs-std/std",
+#	"equality_across_groups/std"
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]

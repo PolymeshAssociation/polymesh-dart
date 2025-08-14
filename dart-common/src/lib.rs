@@ -14,7 +14,8 @@ pub const AMOUNT_BITS: u16 = 48;
 
 pub const MAX_AMOUNT: u64 = (1 << AMOUNT_BITS) - 1;
 
-pub const MAX_ASSET_ID: u32 = u32::MAX;
+pub const ASSET_ID_BITS: u32 = 32;
+pub const MAX_ASSET_ID: u32 = ((1_u64 << ASSET_ID_BITS) - 1) as u32;
 pub const MAX_CURVE_TREE_GENS: usize = 1 << 12;
 
 pub const ACCOUNT_TREE_L: usize = 512;

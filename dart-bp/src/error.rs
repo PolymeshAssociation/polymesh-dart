@@ -67,6 +67,30 @@ pub enum Error {
     /// Couldn't solve discrete log for chunk
     #[error("Couldn't solve discrete log for chunk index {0}")]
     SolvingDiscreteLogFailed(usize),
+
+    /// Insufficient commitment key length
+    #[error("Commitment key length is {0} but expected at least {1}")]
+    InsufficientCommitmentKeyLength(usize, usize),
+
+    /// Expect same number of randomized points and responses for the points
+    #[error("Randomized point count is {0} but expected at least {1}")]
+    DifferentNumberOfRandomizedPointsAndResponses(usize, usize),
+
+    /// Mediator not found at index
+    #[error("Expected mediator at index {0} in the keys list but it wasn't found")]
+    MediatorNotFoundAtIndex(usize),
+
+    /// Asset id mismatch between leg and asset data
+    #[error("Leg asset-id is {0} but asset-data has {1}")]
+    IncompatibleAssetId(AssetId, AssetId),
+
+    /// pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness
+    #[error("pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness")]
+    PkTAndEncryptedRandomnessInconsistent,
+
+    /// Can't invert 0
+    #[error("Can't invert 0")]
+    InvertingZero,
 }
 
 impl Error {

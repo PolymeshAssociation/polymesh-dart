@@ -997,7 +997,8 @@ pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
     Ok(())
 }
 
-/// `committed_variables` are variables for committed values `[rho, rho^i, rho^{i+1}, s^j, s^{2.j}]`
+/// Enforces the constraints for relations between initial rho, current rho, old and new randomness
+/// `committed_variables` are variables for committed values `[rho, rho^i, rho^{i+1}, s^j, s^{2*j}]`
 pub fn enforce_constraints_for_randomness_relations<F: Field, CS: ConstraintSystem<F>>(
     cs: &mut CS,
     mut committed_variables: Vec<Variable<F>>,
