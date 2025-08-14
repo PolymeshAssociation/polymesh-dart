@@ -38,7 +38,6 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use crate::account_registration::RegTxnProofAlt;
 
 pub const NUM_GENERATORS: usize = 7;
 
