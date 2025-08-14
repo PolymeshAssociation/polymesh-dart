@@ -67,6 +67,8 @@ impl_curve_tree_with_backend!(Sync, CurveTreeWithBackend, CurveTreeBackend);
 
 /// A trait for looking up paths in a curve tree.
 pub trait CurveTreeLookup<const L: usize> {
+    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
+
     /// Returns the path to a leaf in the curve tree by its index.
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error>;
 
@@ -83,21 +85,17 @@ pub trait CurveTreeLookup<const L: usize> {
     fn root_node(&self) -> Result<CurveTreeRoot<L>, Error>;
 
     /// Returns the block number associated with the current state of the tree.
-    fn get_block_number(&self) -> Result<BlockNumber, Error>;
+    fn get_block_number(&self) -> Result<Self::BlockNumber, Error>;
 }
 
 /// Check if the tree root is valid.
 ///
 /// This allows verifying proofs against older tree roots.
 pub trait ValidateCurveTreeRoot<const L: usize> {
-    type BlockNumber: From<BlockNumber> + Copy;
+    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
 
     /// Returns the root of the curve tree for a given block number.
     fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>>;
-
-    fn validate_root(&self, _root: &CurveTreeRoot<L>) -> bool {
-        false
-    }
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters;
@@ -137,7 +135,7 @@ impl<const L: usize> RootHistory<L> {
 impl<const L: usize> ValidateCurveTreeRoot<L> for &RootHistory<L> {
     type BlockNumber = BlockNumber;
 
-    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>> {
+    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>> {
         self.block_roots.get(&block).cloned()
     }
 
@@ -208,6 +206,8 @@ impl<const L: usize> FullCurveTree<L> {
 }
 
 impl<const L: usize> CurveTreeLookup<L> for &FullCurveTree<L> {
+    type BlockNumber = BlockNumber;
+
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
         Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
     }
@@ -282,7 +282,7 @@ impl<const L: usize> VerifierCurveTree<L> {
 impl<const L: usize> ValidateCurveTreeRoot<L> for &VerifierCurveTree<L> {
     type BlockNumber = BlockNumber;
 
-    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>> {
+    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L>> {
         self.tree.fetch_root(block).ok().map(|root| {
             CurveTreeRoot::new(&root).expect("Failed to create CurveTreeRoot from block root")
         })
@@ -329,12 +329,12 @@ impl<
         Ok(leaf_index)
     }
 
-    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), E> {
+    pub fn set_block_number(&mut self, block_number: B::BlockNumber) -> Result<(), E> {
         self.tree.set_block_number(block_number)?;
         Ok(())
     }
 
-    pub fn store_root(&mut self) -> Result<BlockNumber, E> {
+    pub fn store_root(&mut self) -> Result<B::BlockNumber, E> {
         self.tree.store_root()
     }
 
@@ -363,6 +363,8 @@ impl<
     E: From<crate::Error>,
 > CurveTreeLookup<L> for &ProverCurveTree<L, PallasParameters, VestaParameters, B, E>
 {
+    type BlockNumber = B::BlockNumber;
+
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
         Ok(self
             .tree
@@ -395,7 +397,7 @@ impl<
         )?)
     }
 
-    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+    fn get_block_number(&self) -> Result<B::BlockNumber, Error> {
         Ok(self.tree.get_block_number()
             .map_err(|_| Error::CurveTreeBlockNumberNotFound)?)
     }

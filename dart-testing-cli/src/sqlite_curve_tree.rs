@@ -448,6 +448,8 @@ impl AccountCurveTree {
 }
 
 impl CurveTreeLookup<ACCOUNT_TREE_L> for &AccountCurveTree {
+    type BlockNumber = BlockNumber;
+
     fn get_path_to_leaf_index(
         &self,
         leaf_index: LeafIndex,
@@ -504,7 +506,7 @@ impl AssetRootHistory {
 
     pub fn add_root(
         &mut self,
-        block: polymesh_dart::BlockNumber,
+        block: BlockNumber,
         root: &CurveTreeRoot<ASSET_TREE_L>,
     ) -> Result<()> {
         let root_bytes = root.encode();
@@ -517,7 +519,7 @@ impl AssetRootHistory {
 }
 
 impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetRootHistory {
-    type BlockNumber = polymesh_dart::BlockNumber;
+    type BlockNumber = BlockNumber;
 
     fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<ASSET_TREE_L>> {
         let mut stmt = self
@@ -547,7 +549,7 @@ impl AccountRootHistory {
 
     pub fn add_root(
         &mut self,
-        block: polymesh_dart::BlockNumber,
+        block: BlockNumber,
         root: &CurveTreeRoot<ACCOUNT_TREE_L>,
     ) -> Result<()> {
         let root_bytes = root.encode();
@@ -560,7 +562,7 @@ impl AccountRootHistory {
 }
 
 impl ValidateCurveTreeRoot<ACCOUNT_TREE_L> for &AccountRootHistory {
-    type BlockNumber = polymesh_dart::BlockNumber;
+    type BlockNumber = BlockNumber;
 
     fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<ACCOUNT_TREE_L>> {
         let mut stmt = self

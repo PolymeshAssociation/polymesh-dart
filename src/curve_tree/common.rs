@@ -403,6 +403,8 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error>,
         > CurveTreeLookup<L> for &$curve_tree_ty<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, B, Error>
         {
+            type BlockNumber = B::BlockNumber;
+
             fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, error::Error> {
                 Ok($curve_tree_ty::get_path_to_leaf(self,leaf_index, 0).map_err(|_| error::Error::LeafIndexNotFound(leaf_index))?)
             }
@@ -423,7 +425,7 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(CurveTreeRoot::new(&root)?)
             }
 
-            fn get_block_number(&self) -> Result<BlockNumber, error::Error> {
+            fn get_block_number(&self) -> Result<B::BlockNumber, error::Error> {
                 Ok($curve_tree_ty::get_block_number(self).map_err(|_| error::Error::CurveTreeBlockNumberNotFound)?)
             }
         }
@@ -434,9 +436,9 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error>,
         > ValidateCurveTreeRoot<L> for &$curve_tree_ty<L, 1, ark_pallas::PallasConfig, ark_vesta::VestaConfig, B, Error>
         {
-            type BlockNumber = BlockNumber;
+            type BlockNumber = B::BlockNumber;
 
-            fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<L>> {
+            fn get_block_root(&self, block: B::BlockNumber) -> Option<CurveTreeRoot<L>> {
                 let root = self.fetch_root(block).ok()?;
                 CurveTreeRoot::new(&root).ok()
             }
@@ -666,24 +668,24 @@ macro_rules! impl_curve_tree_with_backend {
                 }
             }
 
-            pub $($async_fn)* fn get_block_number(&self) -> Result<BlockNumber, Error> {
+            pub $($async_fn)* fn get_block_number(&self) -> Result<B::BlockNumber, Error> {
                 let block_number = self.backend.get_block_number()$($await)*?;
-                Ok(block_number.into())
+                Ok(block_number)
             }
 
-            pub $($async_fn)* fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
+            pub $($async_fn)* fn set_block_number(&mut self, block_number: B::BlockNumber) -> Result<(), Error> {
                 self.backend.set_block_number(block_number)$($await)*?;
                 Ok(())
             }
 
-            pub $($async_fn)* fn store_root(&mut self) -> Result<BlockNumber, Error> {
+            pub $($async_fn)* fn store_root(&mut self) -> Result<B::BlockNumber, Error> {
                 let root = self.root_node()$($await)*?;
                 let block_number = self.backend.store_root(root)$($await)*?;
-                Ok(block_number.into())
+                Ok(block_number)
             }
 
-            pub $($async_fn)* fn fetch_root(&self, block_number: BlockNumber) -> Result<Root<L, M, P0, P1>, Error> {
-                self.backend.fetch_root(block_number.into())$($await)*.map_err(|_| crate::Error::CurveTreeRootNotFound.into())
+            pub $($async_fn)* fn fetch_root(&self, block_number: B::BlockNumber) -> Result<Root<L, M, P0, P1>, Error> {
+                self.backend.fetch_root(block_number)$($await)*.map_err(|_| crate::Error::CurveTreeRootNotFound.into())
             }
 
             pub $($async_fn)* fn get_path_to_leaf(
@@ -891,7 +893,7 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn get_path_and_root(
                 &self,
                 leaf_index: LeafIndex,
-            ) -> Result<LeafPathAndRoot<L>, Error> {
+            ) -> Result<LeafPathAndRoot<L, B::BlockNumber>, Error> {
                 // Get the leaf and path for the given leaf index.
                 let leaf = self
                     .backend

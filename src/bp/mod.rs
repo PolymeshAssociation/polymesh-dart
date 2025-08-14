@@ -800,6 +800,7 @@ impl AssetCurveTree {
     }
 }
 
+#[cfg(feature = "std")]
 impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetCurveTree {
     type BlockNumber = BlockNumber;
 
@@ -867,6 +868,12 @@ impl AccountAssetRegistrationProof {
     }
 }
 
+fn try_block_number<T: TryInto<BlockNumber>>(block_number: T) -> Result<BlockNumber, Error> {
+    block_number
+        .try_into()
+        .map_err(|_| Error::CurveTreeBlockNumberNotFound)
+}
+
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AssetMintingProof {
@@ -908,7 +915,6 @@ impl AssetMintingProof {
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        eprintln!("Mint proof root block: {}", root_block);
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
@@ -927,7 +933,7 @@ impl AssetMintingProof {
             pk,
             asset_id: account_asset.asset_id,
             amount,
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: mint_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -941,10 +947,6 @@ impl AssetMintingProof {
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        eprintln!(
-            "Verifying asset minting proof for root block {}",
-            self.root_block
-        );
         let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
             log::error!("Invalid root for asset minting proof");
             Error::CurveTreeRootNotFound
@@ -1230,7 +1232,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
 
         let legs =
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        Ok(SettlementProof { memo, root_block, legs })
+        Ok(SettlementProof { memo, root_block: try_block_number(root_block)?, legs })
     }
 }
 
@@ -1627,7 +1629,7 @@ impl SenderAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1732,7 +1734,7 @@ impl ReceiverAffirmationProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1839,7 +1841,7 @@ impl ReceiverClaimProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -1944,7 +1946,7 @@ impl SenderCounterUpdateProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
@@ -2051,7 +2053,7 @@ impl SenderReversalProof {
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
-            root_block,
+            root_block: try_block_number(root_block)?,
             updated_account_state_commitment: new_account_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 

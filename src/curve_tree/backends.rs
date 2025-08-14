@@ -12,16 +12,18 @@ use crate::{
     error::*,
 };
 
-pub struct LeafPathAndRoot<'p, const L: usize> {
+pub struct LeafPathAndRoot<'p, const L: usize, Block> {
     pub leaf: LeafValue<PallasParameters>,
     pub leaf_index: LeafIndex,
     pub path: CurveTreePath<L>,
-    pub block_number: BlockNumber,
+    pub block_number: Block,
     pub root: CurveTreeRoot<L>,
     pub params: &'p CurveTreeParameters,
 }
 
-impl<'p, const L: usize> CurveTreeLookup<L> for LeafPathAndRoot<'p, L> {
+impl<'p, const L: usize, Block: From<BlockNumber> + TryInto<BlockNumber> + Copy> CurveTreeLookup<L> for LeafPathAndRoot<'p, L, Block> {
+    type BlockNumber = Block;
+
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
         if self.leaf_index == leaf_index {
             Ok(self.path.clone())
@@ -49,7 +51,7 @@ impl<'p, const L: usize> CurveTreeLookup<L> for LeafPathAndRoot<'p, L> {
         Ok(self.root.clone())
     }
 
-    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+    fn get_block_number(&self) -> Result<Block, Error> {
         Ok(self.block_number)
     }
 }
@@ -62,7 +64,7 @@ pub trait CurveTreeBackend<
 >: Sized
 {
     type Error: From<crate::Error>;
-    type BlockNumber: From<BlockNumber> + Into<BlockNumber> + Copy;
+    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error>;
 
@@ -70,7 +72,7 @@ pub trait CurveTreeBackend<
 
     fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error>;
 
-    fn set_block_number(&mut self, _block_number: BlockNumber) -> Result<(), Self::Error> {
+    fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -118,7 +120,7 @@ pub trait AsyncCurveTreeBackend<
 >: Sized
 {
     type Error: From<crate::Error>;
-    type BlockNumber: From<BlockNumber> + Into<BlockNumber> + Copy;
+    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
 
     fn new(
         height: NodeLevel,
@@ -131,7 +133,7 @@ pub trait AsyncCurveTreeBackend<
         &self,
     ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send;
 
-    fn set_block_number(&mut self, _block_number: BlockNumber) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             Ok(())
         }
@@ -256,7 +258,7 @@ impl<
         Ok(self.block_number)
     }
 
-    fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
+    fn set_block_number(&mut self, block_number: Self::BlockNumber) -> Result<(), Self::Error> {
         self.block_number = block_number;
         Ok(())
     }
@@ -264,7 +266,6 @@ impl<
     fn store_root(&mut self, root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
-        eprintln!("Storing root for block number: {}", block_number);
         self.roots.insert(block_number, root);
         Ok(block_number)
     }
@@ -273,7 +274,6 @@ impl<
         &self,
         block_number: Self::BlockNumber,
     ) -> Result<Root<L, M, P0, P1>, Self::Error> {
-        eprintln!("Fetching root for block number: {}", block_number);
         self.roots.get(&block_number).cloned()
             .ok_or(Error::CurveTreeRootNotFound)
     }
@@ -356,7 +356,7 @@ where
         Ok(self.block_number)
     }
 
-    async fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
+    async fn set_block_number(&mut self, block_number: Self::BlockNumber) -> Result<(), Self::Error> {
         self.block_number = block_number;
         Ok(())
     }
@@ -367,7 +367,6 @@ where
     ) -> Result<Self::BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
-        eprintln!("Storing root for block number: {}", block_number);
         self.roots.insert(block_number, root);
         Ok(block_number)
     }
@@ -376,7 +375,6 @@ where
         &self,
         block_number: Self::BlockNumber,
     ) -> Result<Root<L, M, P0, P1>, Self::Error> {
-        eprintln!("Fetching root for block number: {}", block_number);
         self.roots.get(&block_number).cloned().ok_or(Error::CurveTreeRootNotFound)
     }
 
