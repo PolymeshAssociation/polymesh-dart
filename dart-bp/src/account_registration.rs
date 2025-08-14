@@ -1095,8 +1095,8 @@ impl<
         let var_y_2 = vars.remove(0);
         let var_rho_sq = vars.remove(0);
 
-        let (p_1, lc_x_1, lc_y_1) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_1)?;
-        let (p_2, lc_x_2, lc_y_2) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_2)?;
+        let (_, lc_x_1, lc_y_1) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_1)?;
+        let (_, lc_x_2, lc_y_2) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_2)?;
 
         curve_check(
             cs,

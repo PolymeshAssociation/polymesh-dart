@@ -9,8 +9,6 @@ pub mod account_registration;
 pub mod account;
 pub mod leg;
 pub mod poseidon_impls;
-pub mod leg_alt;
-mod eq_across_groups;
 
 pub use error::Error;
 
