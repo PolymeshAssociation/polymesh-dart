@@ -1,9 +1,12 @@
 // The native implementation is taken from here https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2.rs
 
-use bulletproofs::r1cs::{ConstraintSystem, R1CSError, LinearCombination};
-use ark_ff::PrimeField;
-use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
+use crate::poseidon_impls::poseidon_old::PADDING_CONST;
 use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
+use ark_ff::PrimeField;
+use ark_std::UniformRand;
+use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
+use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError, Variable};
+use rand_core::CryptoRngCore;
 
 #[derive(Clone, Debug)]
 pub struct Poseidon2Params<F: PrimeField> {
@@ -29,6 +32,8 @@ impl<F: PrimeField> Poseidon2Params<F> {
         mat_internal: &[Vec<F>],
         round_constants: &[Vec<F>],
     ) -> Self {
+        // We only need t to be 3 for now. Support for 2 is simple so keeping it
+        assert!(t == 2 || t == 3);
         assert!(d == 3 || d == 5 || d == 7 || d == 11);
         assert_eq!(rounds_f % 2, 0);
         let r = rounds_f / 2;
@@ -47,7 +52,29 @@ impl<F: PrimeField> Poseidon2Params<F> {
         }
     }
 
-    // Unused
+    /// Only for testing purposes
+    pub fn new_with_randoms<R: CryptoRngCore>(
+        rng: &mut R,
+        t: usize,
+        d: usize,
+        rounds_f: usize,
+        rounds_p: usize,
+    ) -> Self
+    {
+        let mat_internal_diag_m_1: Vec<F> = (0..t).map(|_| F::rand(rng)).collect();
+        let mat_internal: Vec<Vec<F>> = (0..t)
+            .map(|_| (0..t).map(|_| F::rand(rng)).collect())
+            .collect();
+        let round_constants: Vec<Vec<F>> = (0..(rounds_f + rounds_p))
+            .map(|_| (0..t).map(|_| F::rand(rng)).collect())
+            .collect();
+        
+        Self::new(
+            t, d, rounds_f, rounds_p, &mat_internal_diag_m_1, &mat_internal, &round_constants,
+        )
+    }
+
+    #[allow(dead_code)]
     pub fn equivalent_round_constants(
         round_constants: &[Vec<F>],
         mat_internal: &[Vec<F>],
@@ -81,9 +108,7 @@ pub struct Poseidon2<F: PrimeField> {
 
 impl<F: PrimeField> Poseidon2<F> {
     pub fn new(params: Poseidon2Params<F>) -> Self {
-        Poseidon2 {
-            params,
-        }
+        Poseidon2 { params }
     }
 
     pub fn get_t(&self) -> usize {
@@ -112,7 +137,7 @@ impl<F: PrimeField> Poseidon2<F> {
             // self.matmul_internal(&mut current_state, &self.params.mat_internal_diag_m_1);
             self.matmul_internal(&mut current_state);
         }
-        
+
         for r in p_end..self.params.rounds {
             current_state = self.add_rc(&current_state, &self.params.round_constants[r]);
             current_state = self.sbox(&current_state);
@@ -126,36 +151,32 @@ impl<F: PrimeField> Poseidon2<F> {
     }
 
     fn sbox_p(&self, input: &F) -> F {
-        let mut input2 = *input;
-        input2.square_in_place();
+        let mut res = *input;
+        res.square_in_place();
 
         match self.params.d {
             3 => {
-                let mut out = input2;
-                out.mul_assign(input);
-                out
+                res.mul_assign(input);
             }
             5 => {
-                let mut out = input2;
-                out.square_in_place();
-                out.mul_assign(input);
-                out
+                res.square_in_place();
+                res.mul_assign(input);
             }
             7 => {
-                let mut out = input2;
-                out.square_in_place();
-                out.mul_assign(&input2);
-                out.mul_assign(input);
-                out
+                let res_sq = res;
+                res.square_in_place();
+                res.mul_assign(&res_sq);
+                res.mul_assign(input);
             }
             _ => {
                 panic!()
             }
         }
+        res
     }
 
     #[allow(dead_code)]
-    fn matmul_m4(&self, input: &mut[F]) {
+    fn matmul_m4(&self, input: &mut [F]) {
         let t = self.params.t;
         let t4 = t / 4;
         for i in 0..t4 {
@@ -189,7 +210,7 @@ impl<F: PrimeField> Poseidon2<F> {
         }
     }
 
-    fn matmul_external(&self, input: &mut[F]) {
+    fn matmul_external(&self, input: &mut [F]) {
         let t = self.params.t;
         match t {
             2 => {
@@ -234,7 +255,7 @@ impl<F: PrimeField> Poseidon2<F> {
     }
 
     // fn matmul_internal(&self, input: &mut[F], mat_internal_diag_m_1: &[F]) {
-    fn matmul_internal(&self, input: &mut[F]) {
+    fn matmul_internal(&self, input: &mut [F]) {
         let t = self.params.t;
 
         match t {
@@ -278,13 +299,7 @@ impl<F: PrimeField> Poseidon2<F> {
     }
 
     fn add_rc(&self, input: &[F], rc: &[F]) -> Vec<F> {
-        input
-            .iter()
-            .zip(rc.iter())
-            .map(|(a, b)| {
-                *a + *b
-            })
-            .collect()
+        input.iter().zip(rc.iter()).map(|(a, b)| *a + *b).collect()
     }
 }
 
@@ -308,14 +323,21 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         apply_round_constants(&mut output_vars, &params.round_constants[r]);
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
+        for i in 0..t {
+            output_vars[i] = output_vars[i].clone().simplify();
+        }
     }
 
     let p_end = params.rounds_f_beginning + params.rounds_p;
     // Partial rounds
     for r in params.rounds_f_beginning..p_end {
-        output_vars[0] = output_vars[0].clone() + LinearCombination::from(params.round_constants[r][0]);
+        output_vars[0] =
+            output_vars[0].clone() + LinearCombination::from(params.round_constants[r][0]);
         output_vars[0] = sbox_p_constraints(cs, &output_vars[0], params)?;
         matmul_internal_constraints(&mut output_vars, params);
+        for i in 0..t {
+            output_vars[i] = output_vars[i].clone().simplify();
+        }
     }
 
     // Full rounds after partial
@@ -323,13 +345,16 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         apply_round_constants(&mut output_vars, &params.round_constants[r]);
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
+        for i in 0..t {
+            output_vars[i] = output_vars[i].clone().simplify();
+        }
     }
     Ok(output_vars)
 }
 
 pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
     cs: &mut CS,
-    input: Vec<bulletproofs::r1cs::Variable<F>>,
+    input: Vec<Variable<F>>,
     params: &Poseidon2Params<F>,
     output: &[F],
 ) -> Result<(), R1CSError> {
@@ -357,7 +382,10 @@ fn apply_sbox_full<F: PrimeField, CS: ConstraintSystem<F>>(
     input: &[LinearCombination<F>],
     params: &Poseidon2Params<F>,
 ) -> Result<Vec<LinearCombination<F>>, R1CSError> {
-    Ok(input.iter().map(|el| sbox_p_constraints(cs, el, params)).collect::<Result<Vec<_>, _>>()?)
+    Ok(input
+        .iter()
+        .map(|el| sbox_p_constraints(cs, el, params))
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 fn sbox_p_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
@@ -387,7 +415,10 @@ fn sbox_p_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     }
 }
 
-fn matmul_external_constraints<F: PrimeField>(input: &mut [LinearCombination<F>], params: &Poseidon2Params<F>) {
+fn matmul_external_constraints<F: PrimeField>(
+    input: &mut [LinearCombination<F>],
+    params: &Poseidon2Params<F>,
+) {
     let t = params.t;
     assert!(t == 2 || t == 3);
     match t {
@@ -406,7 +437,10 @@ fn matmul_external_constraints<F: PrimeField>(input: &mut [LinearCombination<F>]
     }
 }
 
-fn matmul_internal_constraints<F: PrimeField>(input: &mut [LinearCombination<F>], params: &Poseidon2Params<F>) {
+fn matmul_internal_constraints<F: PrimeField>(
+    input: &mut [LinearCombination<F>],
+    params: &Poseidon2Params<F>,
+) {
     let t = params.t;
     assert!(t == 2 || t == 3);
     match t {
@@ -427,90 +461,234 @@ fn matmul_internal_constraints<F: PrimeField>(input: &mut [LinearCombination<F>]
     }
 }
 
+pub fn Poseidon_hash_2_simple<F: PrimeField>(xl: F, xr: F, params: Poseidon2Params<F>) -> F {
+    let poseidon2 = Poseidon2::new(params);
+    poseidon2.permutation(&[xl, xr, F::from(PADDING_CONST)])[0]
+}
+
+pub fn Poseidon_hash_2_constraints_simple<F: PrimeField, CS: ConstraintSystem<F>>(
+    cs: &mut CS,
+    xl: LinearCombination<F>,
+    xr: LinearCombination<F>,
+    params: &Poseidon2Params<F>,
+) -> Result<LinearCombination<F>, R1CSError> {
+    let inputs = vec![xl, xr, LinearCombination::<F>::from(F::from(PADDING_CONST))];
+    let permutation_output = Poseidon_permutation_constraints::<F, CS>(cs, inputs, params)?;
+    Ok(permutation_output[0].to_owned())
+}
+
+pub fn Poseidon_hash_2_gadget_simple<F: PrimeField, CS: ConstraintSystem<F>>(
+    cs: &mut CS,
+    xl: Variable<F>,
+    xr: Variable<F>,
+    params: &Poseidon2Params<F>,
+    output: F,
+) -> Result<(), R1CSError> {
+    let hash = Poseidon_hash_2_constraints_simple::<F, CS>(cs, xl.into(), xr.into(), params)?;
+
+    constrain_lc_with_scalar::<F, CS>(cs, hash, output);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::marker::PhantomData;
     use super::*;
+    use ark_pallas::Affine as PallasA;
+    use ark_pallas::Fr;
+    use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
     use bulletproofs::{BulletproofGens, PedersenGens};
     use dock_crypto_utils::transcript::MerlinTranscript;
-    use ark_pallas::Affine as PallasA;
-    use ark_pallas::Fr;
-    use ark_serialize::CanonicalSerialize;
-    #[test]
-    fn test_poseidon2_perm_sbox() {
-        let mut rng = rand::thread_rng();
-        
+    use std::time::Instant;
+    use rand_core::CryptoRngCore;
+
+    fn poseidon2_perm_sbox<R: CryptoRngCore>(
+        rng: &mut R,
+        degree: usize,
+        full_rounds: usize,
+        partial_rounds: usize,
+        transcript_label: &'static [u8],
+    ) {
         let width = 3;
-        let d = 3;
-        let full_rounds = 8;
-        let partial_rounds = 56;
-        
-        let mat_internal_diag_m_1: Vec<Fr> = (0..width).map(|_| Fr::rand(&mut rng)).collect();
-        let mat_internal: Vec<Vec<Fr>> = (0..width).map(|_| (0..width).map(|_| Fr::rand(&mut rng)).collect()).collect();
-        let round_constants: Vec<Vec<Fr>> = (0..(full_rounds + partial_rounds)).map(|_| (0..width).map(|_| Fr::rand(&mut rng)).collect()).collect();
-        
-        let params = Poseidon2Params::<Fr>::new(width, d, full_rounds, partial_rounds, &mat_internal_diag_m_1, &mat_internal, &round_constants);
-        
+
+        let params = Poseidon2Params::<Fr>::new_with_randoms(
+            rng,
+            width,
+            degree,
+            full_rounds,
+            partial_rounds,
+        );
+
         let poseidon2 = Poseidon2::new(params.clone());
-        
-        let input = (0..width).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
-        
+
+        let input = (0..width).map(|_| Fr::rand(rng)).collect::<Vec<_>>();
+
         let expected_output = poseidon2.permutation(&input);
-        
+
         let pc_gens = PedersenGens::<PallasA>::default();
         let bp_gens = BulletproofGens::new(2048, 1);
 
-        let (proof, commitments) = {
-            let prover_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
+        let (proof, commitment) = {
+            let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
-            let mut comms = vec![];
-            let mut vars = vec![];
-            for i in 0..width {
-                let (com, var) = prover.commit(input[i], Fr::rand(&mut rng));
-                comms.push(com);
-                vars.push(var);
-            }
-
             let start = Instant::now();
-            assert!(Poseidon_permutation_gadget(
-                &mut prover,
-                vars.clone(),
-                &params,
-                &expected_output
-            ).is_ok());
+            let (comm, vars) = prover.commit_vec(&input, Fr::rand(rng), &bp_gens);
+
+            assert!(
+                Poseidon_permutation_gadget(&mut prover, vars.clone(), &params, &expected_output)
+                    .is_ok()
+            );
 
             println!(
-                "For Poseidon2 perm width={width} full rounds {full_rounds}, partial rounds {partial_rounds}, no of constraints is {}",
+                "For Poseidon2 perm width={width}, d={degree} full rounds {full_rounds}, partial rounds {partial_rounds}, no of constraints is {}",
                 &prover.number_of_constraints()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();
 
-            println!("Proving time is {:?} and size is {}", start.elapsed(), proof.compressed_size());
-            (proof, comms)
+            println!(
+                "Proving time is {:?} and size is {}",
+                start.elapsed(),
+                proof.compressed_size()
+            );
+            (proof, comm)
         };
 
-        let verifier_transcript = MerlinTranscript::new(b"Poseidon2_perm_sbox");
+        let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
 
-        let mut vars = vec![];
-        for i in 0..width {
-            let v = verifier.commit(commitments[i]);
-            vars.push(v);
-        }
-
         let start = Instant::now();
-        assert!(Poseidon_permutation_gadget(
-            &mut verifier,
-            vars,
-            &params,
-            &expected_output
-        ).is_ok());
+        let vars = verifier.commit_vec(width, commitment);
+
+        assert!(
+            Poseidon_permutation_gadget(&mut verifier, vars, &params, &expected_output).is_ok()
+        );
 
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
         println!("Verification time is {:?}", start.elapsed());
     }
+
+    fn poseidon2_hash_2_simple<R: CryptoRngCore>(
+        rng: &mut R,
+        degree: usize,
+        full_rounds: usize,
+        partial_rounds: usize,
+        transcript_label: &'static [u8],
+    ) {
+        let width = 3;
+
+        let params = Poseidon2Params::<Fr>::new_with_randoms(
+            rng,
+            width,
+            degree,
+            full_rounds,
+            partial_rounds,
+        );
+
+        let xl = Fr::rand(rng);
+        let xr = Fr::rand(rng);
+        let expected_output = Poseidon_hash_2_simple(xl, xr, params.clone());
+
+        let pc_gens = PedersenGens::<PallasA>::default();
+        let bp_gens = BulletproofGens::new(2048, 1);
+
+        let (proof, commitment) = {
+            let prover_transcript = MerlinTranscript::new(transcript_label);
+            let mut prover = Prover::new(&pc_gens, prover_transcript);
+
+            let start = Instant::now();
+
+            let (comm, mut vars) = prover.commit_vec(&[xl, xr], Fr::rand(rng), &bp_gens);
+
+
+            assert!(
+                Poseidon_hash_2_gadget_simple(
+                    &mut prover,
+                    vars.remove(0),
+                    vars.remove(0),
+                    &params,
+                    expected_output
+                )
+                    .is_ok()
+            );
+
+            println!(
+                "For Poseidon hash 2:1 rounds {}, no of constraints is {}",
+                full_rounds + partial_rounds,
+                &prover.number_of_constraints()
+            );
+
+            let proof = prover.prove(&bp_gens).unwrap();
+
+            println!(
+                "Proving time is {:?} and size is {}",
+                start.elapsed(),
+                proof.compressed_size()
+            );
+            (proof, comm)
+        };
+
+        let verifier_transcript = MerlinTranscript::new(transcript_label);
+        let mut verifier = Verifier::new(verifier_transcript);
+
+        let start = Instant::now();
+
+        let mut vars = verifier.commit_vec(2, commitment);
+
+        assert!(
+            Poseidon_hash_2_gadget_simple(
+                &mut verifier,
+                vars.remove(0),
+                vars.remove(0),
+                &params,
+                expected_output
+            )
+                .is_ok()
+        );
+
+        assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
+
+        println!("Verification time is {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn test_poseidon2_perm_cube_sbox() {
+        let mut rng = rand::thread_rng();
+        poseidon2_perm_sbox(&mut rng, 3, 8, 56, b"Poseidon2_perm_cube_sbox");
+    }
+
+    #[test]
+    fn test_poseidon2_perm_quint_sbox() {
+        let mut rng = rand::thread_rng();
+        poseidon2_perm_sbox(&mut rng, 5, 8, 56, b"Poseidon2_perm_2_quint_sbox");
+    }
+
+    #[test]
+    fn test_poseidon2_hash_2_simple_cube_sbox() {
+        let mut rng = rand::thread_rng();
+        poseidon2_hash_2_simple(
+            &mut rng,
+            3,
+            8,
+            56,
+            b"Poseidon_hash_2_cube",
+        );
+    }
+
+    #[test]
+    fn test_poseidon2_hash_2_simple_quint_sbox() {
+        let mut rng = rand::thread_rng();
+        poseidon2_hash_2_simple(
+            &mut rng,
+            5,
+            8,
+            56,
+            b"Poseidon_hash_2_quint",
+        );
+    }
+
 }

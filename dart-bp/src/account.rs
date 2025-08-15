@@ -3,14 +3,14 @@ use ark_std::collections::{BTreeMap, BTreeSet};
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::poseidon_impls::poseidon_old::{Poseidon_hash_2_simple, PoseidonParams, SboxType};
 use crate::util::{
-    bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
+    bp_gens_for_vec_commitment,
+    enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
+    enforce_constraints_for_randomness_relations,
     generate_schnorr_responses_for_common_state_change,
     generate_schnorr_t_values_for_balance_change,
     generate_schnorr_t_values_for_common_state_change,
     take_challenge_contrib_of_schnorr_t_values_for_balance_change,
-    take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
     verify_schnorr_for_balance_change, verify_schnorr_for_common_state_change,
 };
 use crate::util::{
@@ -25,7 +25,7 @@ use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::{vec, vec::Vec};
-use bulletproofs::PedersenGens;
+use bulletproofs::{BulletproofGens, PedersenGens};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -38,6 +38,7 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_simple};
 
 pub const NUM_GENERATORS: usize = 7;
 
@@ -131,7 +132,6 @@ pub struct AccountState<G: AffineRepr> {
     pub rho: G::ScalarField,
     pub current_rho: G::ScalarField,
     pub randomness: G::ScalarField,
-    // TODO: Add version
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -146,37 +146,36 @@ where
         rng: &mut R,
         sk: G::ScalarField,
         asset_id: AssetId,
+        counter: NullifierSkGenCounter,
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
-        poseidon_config: &PoseidonParams<G::ScalarField>,
-        sbox: &SboxType<G::ScalarField>,
-    ) -> Result<(Self, NullifierSkGenCounter)> {
+        poseidon_config: Poseidon2Params<G::ScalarField>,
+    ) -> Result<Self> {
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
-        let counter = NullifierSkGenCounter::rand(rng);
         let combined = Self::concat_asset_id_counter(asset_id, counter);
         // unwrap is fine as there is no way this can fail
         // let rho = TwoToOneCRH::<G::ScalarField>::compress(poseidon_config, sk, combined).unwrap();
-        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config, sbox);
+        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config);
         let current_rho = rho.square();
 
         let randomness = G::ScalarField::rand(rng);
-        Ok((
-            Self {
-                sk,
-                balance: 0,
-                counter: 0,
-                asset_id,
-                rho,
-                current_rho,
-                randomness,
-            },
-            counter,
-        ))
+        Ok(Self {
+            sk,
+            balance: 0,
+            counter: 0,
+            asset_id,
+            rho,
+            current_rho,
+            randomness,
+        })
     }
 
     /// To be used when using [`RegTxnProofAlt`]
-    pub fn new_alt<R: CryptoRngCore, G2: SWCurveConfig<BaseField = G::ScalarField, ScalarField = G::BaseField>>(
+    pub fn new_alt<
+        R: CryptoRngCore,
+        G2: SWCurveConfig<BaseField = G::ScalarField, ScalarField = G::BaseField>,
+    >(
         rng: &mut R,
         sk: G::ScalarField,
         asset_id: AssetId,
@@ -200,8 +199,8 @@ where
         let randomness = *p_2.x().unwrap();
         let current_rho = rho.square();
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 sk,
                 balance: 0,
                 counter: 0,
@@ -209,8 +208,10 @@ where
                 rho,
                 current_rho,
                 randomness,
-            }, r_1, r_2),
-        )
+            },
+            r_1,
+            r_2,
+        ))
     }
 
     pub fn commit(
@@ -342,6 +343,8 @@ pub const TXN_CHALLENGE_LABEL: &[u8; 13] = b"txn-challenge";
 pub const TXN_INSTANCE_LABEL: &[u8; 18] = b"txn-extra-instance";
 
 pub const TXN_POB_LABEL: &[u8; 20] = b"proof-of-balance-txn";
+
+// NOTE: Commitments generated when committing Bulletproofs (using `commit` or `commit_vec`) are already added to the transcript
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MintTxnProof<
@@ -857,18 +860,9 @@ pub struct CommonStateChangeProof<
 /// Proof for variables that change only when the account state transition involves a change in account balance
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct BalanceChangeProof<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
-    pub comm_bal_old: Affine<G0>,
-    pub comm_bal_new: Affine<G0>,
-    pub comm_amount: Affine<G0>,
-    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to amount is created for using with Bulletproofs
-    pub resp_amount: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to old balance is created for using with Bulletproofs
-    pub resp_old_bal: PokPedersenCommitment<Affine<G0>>,
-    /// Commitment to randomness and response for proving knowledge of old balance using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to new balance is created for using with Bulletproofs
-    pub resp_new_bal: PokPedersenCommitment<Affine<G0>>,
+    pub comm_bp_bal: Affine<G0>,
+    pub t_comm_bp_bal: Affine<G0>,
+    pub resp_comm_bp_bal: SchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_leg_amount: PokPedersenCommitment<Affine<G0>>,
 }
@@ -900,12 +894,12 @@ pub struct CommonStateChangeProver<
 }
 
 pub struct BalanceChangeProver<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
-    pub comm_bal_old: Affine<G0>,
-    pub comm_bal_new: Affine<G0>,
-    pub comm_amount: Affine<G0>,
-    pub t_old_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
-    pub t_new_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
-    pub t_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
+    pub amount: Balance,
+    pub old_balance: Balance,
+    pub new_balance: Balance,
+    pub comm_bp_bal_blinding: G0::ScalarField,
+    pub comm_bp_bal: Affine<G0>,
+    pub t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
     pub t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
 }
 
@@ -1124,10 +1118,11 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         has_balance_decreased: bool,
         mut even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         pc_gens: &PedersenGens<Affine<G0>>,
+        bp_gens: &BulletproofGens<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
-        let ((r_bal_old, comm_bal_old), (r_bal_new, comm_bal_new), (r_amount, comm_amount)) =
+        let (comm_bp_bal_blinding, comm_bp_bal) =
             enforce_balance_change_prover(
                 rng,
                 account.balance,
@@ -1135,60 +1130,54 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
                 amount,
                 has_balance_decreased,
                 &mut even_prover,
+                bp_gens
             )?;
 
         let mut transcript = even_prover.transcript();
 
         let amount_blinding = F0::rand(rng);
-        let (t_old_bal, t_new_bal, t_amount, t_leg_amount) =
+        let (t_comm_bp_bal, t_leg_amount) =
             generate_schnorr_t_values_for_balance_change(
                 rng,
                 amount,
                 ct_amount,
-                account,
-                updated_account,
                 old_balance_blinding,
                 new_balance_blinding,
                 amount_blinding,
-                r_bal_old,
-                r_bal_new,
-                r_amount,
                 r_3,
-                &comm_bal_old,
-                &comm_bal_new,
-                &comm_amount,
                 pc_gens,
+                bp_gens,
                 enc_key_gen,
                 enc_gen,
                 &mut transcript,
             )?;
         Ok(Self {
-            comm_bal_old,
-            comm_bal_new,
-            comm_amount,
-            t_old_bal,
-            t_new_bal,
-            t_amount,
+            amount,
+            old_balance: account.balance,
+            new_balance: updated_account.balance,
+            comm_bp_bal_blinding,
+            comm_bp_bal,
+            t_comm_bp_bal,
             t_leg_amount,
         })
     }
 
     pub fn gen_proof(self, challenge: &F0) -> Result<BalanceChangeProof<F0, G0>> {
-        let (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount) =
+        let t_comm_bp_bal = self.t_comm_bp_bal.t;
+        let (resp_comm_bp_bal, resp_leg_amount) =
             generate_schnorr_responses_for_balance_change(
-                self.t_old_bal,
-                self.t_new_bal,
-                self.t_amount,
+                self.old_balance,
+                self.new_balance,
+                self.amount,
+                self.comm_bp_bal_blinding,
+                self.t_comm_bp_bal,
                 self.t_leg_amount,
                 challenge,
-            );
+            )?;
         Ok(BalanceChangeProof {
-            comm_bal_old: self.comm_bal_old,
-            comm_bal_new: self.comm_bal_new,
-            comm_amount: self.comm_amount,
-            resp_old_bal,
-            resp_new_bal,
-            resp_amount,
+            comm_bp_bal: self.comm_bp_bal,
+            t_comm_bp_bal,
+            resp_comm_bp_bal,
             resp_leg_amount,
         })
     }
@@ -1203,6 +1192,7 @@ impl<
 > StateChangeVerifier<L, F0, F1, G0, G1>
 {
     /// Takes challenge contributions from all relevant subprotocols
+    /// `has_balance_decreased` is None when balance doesn't change
     pub fn init(
         proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         leg_enc: &LegEncryption<Affine<G0>>,
@@ -1243,7 +1233,7 @@ impl<
             .transcript()
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        take_challenge_contrib_of_schnorr_t_values_for_common_state_change(
+        enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change(
             leg_enc,
             prover_is_sender,
             &nullifier,
@@ -1269,20 +1259,17 @@ impl<
         })
     }
 
-    /// Takes challenge contributions from balance change related subprotocols
-    pub fn take_challenge_contrib_of_balance_change(
+    /// Enforce Bulletproofs constraints for balance change and takes challenge contributions from balance change related subprotocols
+    pub fn enforce_constraints_and_take_challenge_contrib_of_balance_change(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
         ct_amount: &Affine<G0>,
-        pc_gens: &PedersenGens<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
         if let Some(has_balance_decreased) = self.has_balance_decreased {
             enforce_balance_change_verifier(
-                proof.comm_bal_old,
-                proof.comm_bal_new,
-                proof.comm_amount,
+                proof.comm_bp_bal,
                 has_balance_decreased,
                 &mut self.even_verifier,
             )?;
@@ -1294,14 +1281,8 @@ impl<
 
         take_challenge_contrib_of_schnorr_t_values_for_balance_change(
             ct_amount,
-            &proof.comm_bal_old,
-            &proof.comm_bal_new,
-            &proof.comm_amount,
-            &proof.resp_old_bal,
-            &proof.resp_new_bal,
-            &proof.resp_amount,
+            &proof.t_comm_bp_bal,
             &proof.resp_leg_amount,
-            pc_gens,
             enc_key_gen,
             enc_gen,
             &mut verifier_transcript,
@@ -1330,6 +1311,7 @@ impl<
         verify_schnorr_for_common_state_change(
             leg_enc,
             self.prover_is_sender,
+            self.has_counter_decreased,
             &nullifier,
             &common_state_change_proof
                 .re_randomized_path
@@ -1356,22 +1338,20 @@ impl<
         if let Some(balance_change_proof) = balance_change_proof {
             verify_schnorr_for_balance_change(
                 &leg_enc,
-                &balance_change_proof.comm_bal_old,
-                &balance_change_proof.comm_bal_new,
-                &balance_change_proof.comm_amount,
-                &balance_change_proof.resp_old_bal,
-                &balance_change_proof.resp_new_bal,
-                &balance_change_proof.resp_amount,
                 &balance_change_proof.resp_leg_amount,
+                &balance_change_proof.comm_bp_bal,
+                &balance_change_proof.t_comm_bp_bal,
+                &balance_change_proof.resp_comm_bp_bal,
                 &challenge,
                 pc_gens,
+                bp_gens,
                 enc_key_gen,
                 enc_gen,
             )?;
 
             // Balance in leaf (old account) is same as in the old balance commitment
             if common_state_change_proof.resp_leaf.0[1]
-                != balance_change_proof.resp_old_bal.response1
+                != balance_change_proof.resp_comm_bp_bal.0[2]
             {
                 return Err(Error::ProofVerificationError(
                     "Balance in leaf does not match old balance commitment".to_string(),
@@ -1380,7 +1360,7 @@ impl<
 
             // Balance in new account commitment is same as in the new balance commitment
             if common_state_change_proof.resp_acc_new.0[1]
-                != balance_change_proof.resp_new_bal.response1
+                != balance_change_proof.resp_comm_bp_bal.0[3]
             {
                 return Err(Error::ProofVerificationError(
                     "Balance in new account does not match new balance commitment".to_string(),
@@ -1389,30 +1369,19 @@ impl<
 
             // Amount in leg is same as amount in commitment
             if balance_change_proof.resp_leg_amount.response2
-                != balance_change_proof.resp_amount.response1
+                != balance_change_proof.resp_comm_bp_bal.0[1]
             {
                 return Err(Error::ProofVerificationError(
                     "Amount in leg does not match amount commitment".to_string(),
                 ));
             }
-        }
-
-        if self.has_counter_decreased {
-            // Counter in new account commitment is 1 less than the one in the leaf commitment
-            if common_state_change_proof.resp_acc_new.0[2] + challenge
-                != common_state_change_proof.resp_leaf.0[2]
-            {
-                return Err(Error::ProofVerificationError(
-                    "Counter in new account does not match counter in leaf - 1".to_string(),
-                ));
-            }
         } else {
-            // Counter in new account commitment is 1 more than the one in the leaf commitment
-            if common_state_change_proof.resp_acc_new.0[2]
-                != common_state_change_proof.resp_leaf.0[2] + challenge
+            // Balance in leaf (old account) is same as in the new account commitment
+            if common_state_change_proof.resp_leaf.0[1]
+                != common_state_change_proof.resp_acc_new.0[1]
             {
                 return Err(Error::ProofVerificationError(
-                    "Counter in new account does not match counter in leaf + 1".to_string(),
+                    "Balance in leaf does not match the new account commitment".to_string(),
                 ));
             }
         }
@@ -1510,6 +1479,7 @@ impl<
             true,
             &mut common_prover.even_prover,
             &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -1571,10 +1541,9 @@ impl<
             enc_gen,
         )?;
 
-        verifier.take_challenge_contrib_of_balance_change(
+        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
             &self.balance_proof,
             &ct_amount,
-            &account_tree_params.even_parameters.pc_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -1810,6 +1779,7 @@ impl<
             false,
             &mut common_prover.even_prover,
             &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -1871,10 +1841,9 @@ impl<
             enc_gen,
         )?;
 
-        verifier.take_challenge_contrib_of_balance_change(
+        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
             &self.balance_proof,
             &ct_amount,
-            &account_tree_params.even_parameters.pc_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -1956,7 +1925,7 @@ impl<
             root,
             nonce,
             true,
-            true,
+            false,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -2111,6 +2080,7 @@ impl<
             false,
             &mut common_prover.even_prover,
             &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -2172,10 +2142,9 @@ impl<
             enc_gen,
         )?;
 
-        verifier.take_challenge_contrib_of_balance_change(
+        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
             &self.balance_proof,
             &ct_amount,
-            &account_tree_params.even_parameters.pc_gens,
             enc_key_gen,
             enc_gen,
         )?;
@@ -3030,10 +2999,9 @@ fn ensure_same_accounts<G: AffineRepr>(
 pub mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
-    use crate::keys::{keygen_enc, keygen_sig};
+    use crate::keys::keygen_sig;
     use crate::leg::Leg;
     use crate::leg::tests::setup_keys;
-    use ark_ff::PrimeField;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -3122,7 +3090,7 @@ pub mod tests {
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let (account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+        let (account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
 
         let account_tree = get_tree_with_account_comm::<L>(
             &account,
@@ -3229,7 +3197,7 @@ pub mod tests {
         );
 
         // Sender account
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -3335,7 +3303,7 @@ pub mod tests {
         );
 
         // Receiver account
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree = get_tree_with_account_comm::<L>(
@@ -3439,7 +3407,7 @@ pub mod tests {
         );
 
         // Receiver account
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3544,7 +3512,7 @@ pub mod tests {
         );
 
         // Sender account with non-zero counter
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
 
         account.balance = 50;
         account.counter = 1;
@@ -3645,7 +3613,7 @@ pub mod tests {
         );
 
         // Sender account
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3750,7 +3718,7 @@ pub mod tests {
         );
 
         // Receiver account with non-zero counter
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
 
         account.balance = 50;
         account.counter = 1;
@@ -3828,7 +3796,7 @@ pub mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         // Account exists with some balance and pending txns
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -3877,7 +3845,7 @@ pub mod tests {
         let num_pending_txns = 20;
 
         // Account exists with some balance and pending txns
-        let (mut account, _, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();

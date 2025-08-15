@@ -1,12 +1,12 @@
 use crate::poseidon_impls::utils::mat_mut_vec_mul;
 use ark_ec::AffineRepr;
-use ark_ff::{Field};
+use ark_ff::Field;
+use ark_std::marker::PhantomData;
+use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::LinearCombination;
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSError, Variable, Verifier};
-use bulletproofs::PedersenGens;
 use dock_crypto_utils::transcript::MerlinTranscript;
-use ark_std::marker::PhantomData;
 
 pub struct PoseidonParams<F: Field> {
     pub width: usize,
@@ -76,6 +76,7 @@ impl<F: Field> PoseidonParams<F> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum SboxType<F: Field> {
     Cube(PhantomData<F>),
     Quint(PhantomData<F>),
@@ -372,14 +373,8 @@ pub fn Poseidon_hash_2_gadget<F: Field, CS: ConstraintSystem<F>>(
     output: F,
 ) -> Result<(), R1CSError> {
     let statics: Vec<LinearCombination<F>> = statics.iter().map(|s| (*s).into()).collect();
-    let hash = Poseidon_hash_2_constraints::<F, CS>(
-        cs,
-        xl.into(),
-        xr.into(),
-        statics,
-        params,
-        sbox_type,
-    )?;
+    let hash =
+        Poseidon_hash_2_constraints::<F, CS>(cs, xl.into(), xr.into(), statics, params, sbox_type)?;
 
     constrain_lc_with_scalar::<F, CS>(cs, hash, output);
 
@@ -418,13 +413,8 @@ pub fn Poseidon_hash_2_gadget_simple<F: Field, CS: ConstraintSystem<F>>(
     sbox_type: &SboxType<F>,
     output: F,
 ) -> Result<(), R1CSError> {
-    let hash = Poseidon_hash_2_constraints_simple::<F, CS>(
-        cs,
-        xl.into(),
-        xr.into(),
-        params,
-        sbox_type,
-    )?;
+    let hash =
+        Poseidon_hash_2_constraints_simple::<F, CS>(cs, xl.into(), xr.into(), params, sbox_type)?;
 
     constrain_lc_with_scalar::<F, CS>(cs, hash, output);
 
@@ -480,18 +470,18 @@ pub fn allocate_statics_for_verifier<F: Field, G: AffineRepr<ScalarField = F>>(
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use ark_std::UniformRand;
-    use std::time::Instant;
     use ark_serialize::CanonicalSerialize;
+    use ark_std::UniformRand;
     use bulletproofs::BulletproofGens;
     use rand_core::CryptoRngCore;
+    use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
     type Fr = ark_pallas::Fr;
 
     pub fn get_poseidon_params<R: CryptoRngCore>(rng: &mut R, width: usize) -> PoseidonParams<Fr> {
         let full_rounds = 8;
-        let partial_rounds = 140;
+        let partial_rounds = 56;
         PoseidonParams::new(width, full_rounds, partial_rounds)
     }
 
@@ -502,7 +492,6 @@ pub mod tests {
     ) {
         let s_params = get_poseidon_params(rng, 6);
         let width = s_params.width;
-        let total_rounds = s_params.get_total_rounds();
 
         let input = (0..width).map(|_| Fr::rand(rng)).collect::<Vec<_>>();
         let expected_output = Poseidon_permutation(&input, &s_params, sbox_type);
@@ -515,18 +504,12 @@ pub mod tests {
         let pc_gens = PedersenGens::<PallasA>::default();
         let bp_gens = BulletproofGens::new(2048, 1);
 
-        let (proof, commitments) = {
+        let (proof, commitment) = {
             let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
-            let mut comms = vec![];
-            let mut vars = vec![];
-
-            for i in 0..width {
-                let (com, var) = prover.commit(input[i].clone(), Fr::rand(rng));
-                comms.push(com);
-                vars.push(var);
-            }
+            let start = Instant::now();
+            let (comm, vars) = prover.commit_vec(&input, Fr::rand(rng), &bp_gens);
 
             assert!(
                 Poseidon_permutation_gadget(
@@ -540,22 +523,24 @@ pub mod tests {
             );
 
             println!(
-                "For Poseidon permutation rounds {}, no of constraints is {}",
-                total_rounds,
-                &prover.number_of_constraints()
+                "For Poseidon perm width={width}, {:?}, full rounds {}, partial rounds {}, no of constraints is {}",
+                sbox_type, s_params.full_rounds, s_params.partial_rounds, &prover.number_of_constraints()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();
-            (proof, comms)
+            println!(
+                "Proving time is {:?} and size is {}",
+                start.elapsed(),
+                proof.compressed_size()
+            );
+            (proof, comm)
         };
 
         let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
-        let mut vars = vec![];
-        for i in 0..width {
-            let v = verifier.commit(commitments[i]);
-            vars.push(v);
-        }
+
+        let start = Instant::now();
+        let vars = verifier.commit_vec(width, commitment);
         assert!(
             Poseidon_permutation_gadget(
                 &mut verifier,
@@ -568,6 +553,7 @@ pub mod tests {
         );
 
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
+        println!("Verification time is {:?}", start.elapsed());
     }
 
     pub fn poseidon_hash_2<R: CryptoRngCore>(
@@ -591,27 +577,22 @@ pub mod tests {
         let pc_gens = PedersenGens::<PallasA>::default();
         let bp_gens = BulletproofGens::new(2048, 1);
 
-        let (proof, commitments) = {
+        let (proof, commitment) = {
             let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
-            let mut comms = vec![];
+            let start = Instant::now();
 
-            let (com_l, var_l) = prover.commit(xl.clone(), Fr::rand(rng));
-            comms.push(com_l);
-
-            let (com_r, var_r) = prover.commit(xr.clone(), Fr::rand(rng));
-            comms.push(com_r);
+            let (comm, mut vars) = prover.commit_vec(&[xl, xr], Fr::rand(rng), &bp_gens);
 
             let num_statics = 4;
             let static_vars = allocate_statics_for_prover(&mut prover, num_statics);
 
-            let start = Instant::now();
             assert!(
                 Poseidon_hash_2_gadget(
                     &mut prover,
-                    var_l,
-                    var_r,
+                    vars.remove(0),
+                    vars.remove(0),
                     static_vars,
                     &s_params,
                     sbox_type,
@@ -630,25 +611,28 @@ pub mod tests {
 
             let end = start.elapsed();
 
-            println!("Proving time is {:?} and size is {}", end, proof.compressed_size());
-            (proof, comms)
+            println!(
+                "Proving time is {:?} and size is {}",
+                end,
+                proof.compressed_size()
+            );
+            (proof, comm)
         };
 
         let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
 
-        let var_l = verifier.commit(commitments[0]);
-        let var_r = verifier.commit(commitments[1]);
+        let start = Instant::now();
+        let mut vars = verifier.commit_vec(2, commitment);
 
         let num_statics = 4;
         let static_vars = allocate_statics_for_verifier(&mut verifier, num_statics, &pc_gens);
 
-        let start = Instant::now();
         assert!(
             Poseidon_hash_2_gadget(
                 &mut verifier,
-                var_l,
-                var_r,
+                vars.remove(0),
+                vars.remove(0),
                 static_vars,
                 &s_params,
                 sbox_type,
@@ -675,21 +659,16 @@ pub mod tests {
         let xr = Fr::rand(rng);
         let expected_output = Poseidon_hash_2_simple(xl, xr, &s_params, sbox_type);
 
-
         let pc_gens = PedersenGens::<PallasA>::default();
         let bp_gens = BulletproofGens::new(2048, 1);
 
-        let (proof, commitments) = {
+        let (proof, commitment) = {
             let prover_transcript = MerlinTranscript::new(transcript_label);
             let mut prover = Prover::new(&pc_gens, prover_transcript);
 
-            let mut comms = vec![];
+            let start = Instant::now();
 
-            let (com_l, var_l) = prover.commit(xl.clone(), Fr::rand(rng));
-            comms.push(com_l);
-
-            let (com_r, var_r) = prover.commit(xr.clone(), Fr::rand(rng));
-            comms.push(com_r);
+            let (comm, mut vars) = prover.commit_vec(&[xl, xr], Fr::rand(rng), &bp_gens);
 
             // let h = Poseidon_hash_2_constraints_simple(
             //     &mut prover,
@@ -701,12 +680,11 @@ pub mod tests {
             // println!("expected {:?}", expected_output);
             // println!("prover h {:?}", prover.eval(&h));
 
-            let start = Instant::now();
             assert!(
                 Poseidon_hash_2_gadget_simple(
                     &mut prover,
-                    var_l,
-                    var_r,
+                    vars.remove(0),
+                    vars.remove(0),
                     &s_params,
                     sbox_type,
                     expected_output
@@ -721,23 +699,27 @@ pub mod tests {
             );
 
             let proof = prover.prove(&bp_gens).unwrap();
-            
-            println!("Proving time is {:?} and size is {}", start.elapsed(), proof.compressed_size());
-            (proof, comms)
+
+            println!(
+                "Proving time is {:?} and size is {}",
+                start.elapsed(),
+                proof.compressed_size()
+            );
+            (proof, comm)
         };
 
         let verifier_transcript = MerlinTranscript::new(transcript_label);
         let mut verifier = Verifier::new(verifier_transcript);
 
-        let var_l = verifier.commit(commitments[0]);
-        let var_r = verifier.commit(commitments[1]);
-
         let start = Instant::now();
+
+        let mut vars = verifier.commit_vec(2, commitment);
+
         assert!(
             Poseidon_hash_2_gadget_simple(
                 &mut verifier,
-                var_l,
-                var_r,
+                vars.remove(0),
+                vars.remove(0),
                 &s_params,
                 sbox_type,
                 expected_output
@@ -746,7 +728,7 @@ pub mod tests {
         );
 
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
-        
+
         println!("Verification time is {:?}", start.elapsed());
     }
 
