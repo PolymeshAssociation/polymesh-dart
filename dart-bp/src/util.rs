@@ -1,13 +1,14 @@
-use std::iter::Copied;
-use ark_ec::AffineRepr;
+use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
+use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
+use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
 use ark_std::vec;
-use bulletproofs::{BulletproofGens, PedersenGens};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Variable, Verifier};
+use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
@@ -17,8 +18,7 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use crate::account::{AccountCommitmentKeyTrait, AccountState};
-use crate::leg::LegEncryption;
+use std::iter::Copied;
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
 /// Also re-randomizes the path and enforces the corresponding constraints. Returns the even prover,
@@ -125,23 +125,51 @@ pub fn enforce_balance_change_prover<
     amount: Balance,
     has_balance_decreased: bool,
     even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
-) -> Result<((F0, Affine<G0>), (F0, Affine<G0>), (F0, Affine<G0>))> {
+    bp_gens: &BulletproofGens<Affine<G0>>,
+) -> Result<(F0, Affine<G0>)> {
     // Commit to amount, old and new balance
-    // TODO: It makes sense to commit to all these in a single vector commitment
-    let r_bal_old = F0::rand(rng);
-    let (comm_bal_old, var_bal_old) = even_prover.commit(F0::from(old_bal), r_bal_old);
+    let comm_bp_bal_blinding = F0::rand(rng);
+    let (comm_bp_bal, vars) = even_prover.commit_vec(
+        &[F0::from(amount), F0::from(old_bal), F0::from(new_bal)],
+        comm_bp_bal_blinding,
+        bp_gens,
+    );
+    enforce_constraints_for_balance_change(
+        even_prover,
+        vars,
+        has_balance_decreased,
+        Some(new_bal),
+    )?;
+    Ok((comm_bp_bal_blinding, comm_bp_bal))
+}
 
-    let r_bal_new = F0::rand(rng);
-    let (comm_bal_new, var_bal_new) = even_prover.commit(F0::from(new_bal), r_bal_new);
+/// Enforce that balance has correctly changed. If `has_balance_decreased` is true, then `old_bal - new_bal = amount` else `new_bal - old_bal = amount`
+pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0>>(
+    comm_bp_bal: Affine<G0>,
+    has_balance_decreased: bool,
+    even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+) -> Result<()> {
+    let vars = even_verifier.commit_vec(3, comm_bp_bal);
 
-    let r_amount = F0::rand(rng);
-    let (comm_amount, var_amount) = even_prover.commit(F0::from(amount), r_amount);
+    enforce_constraints_for_balance_change(even_verifier, vars, has_balance_decreased, None)?;
 
+    Ok(())
+}
+
+pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>(
+    cs: &mut CS,
+    mut committed_variables: Vec<Variable<F>>,
+    has_balance_decreased: bool,
+    new_bal: Option<Balance>,
+) -> Result<()> {
+    let var_amount = committed_variables.remove(0);
+    let var_bal_old = committed_variables.remove(0);
+    let var_bal_new = committed_variables.remove(0);
     // TODO: Combined the following 2 gadgets reduce 1 constraint
     if has_balance_decreased {
         // old - new balance is correct
         difference(
-            even_prover,
+            cs,
             var_bal_old.into(),
             var_bal_new.into(),
             var_amount.into(),
@@ -149,56 +177,14 @@ pub fn enforce_balance_change_prover<
     } else {
         // new - old balance is correct
         difference(
-            even_prover,
+            cs,
             var_bal_new.into(),
             var_bal_old.into(),
             var_amount.into(),
         )?;
     }
     // new balance does not overflow
-    range_proof(
-        even_prover,
-        var_bal_new.into(),
-        Some(new_bal),
-        AMOUNT_BITS.into(),
-    )?;
-    Ok((
-        (r_bal_old, comm_bal_old),
-        (r_bal_new, comm_bal_new),
-        (r_amount, comm_amount),
-    ))
-}
-
-/// Enforce that balance has correctly changed. If `has_balance_decreased` is true, then `old_bal - new_bal = amount` else `new_bal - old_bal = amount`
-pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0>>(
-    comm_bal_old: Affine<G0>,
-    comm_bal_new: Affine<G0>,
-    comm_amount: Affine<G0>,
-    has_balance_decreased: bool,
-    even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-) -> Result<()> {
-    let var_bal_old = even_verifier.commit(comm_bal_old);
-    let var_bal_new = even_verifier.commit(comm_bal_new);
-    let var_amount = even_verifier.commit(comm_amount);
-
-    if has_balance_decreased {
-        difference(
-            even_verifier,
-            var_bal_old.into(),
-            var_bal_new.into(),
-            var_amount.into(),
-        )?;
-    } else {
-        difference(
-            even_verifier,
-            var_bal_new.into(),
-            var_bal_old.into(),
-            var_amount.into(),
-        )?;
-    }
-
-    range_proof(even_verifier, var_bal_new.into(), None, AMOUNT_BITS.into())?;
-
+    range_proof(cs, var_bal_new.into(), new_bal, AMOUNT_BITS.into())?;
     Ok(())
 }
 
@@ -207,22 +193,28 @@ pub fn generate_schnorr_responses_for_balance_change<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
-    t_old_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
-    t_new_bal: PokPedersenCommitmentProtocol<Affine<G0>>,
-    t_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
+    old_balance: Balance,
+    new_balance: Balance,
+    amount: Balance,
+    comm_bp_bal_blinding: G0::ScalarField,
+    t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
     t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
     prover_challenge: &F0,
-) -> (
+) -> Result<(
+    SchnorrResponse<Affine<G0>>,
     PokPedersenCommitment<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
-) {
-    let resp_old_bal = t_old_bal.gen_proof(prover_challenge);
-    let resp_new_bal = t_new_bal.gen_proof(prover_challenge);
-    let resp_amount = t_amount.clone().gen_proof(prover_challenge);
+)> {
+    let resp_comm_bp_bal = t_comm_bp_bal.response(
+        &[
+            comm_bp_bal_blinding,
+            F0::from(amount),
+            F0::from(old_balance),
+            F0::from(new_balance),
+        ],
+        prover_challenge,
+    )?;
     let resp_leg_amount = t_leg_amount.clone().gen_proof(prover_challenge);
-    (resp_old_bal, resp_new_bal, resp_amount, resp_leg_amount)
+    Ok((resp_comm_bp_bal, resp_leg_amount))
 }
 
 #[cfg(feature = "std")]
@@ -348,7 +340,6 @@ pub fn verify_with_rng<
     Ok(())
 }
 
-
 /// Generate commitment to randomness (Schnorr step 1) for state change excluding changes related to amount and balances
 pub fn generate_schnorr_t_values_for_common_state_change<
     R: RngCore,
@@ -440,11 +431,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     let null_gen = account_comm_key.current_rho_gen();
 
     // Schnorr commitment for proving correctness of nullifier
-    let t_null = PokDiscreteLogProtocol::init(
-        old_account.current_rho,
-        old_rho_blinding,
-        &null_gen,
-    );
+    let t_null = PokDiscreteLogProtocol::init(old_account.current_rho, old_rho_blinding, &null_gen);
 
     // Schnorr commitment for proving correctness of asset-id used in leg
     let t_leg_asset_id = PokPedersenCommitmentProtocol::init(
@@ -484,11 +471,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     // Add challenge contribution of each of the above commitments to the transcript
     t_r_leaf.challenge_contribution(&mut transcript)?;
     t_acc_new.challenge_contribution(&mut transcript)?;
-    t_null.challenge_contribution(
-        &null_gen,
-        &nullifier,
-        &mut transcript,
-    )?;
+    t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
     t_leg_asset_id.challenge_contribution(
         &enc_key_gen,
         &enc_gen,
@@ -530,57 +513,34 @@ pub fn generate_schnorr_t_values_for_balance_change<
     rng: &mut R,
     amount: Balance,
     ct_amount: &Affine<G0>,
-    account: &AccountState<Affine<G0>>,
-    updated_account: &AccountState<Affine<G0>>,
     old_balance_blinding: F0,
     new_balance_blinding: F0,
     amount_blinding: F0,
-    r_bal_old: F0,
-    r_bal_new: F0,
-    r_amount: F0,
     r_3: F0,
-    comm_bal_old: &Affine<G0>,
-    comm_bal_new: &Affine<G0>,
-    comm_amount: &Affine<G0>,
     pc_gens: &PedersenGens<Affine<G0>>,
+    bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
     mut prover_transcript: &mut MerlinTranscript,
 ) -> Result<(
-    PokPedersenCommitmentProtocol<Affine<G0>>,
-    PokPedersenCommitmentProtocol<Affine<G0>>,
-    PokPedersenCommitmentProtocol<Affine<G0>>,
+    SchnorrCommitment<Affine<G0>>,
     PokPedersenCommitmentProtocol<Affine<G0>>,
 )> {
-    // The following 3 are for Bulletproof commitment and will likely be combined in one
-    // Schnorr commitment for proving knowledge of old account balance
-    let t_old_bal = PokPedersenCommitmentProtocol::init(
-        account.balance.into(),
-        old_balance_blinding,
-        &pc_gens.B,
-        r_bal_old,
-        F0::rand(rng),
-        &pc_gens.B_blinding,
-    );
-
-    // Schnorr commitment for proving knowledge of new account balance
-    let t_new_bal = PokPedersenCommitmentProtocol::init(
-        updated_account.balance.into(),
-        new_balance_blinding,
-        &pc_gens.B,
-        r_bal_new,
-        F0::rand(rng),
-        &pc_gens.B_blinding,
-    );
-
-    // Schnorr commitment for proving knowledge of amount (used in Bulletproof)
-    let t_amount = PokPedersenCommitmentProtocol::init(
-        F0::from(amount),
-        amount_blinding,
-        &pc_gens.B,
-        r_amount,
-        F0::rand(rng),
-        &pc_gens.B_blinding,
+    let mut gens = bp_gens_for_vec_commitment(3, bp_gens);
+    // Schnorr commitment for proving knowledge of amount, old account balance and new account balance in Bulletproof commitment
+    let t_comm_bp_bal = SchnorrCommitment::new(
+        &[
+            pc_gens.B_blinding,
+            gens.next().unwrap(),
+            gens.next().unwrap(),
+            gens.next().unwrap(),
+        ],
+        vec![
+            F0::rand(rng),
+            amount_blinding,
+            old_balance_blinding,
+            new_balance_blinding,
+        ],
     );
 
     // Schnorr commitment for proving knowledge of amount used in the leg
@@ -594,31 +554,14 @@ pub fn generate_schnorr_t_values_for_balance_change<
     );
 
     // Add challenge contribution of each of the above commitments to the transcript
-    t_old_bal.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        comm_bal_old,
-        &mut prover_transcript,
-    )?;
-    t_new_bal.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        comm_bal_new,
-        &mut prover_transcript,
-    )?;
-    t_amount.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        comm_amount,
-        &mut prover_transcript,
-    )?;
+    t_comm_bp_bal.challenge_contribution(&mut prover_transcript)?;
     t_leg_amount.challenge_contribution(
         &enc_key_gen,
         &enc_gen,
         ct_amount,
         &mut prover_transcript,
     )?;
-    Ok((t_old_bal, t_new_bal, t_amount, t_leg_amount))
+    Ok((t_comm_bp_bal, t_leg_amount))
 }
 
 /// Generate responses (Schnorr step 3) for state change excluding changes related to amount and balances
@@ -695,7 +638,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
     ))
 }
 
-pub fn take_challenge_contrib_of_schnorr_t_values_for_common_state_change<
+pub fn enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change<
     G0: SWCurveConfig + Copy,
 >(
     leg_enc: &LegEncryption<Affine<G0>>,
@@ -713,12 +656,10 @@ pub fn take_challenge_contrib_of_schnorr_t_values_for_common_state_change<
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
 ) -> Result<()> {
-
     let vars = verifier.commit_vec(5, comm_bp_randomness_relations);
     enforce_constraints_for_randomness_relations(verifier, vars);
 
     let mut transcript = verifier.transcript();
-
 
     t_r_leaf.serialize_compressed(&mut transcript)?;
     t_acc_new.serialize_compressed(&mut transcript)?;
@@ -752,36 +693,13 @@ pub fn take_challenge_contrib_of_schnorr_t_values_for_common_state_change<
 
 pub fn take_challenge_contrib_of_schnorr_t_values_for_balance_change<G0: SWCurveConfig + Copy>(
     ct_amount: &Affine<G0>,
-    comm_bal_old: &Affine<G0>,
-    comm_bal_new: &Affine<G0>,
-    comm_amount: &Affine<G0>,
-    resp_old_bal: &PokPedersenCommitment<Affine<G0>>,
-    resp_new_bal: &PokPedersenCommitment<Affine<G0>>,
-    resp_amount: &PokPedersenCommitment<Affine<G0>>,
+    t_comm_bp_bal: &Affine<G0>,
     resp_leg_amount: &PokPedersenCommitment<Affine<G0>>,
-    pc_gens: &PedersenGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
     mut verifier_transcript: &mut MerlinTranscript,
 ) -> Result<()> {
-    resp_old_bal.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        comm_bal_old,
-        &mut verifier_transcript,
-    )?;
-    resp_new_bal.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        &comm_bal_new,
-        &mut verifier_transcript,
-    )?;
-    resp_amount.challenge_contribution(
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        &comm_amount,
-        &mut verifier_transcript,
-    )?;
+    t_comm_bp_bal.serialize_compressed(&mut verifier_transcript)?;
     resp_leg_amount.challenge_contribution(
         &enc_key_gen,
         &enc_gen,
@@ -794,6 +712,7 @@ pub fn take_challenge_contrib_of_schnorr_t_values_for_balance_change<G0: SWCurve
 pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
     is_sender: bool,
+    has_counter_decreased: bool,
     nullifier: &Affine<G0>,
     re_randomized_leaf: &Affine<G0>,
     updated_account_commitment: &Affine<G0>,
@@ -884,6 +803,22 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         ));
     }
 
+    if has_counter_decreased {
+        // Counter in new account commitment is 1 less than the one in the leaf commitment
+        if resp_acc_new.0[2] + verifier_challenge != resp_leaf.0[2] {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf - 1".to_string(),
+            ));
+        }
+    } else {
+        // Counter in new account commitment is 1 more than the one in the leaf commitment
+        if resp_acc_new.0[2] != resp_leaf.0[2] + verifier_challenge {
+            return Err(Error::ProofVerificationError(
+                "Counter in new account does not match counter in leaf + 1".to_string(),
+            ));
+        }
+    }
+
     // rho matches the one in nullifier
     if resp_leaf.0[5] != resp_null.response {
         return Err(Error::ProofVerificationError(
@@ -919,7 +854,8 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
 
     if resp_bp.0[3] != resp_acc_new.0[5] {
         return Err(Error::ProofVerificationError(
-            "New rho mismatch between the new account commitment and the one in BP commitment".to_string(),
+            "New rho mismatch between the new account commitment and the one in BP commitment"
+                .to_string(),
         ));
     }
 
@@ -931,7 +867,8 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
 
     if resp_bp.0[5] != resp_acc_new.0[6] {
         return Err(Error::ProofVerificationError(
-            "New randomness mismatch between the account commitment and the one in BP commitment".to_string(),
+            "New randomness mismatch between the account commitment and the one in BP commitment"
+                .to_string(),
         ));
     }
 
@@ -940,49 +877,28 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
 
 pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
-    comm_bal_old: &Affine<G0>,
-    comm_bal_new: &Affine<G0>,
-    comm_amount: &Affine<G0>,
-    resp_old_bal: &PokPedersenCommitment<Affine<G0>>,
-    resp_new_bal: &PokPedersenCommitment<Affine<G0>>,
-    resp_amount: &PokPedersenCommitment<Affine<G0>>,
     resp_leg_amount: &PokPedersenCommitment<Affine<G0>>,
+    comm_bp_bal: &Affine<G0>,
+    t_comm_bp_bal: &Affine<G0>,
+    resp_comm_bp_bal: &SchnorrResponse<Affine<G0>>,
     verifier_challenge: &G0::ScalarField,
     pc_gens: &PedersenGens<Affine<G0>>,
+    bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
-)   -> Result<()> {
-    if !resp_old_bal.verify(
-        comm_bal_old,
-        &pc_gens.B,
-        &pc_gens.B_blinding,
+) -> Result<()> {
+    let mut gens = bp_gens_for_vec_commitment(3, bp_gens);
+    resp_comm_bp_bal.is_valid(
+        &[
+            pc_gens.B_blinding,
+            gens.next().unwrap(),
+            gens.next().unwrap(),
+            gens.next().unwrap(),
+        ],
+        comm_bp_bal,
+        t_comm_bp_bal,
         verifier_challenge,
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Old balance verification failed".to_string(),
-        ));
-    }
-    if !resp_new_bal.verify(
-        comm_bal_new,
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        verifier_challenge,
-    ) {
-        return Err(Error::ProofVerificationError(
-            "New balance verification failed".to_string(),
-        ));
-    }
-    if !resp_amount.verify(
-        comm_amount,
-        &pc_gens.B,
-        &pc_gens.B_blinding,
-        verifier_challenge,
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Amount verification failed".to_string(),
-        ));
-    }
-
+    )?;
     if !resp_leg_amount.verify(
         &leg_enc.ct_amount,
         &enc_key_gen,
@@ -1031,6 +947,9 @@ fn bp_gens_vec_for_randomness_relations<G0: SWCurveConfig + Copy>(
 
 /// Generators used by Bulletproofs to construct vector commitment, i.e. when `commit_vec` is called. The resulting commitment
 /// has the first generator as the blinding generator and then these generators follow.
-pub fn bp_gens_for_vec_commitment<G: AffineRepr>(size: usize, bp_gens: &BulletproofGens<G>) -> Copied<impl Iterator<Item=&G>> {
+pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
+    size: usize,
+    bp_gens: &BulletproofGens<G>,
+) -> Copied<impl Iterator<Item = &G>> {
     bp_gens.share(0).G(size).copied()
 }

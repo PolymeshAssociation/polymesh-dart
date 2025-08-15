@@ -5,11 +5,11 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 // use arkworks_r1cs_gadgets::poseidon::{PoseidonGadget, FieldHasherGadget};
-use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
-use crate::error::*;
-use crate::poseidon_impls::poseidon_old::{
-    Poseidon_hash_2_constraints_simple, PoseidonParams, SboxType,
+use crate::account::{
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, TXN_CHALLENGE_LABEL,
+    TXN_INSTANCE_LABEL,
 };
+use crate::error::*;
 use crate::util::bp_gens_for_vec_commitment;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
@@ -26,7 +26,9 @@ use ark_r1cs_std::{
     fields::fp::{AllocatedFp, FpVar},
 };
 use ark_std::UniformRand;
-use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier};
+use bulletproofs::r1cs::{
+    ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier,
+};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve::curve_check;
 use curve_tree_relations::lookup::Lookup3Bit;
@@ -39,6 +41,7 @@ use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand_core::CryptoRngCore;
+use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_constraints_simple};
 
 /// Proof of encrypted randomness
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
@@ -103,8 +106,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
-        poseidon_config: &PoseidonParams<G::ScalarField>,
-        sbox: &SboxType<G::ScalarField>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+
         T: Option<(G, G, G)>,
     ) -> Result<Self> {
         let _ = Self::CHECK_CHUNK_BITS;
@@ -259,7 +262,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             com_rho_bp_blinding,
             &leaf_level_bp_gens,
         );
-        Self::enforce_constraints(&mut prover, account.asset_id, counter, vars, poseidon_config, sbox)?;
+        Self::enforce_constraints(
+            &mut prover,
+            account.asset_id,
+            counter,
+            vars,
+            poseidon_config,
+        )?;
 
         let t_comm_rho_bp = SchnorrCommitment::new(
             &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
@@ -420,14 +429,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
-        poseidon_config: &PoseidonParams<G::ScalarField>,
-        sbox: &SboxType<G::ScalarField>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+
         T: Option<(G, G, G)>,
     ) -> Result<()> {
         let _ = Self::CHECK_CHUNK_BITS;
         if T.is_none() ^ self.encrypted_randomness.is_none() {
-            return Err(Error::PkTAndEncryptedRandomnessInconsistent
-            )
+            return Err(Error::PkTAndEncryptedRandomnessInconsistent);
         }
         let mut verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
 
@@ -481,7 +489,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut verifier = Verifier::new(verifier_transcript);
 
         let vars = verifier.commit_vec(3, self.comm_rho_bp);
-        Self::enforce_constraints(&mut verifier, asset_id, counter, vars, poseidon_config, sbox)?;
+        Self::enforce_constraints(
+            &mut verifier,
+            asset_id,
+            counter,
+            vars,
+            poseidon_config,
+        )?;
 
         if let Some(enc_rand) = &self.encrypted_randomness {
             let mut vars = verifier.commit_vec(NUM_CHUNKS, enc_rand.comm_s_chunks_bp);
@@ -644,7 +658,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         Ok(())
     }
 
-    fn enforce_constraints<CS: ConstraintSystem<G::ScalarField>>(cs: &mut CS, asset_id: AssetId, counter: NullifierSkGenCounter, mut vars: Vec<Variable<G::ScalarField>>, poseidon_config: &PoseidonParams<G::ScalarField>, sbox: &SboxType<G::ScalarField>,) -> Result<()> {
+    fn enforce_constraints<CS: ConstraintSystem<G::ScalarField>>(
+        cs: &mut CS,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        mut vars: Vec<Variable<G::ScalarField>>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+    ) -> Result<()> {
         let var_sk = vars.remove(0);
         let var_rho = vars.remove(0);
         let var_rho_sq = vars.remove(0);
@@ -652,13 +672,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let lc_rho: LinearCombination<G::ScalarField> = var_rho.into();
         let combined = AccountState::<G>::concat_asset_id_counter(asset_id, counter);
         let c = LinearCombination::from(combined);
-        let lc_rho_1 = Poseidon_hash_2_constraints_simple(
-            cs,
-            var_sk.into(),
-            c,
-            poseidon_config,
-            sbox,
-        )?;
+        let lc_rho_1 =
+            Poseidon_hash_2_constraints_simple(cs, var_sk.into(), c, poseidon_config)?;
         let (_, _, var_rho_sq_1) = cs.multiply(lc_rho.clone(), lc_rho.clone());
         cs.constrain(lc_rho_1 - lc_rho);
         cs.constrain(var_rho_sq_1 - var_rho_sq);
@@ -856,7 +871,11 @@ impl<
         T_2_protocol.challenge_contribution(&pk_T, &T_2, &mut transcript)?;
 
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
-        let (comm_bp, vars) = prover.commit_vec(&[x_1, y_1, x_2, y_2, account.current_rho], comm_bp_blinding, &leaf_level_bp_gens);
+        let (comm_bp, vars) = prover.commit_vec(
+            &[x_1, y_1, x_2, y_2, account.current_rho],
+            comm_bp_blinding,
+            &leaf_level_bp_gens,
+        );
 
         Self::enforce_constraints(&mut prover, Some(r_1), Some(r_2), vars, pk_T_gen_tables)?;
 
@@ -870,8 +889,15 @@ impl<
                 gens.next().unwrap(),
                 gens.next().unwrap(),
             ],
-            vec![F0::rand(rng), x_1_blinding, F0::rand(rng), x_2_blinding, F0::rand(rng), current_rho_blinding]);
-
+            vec![
+                F0::rand(rng),
+                x_1_blinding,
+                F0::rand(rng),
+                x_2_blinding,
+                F0::rand(rng),
+                current_rho_blinding,
+            ],
+        );
 
         let t_pk =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
@@ -881,11 +907,9 @@ impl<
         t_comm_bp.challenge_contribution(&mut transcript)?;
         t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
-        let prover_challenge =
-            transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        let prover_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let prover_challenge_g1 =
-            transcript.challenge_scalar::<F1>(TXN_CHALLENGE_LABEL);
+        let prover_challenge_g1 = transcript.challenge_scalar::<F1>(TXN_CHALLENGE_LABEL);
 
         let resp_comm = comm_protocol.gen_proof(&prover_challenge);
         let resp_initial_nullifier = init_null_protocol.gen_proof(&prover_challenge);
@@ -894,14 +918,7 @@ impl<
         let resp_T_2 = T_2_protocol.gen_proof(&prover_challenge_g1);
 
         let resp_comm_bp = t_comm_bp.response(
-            &[
-                comm_bp_blinding,
-                x_1,
-                y_1,
-                x_2,
-                y_2,
-                account.current_rho,
-            ],
+            &[comm_bp_blinding, x_1, y_1, x_2, y_2, account.current_rho],
             &prover_challenge,
         )?;
         let resp_pk = t_pk.gen_proof(&prover_challenge);
@@ -938,7 +955,6 @@ impl<
         leaf_level_pc_gens: &PedersenGens<Affine<G0>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G0>>,
     ) -> Result<()> {
-
         let mut transcript = MerlinTranscript::new(REG_TXN_LABEL);
 
         let mut extra_instance = vec![];
@@ -950,12 +966,10 @@ impl<
         pk_T.serialize_compressed(&mut extra_instance)?;
         pk_T_gen.serialize_compressed(&mut extra_instance)?;
 
-        transcript
-            .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+        transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
         // D = pk + g_k * asset_id
-        let D =
-            pk.into_group() + (account_comm_key.asset_id_gen() * F0::from(asset_id));
+        let D = pk.into_group() + (account_comm_key.asset_id_gen() * F0::from(asset_id));
 
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
@@ -973,8 +987,10 @@ impl<
             &mut transcript,
         )?;
 
-        self.resp_T_1.challenge_contribution(&pk_T, &self.T_1, &mut transcript)?;
-        self.resp_T_2.challenge_contribution(&pk_T, &self.T_2, &mut transcript)?;
+        self.resp_T_1
+            .challenge_contribution(&pk_T, &self.T_1, &mut transcript)?;
+        self.resp_T_2
+            .challenge_contribution(&pk_T, &self.T_2, &mut transcript)?;
 
         let mut verifier = Verifier::new(transcript);
 
@@ -983,19 +999,13 @@ impl<
 
         let mut transcript = verifier.transcript();
 
-        self.t_comm_bp
-            .serialize_compressed(&mut transcript)?;
-        self.resp_pk.challenge_contribution(
-            &account_comm_key.sk_gen(),
-            &pk,
-            &mut transcript,
-        )?;
+        self.t_comm_bp.serialize_compressed(&mut transcript)?;
+        self.resp_pk
+            .challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
-        let verifier_challenge =
-            transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        let verifier_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let verifier_challenge_g1 =
-            transcript.challenge_scalar::<F1>(TXN_CHALLENGE_LABEL);
+        let verifier_challenge_g1 = transcript.challenge_scalar::<F1>(TXN_CHALLENGE_LABEL);
 
         if !self.resp_comm.verify(
             &reduced_acc_comm,
@@ -1043,21 +1053,19 @@ impl<
             ));
         }
 
-        if !self.resp_T_1.verify(
-            &self.T_1,
-            &pk_T,
-            &verifier_challenge_g1,
-        ) {
+        if !self
+            .resp_T_1
+            .verify(&self.T_1, &pk_T, &verifier_challenge_g1)
+        {
             return Err(Error::ProofVerificationError(
                 "T_1 verification failed".to_string(),
             ));
         }
 
-        if !self.resp_T_2.verify(
-            &self.T_2,
-            &pk_T,
-            &verifier_challenge_g1,
-        ) {
+        if !self
+            .resp_T_2
+            .verify(&self.T_2, &pk_T, &verifier_challenge_g1)
+        {
             return Err(Error::ProofVerificationError(
                 "T_2 verification failed".to_string(),
             ));
@@ -1088,7 +1096,13 @@ impl<
         Ok(())
     }
 
-    fn enforce_constraints<CS: ConstraintSystem<F0>>(cs: &mut CS, r_1: Option<F1>, r_2: Option<F1>, mut vars: Vec<Variable<F0>>, tables: &[Lookup3Bit<2, F0>],) -> Result<()> {
+    fn enforce_constraints<CS: ConstraintSystem<F0>>(
+        cs: &mut CS,
+        r_1: Option<F1>,
+        r_2: Option<F1>,
+        mut vars: Vec<Variable<F0>>,
+        tables: &[Lookup3Bit<2, F0>],
+    ) -> Result<()> {
         let var_x_1 = vars.remove(0);
         let var_y_1 = vars.remove(0);
         let var_x_2 = vars.remove(0);
@@ -1098,21 +1112,9 @@ impl<
         let (_, lc_x_1, lc_y_1) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_1)?;
         let (_, lc_x_2, lc_y_2) = scalar_mult::<F0, F1, G1, _>(cs, &tables, r_2)?;
 
-        curve_check(
-            cs,
-            lc_x_1.clone(),
-            lc_y_1.clone(),
-            G1::COEFF_A,
-            G1::COEFF_B,
-        );
+        curve_check(cs, lc_x_1.clone(), lc_y_1.clone(), G1::COEFF_A, G1::COEFF_B);
 
-        curve_check(
-            cs,
-            lc_x_2.clone(),
-            lc_y_2.clone(),
-            G1::COEFF_A,
-            G1::COEFF_B,
-        );
+        curve_check(cs, lc_x_2.clone(), lc_y_2.clone(), G1::COEFF_A, G1::COEFF_B);
 
         let (_, _, var_rho_sq_1) = cs.multiply(lc_x_1.clone(), lc_x_1.clone());
         cs.constrain(lc_x_1 - var_x_1);
@@ -1166,15 +1168,17 @@ pub mod tests {
     use super::*;
     use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
+    use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use ark_crypto_primitives::sponge::Absorb;
     use ark_ff::{Field, PrimeField};
     use ark_std::UniformRand;
     use curve_tree_relations::curve_tree::SelRerandParameters;
+    use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::marker::PhantomData;
     use std::time::Instant;
-    use curve_tree_relations::rerandomize::build_tables;
-    use crate::poseidon_impls::poseidon_old::Poseidon_hash_2_simple;
+    use crate::poseidon_impls::poseidon_2::Poseidon2Params;
+    use crate::poseidon_impls::poseidon_old::{PoseidonParams, SboxType};
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1219,6 +1223,14 @@ pub mod tests {
             PoseidonParams::new(3, full_rounds, partial_rounds),
             SboxType::Cube(PhantomData),
         )
+    }
+
+    pub fn test_params_for_poseidon2<R: CryptoRngCore, F: PrimeField>(
+        rng: &mut R,
+    ) -> Poseidon2Params<F> {
+        let full_rounds = 8;
+        let partial_rounds = 56;
+        Poseidon2Params::new_with_randoms(rng, 3, 5, full_rounds, partial_rounds)
     }
 
     #[test]
@@ -1273,12 +1285,12 @@ pub mod tests {
     ) -> (
         AccountState<G>,
         NullifierSkGenCounter,
-        PoseidonParams<G::ScalarField>,
-        SboxType<G::ScalarField>,
+        Poseidon2Params<G::ScalarField>,
     ) {
-        let (params, sbox) = test_params_for_poseidon::<_, G::ScalarField>(rng);
-        let (account, c) = AccountState::new(rng, sk.0, asset_id, &params, &sbox).unwrap();
-        (account, c, params, sbox)
+        let params = test_params_for_poseidon2::<_, G::ScalarField>(rng);
+        let counter = 1;
+        let account = AccountState::new(rng, sk.0, asset_id, counter, params.clone()).unwrap();
+        (account, counter, params)
     }
 
     #[test]
@@ -1290,14 +1302,16 @@ pub mod tests {
         let asset_id = 1;
 
         // Issuer creates keys
-        let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let (account, c, poseidon_config, sbox) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+        let (account, c, poseidon_config) =
+            new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, c);
-        let expected_rho = Poseidon_hash_2_simple::<Fr>(account.sk, combined, &poseidon_config, &sbox);
+        let expected_rho =
+            Poseidon_hash_2_simple::<Fr>(account.sk, combined, poseidon_config);
         assert_eq!(account.rho, expected_rho);
         assert_eq!(account.current_rho, account.rho.square());
 
@@ -1324,7 +1338,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         let clock = Instant::now();
-        let (account, nullifier_gen_counter, poseidon_params, sbox_type) =
+        let (account, nullifier_gen_counter, poseidon_params) =
             new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -1341,7 +1355,6 @@ pub mod tests {
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             &poseidon_params,
-            &sbox_type,
             None,
         )
         .unwrap();
@@ -1361,7 +1374,6 @@ pub mod tests {
                 &account_tree_params.even_parameters.pc_gens,
                 &account_tree_params.even_parameters.bp_gens,
                 &poseidon_params,
-                &sbox_type,
                 None,
             )
             .unwrap();
@@ -1404,7 +1416,7 @@ pub mod tests {
         let (sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
 
         let clock = Instant::now();
-        let (mut account, nullifier_gen_counter, poseidon_params, sbox_type) =
+        let (mut account, nullifier_gen_counter, poseidon_params) =
             new_account::<_, PallasA>(&mut rng, asset_id, sk);
         // Make randomness small to run test faster
         account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
@@ -1423,7 +1435,6 @@ pub mod tests {
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             &poseidon_params,
-            &sbox_type,
             Some((pk_T.0, enc_key_gen, enc_gen)),
         )
         .unwrap();
@@ -1443,7 +1454,6 @@ pub mod tests {
                 &account_tree_params.even_parameters.pc_gens,
                 &account_tree_params.even_parameters.bp_gens,
                 &poseidon_params,
-                &sbox_type,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
             )
             .unwrap();
@@ -1452,11 +1462,17 @@ pub mod tests {
 
         println!("For reg. txn with {NUM_CHUNKS} chunks each of {CHUNK_BITS} bits");
         println!("total proof size = {}", reg_proof.compressed_size());
-        println!("ciphertext and its proof size = {}", reg_proof.encrypted_randomness.as_ref().unwrap().compressed_size());
+        println!(
+            "ciphertext and its proof size = {}",
+            reg_proof
+                .encrypted_randomness
+                .as_ref()
+                .unwrap()
+                .compressed_size()
+        );
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+            prover_time, verifier_time
         );
 
         // This will take a long time to decrypt
@@ -1496,7 +1512,8 @@ pub mod tests {
         let tables = build_tables(enc_key_gen).unwrap();
 
         let clock = Instant::now();
-        let (account, r_1, r_2) = AccountState::new_alt(&mut rng, sk.0, asset_id, enc_key_gen).unwrap();
+        let (account, r_1, r_2) =
+            AccountState::new_alt(&mut rng, sk.0, asset_id, enc_key_gen).unwrap();
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
@@ -1516,7 +1533,7 @@ pub mod tests {
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
         )
-            .unwrap();
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1543,13 +1560,18 @@ pub mod tests {
         println!("total proof size = {}", reg_proof.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+            prover_time, verifier_time
         );
 
         let sk_inv = sk_T.0.inverse().unwrap();
-        assert_eq!(*(reg_proof.T_1 * sk_inv).into_affine().x().unwrap(), account.rho);
-        assert_eq!(*(reg_proof.T_2 * sk_inv).into_affine().x().unwrap(), account.randomness);
+        assert_eq!(
+            *(reg_proof.T_1 * sk_inv).into_affine().x().unwrap(),
+            account.rho
+        );
+        assert_eq!(
+            *(reg_proof.T_2 * sk_inv).into_affine().x().unwrap(),
+            account.randomness
+        );
     }
 
     #[test]
