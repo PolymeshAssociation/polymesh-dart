@@ -74,6 +74,10 @@ pub enum Error {
     /// Curve tree block number not found.
     #[error("Curve tree block number not found.")]
     CurveTreeBlockNumberNotFound,
+
+    /// Curve tree backend is read-only.
+    #[error("Curve tree backend is read-only.")]
+    CurveTreeBackendReadOnly,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

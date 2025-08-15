@@ -73,10 +73,12 @@ pub trait CurveTreeBackend<
     fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error>;
 
     fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> Result<(), Self::Error> {
-        Ok(())
+        Err(Error::CurveTreeBackendReadOnly.into())
     }
 
-    fn store_root(&mut self, root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error>;
+    fn store_root(&mut self, _root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error> {
+        Err(Error::CurveTreeBackendReadOnly.into())
+    }
 
     fn fetch_root(
         &self,
@@ -85,7 +87,9 @@ pub trait CurveTreeBackend<
 
     fn height(&self) -> NodeLevel;
 
-    fn set_height(&mut self, height: NodeLevel) -> Result<(), Self::Error>;
+    fn set_height(&mut self, _height: NodeLevel) -> Result<(), Self::Error> {
+        Err(Error::CurveTreeBackendReadOnly.into())
+    }
 
     fn allocate_leaf_index(&mut self) -> LeafIndex;
 
@@ -93,9 +97,11 @@ pub trait CurveTreeBackend<
 
     fn set_leaf(
         &mut self,
-        leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>, Self::Error>;
+        _leaf_index: LeafIndex,
+        _new_leaf_value: LeafValue<P0>,
+    ) -> Result<Option<LeafValue<P0>>, Self::Error> {
+        Err(Error::CurveTreeBackendReadOnly.into())
+    }
 
     fn leaf_count(&self) -> LeafIndex;
 
@@ -106,9 +112,11 @@ pub trait CurveTreeBackend<
 
     fn set_inner_node(
         &mut self,
-        location: NodeLocation<L>,
-        new_node: Inner<M, P0, P1>,
-    ) -> Result<(), Self::Error>;
+        _location: NodeLocation<L>,
+        _new_node: Inner<M, P0, P1>,
+    ) -> Result<(), Self::Error> {
+        Err(Error::CurveTreeBackendReadOnly.into())
+    }
 }
 
 #[cfg(feature = "async_tree")]
@@ -135,14 +143,18 @@ pub trait AsyncCurveTreeBackend<
 
     fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
-            Ok(())
+            Err(Error::CurveTreeBackendReadOnly.into())
         }
     }
 
     fn store_root(
         &mut self,
-        root: Root<L, M, P0, P1>,
-    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send;
+        _root: Root<L, M, P0, P1>,
+    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send {
+        async move {
+            Err(Error::CurveTreeBackendReadOnly.into())
+        }
+    }
 
     fn fetch_root(
         &self,
@@ -153,8 +165,12 @@ pub trait AsyncCurveTreeBackend<
 
     fn set_height(
         &mut self,
-        height: NodeLevel,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+        _height: NodeLevel,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            Err(Error::CurveTreeBackendReadOnly.into())
+        }
+    }
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
 
@@ -165,9 +181,13 @@ pub trait AsyncCurveTreeBackend<
 
     fn set_leaf(
         &mut self,
-        leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<P0>,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send;
+        _leaf_index: LeafIndex,
+        _new_leaf_value: LeafValue<P0>,
+    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send {
+        async move {
+            Err(Error::CurveTreeBackendReadOnly.into())
+        }
+    }
 
     fn leaf_count(&self) -> impl Future<Output = LeafIndex> + Send;
 
@@ -178,9 +198,13 @@ pub trait AsyncCurveTreeBackend<
 
     fn set_inner_node(
         &mut self,
-        location: NodeLocation<L>,
-        new_node: Inner<M, P0, P1>,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+        _location: NodeLocation<L>,
+        _new_node: Inner<M, P0, P1>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            Err(Error::CurveTreeBackendReadOnly.into())
+        }
+    }
 }
 
 pub struct CurveTreeMemoryBackend<
