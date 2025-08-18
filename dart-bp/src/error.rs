@@ -76,6 +76,10 @@ pub enum Error {
     #[error("Randomized point count is {0} but expected at least {1}")]
     DifferentNumberOfRandomizedPointsAndResponses(usize, usize),
 
+    /// Different number of responses for Sigma protocol
+    #[error("Expected {0} responses for Sigma protocol but found {1}")]
+    DifferentNumberOfResponsesForSigmaProtocol(usize, usize),
+
     /// Mediator not found at index
     #[error("Expected mediator at index {0} in the keys list but it wasn't found")]
     MediatorNotFoundAtIndex(usize),
@@ -91,6 +95,22 @@ pub enum Error {
     /// Can't invert 0
     #[error("Can't invert 0")]
     InvertingZero,
+
+    /// Unexpected state size for Poseidon2
+    #[error("Unexpected state size {0} for Poseidon2")]
+    UnexpectedStateSizeForPoseidon2(usize),
+
+    /// Unexpected degree for Poseidon2
+    #[error("Unexpected degree {0} for Poseidon2")]
+    UnexpectedDegreeForPoseidon2(usize),
+
+    /// Full rounds must be a multiple of 2 for Poseidon2
+    #[error("Full rounds must be a multiple of 2 for Poseidon2 but given as {0}")]
+    IncorrectNumberOfFullRoundsForPoseidon2(usize),
+
+    /// Input size not equal to state size
+    #[error("Input size {0} not equal to state size {1}")]
+    UnequalInputSizeAndStateSize(usize, usize),
 }
 
 impl Error {
