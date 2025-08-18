@@ -25,7 +25,7 @@ use ark_r1cs_std::{
     R1CSVar,
     fields::fp::{AllocatedFp, FpVar},
 };
-use ark_std::UniformRand;
+use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier,
 };
@@ -45,7 +45,7 @@ use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_constra
 
 /// Proof of encrypted randomness
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
-// The problem is that response of all chunks is aggregated in one value so typing it with BP is not straightforward. So need to check if aggregating
+// The problem is that response of all chunks is aggregated in one value so tying it with BP is not straightforward. So need to check if aggregating
 // those responses and comparing is safe
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptedRandomness<
@@ -54,11 +54,15 @@ pub struct EncryptedRandomness<
     const NUM_CHUNKS: usize = 6,
 > {
     pub ciphertexts: [Ciphertext<G>; NUM_CHUNKS],
+    /// For relation `g * r_i`
     pub resp_eph_pk: [PokDiscreteLog<G>; NUM_CHUNKS],
+    /// For relation `pk_T * r_i + h * s_i`
     pub resp_encrypted: [PokPedersenCommitment<G>; NUM_CHUNKS],
+    /// Bulletproof vector commitment to all the chunks of randomness
     pub comm_s_chunks_bp: G,
     pub t_comm_s_chunks_bp: G,
     pub resp_comm_s_chunks_bp: SchnorrResponse<G>,
+    /// For Pedersen commitment to the weighted randomness and chunks. The weighted chunks equals the account commitment randomness
     pub resp_combined_s: PokPedersenCommitment<G>,
 }
 
@@ -68,9 +72,10 @@ pub struct EncryptedRandomness<
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
     pub resp_comm: PokPedersenCommitment<G>,
     pub resp_initial_nullifier: PokDiscreteLog<G>,
-    pub comm_rho_bp: G,
     /// Called `N` in the report. This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub initial_nullifier: G,
+    /// Bulletproof vector commitment to `sk, initial_rho, current_rho`
+    pub comm_rho_bp: G,
     pub t_comm_rho_bp: G,
     pub resp_comm_rho_bp: SchnorrResponse<G>,
     pub resp_pk: PokDiscreteLog<G>,
@@ -437,6 +442,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         if T.is_none() ^ self.encrypted_randomness.is_none() {
             return Err(Error::PkTAndEncryptedRandomnessInconsistent);
         }
+        if self.resp_comm_rho_bp.len() != 4 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(4, self.resp_comm_rho_bp.len()))
+        }
+        if let Some(enc_rand) = &self.encrypted_randomness {
+            if enc_rand.resp_comm_s_chunks_bp.len() != (NUM_CHUNKS + 1) {
+                return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(NUM_CHUNKS + 1, enc_rand.resp_comm_s_chunks_bp.len()))
+            }
+        }
+
         let mut verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
 
         let mut extra_instance = vec![];
@@ -625,6 +639,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 if enc_rand.resp_eph_pk[i].response != enc_rand.resp_encrypted[i].response1 {
                     return Err(Error::ProofVerificationError(
                         "Mismatch in combined encryption randomness".to_string(),
+                    ));
+                }
+
+                if enc_rand.resp_comm_s_chunks_bp.0[i+1] != enc_rand.resp_encrypted[i].response2 {
+                    return Err(Error::ProofVerificationError(
+                        "Mismatch in commitment randomness chunk".to_string(),
                     ));
                 }
             }
@@ -1228,9 +1248,11 @@ pub mod tests {
     pub fn test_params_for_poseidon2<R: CryptoRngCore, F: PrimeField>(
         rng: &mut R,
     ) -> Poseidon2Params<F> {
+        // NOTE: These numbers are for 2:1 compression and 256 bit group (Table 1 from Poseidon2 paper) and that is the only config we use. These should be changed if we decide to use something else.
         let full_rounds = 8;
         let partial_rounds = 56;
-        Poseidon2Params::new_with_randoms(rng, 3, 5, full_rounds, partial_rounds)
+        let degree = 5;
+        Poseidon2Params::new_with_randoms(rng, 3, degree, full_rounds, partial_rounds).unwrap()
     }
 
     #[test]
@@ -1311,7 +1333,7 @@ pub mod tests {
         assert_eq!(account.counter, 0);
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, c);
         let expected_rho =
-            Poseidon_hash_2_simple::<Fr>(account.sk, combined, poseidon_config);
+            Poseidon_hash_2_simple::<Fr>(account.sk, combined, poseidon_config).unwrap();
         assert_eq!(account.rho, expected_rho);
         assert_eq!(account.current_rho, account.rho.square());
 

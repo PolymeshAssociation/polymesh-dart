@@ -156,7 +156,7 @@ where
         let combined = Self::concat_asset_id_counter(asset_id, counter);
         // unwrap is fine as there is no way this can fail
         // let rho = TwoToOneCRH::<G::ScalarField>::compress(poseidon_config, sk, combined).unwrap();
-        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config);
+        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config)?;
         let current_rho = rho.square();
 
         let randomness = G::ScalarField::rand(rng);
@@ -596,6 +596,15 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
+        if self.resp_leaf.len() != 7 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(7, self.resp_leaf.len()))
+        }
+        if self.resp_acc_new.len() != 6 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, self.resp_acc_new.len()))
+        }
+        if self.resp_bp.len() != 6 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, self.resp_bp.len()))
+        }
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
@@ -1208,6 +1217,15 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
+        if proof.resp_leaf.len() != 8 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(8, proof.resp_leaf.len()))
+        }
+        if proof.resp_acc_new.len() != 7 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(7, proof.resp_acc_new.len()))
+        }
+        if proof.resp_bp_randomness_relations.len() != 6 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, proof.resp_bp_randomness_relations.len()))
+        }
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,

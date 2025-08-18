@@ -10,6 +10,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::iter;
 use ark_std::ops::Neg;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::BulletproofGens;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSProof, Variable};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
@@ -54,25 +55,6 @@ impl<
     G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
 > AssetCommitmentParams<G0, G1>
 {
-    // pub fn new<D: Digest>(label: &[u8], num_keys: usize) -> Self {
-    //     let j_0 = affine_group_elem_from_try_and_incr::<_, D>(&concat_slices![label, b" : j_0"]);
-    //
-    //     let comm_key = (0..(num_keys + 1))
-    //         .map(|i| {
-    //             affine_group_elem_from_try_and_incr::<_, D>(&concat_slices![
-    //                 label,
-    //                 b" : h_",
-    //                 i.to_le_bytes()
-    //             ])
-    //         })
-    //         .collect::<Vec<_>>();
-    //
-    //     Self {
-    //         j_0,
-    //         comm_key,
-    //     }
-    // }
-
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
     pub fn new<D: Digest>(
         label: &[u8],
@@ -178,7 +160,9 @@ pub struct LegEncryption<G: AffineRepr> {
     pub ct_r: G,
     pub ct_amount: G,
     pub ct_asset_id: G,
+    /// Used by sender to recover `r_i`
     pub eph_pk_s: G,
+    /// Used by receiver to recover `r_i`
     pub eph_pk_r: G,
     pub eph_pk_auds_meds: Vec<EphemeralPublicKey<G>>,
 }
@@ -396,8 +380,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     }
 }
 
+/// Proof of knowledge of `pk` and `r_i` in `(pk * r_1, pk * r_2, pk * r_3, pk * r_4)` without revealing `pk`
+/// and ensuring `pk` is the correct public key for the asset auditor/mediator
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RespLeafPoint<G: SWCurveConfig> {
+pub struct RespEphemeralPublicKey<G: SWCurveConfig> {
     pub role: bool,
     pub r_1: (Affine<G>, SchnorrResponse<Affine<G>>),
     pub r_2: PokDiscreteLog<Affine<G>>,
@@ -417,9 +403,6 @@ pub struct SettlementTxnProof<
     pub even_proof: R1CSProof<Affine<G1>>,
     pub odd_proof: R1CSProof<Affine<G0>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G1, G0>,
-    /// Commitment to randomness and response for proving knowledge of amount using Schnorr protocol (step 1 and 3 of Schnorr).
-    /// The commitment to amount is created for using with Bulletproofs
-    pub resp_amount: PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of amount in twisted Elgamal encryption of amount.
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_amount_enc: PokPedersenCommitment<Affine<G0>>,
@@ -428,11 +411,11 @@ pub struct SettlementTxnProof<
     pub resp_asset_id_enc: PokPedersenCommitment<Affine<G0>>,
     pub resp_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub re_randomized_points: Vec<Affine<G0>>,
-    pub comm_amount: Affine<G0>,
-    pub comm_r_i: Affine<G0>,
-    pub t_comm_r_i: Affine<G0>,
-    pub resp_comm_r_i: SchnorrResponse<Affine<G0>>,
-    pub resp_leaf_points: Vec<RespLeafPoint<G0>>,
+    /// Bulletproof vector commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
+    pub comm_r_i_amount: Affine<G0>,
+    pub t_comm_r_i_amount: Affine<G0>,
+    pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
+    pub resp_leaf_points: Vec<RespEphemeralPublicKey<G0>>,
 }
 
 impl<
@@ -489,17 +472,6 @@ impl<
         let at = F0::from(leg.asset_id);
         let amount = F0::from(leg.amount);
 
-        let r_amount = F0::rand(rng);
-        // TODO: Can I avoid this new commitment?
-        let (comm_amount, var_amount) = odd_prover.commit(F0::from(amount), r_amount);
-
-        // TODO: What if we do range proof outside circuit? Or using another protocol like Bulletproofs++?
-        range_proof(
-            &mut odd_prover,
-            var_amount.into(),
-            Some(leg.amount),
-            AMOUNT_BITS.into(),
-        )?;
         let rerandomized_leaf = re_randomized_path.get_rerandomized_leaf();
 
         let asset_data_points =
@@ -575,11 +547,15 @@ impl<
         let r_3_r_1_inv_blinding = F0::rand(rng);
         let r_4_r_1_inv_blinding = F0::rand(rng);
 
-        let comm_r_i_blinding = F0::rand(rng);
-        let (comm_r_i, vars) = odd_prover.commit_vec(&[r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv], comm_r_i_blinding, &tree_parameters.odd_parameters.bp_gens);
-        Self::enforce_constraints(&mut odd_prover, vars);
+        let amount_blinding = F0::rand(rng);
+        let asset_id_blinding = F0::rand(rng);
 
-        let t_comm_r_i = SchnorrCommitment::new(&Self::bp_gens_vec(tree_parameters), vec![
+        let comm_r_i_blinding = F0::rand(rng);
+        // Commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
+        let (comm_r_i_amount, vars) = odd_prover.commit_vec(&[r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv, amount], comm_r_i_blinding, &tree_parameters.odd_parameters.bp_gens);
+        Self::enforce_constraints(&mut odd_prover, Some(leg.amount), vars)?;
+
+        let t_comm_r_i_amount = SchnorrCommitment::new(&Self::bp_gens_vec(tree_parameters), vec![
             F0::rand(rng),
             r_1_blinding,
             r_2_blinding,
@@ -588,6 +564,7 @@ impl<
             r_2_r_1_inv_blinding,
             r_3_r_1_inv_blinding,
             r_4_r_1_inv_blinding,
+            amount_blinding,
         ]);
 
         let mut transcript = odd_prover.transcript();
@@ -611,7 +588,6 @@ impl<
             if *role {
                 blindings_r1.push(r_1_blinding);
             }
-            // let t_1 = SchnorrCommitment::new(&bases, blindings_r1);
             let t_1 = if *role {
                 SchnorrCommitment::new(&[
                     re_randomized_points[i + 1], // since first point commits to asset-id
@@ -635,10 +611,6 @@ impl<
             t_points_r4.push(t_4);
         }
 
-        let amount_blinding = F0::rand(rng);
-        let asset_id_blinding = F0::rand(rng);
-        // let (asset_id_blinding_0, asset_id_blinding_1) = Self::same_blindings(rng);
-
         // Proving correctness of twisted Elgamal encryption of amount
         let t_amount_enc = PokPedersenCommitmentProtocol::init(
             r_3,
@@ -647,16 +619,6 @@ impl<
             amount,
             amount_blinding,
             &enc_gen,
-        );
-
-        // Proving correctness of amount in the commitment used with Bulletproofs
-        let t_amount = PokPedersenCommitmentProtocol::init(
-            amount,
-            amount_blinding,
-            &tree_parameters.odd_parameters.pc_gens.B,
-            r_amount,
-            F0::rand(rng),
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
         );
 
         // Proving correctness of twisted Elgamal encryption of asset-id
@@ -679,7 +641,7 @@ impl<
             &tree_parameters.odd_parameters.pc_gens.B_blinding,
         );
 
-        t_comm_r_i.challenge_contribution(&mut transcript)?;
+        t_comm_r_i_amount.challenge_contribution(&mut transcript)?;
 
         for i in 0..asset_data.keys.len() {
             re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
@@ -693,12 +655,6 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount,
-            &mut transcript,
-        )?;
-        t_amount.challenge_contribution(
-            &tree_parameters.odd_parameters.pc_gens.B,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
-            &comm_amount,
             &mut transcript,
         )?;
         t_asset_id_enc.challenge_contribution(
@@ -716,8 +672,8 @@ impl<
 
         let prover_challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
-        let resp_comm_r_i = t_comm_r_i.response(
-            &[comm_r_i_blinding, r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv],
+        let resp_comm_r_i_amount = t_comm_r_i_amount.response(
+            &[comm_r_i_blinding, r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv, amount],
             &prover_challenge
         )?;
 
@@ -738,7 +694,7 @@ impl<
             let resp_3 = t_points_r3.gen_proof(&prover_challenge);
 
             let resp_4 = t_points_r4.gen_proof(&prover_challenge);
-            resp_leaf_points.push(RespLeafPoint {
+            resp_leaf_points.push(RespEphemeralPublicKey {
                 role,
                 r_1: (t_points_r1[i].t, resp_1),
                 r_2: resp_2,
@@ -748,7 +704,6 @@ impl<
         }
 
         let resp_amount_enc = t_amount_enc.gen_proof(&prover_challenge);
-        let resp_amount = t_amount.gen_proof(&prover_challenge);
         let resp_asset_id_enc = t_asset_id_enc.gen_proof(&prover_challenge);
         let resp_asset_id = t_asset_id.gen_proof(&prover_challenge);
 
@@ -760,14 +715,12 @@ impl<
             odd_proof,
             re_randomized_path,
             resp_amount_enc,
-            resp_amount,
             resp_asset_id_enc,
             resp_asset_id,
             re_randomized_points,
-            comm_amount,
-            comm_r_i,
-            t_comm_r_i: t_comm_r_i.t,
-            resp_comm_r_i,
+            comm_r_i_amount,
+            t_comm_r_i_amount: t_comm_r_i_amount.t,
+            resp_comm_r_i_amount,
             resp_leaf_points,
         })
     }
@@ -789,6 +742,9 @@ impl<
         }
         if self.re_randomized_points.len() != self.resp_leaf_points.len() + 1 {
             return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(self.re_randomized_points.len(), self.resp_leaf_points.len() + 1))
+        }
+        if self.resp_comm_r_i_amount.len() != 9 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(9, self.resp_comm_r_i_amount.len()))
         }
 
         let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
@@ -813,13 +769,6 @@ impl<
             .transcript()
             .append_message_without_static_label(SETTLE_TXN_INSTANCE_LABEL, &leg_instance);
 
-        let var_amount = odd_verifier.commit(self.comm_amount);
-        range_proof(
-            &mut odd_verifier,
-            var_amount.into(),
-            None,
-            AMOUNT_BITS.into(),
-        )?;
 
         let rerandomized_leaf = self.re_randomized_path.get_rerandomized_leaf();
 
@@ -830,12 +779,12 @@ impl<
             &tree_parameters.odd_parameters,
         )?;
 
-        let vars = odd_verifier.commit_vec(7, self.comm_r_i);
-        Self::enforce_constraints(&mut odd_verifier, vars);
+        let vars = odd_verifier.commit_vec(8, self.comm_r_i_amount);
+        Self::enforce_constraints(&mut odd_verifier, None, vars)?;
 
         let mut transcript = odd_verifier.transcript();
 
-        self.t_comm_r_i.serialize_compressed(&mut transcript)?;
+        self.t_comm_r_i_amount.serialize_compressed(&mut transcript)?;
 
         for i in 0..self.resp_leaf_points.len() {
             self.re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
@@ -860,12 +809,6 @@ impl<
             &leg_enc.ct_amount,
             &mut transcript,
         )?;
-        self.resp_amount.challenge_contribution(
-            &tree_parameters.odd_parameters.pc_gens.B,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
-            &self.comm_amount,
-            &mut transcript,
-        )?;
         self.resp_asset_id_enc.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
@@ -881,16 +824,6 @@ impl<
 
         let verifier_challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
-        if !self.resp_amount.verify(
-            &self.comm_amount,
-            &tree_parameters.odd_parameters.pc_gens.B,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "resp_amount verification failed".into(),
-            ));
-        }
         if !self.resp_amount_enc.verify(
             &leg_enc.ct_amount,
             &enc_key_gen,
@@ -902,7 +835,7 @@ impl<
             ));
         }
 
-        if self.resp_amount.response1 != self.resp_amount_enc.response2 {
+        if self.resp_comm_r_i_amount.0[8] != self.resp_amount_enc.response2 {
             return Err(Error::ProofVerificationError(
                 "Amount response mismatch".into(),
             ));
@@ -936,7 +869,7 @@ impl<
             ));
         }
 
-        self.resp_comm_r_i.is_valid(&Self::bp_gens_vec(tree_parameters), &self.comm_r_i, &self.t_comm_r_i, &verifier_challenge)?;
+        self.resp_comm_r_i_amount.is_valid(&Self::bp_gens_vec(tree_parameters), &self.comm_r_i_amount, &self.t_comm_r_i_amount, &verifier_challenge)?;
 
         let aud_role_base = asset_comm_params.j_0.neg();
         let blinding_base = tree_parameters
@@ -1007,22 +940,22 @@ impl<
                 ));
             }
 
-            if resp.r_1.1.0[0] != self.resp_comm_r_i.0[1] {
+            if resp.r_1.1.0[0] != self.resp_comm_r_i_amount.0[1] {
                 return Err(Error::ProofVerificationError(
                     "Mismatch in response for r_1".into(),
                 ));
             }
-            if resp.r_2.response != self.resp_comm_r_i.0[5] {
+            if resp.r_2.response != self.resp_comm_r_i_amount.0[5] {
                 return Err(Error::ProofVerificationError(
                     "Mismatch in response for r_2/r_1".into(),
                 ));
             }
-            if resp.r_3.response != self.resp_comm_r_i.0[6] {
+            if resp.r_3.response != self.resp_comm_r_i_amount.0[6] {
                 return Err(Error::ProofVerificationError(
                     "Mismatch in response for r_3/r_1".into(),
                 ));
             }
-            if resp.r_4.response != self.resp_comm_r_i.0[7] {
+            if resp.r_4.response != self.resp_comm_r_i_amount.0[7] {
                 return Err(Error::ProofVerificationError(
                     "Mismatch in response for r_4/r_1".into(),
                 ));
@@ -1042,8 +975,9 @@ impl<
 
     pub(crate) fn enforce_constraints<CS: ConstraintSystem<F0>>(
         cs: &mut CS,
+        amount: Option<Balance>,
         mut committed_variables: Vec<Variable<F0>>,
-    ) {
+    ) -> Result<()> {
         let var_r_1 = committed_variables.remove(0);
         let var_r_2 = committed_variables.remove(0);
         let var_r_3 = committed_variables.remove(0);
@@ -1051,6 +985,8 @@ impl<
         let var_r_2_r_1_inv = committed_variables.remove(0);
         let var_r_3_r_1_inv = committed_variables.remove(0);
         let var_r_4_r_1_inv = committed_variables.remove(0);
+        let var_amount = committed_variables.remove(0);
+
         let lc_r_1: LinearCombination<_> = var_r_1.into();
         let (_, _, var_r_2_) = cs.multiply(lc_r_1.clone(), var_r_2_r_1_inv.into());
         let (_, _, var_r_3_) = cs.multiply(lc_r_1.clone(), var_r_3_r_1_inv.into());
@@ -1058,10 +994,19 @@ impl<
         cs.constrain(var_r_2 - var_r_2_);
         cs.constrain(var_r_3 - var_r_3_);
         cs.constrain(var_r_4 - var_r_4_);
+
+        // TODO: What if we do range proof outside circuit? Or using another protocol like Bulletproofs++?
+        range_proof(
+            cs,
+            var_amount.into(),
+            amount,
+            AMOUNT_BITS.into(),
+        )?;
+        Ok(())
     }
 
-    pub(crate)fn bp_gens_vec(account_tree_params: &SelRerandParameters<G1, G0>) -> [Affine<G0>; 8] {
-        let mut gens = bp_gens_for_vec_commitment(7, &account_tree_params.odd_parameters.bp_gens);
+    pub(crate)fn bp_gens_vec(account_tree_params: &SelRerandParameters<G1, G0>) -> [Affine<G0>; 9] {
+        let mut gens = bp_gens_for_vec_commitment(8, &account_tree_params.odd_parameters.bp_gens);
         [
             account_tree_params.odd_parameters.pc_gens.B_blinding,
             gens.next().unwrap(),
@@ -1071,20 +1016,9 @@ impl<
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
+            gens.next().unwrap(),
         ]
     }
-
-    // /// This is chosen such that its smaller than order of both groups
-    // fn same_blindings<R: CryptoRngCore>(rng: &mut R) -> (F0, F1) {
-    //     let f1_mod = F1::MODULUS.into();
-    //     loop {
-    //         let blinding = F0::rand(rng);
-    //         let big_int = blinding.into_bigint().into();
-    //         if big_int < f1_mod {
-    //             return (blinding, F1::from(big_int));
-    //         }
-    //     }
-    // }
 }
 
 /// This is the proof for mediator affirm/reject. Report section 5.1.12

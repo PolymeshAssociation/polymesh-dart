@@ -2,6 +2,7 @@ use crate::poseidon_impls::utils::mat_mut_vec_mul;
 use ark_ec::AffineRepr;
 use ark_ff::Field;
 use ark_std::marker::PhantomData;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::LinearCombination;
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
@@ -381,14 +382,14 @@ pub fn Poseidon_hash_2_gadget<F: Field, CS: ConstraintSystem<F>>(
     Ok(())
 }
 
-/// 2:1 hash, only xl, xr, and a single static F::from(PADDING_CONST) at the end
+/// 2:1 hash, only xl, xr, and a single static F::from(ZERO_CONST) at the end
 pub fn Poseidon_hash_2_simple<F: Field>(
     xl: F,
     xr: F,
     params: &PoseidonParams<F>,
     sbox: &SboxType<F>,
 ) -> F {
-    let input = vec![xl, xr, F::from(PADDING_CONST)];
+    let input = vec![xl, xr, F::from(ZERO_CONST)];
     Poseidon_permutation(&input, params, sbox)[0]
 }
 
@@ -399,7 +400,7 @@ pub fn Poseidon_hash_2_constraints_simple<F: Field, CS: ConstraintSystem<F>>(
     params: &PoseidonParams<F>,
     sbox_type: &SboxType<F>,
 ) -> Result<LinearCombination<F>, R1CSError> {
-    let inputs = vec![xl, xr, LinearCombination::<F>::from(F::from(PADDING_CONST))];
+    let inputs = vec![xl, xr, LinearCombination::<F>::from(F::from(ZERO_CONST))];
     let permutation_output =
         Poseidon_permutation_constraints::<F, CS>(cs, inputs, params, sbox_type)?;
     Ok(permutation_output[0].to_owned())
@@ -730,36 +731,6 @@ pub mod tests {
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
 
         println!("Verification time is {:?}", start.elapsed());
-    }
-
-    #[test]
-    fn test_poseidon_perm_cube_sbox() {
-        let mut rng = rand::thread_rng();
-        poseidon_perm(
-            &mut rng,
-            &SboxType::Cube(PhantomData),
-            b"Poseidon_perm_cube",
-        );
-    }
-
-    #[test]
-    fn test_poseidon_hash_2_cube_sbox() {
-        let mut rng = rand::thread_rng();
-        poseidon_hash_2(
-            &mut rng,
-            &SboxType::Cube(PhantomData),
-            b"Poseidon_hash_2_cube",
-        );
-    }
-
-    #[test]
-    fn test_poseidon_hash_2_simple_cube_sbox() {
-        let mut rng = rand::thread_rng();
-        poseidon_hash_2_simple(
-            &mut rng,
-            &SboxType::Cube(PhantomData),
-            b"Poseidon_hash_2_cube",
-        );
     }
 
     #[test]
