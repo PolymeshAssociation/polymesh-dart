@@ -1,30 +1,28 @@
-use ark_ec::models::short_weierstrass::SWCurveConfig;
 use ark_std::{collections::BTreeMap, vec::Vec};
-use curve_tree_relations::curve_tree::{
-    Root,
-    SelRerandParameters
-};
+use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 
 use super::common::*;
 use crate::{
-    BlockNumber, LeafIndex, NodeLevel, PallasParameters,
-    curve_tree::{CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot},
+    BlockNumber, LeafIndex, NodeLevel,
+    curve_tree::{
+        CurveTreeConfig, CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot,
+    },
     error::*,
 };
 
-pub struct LeafPathAndRoot<'p, const L: usize, Block> {
-    pub leaf: LeafValue<PallasParameters>,
+pub struct LeafPathAndRoot<'p, const L: usize, const M: usize, C: CurveTreeConfig> {
+    pub leaf: LeafValue<C::P0>,
     pub leaf_index: LeafIndex,
-    pub path: CurveTreePath<L>,
-    pub block_number: Block,
-    pub root: CurveTreeRoot<L>,
-    pub params: &'p CurveTreeParameters,
+    pub path: CurveTreePath<L, C>,
+    pub block_number: C::BlockNumber,
+    pub root: CurveTreeRoot<L, M, C>,
+    pub params: &'p CurveTreeParameters<C>,
 }
 
-impl<'p, const L: usize, Block: From<BlockNumber> + TryInto<BlockNumber> + Copy> CurveTreeLookup<L> for LeafPathAndRoot<'p, L, Block> {
-    type BlockNumber = Block;
-
-    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L>, Error> {
+impl<'p, const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C>
+    for LeafPathAndRoot<'p, L, M, C>
+{
+    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         if self.leaf_index == leaf_index {
             Ok(self.path.clone())
         } else {
@@ -32,58 +30,51 @@ impl<'p, const L: usize, Block: From<BlockNumber> + TryInto<BlockNumber> + Copy>
         }
     }
 
-    fn get_path_to_leaf(
-        &self,
-        leaf: LeafValue<PallasParameters>,
-    ) -> Result<CurveTreePath<L>, Error> {
+    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
         if self.leaf == leaf {
             Ok(self.path.clone())
         } else {
-            Err(Error::LeafNotFound(leaf))
+            Err(Error::LeafNotFound)
         }
     }
 
-    fn params(&self) -> &CurveTreeParameters {
+    fn params(&self) -> &CurveTreeParameters<C> {
         self.params
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L>, Error> {
+    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
         Ok(self.root.clone())
     }
 
-    fn get_block_number(&self) -> Result<Block, Error> {
+    fn get_block_number(&self) -> Result<C::BlockNumber, Error> {
         Ok(self.block_number)
     }
 }
 
-pub trait CurveTreeBackend<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy,
-    P1: SWCurveConfig + Copy,
->: Sized
-{
+pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: Sized {
     type Error: From<crate::Error>;
-    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error>;
 
-    fn parameters(&self) -> &SelRerandParameters<P0, P1>;
+    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
 
-    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error>;
+    fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error>;
 
-    fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> Result<(), Self::Error> {
+    fn set_block_number(&mut self, _block_number: C::BlockNumber) -> Result<(), Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
-    fn store_root(&mut self, _root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error> {
+    fn store_root(
+        &mut self,
+        _root: Root<L, M, C::P0, C::P1>,
+    ) -> Result<C::BlockNumber, Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
     fn fetch_root(
         &self,
-        block_number: Self::BlockNumber,
-    ) -> Result<Root<L, M, P0, P1>, Self::Error>;
+        block_number: C::BlockNumber,
+    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error>;
 
     fn height(&self) -> NodeLevel;
 
@@ -93,73 +84,61 @@ pub trait CurveTreeBackend<
 
     fn allocate_leaf_index(&mut self) -> LeafIndex;
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Self::Error>;
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Self::Error>;
 
     fn set_leaf(
         &mut self,
         _leaf_index: LeafIndex,
-        _new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>, Self::Error> {
+        _new_leaf_value: LeafValue<C::P0>,
+    ) -> Result<Option<LeafValue<C::P0>>, Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
     fn leaf_count(&self) -> LeafIndex;
 
-    fn get_inner_node(
-        &self,
-        location: NodeLocation<L>,
-    ) -> Result<Option<Inner<M, P0, P1>>, Self::Error>;
+    fn get_inner_node(&self, location: NodeLocation<L>)
+    -> Result<Option<Inner<M, C>>, Self::Error>;
 
     fn set_inner_node(
         &mut self,
         _location: NodeLocation<L>,
-        _new_node: Inner<M, P0, P1>,
+        _new_node: Inner<M, C>,
     ) -> Result<(), Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 }
 
 #[cfg(feature = "async_tree")]
-pub trait AsyncCurveTreeBackend<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy,
-    P1: SWCurveConfig + Copy,
->: Sized
-{
+pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: Sized {
     type Error: From<crate::Error>;
-    type BlockNumber: From<BlockNumber> + TryInto<BlockNumber> + Copy;
 
     fn new(
         height: NodeLevel,
         gens_length: usize,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
-    fn parameters(&self) -> impl Future<Output = &SelRerandParameters<P0, P1>> + Send;
+    fn parameters(&self) -> impl Future<Output = &SelRerandParameters<C::P0, C::P1>> + Send;
 
-    fn get_block_number(
-        &self,
-    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send;
+    fn get_block_number(&self) -> impl Future<Output = Result<C::BlockNumber, Self::Error>> + Send;
 
-    fn set_block_number(&mut self, _block_number: Self::BlockNumber) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            Err(Error::CurveTreeBackendReadOnly.into())
-        }
+    fn set_block_number(
+        &mut self,
+        _block_number: C::BlockNumber,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
     fn store_root(
         &mut self,
-        _root: Root<L, M, P0, P1>,
-    ) -> impl Future<Output = Result<Self::BlockNumber, Self::Error>> + Send {
-        async move {
-            Err(Error::CurveTreeBackendReadOnly.into())
-        }
+        _root: Root<L, M, C::P0, C::P1>,
+    ) -> impl Future<Output = Result<C::BlockNumber, Self::Error>> + Send {
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
     fn fetch_root(
         &self,
-        block_number: Self::BlockNumber,
-    ) -> impl Future<Output = Result<Root<L, M, P0, P1>, Self::Error>> + Send;
+        block_number: C::BlockNumber,
+    ) -> impl Future<Output = Result<Root<L, M, C::P0, C::P1>, Self::Error>> + Send;
 
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
 
@@ -167,9 +146,7 @@ pub trait AsyncCurveTreeBackend<
         &mut self,
         _height: NodeLevel,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            Err(Error::CurveTreeBackendReadOnly.into())
-        }
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
@@ -177,16 +154,14 @@ pub trait AsyncCurveTreeBackend<
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<LeafValue<C::P0>>, Self::Error>> + Send;
 
     fn set_leaf(
         &mut self,
         _leaf_index: LeafIndex,
-        _new_leaf_value: LeafValue<P0>,
-    ) -> impl Future<Output = Result<Option<LeafValue<P0>>, Self::Error>> + Send {
-        async move {
-            Err(Error::CurveTreeBackendReadOnly.into())
-        }
+        _new_leaf_value: LeafValue<C::P0>,
+    ) -> impl Future<Output = Result<Option<LeafValue<C::P0>>, Self::Error>> + Send {
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
     fn leaf_count(&self) -> impl Future<Output = LeafIndex> + Send;
@@ -194,40 +169,29 @@ pub trait AsyncCurveTreeBackend<
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> impl Future<Output = Result<Option<Inner<M, P0, P1>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<Inner<M, C>>, Self::Error>> + Send;
 
     fn set_inner_node(
         &mut self,
         _location: NodeLocation<L>,
-        _new_node: Inner<M, P0, P1>,
+        _new_node: Inner<M, C>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            Err(Error::CurveTreeBackendReadOnly.into())
-        }
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 }
 
-pub struct CurveTreeMemoryBackend<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy,
-> {
+pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeConfig> {
     height: NodeLevel,
-    leafs: Vec<LeafValue<P0>>,
+    leafs: Vec<LeafValue<C::P0>>,
     next_leaf_index: LeafIndex,
-    nodes: BTreeMap<NodeLocation<L>, Inner<M, P0, P1>>,
+    nodes: BTreeMap<NodeLocation<L>, Inner<M, C>>,
     block_number: BlockNumber,
-    roots: BTreeMap<BlockNumber, Root<L, M, P0, P1>>,
-    parameters: SelRerandParameters<P0, P1>,
+    roots: BTreeMap<BlockNumber, Root<L, M, C::P0, C::P1>>,
+    parameters: SelRerandParameters<C::P0, C::P1>,
 }
 
-impl<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy + Send,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> core::fmt::Debug for CurveTreeMemoryBackend<L, M, P0, P1>
+impl<const L: usize, const M: usize, C: CurveTreeConfig> core::fmt::Debug
+    for CurveTreeMemoryBackend<L, M, C>
 {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_struct("CurveTreeMemoryBackend")
@@ -240,13 +204,7 @@ impl<
     }
 }
 
-impl<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy + Send,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> CurveTreeMemoryBackend<L, M, P0, P1>
-{
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeMemoryBackend<L, M, C> {
     pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
         Ok(Self {
             height,
@@ -260,45 +218,50 @@ impl<
     }
 }
 
-impl<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy + Send,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> CurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, C>
+    for CurveTreeMemoryBackend<L, M, C>
 {
     type Error = Error;
-    type BlockNumber = BlockNumber;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
     }
 
-    fn parameters(&self) -> &SelRerandParameters<P0, P1> {
+    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
         &self.parameters
     }
 
-    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
-        Ok(self.block_number)
+    fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error> {
+        Ok(self.block_number.into())
     }
 
-    fn set_block_number(&mut self, block_number: Self::BlockNumber) -> Result<(), Self::Error> {
-        self.block_number = block_number;
+    fn set_block_number(&mut self, block_number: C::BlockNumber) -> Result<(), Self::Error> {
+        self.block_number = block_number
+            .try_into()
+            .expect("Block number conversion failed");
         Ok(())
     }
 
-    fn store_root(&mut self, root: Root<L, M, P0, P1>) -> Result<Self::BlockNumber, Self::Error> {
+    fn store_root(
+        &mut self,
+        root: Root<L, M, C::P0, C::P1>,
+    ) -> Result<C::BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
         self.roots.insert(block_number, root);
-        Ok(block_number)
+        Ok(block_number.into())
     }
 
     fn fetch_root(
         &self,
-        block_number: Self::BlockNumber,
-    ) -> Result<Root<L, M, P0, P1>, Self::Error> {
-        self.roots.get(&block_number).cloned()
+        block_number: C::BlockNumber,
+    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
+        let block_number: BlockNumber = block_number
+            .try_into()
+            .expect("Block number conversion failed");
+        self.roots
+            .get(&block_number)
+            .cloned()
             .ok_or(Error::CurveTreeRootNotFound)
     }
 
@@ -317,15 +280,15 @@ impl<
         leaf_index
     }
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
         Ok(self.leafs.get(leaf_index as usize).copied())
     }
 
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>, Error> {
+        new_leaf_value: LeafValue<C::P0>,
+    ) -> Result<Option<LeafValue<C::P0>>, Error> {
         let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index as usize) {
             let old = *leaf;
             *leaf = new_leaf_value;
@@ -341,14 +304,14 @@ impl<
         self.leafs.len() as LeafIndex
     }
 
-    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, P0, P1>>, Error> {
-        Ok(self.nodes.get(&location).copied())
+    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, C>>, Error> {
+        Ok(self.nodes.get(&location).cloned())
     }
 
     fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
-        new_node: Inner<M, P0, P1>,
+        new_node: Inner<M, C>,
     ) -> Result<(), Error> {
         self.nodes.insert(location, new_node);
         Ok(())
@@ -356,50 +319,53 @@ impl<
 }
 
 #[cfg(feature = "async_tree")]
-impl<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy + Send,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-> AsyncCurveTreeBackend<L, M, P0, P1> for CurveTreeMemoryBackend<L, M, P0, P1>
+impl<const L: usize, const M: usize, C: CurveTreeConfig> AsyncCurveTreeBackend<L, M, C>
+    for CurveTreeMemoryBackend<L, M, C>
 where
-    Self: CurveTreeBackend<L, M, P0, P1, Error = Error>,
+    Self: CurveTreeBackend<L, M, C, Error = Error>,
 {
     type Error = Error;
-    type BlockNumber = BlockNumber;
 
     async fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
     }
 
-    async fn parameters(&self) -> &SelRerandParameters<P0, P1> {
+    async fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
         &self.parameters
     }
 
-    async fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
-        Ok(self.block_number)
+    async fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error> {
+        Ok(self.block_number.into())
     }
 
-    async fn set_block_number(&mut self, block_number: Self::BlockNumber) -> Result<(), Self::Error> {
-        self.block_number = block_number;
+    async fn set_block_number(&mut self, block_number: C::BlockNumber) -> Result<(), Self::Error> {
+        self.block_number = block_number
+            .try_into()
+            .expect("Block number conversion failed");
         Ok(())
     }
 
     async fn store_root(
         &mut self,
-        root: Root<L, M, P0, P1>,
-    ) -> Result<Self::BlockNumber, Self::Error> {
+        root: Root<L, M, C::P0, C::P1>,
+    ) -> Result<C::BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
         self.roots.insert(block_number, root);
-        Ok(block_number)
+        Ok(block_number.into())
     }
 
     async fn fetch_root(
         &self,
-        block_number: Self::BlockNumber,
-    ) -> Result<Root<L, M, P0, P1>, Self::Error> {
-        self.roots.get(&block_number).cloned().ok_or(Error::CurveTreeRootNotFound)
+        block_number: C::BlockNumber,
+    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
+        let block_number: BlockNumber = block_number
+            .try_into()
+            .expect("Block number conversion failed");
+        self.roots
+            .get(&block_number)
+            .cloned()
+            .ok_or(Error::CurveTreeRootNotFound)
     }
 
     async fn height(&self) -> NodeLevel {
@@ -414,15 +380,15 @@ where
         CurveTreeBackend::allocate_leaf_index(self)
     }
 
-    async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<P0>>, Error> {
+    async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
         CurveTreeBackend::get_leaf(self, leaf_index)
     }
 
     async fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<P0>,
-    ) -> Result<Option<LeafValue<P0>>, Error> {
+        new_leaf_value: LeafValue<C::P0>,
+    ) -> Result<Option<LeafValue<C::P0>>, Error> {
         CurveTreeBackend::set_leaf(self, leaf_index, new_leaf_value)
     }
 
@@ -433,14 +399,14 @@ where
     async fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> Result<Option<Inner<M, P0, P1>>, Error> {
+    ) -> Result<Option<Inner<M, C>>, Error> {
         CurveTreeBackend::get_inner_node(self, location)
     }
 
     async fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
-        new_node: Inner<M, P0, P1>,
+        new_node: Inner<M, C>,
     ) -> Result<(), Error> {
         CurveTreeBackend::set_inner_node(self, location, new_node)
     }

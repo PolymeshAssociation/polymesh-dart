@@ -6,13 +6,20 @@ use polymesh_dart::{curve_tree::*, *};
 fn proof_benchmark(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
     let mut asset_tree = AssetCurveTree::new().expect("Failed to create asset tree");
-    let mut asset_roots = RootHistory::<ASSET_TREE_L>::new(10, asset_tree.params());
+    let mut asset_roots =
+        RootHistory::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(10, asset_tree.params());
 
     // The account curve tree.
     let mut account_tree =
-        ProverCurveTree::<ACCOUNT_TREE_L>::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)
-            .expect("Failed to create account tree");
-    let mut account_roots = RootHistory::<ACCOUNT_TREE_L>::new(10, (&account_tree).params());
+        ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
+            ACCOUNT_TREE_HEIGHT,
+            ACCOUNT_TREE_GENS,
+        )
+        .expect("Failed to create account tree");
+    let mut account_roots = RootHistory::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
+        10,
+        (&account_tree).params(),
+    );
 
     let issuer_keys = AccountKeys::rand(&mut rng).expect("Failed to generate issuer keys");
     let issuer_acct = issuer_keys.public_keys();
@@ -140,7 +147,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate settlement creation proof.
     c.bench_function("SettlementProof generate", |b| {
         b.iter(|| {
-            let _settlement: SettlementProof<()> = SettlementBuilder::new(b"Test")
+            let _settlement: SettlementProof<(), AssetTreeConfig> = SettlementBuilder::new(b"Test")
                 .leg(black_box(LegBuilder {
                     sender: issuer_acct,
                     receiver: investor1_acct,
@@ -154,7 +161,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let settlement: SettlementProof<()> = SettlementBuilder::new(b"Test")
+    let settlement: SettlementProof = SettlementBuilder::new(b"Test")
         .leg(LegBuilder {
             sender: issuer_acct,
             receiver: investor1_acct,
@@ -185,7 +192,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate of sender affirmation proof.
     c.bench_function("SenderAffirmationProof generate", |b| {
         b.iter(|| {
-            let _proof = SenderAffirmationProof::new(
+            let _proof: SenderAffirmationProof = SenderAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
                 leg_amount,
@@ -199,7 +206,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let proof = SenderAffirmationProof::new(
+    let proof: SenderAffirmationProof = SenderAffirmationProof::new(
         &mut rng,
         &leg_ref,
         leg_amount,
@@ -222,7 +229,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate of receiver affirmation proof.
     c.bench_function("ReceiverAffirmationProof generate", |b| {
         b.iter(|| {
-            let _proof = ReceiverAffirmationProof::new(
+            let _proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
                 sk_e,
@@ -235,7 +242,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let proof = ReceiverAffirmationProof::new(
+    let proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
         &mut rng,
         &leg_ref,
         sk_e,
@@ -310,7 +317,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate receiver claim assets proof.
     c.bench_function("ReceiverClaimProof generate", |b| {
         b.iter(|| {
-            let _proof = ReceiverClaimProof::new(
+            let _proof: ReceiverClaimProof = ReceiverClaimProof::new(
                 &mut rng,
                 &leg_ref,
                 leg_amount,
@@ -324,7 +331,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let proof = ReceiverClaimProof::new(
+    let proof: ReceiverClaimProof = ReceiverClaimProof::new(
         &mut rng,
         &leg_ref,
         leg_amount,

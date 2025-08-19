@@ -725,7 +725,7 @@ impl AssetStateCommitment {
 /// Represents a tree of asset states in the Dart BP protocol.
 #[cfg(feature = "std")]
 pub struct AssetCurveTree {
-    pub tree: FullCurveTree<ASSET_TREE_L>,
+    pub tree: FullCurveTree<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     assets: HashMap<AssetId, (LeafIndex, AssetState)>,
 }
 
@@ -771,44 +771,45 @@ impl AssetCurveTree {
         }
     }
 
-    pub fn get_asset_state_path(&self, asset_id: AssetId) -> Option<CurveTreePath<ASSET_TREE_L>> {
+    pub fn get_asset_state_path(
+        &self,
+        asset_id: AssetId,
+    ) -> Option<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>> {
         let (leaf_index, _) = self.assets.get(&asset_id)?;
         self.tree.get_path_to_leaf_index(*leaf_index).ok()
     }
 
-    pub fn params(&self) -> &CurveTreeParameters {
+    pub fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
         self.tree.params()
     }
 
-    pub fn root_node(&self) -> Result<CurveTreeRoot<ASSET_TREE_L>, Error> {
+    pub fn root_node(
+        &self,
+    ) -> Result<CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
         self.tree.root_node()
     }
 
-    pub fn set_block_number(
-        &mut self,
-        block_number: BlockNumber,
-    ) -> Result<(), Error> {
+    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
         self.tree.set_block_number(block_number)?;
         Ok(())
     }
 
-    pub fn store_root(
-        &mut self,
-    ) -> Result<(), Error> {
+    pub fn store_root(&mut self) -> Result<(), Error> {
         self.tree.store_root()?;
         Ok(())
     }
 }
 
 #[cfg(feature = "std")]
-impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetCurveTree {
-    type BlockNumber = BlockNumber;
-
-    fn get_block_root(&self, block_number: BlockNumber) -> Option<CurveTreeRoot<ASSET_TREE_L>> {
+impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &AssetCurveTree {
+    fn get_block_root(
+        &self,
+        block_number: BlockNumber,
+    ) -> Option<CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
         self.tree.fetch_root(block_number).ok()
     }
 
-    fn params(&self) -> &CurveTreeParameters {
+    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
         self.tree.params()
     }
 }
@@ -875,8 +876,9 @@ fn try_block_number<T: TryInto<BlockNumber>>(block_number: T) -> Result<BlockNum
 }
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct AssetMintingProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.
     pub pk: AccountPublicKey,
     pub asset_id: AssetId,
@@ -886,23 +888,39 @@ pub struct AssetMintingProof {
     pub nullifier: AccountStateNullifier,
 
     // proof
-    proof: WrappedCanonical<
-        bp_account::MintTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
-    >,
+    proof: WrappedCanonical<bp_account::MintTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>>,
 }
 
-impl AssetMintingProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for AssetMintingProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AssetMintingProof")
+            .field("pk", &self.pk)
+            .field("asset_id", &self.asset_id)
+            .field("amount", &self.amount)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> AssetMintingProof<C>
+{
     /// Generate a new asset minting proof.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
@@ -943,14 +961,16 @@ impl AssetMintingProof {
 
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for asset minting proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for asset minting proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -970,7 +990,7 @@ impl AssetMintingProof {
     }
 }
 
-impl AccountStateUpdate for AssetMintingProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }
@@ -1159,12 +1179,20 @@ impl LegBuilder {
         }
     }
 
-    pub fn encryt_and_prove<R: RngCore + CryptoRng>(
+    pub fn encryt_and_prove<
+        R: RngCore + CryptoRng,
+        C: CurveTreeConfig<
+                F0 = <PallasParameters as CurveConfig>::ScalarField,
+                F1 = <VestaParameters as CurveConfig>::ScalarField,
+                P0 = PallasParameters,
+                P1 = VestaParameters,
+            >,
+    >(
         self,
         rng: &mut R,
         ctx: &[u8],
-        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
-    ) -> Result<SettlementLegProof, Error> {
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
+    ) -> Result<SettlementLegProof<C>, Error> {
         let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
         let leg = Leg::new(
             self.sender.acct,
@@ -1213,11 +1241,19 @@ impl<T: DartLimits> SettlementBuilder<T> {
         self
     }
 
-    pub fn encryt_and_prove<R: RngCore + CryptoRng>(
+    pub fn encryt_and_prove<
+        R: RngCore + CryptoRng,
+        C: CurveTreeConfig<
+                F0 = <PallasParameters as CurveConfig>::ScalarField,
+                F1 = <VestaParameters as CurveConfig>::ScalarField,
+                P0 = PallasParameters,
+                P1 = VestaParameters,
+            >,
+    >(
         self,
         rng: &mut R,
-        asset_tree: impl CurveTreeLookup<ASSET_TREE_L>,
-    ) -> Result<SettlementProof<T>, Error> {
+        asset_tree: impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
+    ) -> Result<SettlementProof<T, C>, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         let root_block = asset_tree.get_block_number()?;
@@ -1232,28 +1268,41 @@ impl<T: DartLimits> SettlementBuilder<T> {
 
         let legs =
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        Ok(SettlementProof { memo, root_block: try_block_number(root_block)?, legs })
+        Ok(SettlementProof {
+            memo,
+            root_block: try_block_number(root_block)?,
+            legs,
+        })
     }
 }
 
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
-#[scale_info(skip_type_params(T))]
-pub struct SettlementProof<T: DartLimits> {
+#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[scale_info(skip_type_params(T, C))]
+pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     root_block: BlockNumber,
 
-    pub legs: BoundedVec<SettlementLegProof, T::MaxSettlementLegs>,
+    pub legs: BoundedVec<SettlementLegProof<C>, T::MaxSettlementLegs>,
 }
 
-impl<T: DartLimits> PartialEq for SettlementProof<T> {
+impl<T: DartLimits, C: CurveTreeConfig> PartialEq for SettlementProof<T, C> {
     fn eq(&self, other: &Self) -> bool {
         self.memo == other.memo && self.root_block == other.root_block && self.legs == other.legs
     }
 }
 
-impl<T: DartLimits> Eq for SettlementProof<T> {}
+impl<T: DartLimits, C: CurveTreeConfig> Eq for SettlementProof<T, C> {}
 
-impl<T: DartLimits> SettlementProof<T> {
+impl<
+    T: DartLimits,
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> SettlementProof<T, C>
+{
     pub fn hash(&self) -> SettlementHash {
         let mut hasher = Blake2s256::new();
         let data = self.encode();
@@ -1263,14 +1312,16 @@ impl<T: DartLimits> SettlementProof<T> {
 
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
-        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L>,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = asset_tree.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for settlement proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = asset_tree
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for settlement proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
@@ -1285,22 +1336,32 @@ impl<T: DartLimits> SettlementProof<T> {
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SettlementLegProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     leg_enc: WrappedCanonical<LegEncrypted>,
 
-    proof: WrappedCanonical<
-        bp_leg::SettlementTxnProof<
-            ASSET_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
-    >,
+    proof: WrappedCanonical<bp_leg::SettlementTxnProof<ASSET_TREE_L, C::F0, C::F1, C::P0, C::P1>>,
 }
 
-impl SettlementLegProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for SettlementLegProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SettlementLegProof")
+            .field("leg_enc", &self.leg_enc)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> SettlementLegProof<C>
+{
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg: Leg,
@@ -1310,7 +1371,7 @@ impl SettlementLegProof {
         pk_e: EncryptionPublicKey,
         auditor_enc: Option<EncryptionPublicKey>,
         ctx: &[u8],
-        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L>,
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<Self, Error> {
         let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id() as LeafIndex)?;
 
@@ -1351,8 +1412,8 @@ impl SettlementLegProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
-        root: &Root<ASSET_TREE_L, 1, PallasParameters, VestaParameters>,
-        params: &CurveTreeParameters,
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        params: &CurveTreeParameters<C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         let leg_enc = self.leg_enc.decode()?;
@@ -1380,22 +1441,22 @@ impl SettlementLegProof {
 ///
 /// This allows building the settlement off-chain and collecting the leg affirmations
 /// before submitting the settlement to the chain.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
-#[scale_info(skip_type_params(T))]
-pub struct HashedSettlementProof<T: DartLimits = ()> {
+#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[scale_info(skip_type_params(T, C))]
+pub struct HashedSettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     /// The settlement proof containing the memo, root, and legs.
-    pub settlement: SettlementProof<T>,
+    pub settlement: SettlementProof<T, C>,
     /// The hash of the settlement, used to tie the leg affirmations to this settlement.
     pub hash: SettlementHash,
 }
 
-impl<T: DartLimits> PartialEq for HashedSettlementProof<T> {
+impl<T: DartLimits, C: CurveTreeConfig> PartialEq for HashedSettlementProof<T, C> {
     fn eq(&self, other: &Self) -> bool {
         self.settlement == other.settlement && self.hash == other.hash
     }
 }
 
-impl<T: DartLimits> Eq for HashedSettlementProof<T> {}
+impl<T: DartLimits, C: CurveTreeConfig> Eq for HashedSettlementProof<T, C> {}
 
 /// Counts of the legs and sender/receiver affirmations in a batched settlement.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
@@ -1407,44 +1468,56 @@ pub struct BatchedSettlementCounts {
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct BatchedSettlementLegAffirmations {
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConfig> {
     /// The sender's affirmation proof.
-    pub sender: Option<SenderAffirmationProof>,
+    pub sender: Option<SenderAffirmationProof<C>>,
     /// The receiver's affirmation proof.
-    pub receiver: Option<ReceiverAffirmationProof>,
+    pub receiver: Option<ReceiverAffirmationProof<C>>,
+}
+
+impl<C: CurveTreeConfig> PartialEq for BatchedSettlementLegAffirmations<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sender == other.sender && self.receiver == other.receiver
+    }
 }
 
 /// A batched settlement proof allows including the sender and receiver affirmation proofs
 /// with the settlement creation proof to reduce the number of transactions
 /// required to finalize a settlement.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
 #[scale_info(skip_type_params(T))]
-pub struct BatchedSettlementProof<T: DartLimits = ()> {
+pub struct BatchedSettlementProof<
+    T: DartLimits = (),
+    C: CurveTreeConfig = AssetTreeConfig,
+    A: CurveTreeConfig = AccountTreeConfig,
+> {
     /// The settlement proof containing the memo, root, and legs.
-    pub hashed_settlement: HashedSettlementProof<T>,
+    pub hashed_settlement: HashedSettlementProof<T, C>,
 
     /// The leg affirmations for each leg in the settlement.
-    pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations, T::MaxSettlementLegs>,
+    pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<A>, T::MaxSettlementLegs>,
 }
 
-impl<T: DartLimits> PartialEq for BatchedSettlementProof<T> {
+impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> PartialEq
+    for BatchedSettlementProof<T, C, A>
+{
     fn eq(&self, other: &Self) -> bool {
         self.hashed_settlement == other.hashed_settlement
             && self.leg_affirmations == other.leg_affirmations
     }
 }
 
-impl<T: DartLimits> Eq for BatchedSettlementProof<T> {}
+impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> Eq for BatchedSettlementProof<T, C, A> {}
 
-impl<T: DartLimits> BatchedSettlementProof<T> {
+impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementProof<T, C, A> {
     /// The settlemetn reference using the hash of the settlement.
     pub fn settlement_ref(&self) -> SettlementRef {
         SettlementRef::Hash(self.hashed_settlement.hash)
     }
 
     /// The settlement creation proof.
-    pub fn settlement_proof(&self) -> &SettlementProof<T> {
+    pub fn settlement_proof(&self) -> &SettlementProof<T, C> {
         &self.hashed_settlement.settlement
     }
 
@@ -1572,25 +1645,43 @@ impl LegEncrypted {
 }
 
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SenderAffirmationProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
-        bp_account::AffirmAsSenderTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
+        bp_account::AffirmAsSenderTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
     >,
 }
 
-impl SenderAffirmationProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for SenderAffirmationProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SenderAffirmationProof")
+            .field("leg_ref", &self.leg_ref)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> SenderAffirmationProof<C>
+{
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
@@ -1598,7 +1689,7 @@ impl SenderAffirmationProof {
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
         let new_account_state = account_asset.get_sender_affirm_state(rng, amount)?;
@@ -1640,16 +1731,18 @@ impl SenderAffirmationProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for sender affirmation proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for sender affirmation proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
- 
+
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify_with_rng(
@@ -1668,7 +1761,7 @@ impl SenderAffirmationProof {
     }
 }
 
-impl AccountStateUpdate for SenderAffirmationProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }
@@ -1679,32 +1772,50 @@ impl AccountStateUpdate for SenderAffirmationProof {
 }
 
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct ReceiverAffirmationProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
-        bp_account::AffirmAsReceiverTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
+        bp_account::AffirmAsReceiverTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
     >,
 }
 
-impl ReceiverAffirmationProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for ReceiverAffirmationProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReceiverAffirmationProof")
+            .field("leg_ref", &self.leg_ref)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> ReceiverAffirmationProof<C>
+{
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
         let new_account_state = account_asset.get_receiver_affirm_state(rng)?;
@@ -1745,14 +1856,16 @@ impl ReceiverAffirmationProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for receiver affirmation proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for receiver affirmation proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
@@ -1773,7 +1886,7 @@ impl ReceiverAffirmationProof {
     }
 }
 
-impl AccountStateUpdate for ReceiverAffirmationProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverAffirmationProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }
@@ -1784,25 +1897,43 @@ impl AccountStateUpdate for ReceiverAffirmationProof {
 }
 
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct ReceiverClaimProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
-        bp_account::ClaimReceivedTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
+        bp_account::ClaimReceivedTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
     >,
 }
 
-impl ReceiverClaimProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for ReceiverClaimProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReceiverClaimProof")
+            .field("leg_ref", &self.leg_ref)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> ReceiverClaimProof<C>
+{
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
@@ -1810,7 +1941,7 @@ impl ReceiverClaimProof {
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
         let new_account_state = account_asset.get_state_for_claiming_received(rng, amount)?;
@@ -1852,14 +1983,16 @@ impl ReceiverClaimProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for receiver claim proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for receiver claim proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
@@ -1880,7 +2013,7 @@ impl ReceiverClaimProof {
     }
 }
 
-impl AccountStateUpdate for ReceiverClaimProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }
@@ -1891,32 +2024,50 @@ impl AccountStateUpdate for ReceiverClaimProof {
 }
 
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SenderCounterUpdateProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
-        bp_account::SenderCounterUpdateTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
+        bp_account::SenderCounterUpdateTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
     >,
 }
 
-impl SenderCounterUpdateProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for SenderCounterUpdateProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SenderCounterUpdateProof")
+            .field("leg_ref", &self.leg_ref)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> SenderCounterUpdateProof<C>
+{
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
         let new_account_state = account_asset.get_state_for_decreasing_counter(rng)?;
@@ -1957,14 +2108,16 @@ impl SenderCounterUpdateProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for sender counter update proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for sender counter update proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
@@ -1985,7 +2138,7 @@ impl SenderCounterUpdateProof {
     }
 }
 
-impl AccountStateUpdate for SenderCounterUpdateProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for SenderCounterUpdateProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }
@@ -1996,25 +2149,43 @@ impl AccountStateUpdate for SenderCounterUpdateProof {
 }
 
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SenderReversalProof {
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<
-        bp_account::SenderReverseTxnProof<
-            ACCOUNT_TREE_L,
-            <PallasParameters as CurveConfig>::ScalarField,
-            <VestaParameters as CurveConfig>::ScalarField,
-            PallasParameters,
-            VestaParameters,
-        >,
+        bp_account::SenderReverseTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
     >,
 }
 
-impl SenderReversalProof {
+impl<C: CurveTreeConfig> core::fmt::Debug for SenderReversalProof<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SenderReversalProof")
+            .field("leg_ref", &self.leg_ref)
+            .field("root_block", &self.root_block)
+            .field(
+                "updated_account_state_commitment",
+                &self.updated_account_state_commitment,
+            )
+            .field("nullifier", &self.nullifier)
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> SenderReversalProof<C>
+{
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
@@ -2022,7 +2193,7 @@ impl SenderReversalProof {
         sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
         account_asset: &mut AccountAssetState,
-        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
         let new_account_state = account_asset.get_state_for_reversing_send(rng, amount)?;
@@ -2064,14 +2235,16 @@ impl SenderReversalProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         leg_enc: &LegEncrypted,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
-        let root = tree_roots.get_block_root(self.root_block.into()).ok_or_else(|| {
-            log::error!("Invalid root for sender reversal proof");
-            Error::CurveTreeRootNotFound
-        })?;
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for sender reversal proof");
+                Error::CurveTreeRootNotFound
+            })?;
         let root = root.decode()?;
 
         let ctx = self.leg_ref.context();
@@ -2092,7 +2265,7 @@ impl SenderReversalProof {
     }
 }
 
-impl AccountStateUpdate for SenderReversalProof {
+impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }

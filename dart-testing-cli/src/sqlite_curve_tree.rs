@@ -6,14 +6,17 @@ use std::sync::Arc;
 
 use polymesh_dart::{
     curve_tree::{
-        CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot, CurveTreeWithBackend, Inner, LeafValue, NodeLocation, Root, SelRerandParameters, ValidateCurveTreeRoot
+        AccountTreeConfig, AssetTreeConfig, CurveTreeBackend, CurveTreeLookup, CurveTreeParameters,
+        CurveTreePath, CurveTreeRoot, CurveTreeWithBackend, Inner, LeafValue, NodeLocation, Root,
+        SelRerandParameters, ValidateCurveTreeRoot,
     },
     BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
-    ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ASSET_TREE_HEIGHT, ASSET_TREE_L,
+    ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
+    ASSET_TREE_M,
 };
 
 lazy_static::lazy_static! {
-    static ref CURVE_TREE_PARAMETERS: CurveTreeParameters = CurveTreeParameters::new(
+    static ref CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = CurveTreeParameters::<AssetTreeConfig>::new(
         polymesh_dart::MAX_CURVE_TREE_GENS,
         polymesh_dart::MAX_CURVE_TREE_GENS,
     ).expect("Failed to create curve tree parameters");
@@ -31,11 +34,8 @@ impl AssetCurveTreeSqliteStorage {
     }
 }
 
-impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
-    for AssetCurveTreeSqliteStorage
-{
+impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurveTreeSqliteStorage {
     type Error = anyhow::Error;
-    type BlockNumber = BlockNumber;
 
     fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(
@@ -47,20 +47,20 @@ impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
         &CURVE_TREE_PARAMETERS
     }
 
-    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
+    fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT MAX(block_number) FROM asset_root_history")?;
         let block_number: i64 = stmt.query_row([], |row| row.get(0))?;
-        Ok(block_number as Self::BlockNumber)
+        Ok(block_number as BlockNumber)
     }
 
     fn store_root(
         &mut self,
-        root: Root<ASSET_TREE_L, 1, PallasParameters, VestaParameters>,
-    ) -> std::result::Result<Self::BlockNumber, Self::Error> {
+        root: Root<ASSET_TREE_L, ASSET_TREE_M, PallasParameters, VestaParameters>,
+    ) -> std::result::Result<BlockNumber, Self::Error> {
         let block_number = self.get_block_number()? + 1;
-        let root = CurveTreeRoot::new(&root)
+        let root = CurveTreeRoot::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(&root)
             .map_err(|_| anyhow::anyhow!("Failed to create CurveTreeRoot from root data"))?;
         let root_bytes = root.encode();
         let mut stmt = self
@@ -71,15 +71,19 @@ impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
     }
 
     fn fetch_root(
-            &self,
-            block_number: Self::BlockNumber,
-        ) -> std::result::Result<Root<ASSET_TREE_L, 1, PallasParameters, VestaParameters>, Self::Error> {
+        &self,
+        block_number: BlockNumber,
+    ) -> std::result::Result<
+        Root<ASSET_TREE_L, ASSET_TREE_M, PallasParameters, VestaParameters>,
+        Self::Error,
+    > {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")?;
         let root_data: Vec<u8> = stmt.query_row([block_number as i64], |row| row.get(0))?;
         // The root was encoded as CurveTreeRoot, so decode it directly
-        let root: CurveTreeRoot<ASSET_TREE_L> = Decode::decode(&mut root_data.as_slice())?;
+        let root: CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> =
+            Decode::decode(&mut root_data.as_slice())?;
         Ok(root.decode()?)
     }
 
@@ -155,7 +159,7 @@ impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
     fn get_inner_node(
         &self,
         location: NodeLocation<ASSET_TREE_L>,
-    ) -> Result<Option<Inner<1, PallasParameters, VestaParameters>>, Self::Error> {
+    ) -> Result<Option<Inner<1, AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT node_data FROM asset_inner_nodes WHERE location = ?1")?;
@@ -177,7 +181,7 @@ impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
     fn set_inner_node(
         &mut self,
         location: NodeLocation<ASSET_TREE_L>,
-        new_node: Inner<1, PallasParameters, VestaParameters>,
+        new_node: Inner<1, AssetTreeConfig>,
     ) -> Result<(), Self::Error> {
         // Encode the location and node data
         let location_bytes = location.encode();
@@ -196,8 +200,7 @@ impl CurveTreeBackend<ASSET_TREE_L, 1, PallasParameters, VestaParameters>
 pub type AssetCurveTreeType = CurveTreeWithBackend<
     ASSET_TREE_L,
     1,
-    PallasParameters,
-    VestaParameters,
+    AssetTreeConfig,
     AssetCurveTreeSqliteStorage,
     anyhow::Error,
 >;
@@ -252,11 +255,10 @@ impl AccountCurveTreeSqliteStorage {
     }
 }
 
-impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
+impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     for AccountCurveTreeSqliteStorage
 {
     type Error = anyhow::Error;
-    type BlockNumber = BlockNumber;
 
     fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(
@@ -268,20 +270,20 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
         &CURVE_TREE_PARAMETERS
     }
 
-    fn get_block_number(&self) -> Result<Self::BlockNumber, Self::Error> {
+    fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT MAX(block_number) FROM account_root_history")?;
         let block_number: i64 = stmt.query_row([], |row| row.get(0))?;
-        Ok(block_number as Self::BlockNumber)
+        Ok(block_number as BlockNumber)
     }
 
     fn store_root(
         &mut self,
-        root: Root<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>,
-    ) -> std::result::Result<Self::BlockNumber, Self::Error> {
+        root: Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
+    ) -> std::result::Result<BlockNumber, Self::Error> {
         let block_number = self.get_block_number()? + 1;
-        let root = CurveTreeRoot::new(&root)
+        let root = CurveTreeRoot::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(&root)
             .map_err(|_| anyhow::anyhow!("Failed to create CurveTreeRoot from root data"))?;
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
@@ -292,15 +294,19 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
     }
 
     fn fetch_root(
-            &self,
-            block_number: Self::BlockNumber,
-        ) -> std::result::Result<Root<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>, Self::Error> {
+        &self,
+        block_number: BlockNumber,
+    ) -> std::result::Result<
+        Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
+        Self::Error,
+    > {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")?;
         let root_data: Vec<u8> = stmt.query_row([block_number as i64], |row| row.get(0))?;
         // The root was encoded as CurveTreeRoot, so decode it directly
-        let root: CurveTreeRoot<ACCOUNT_TREE_L> = Decode::decode(&mut root_data.as_slice())?;
+        let root: CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> =
+            Decode::decode(&mut root_data.as_slice())?;
         Ok(root.decode()?)
     }
 
@@ -376,7 +382,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
     fn get_inner_node(
         &self,
         location: NodeLocation<ACCOUNT_TREE_L>,
-    ) -> Result<Option<Inner<1, PallasParameters, VestaParameters>>, Self::Error> {
+    ) -> Result<Option<Inner<1, AccountTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT node_data FROM account_inner_nodes WHERE location = ?1")?;
@@ -398,7 +404,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
     fn set_inner_node(
         &mut self,
         location: NodeLocation<ACCOUNT_TREE_L>,
-        new_node: Inner<1, PallasParameters, VestaParameters>,
+        new_node: Inner<1, AccountTreeConfig>,
     ) -> Result<(), Self::Error> {
         // Encode the location and node data
         let location_bytes = location.encode();
@@ -417,8 +423,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, 1, PallasParameters, VestaParameters>
 pub type AccountCurveTreeType = CurveTreeWithBackend<
     ACCOUNT_TREE_L,
     1,
-    PallasParameters,
-    VestaParameters,
+    AccountTreeConfig,
     AccountCurveTreeSqliteStorage,
     anyhow::Error,
 >;
@@ -447,13 +452,11 @@ impl AccountCurveTree {
     }
 }
 
-impl CurveTreeLookup<ACCOUNT_TREE_L> for &AccountCurveTree {
-    type BlockNumber = BlockNumber;
-
+impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &AccountCurveTree {
     fn get_path_to_leaf_index(
         &self,
         leaf_index: LeafIndex,
-    ) -> Result<CurveTreePath<ACCOUNT_TREE_L>, DartError> {
+    ) -> Result<CurveTreePath<ACCOUNT_TREE_L, AccountTreeConfig>, DartError> {
         Ok(self
             .0
             .get_path_to_leaf(leaf_index, 0)
@@ -463,24 +466,26 @@ impl CurveTreeLookup<ACCOUNT_TREE_L> for &AccountCurveTree {
     fn get_path_to_leaf(
         &self,
         leaf: LeafValue<PallasParameters>,
-    ) -> Result<CurveTreePath<ACCOUNT_TREE_L>, DartError> {
+    ) -> Result<CurveTreePath<ACCOUNT_TREE_L, AccountTreeConfig>, DartError> {
         let leaf_index = self.0.backend.find_leaf_index(&leaf).map_err(|er| {
             log::error!("Error finding leaf index: {:?}", er);
-            DartError::LeafNotFound(leaf.clone())
+            DartError::LeafNotFound
         })?;
 
         if let Some(index) = leaf_index {
             self.get_path_to_leaf_index(index)
         } else {
-            Err(DartError::LeafNotFound(leaf))
+            Err(DartError::LeafNotFound)
         }
     }
 
-    fn params(&self) -> &CurveTreeParameters {
+    fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
         &CURVE_TREE_PARAMETERS
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<ACCOUNT_TREE_L>, DartError> {
+    fn root_node(
+        &self,
+    ) -> Result<CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>, DartError> {
         let root = self
             .0
             .root_node()
@@ -489,7 +494,9 @@ impl CurveTreeLookup<ACCOUNT_TREE_L> for &AccountCurveTree {
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, DartError> {
-        self.0.get_block_number().map_err(|_| DartError::CurveTreeBlockNumberNotFound)
+        self.0
+            .get_block_number()
+            .map_err(|_| DartError::CurveTreeBlockNumberNotFound)
     }
 }
 
@@ -507,7 +514,7 @@ impl AssetRootHistory {
     pub fn add_root(
         &mut self,
         block: BlockNumber,
-        root: &CurveTreeRoot<ASSET_TREE_L>,
+        root: &CurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>,
     ) -> Result<()> {
         let root_bytes = root.encode();
         let mut stmt = self
@@ -518,10 +525,11 @@ impl AssetRootHistory {
     }
 }
 
-impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetRootHistory {
-    type BlockNumber = BlockNumber;
-
-    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<ASSET_TREE_L>> {
+impl ValidateCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig> for &AssetRootHistory {
+    fn get_block_root(
+        &self,
+        block: BlockNumber,
+    ) -> Option<CurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>> {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")
@@ -531,7 +539,7 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L> for &AssetRootHistory {
         Decode::decode(&mut root_data.as_slice()).ok()
     }
 
-    fn params(&self) -> &CurveTreeParameters {
+    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
         &CURVE_TREE_PARAMETERS
     }
 }
@@ -550,7 +558,7 @@ impl AccountRootHistory {
     pub fn add_root(
         &mut self,
         block: BlockNumber,
-        root: &CurveTreeRoot<ACCOUNT_TREE_L>,
+        root: &CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     ) -> Result<()> {
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
@@ -561,10 +569,13 @@ impl AccountRootHistory {
     }
 }
 
-impl ValidateCurveTreeRoot<ACCOUNT_TREE_L> for &AccountRootHistory {
-    type BlockNumber = BlockNumber;
-
-    fn get_block_root(&self, block: Self::BlockNumber) -> Option<CurveTreeRoot<ACCOUNT_TREE_L>> {
+impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
+    for &AccountRootHistory
+{
+    fn get_block_root(
+        &self,
+        block: BlockNumber,
+    ) -> Option<CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>> {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")
@@ -574,7 +585,7 @@ impl ValidateCurveTreeRoot<ACCOUNT_TREE_L> for &AccountRootHistory {
         Decode::decode(&mut root_data.as_slice()).ok()
     }
 
-    fn params(&self) -> &CurveTreeParameters {
+    fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
         &CURVE_TREE_PARAMETERS
     }
 }

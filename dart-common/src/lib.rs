@@ -16,10 +16,12 @@ pub const MAX_ASSET_ID: u32 = u32::MAX;
 pub const MAX_CURVE_TREE_GENS: usize = 1 << 12;
 
 pub const ACCOUNT_TREE_L: usize = 512;
+pub const ACCOUNT_TREE_M: usize = 1;
 pub const ACCOUNT_TREE_HEIGHT: u8 = 4;
 pub const ACCOUNT_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
 
 pub const ASSET_TREE_L: usize = 64;
+pub const ASSET_TREE_M: usize = 1;
 pub const ASSET_TREE_HEIGHT: u8 = 4;
 pub const ASSET_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
 

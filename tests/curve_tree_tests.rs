@@ -4,7 +4,7 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
-    CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
+    AccountTreeConfig, CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasA, PallasParameters, VestaParameters};
@@ -19,7 +19,7 @@ pub struct CurveTreeOld<const L: usize> {
     height: usize,
     leaves: Vec<PallasA>,
     length: usize,
-    params: CurveTreeParameters,
+    params: CurveTreeParameters<AccountTreeConfig>,
 }
 
 impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
@@ -77,7 +77,7 @@ impl<const L: usize> CurveTreeOld<L> {
                 *old_leaf = leaf;
             }
             None => {
-                return Err(Error::LeafNotFound(leaf.into()));
+                return Err(Error::LeafNotFound);
             }
         }
         self.tree.update_leaf(leaf_index, 0, leaf, &self.params);
@@ -96,17 +96,20 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Returns the path to a leaf in the curve tree by its index.
-    pub fn get_path_to_leaf_index(&self, leaf_index: usize) -> Result<CurveTreePath<L>, Error> {
+    pub fn get_path_to_leaf_index(
+        &self,
+        leaf_index: usize,
+    ) -> Result<CurveTreePath<L, AccountTreeConfig>, Error> {
         Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
     }
 
     /// Returns the parameters of the curve tree.
-    pub fn params(&self) -> &CurveTreeParameters {
+    pub fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
         &self.params
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> CurveTreeRoot<L> {
+    pub fn root_node(&self) -> CurveTreeRoot<L, 1, AccountTreeConfig> {
         CurveTreeRoot::new(&self.tree.root_node()).expect("Failed to get root node")
     }
 }
@@ -122,15 +125,16 @@ fn create_test_leaf(value: usize) -> LeafValue<PallasParameters> {
 
 fn setup_trees() -> (
     CurveTreeOld<L>,
-    FullCurveTree<L>,
+    FullCurveTree<L, 1, AccountTreeConfig>,
     SelRerandParameters<PallasParameters, VestaParameters>,
 ) {
     let full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH)
         .expect("Failed to create full tree");
     assert!(full_tree.height() == HEIGHT as usize);
     let params = full_tree.params().clone();
-    let storage_tree = FullCurveTree::<L>::new_with_capacity(HEIGHT, GENS_LENGTH)
-        .expect("Failed to create storage tree");
+    let storage_tree =
+        FullCurveTree::<L, 1, AccountTreeConfig>::new_with_capacity(HEIGHT, GENS_LENGTH)
+            .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
     // Compare roots
@@ -146,8 +150,8 @@ fn setup_trees() -> (
 
 /// Compare two roots, printing debug info on mismatch since Root doesn't implement Debug
 fn assert_roots_equal(
-    full_root: &CurveTreeRoot<L>,
-    storage_root: &CurveTreeRoot<L>,
+    full_root: &CurveTreeRoot<L, 1, AccountTreeConfig>,
+    storage_root: &CurveTreeRoot<L, 1, AccountTreeConfig>,
     context: &str,
 ) {
     let full_root = full_root.decode().expect("Failed to decode full root");

@@ -13,8 +13,8 @@ use std::{
 
 use polymesh_dart::{
     curve_tree::{
-        CurveTreeLookup, FullCurveTree, ProverCurveTree, ValidateCurveTreeRoot,
-        VerifierCurveTree,
+        AccountTreeConfig, AssetTreeConfig, CurveTreeLookup, FullCurveTree, ProverCurveTree,
+        ValidateCurveTreeRoot, VerifierCurveTree,
     },
     *,
 };
@@ -110,7 +110,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
@@ -128,7 +128,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
         asset_id: AssetId,
         amount: Balance,
@@ -180,7 +180,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
         asset_id: AssetId,
         amount: Balance,
@@ -273,7 +273,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg for claim");
@@ -310,7 +310,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
@@ -338,7 +338,7 @@ impl DartUserAccountInner {
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         log::info!("Sender decrypts the leg for reversal");
@@ -420,7 +420,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<()> {
@@ -434,7 +434,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
         asset_id: AssetId,
         amount: Balance,
@@ -453,7 +453,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
         asset_id: AssetId,
         amount: Balance,
@@ -503,7 +503,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         self.0
@@ -516,7 +516,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         self.0
@@ -529,7 +529,7 @@ impl DartUserAccount {
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
-        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L>,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         leg_ref: &LegRef,
     ) -> Result<()> {
         self.0
@@ -716,7 +716,7 @@ impl DartSettlementLeg {
     pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderAffirmationProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Pending {
@@ -738,7 +738,7 @@ impl DartSettlementLeg {
     pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverAffirmationProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.receiver != AffirmationStatus::Pending {
@@ -785,7 +785,7 @@ impl DartSettlementLeg {
     pub fn sender_counter_update<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderCounterUpdateProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Affirmed {
@@ -814,7 +814,7 @@ impl DartSettlementLeg {
     pub fn sender_revert<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderReversalProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.sender != AffirmationStatus::Affirmed {
@@ -843,7 +843,7 @@ impl DartSettlementLeg {
     pub fn receiver_claim<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverClaimProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.receiver != AffirmationStatus::Affirmed {
@@ -917,7 +917,7 @@ impl DartSettlement {
     pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderAffirmationProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         self.ensure_pending()?;
@@ -938,7 +938,7 @@ impl DartSettlement {
     pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverAffirmationProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         self.ensure_pending()?;
@@ -980,7 +980,7 @@ impl DartSettlement {
     pub fn sender_counter_update<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderCounterUpdateProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Executed {
@@ -1005,7 +1005,7 @@ impl DartSettlement {
     pub fn sender_revert<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderReversalProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Rejected {
@@ -1030,7 +1030,7 @@ impl DartSettlement {
     pub fn receiver_claim<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverClaimProof,
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L>,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
         if self.status != SettlementStatus::Executed {
@@ -1120,7 +1120,7 @@ impl DartSettlement {
 }
 
 pub struct DartProverAccountTree {
-    account_tree: ProverCurveTree<ACCOUNT_TREE_L>,
+    account_tree: ProverCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     last_leaf_index: usize,
 }
 
@@ -1132,7 +1132,9 @@ impl DartProverAccountTree {
         })
     }
 
-    pub fn prover_account_tree(&self) -> &ProverCurveTree<ACCOUNT_TREE_L> {
+    pub fn prover_account_tree(
+        &self,
+    ) -> &ProverCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> {
         &self.account_tree
     }
 
@@ -1174,7 +1176,7 @@ pub struct DartChainState {
 
     /// Accounts initialized with assets.
     account_assets: HashSet<(AccountPublicKey, AssetId)>,
-    account_tree: VerifierCurveTree<ACCOUNT_TREE_L>,
+    account_tree: VerifierCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     account_nullifiers: HashSet<AccountStateNullifier>,
 
     /// Account leafs in the order they have been inserted.
@@ -1215,11 +1217,13 @@ impl DartChainState {
         })
     }
 
-    pub fn asset_tree(&self) -> &FullCurveTree<ASSET_TREE_L> {
+    pub fn asset_tree(&self) -> &FullCurveTree<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> {
         &self.asset_tree.tree
     }
 
-    pub fn account_tree(&self) -> &VerifierCurveTree<ACCOUNT_TREE_L> {
+    pub fn account_tree(
+        &self,
+    ) -> &VerifierCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> {
         &self.account_tree
     }
 

@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use polymesh_dart_common::AssetId;
 
-use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel, PallasParameters, curve_tree::LeafValue};
+use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
 
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]
@@ -16,8 +16,8 @@ pub enum Error {
     CurveTreeError(#[from] curve_tree_relations::error::Error),
 
     /// Leaf not found in the curve tree.
-    #[error("Leaf not found in the curve tree: {0:?}")]
-    LeafNotFound(LeafValue<PallasParameters>),
+    #[error("Leaf not found in the curve tree")]
+    LeafNotFound,
 
     /// Leaf index not found in the curve tree.
     #[error("Leaf index not found in the curve tree: {0}")]
