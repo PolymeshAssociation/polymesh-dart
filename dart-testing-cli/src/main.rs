@@ -346,12 +346,12 @@ fn main() -> Result<()> {
             let auditor_account_info = db.get_dart_account(&auditor_signer, &auditor_account)?;
             let auditor_keys = db.get_account_public_keys(&auditor_account_info)?;
 
-            let auditor = match auditor_type {
-                AuditorType::Auditor => AuditorOrMediator::auditor(&auditor_keys.enc),
-                AuditorType::Mediator => AuditorOrMediator::mediator(&auditor_keys),
+            let (auditors, mediators) = match auditor_type {
+                AuditorType::Auditor => (vec![auditor_keys.enc], vec![]),
+                AuditorType::Mediator => (vec![], vec![auditor_keys.enc]),
             };
 
-            let asset = db.create_asset(&signer, auditor)?;
+            let asset = db.create_asset(&signer, &auditors, &mediators)?;
             println!(
                 "Created asset {} with issuer '{}' and {} '{}:{}'",
                 asset.asset_id,

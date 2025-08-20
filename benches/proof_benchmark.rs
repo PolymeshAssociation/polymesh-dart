@@ -16,10 +16,9 @@ fn proof_benchmark(c: &mut Criterion) {
             ACCOUNT_TREE_GENS,
         )
         .expect("Failed to create account tree");
-    let mut account_roots = RootHistory::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
-        10,
-        (&account_tree).params(),
-    );
+    let account_params = account_tree.params().clone();
+    let mut account_roots =
+        RootHistory::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(10, &account_params);
 
     let issuer_keys = AccountKeys::rand(&mut rng).expect("Failed to generate issuer keys");
     let issuer_acct = issuer_keys.public_keys();
@@ -30,12 +29,11 @@ fn proof_benchmark(c: &mut Criterion) {
     let ctx = b"benchmark";
 
     let asset_id = 0 as _;
-    let asset_mediator = AuditorOrMediator::Mediator(mediator_acct.clone());
-    let asset_state = AssetState::new(asset_id, true, mediator_acct.acct.into());
+    let asset_state = AssetState::new(asset_id, &[], &[mediator_acct.enc]);
 
     // Create the asset.
     asset_tree
-        .set_asset_state(asset_state)
+        .set_asset_state(asset_state.clone())
         .expect("Failed to insert asset state into asset tree");
     asset_roots.add_root(
         (&asset_tree)
@@ -50,16 +48,24 @@ fn proof_benchmark(c: &mut Criterion) {
                 &mut rng,
                 black_box(&issuer_keys),
                 asset_id,
+                0,
                 ctx,
+                &account_params,
             )
             .expect("Failed to generate proof");
         })
     });
 
     // Generate a proof to benchmark verification.
-    let (proof, mut account_state) =
-        AccountAssetRegistrationProof::new(&mut rng, black_box(&issuer_keys), asset_id, ctx)
-            .expect("Failed to generate proof");
+    let (proof, mut account_state) = AccountAssetRegistrationProof::new(
+        &mut rng,
+        black_box(&issuer_keys),
+        asset_id,
+        0,
+        ctx,
+        &account_params,
+    )
+    .expect("Failed to generate proof");
     account_state
         .commit_pending_state()
         .expect("Failed to commit pending state");
@@ -75,15 +81,21 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AccountAssetRegistrationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(ctx))
+                .verify(black_box(ctx), 0, &account_params, &mut rng)
                 .expect("Failed to verify proof");
         })
     });
 
     // Register the investor's account state.
-    let (_proof, mut investor_account_state) =
-        AccountAssetRegistrationProof::new(&mut rng, &investor_keys, asset_id, ctx)
-            .expect("Failed to generate proof");
+    let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::new(
+        &mut rng,
+        &investor_keys,
+        asset_id,
+        0,
+        ctx,
+        &account_params,
+    )
+    .expect("Failed to generate proof");
     investor_account_state
         .commit_pending_state()
         .expect("Failed to commit pending state");
@@ -151,9 +163,8 @@ fn proof_benchmark(c: &mut Criterion) {
                 .leg(black_box(LegBuilder {
                     sender: issuer_acct,
                     receiver: investor1_acct,
-                    asset_id,
+                    asset: asset_state.clone(),
                     amount: leg_amount,
-                    mediator: asset_mediator,
                 }))
                 .encryt_and_prove(&mut rng, &asset_tree.tree)
                 .expect("Failed to create settlement");
@@ -165,9 +176,8 @@ fn proof_benchmark(c: &mut Criterion) {
         .leg(LegBuilder {
             sender: issuer_acct,
             receiver: investor1_acct,
-            asset_id,
+            asset: asset_state.clone(),
             amount: leg_amount,
-            mediator: asset_mediator,
         })
         .encryt_and_prove(&mut rng, &asset_tree.tree)
         .expect("Failed to create settlement");
@@ -184,8 +194,8 @@ fn proof_benchmark(c: &mut Criterion) {
     let leg_enc = settlement.legs[0]
         .leg_enc()
         .expect("Failed to get leg encoding from settlement proof");
-    let sk_e = leg_enc
-        .decrypt_sk_e(LegRole::Sender, &issuer_keys.enc)
+    let leg_enc_rand = leg_enc
+        .get_encryption_randomness(LegRole::Sender, &issuer_keys.enc)
         .expect("Failed to decrypt sender's secret key");
     let leg_ref = LegRef::new(0.into(), 0 as _);
 
@@ -196,8 +206,8 @@ fn proof_benchmark(c: &mut Criterion) {
                 &mut rng,
                 &leg_ref,
                 leg_amount,
-                sk_e,
                 &leg_enc,
+                &leg_enc_rand,
                 &mut account_state,
                 &account_tree,
             )
@@ -210,8 +220,8 @@ fn proof_benchmark(c: &mut Criterion) {
         &mut rng,
         &leg_ref,
         leg_amount,
-        sk_e,
         &leg_enc,
+        &leg_enc_rand,
         &mut account_state,
         &account_tree,
     )
@@ -232,8 +242,8 @@ fn proof_benchmark(c: &mut Criterion) {
             let _proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
-                sk_e,
                 &leg_enc,
+                &leg_enc_rand,
                 &mut investor_account_state,
                 &account_tree,
             )
@@ -245,8 +255,8 @@ fn proof_benchmark(c: &mut Criterion) {
     let proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
         &mut rng,
         &leg_ref,
-        sk_e,
         &leg_enc,
+        &leg_enc_rand,
         &mut investor_account_state,
         &account_tree,
     )
@@ -285,9 +295,10 @@ fn proof_benchmark(c: &mut Criterion) {
             let _proof = MediatorAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
-                sk_e,
+                asset_id,
                 &leg_enc,
-                &mediator_keys.acct,
+                &mediator_keys.enc,
+                0,
                 true,
             )
             .expect("Failed to generate mediator affirmation proof");
@@ -298,9 +309,10 @@ fn proof_benchmark(c: &mut Criterion) {
     let proof = MediatorAffirmationProof::new(
         &mut rng,
         &leg_ref,
-        sk_e,
+        asset_id,
         &leg_enc,
-        &mediator_keys.acct,
+        &mediator_keys.enc,
+        0,
         true,
     )
     .expect("Failed to generate mediator affirmation proof");
@@ -321,8 +333,8 @@ fn proof_benchmark(c: &mut Criterion) {
                 &mut rng,
                 &leg_ref,
                 leg_amount,
-                sk_e,
                 &leg_enc,
+                &leg_enc_rand,
                 &mut investor_account_state,
                 &account_tree,
             )
@@ -335,8 +347,8 @@ fn proof_benchmark(c: &mut Criterion) {
         &mut rng,
         &leg_ref,
         leg_amount,
-        sk_e,
         &leg_enc,
+        &leg_enc_rand,
         &mut investor_account_state,
         &account_tree,
     )

@@ -6,21 +6,15 @@ use std::sync::Arc;
 
 use polymesh_dart::{
     curve_tree::{
-        AccountTreeConfig, AssetTreeConfig, CurveTreeBackend, CurveTreeLookup, CurveTreeParameters,
-        CurveTreePath, CurveTreeRoot, CurveTreeWithBackend, Inner, LeafValue, NodeLocation, Root,
-        SelRerandParameters, ValidateCurveTreeRoot,
+        get_account_curve_tree_parameters, get_asset_curve_tree_parameters, AccountTreeConfig,
+        AssetTreeConfig, CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
+        CurveTreeRoot, CurveTreeWithBackend, Inner, LeafValue, NodeLocation, Root,
+        ValidateCurveTreeRoot,
     },
     BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
     ASSET_TREE_M,
 };
-
-lazy_static::lazy_static! {
-    static ref CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = CurveTreeParameters::<AssetTreeConfig>::new(
-        polymesh_dart::MAX_CURVE_TREE_GENS,
-        polymesh_dart::MAX_CURVE_TREE_GENS,
-    ).expect("Failed to create curve tree parameters");
-}
 
 /// Asset Curve Tree SQLite Storage backend.
 #[derive(Clone)]
@@ -43,8 +37,8 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         ))
     }
 
-    fn parameters(&self) -> &SelRerandParameters<PallasParameters, VestaParameters> {
-        &CURVE_TREE_PARAMETERS
+    fn parameters(&self) -> &CurveTreeParameters<AssetTreeConfig> {
+        get_asset_curve_tree_parameters()
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
@@ -57,7 +51,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
 
     fn store_root(
         &mut self,
-        root: Root<ASSET_TREE_L, ASSET_TREE_M, PallasParameters, VestaParameters>,
+        root: Root<ASSET_TREE_L, ASSET_TREE_M, VestaParameters, PallasParameters>,
     ) -> std::result::Result<BlockNumber, Self::Error> {
         let block_number = self.get_block_number()? + 1;
         let root = CurveTreeRoot::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(&root)
@@ -74,7 +68,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         &self,
         block_number: BlockNumber,
     ) -> std::result::Result<
-        Root<ASSET_TREE_L, ASSET_TREE_M, PallasParameters, VestaParameters>,
+        Root<ASSET_TREE_L, ASSET_TREE_M, VestaParameters, PallasParameters>,
         Self::Error,
     > {
         let mut stmt = self
@@ -109,7 +103,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> Result<Option<LeafValue<PallasParameters>>, Self::Error> {
+    ) -> Result<Option<LeafValue<VestaParameters>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT leaf_data FROM asset_leaves WHERE leaf_index = ?1")?;
@@ -130,8 +124,8 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<PallasParameters>,
-    ) -> Result<Option<LeafValue<PallasParameters>>, Self::Error> {
+        new_leaf_value: LeafValue<VestaParameters>,
+    ) -> Result<Option<LeafValue<VestaParameters>>, Self::Error> {
         // Get the old leaf value if it exists
         let old_leaf = self.get_leaf(leaf_index)?;
 
@@ -266,8 +260,8 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
         ))
     }
 
-    fn parameters(&self) -> &SelRerandParameters<PallasParameters, VestaParameters> {
-        &CURVE_TREE_PARAMETERS
+    fn parameters(&self) -> &CurveTreeParameters<AccountTreeConfig> {
+        get_account_curve_tree_parameters()
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
@@ -480,7 +474,7 @@ impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &Acc
     }
 
     fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
-        &CURVE_TREE_PARAMETERS
+        get_account_curve_tree_parameters()
     }
 
     fn root_node(
@@ -540,7 +534,7 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig> for &A
     }
 
     fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        &CURVE_TREE_PARAMETERS
+        get_asset_curve_tree_parameters()
     }
 }
 
@@ -586,6 +580,6 @@ impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     }
 
     fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
-        &CURVE_TREE_PARAMETERS
+        get_account_curve_tree_parameters()
     }
 }

@@ -17,6 +17,9 @@ pub const MAX_AMOUNT: u64 = (1 << AMOUNT_BITS) - 1;
 pub const ASSET_ID_BITS: u32 = 32;
 pub const MAX_ASSET_ID: u32 = ((1_u64 << ASSET_ID_BITS) - 1) as u32;
 pub const MAX_CURVE_TREE_GENS: usize = 1 << 12;
+pub const MAX_ASSET_AUDITORS: u32 = 2;
+pub const MAX_ASSET_MEDIATORS: u32 = 2;
+pub const MAX_ASSET_KEYS: usize = (MAX_ASSET_AUDITORS + MAX_ASSET_MEDIATORS) as usize;
 
 pub const ACCOUNT_TREE_L: usize = 512;
 pub const ACCOUNT_TREE_M: usize = 1;

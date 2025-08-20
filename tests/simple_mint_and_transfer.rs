@@ -35,9 +35,9 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
     eprintln!("Mediator account: {:?}", mediator_acct.public_keys());
     eprintln!("Investor account: {:?}", investor1_acct.public_keys());
 
-    let asset_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
     // Create a Dart asset with the issuer as the owner and the mediator as the auditor.
-    let asset_id = issuer.create_asset(&mut chain, asset_mediator)?;
+    let asset_id = issuer.create_asset(&mut chain, &[], &[mediator_acct.public_keys().enc])?;
+    let asset = chain.get_asset_state(asset_id)?;
 
     // Initialize account asset state for the issuer and investor.
     issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
@@ -61,9 +61,8 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer_acct.public_keys(),
             receiver: investor1_acct.public_keys(),
-            asset_id,
+            asset,
             amount: 500,
-            mediator: asset_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
@@ -155,9 +154,9 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
     eprintln!("Auditor account: {:?}", auditor_acct.public_keys());
     eprintln!("Investor account: {:?}", investor1_acct.public_keys());
 
-    let asset_auditor = AuditorOrMediator::auditor(&auditor_enc);
     // Create a Dart asset with the issuer as the owner and the auditor as the auditor.
-    let asset_id = issuer.create_asset(&mut chain, asset_auditor)?;
+    let asset_id = issuer.create_asset(&mut chain, &[auditor_enc], &[])?;
+    let asset = chain.get_asset_state(asset_id)?;
 
     // Initialize account asset state for the issuer and investor.
     issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
@@ -181,9 +180,8 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer_acct.public_keys(),
             receiver: investor1_acct.public_keys(),
-            asset_id,
+            asset,
             amount: 500,
-            mediator: asset_auditor,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
@@ -215,7 +213,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
     )?;
 
     // The auditor decrypts the leg details.
-    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::Auditor)?;
+    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::Auditor(0))?;
     // Verify the leg details.
     assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
     assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
@@ -303,11 +301,10 @@ fn test_atomic_swap() -> Result<()> {
     let investor2_acct = investor2.create_and_register_account(&mut rng, &mut chain, "1")?;
 
     // Step 2: Each asset issuer creates an asset (one asset has an auditor the other has a mediator) and mints it to their respective accounts.
-    let asset1_auditor = AuditorOrMediator::auditor(&auditor_acct.public_keys().enc);
-    let asset2_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
-
-    let asset1_id = issuer1.create_asset(&mut chain, asset1_auditor)?;
-    let asset2_id = issuer2.create_asset(&mut chain, asset2_mediator)?;
+    let asset1_id = issuer1.create_asset(&mut chain, &[auditor_acct.public_keys().enc], &[])?;
+    let asset1 = chain.get_asset_state(asset1_id)?;
+    let asset2_id = issuer2.create_asset(&mut chain, &[], &[mediator_acct.public_keys().enc])?;
+    let asset2 = chain.get_asset_state(asset2_id)?;
 
     // Initialize account asset state for the issuers.
     issuer1_acct.initialize_asset(&mut rng, &mut chain, asset1_id)?;
@@ -349,9 +346,8 @@ fn test_atomic_swap() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer1_acct.public_keys(),
             receiver: investor1_acct.public_keys(),
-            asset_id: asset1_id,
+            asset: asset1.clone(),
             amount: 1000,
-            mediator: asset1_auditor,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating funding settlement: {:?}", funding_settlement1);
@@ -363,9 +359,8 @@ fn test_atomic_swap() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer2_acct.public_keys(),
             receiver: investor2_acct.public_keys(),
-            asset_id: asset2_id,
+            asset: asset2.clone(),
             amount: 1500,
-            mediator: asset2_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating funding settlement: {:?}", funding_settlement2);
@@ -450,16 +445,14 @@ fn test_atomic_swap() -> Result<()> {
         .leg(LegBuilder {
             sender: investor1_acct.public_keys(),
             receiver: investor2_acct.public_keys(),
-            asset_id: asset1_id,
+            asset: asset1,
             amount: 500,
-            mediator: asset1_auditor,
         })
         .leg(LegBuilder {
             sender: investor2_acct.public_keys(),
             receiver: investor1_acct.public_keys(),
-            asset_id: asset2_id,
+            asset: asset2,
             amount: 750,
-            mediator: asset2_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating swap settlement: {:?}", swap_settlement);
@@ -634,8 +627,8 @@ fn test_reject_after_sender_affirms() -> Result<()> {
     let investor_acct = investor.create_and_register_account(&mut rng, &mut chain, "1")?;
 
     // Step 2: The asset issuer creates an asset and mints it to their account.
-    let asset_mediator = AuditorOrMediator::mediator(&mediator_acct.public_keys());
-    let asset_id = issuer.create_asset(&mut chain, asset_mediator)?;
+    let asset_id = issuer.create_asset(&mut chain, &[], &[mediator_acct.public_keys().enc])?;
+    let asset = chain.get_asset_state(asset_id)?;
 
     // Initialize account asset state for the issuer and investor.
     issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
@@ -662,9 +655,8 @@ fn test_reject_after_sender_affirms() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer_acct.public_keys(),
             receiver: investor_acct.public_keys(),
-            asset_id,
+            asset,
             amount: 500,
-            mediator: asset_mediator,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
 
@@ -760,9 +752,9 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
     let auditor_enc = auditor_acct.public_keys().enc.clone();
     let investor1_acct = investor1.create_and_register_account(&mut rng, &mut chain, "1")?;
 
-    let asset_auditor = AuditorOrMediator::auditor(&auditor_enc);
     // Create a Dart asset with the issuer as the owner and the auditor as the auditor.
-    let asset_id = issuer.create_asset(&mut chain, asset_auditor)?;
+    let asset_id = issuer.create_asset(&mut chain, &[auditor_enc], &[])?;
+    let asset = chain.get_asset_state(asset_id)?;
 
     // Initialize account asset state for the issuer and investor.
     issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
@@ -786,9 +778,8 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
         .leg(LegBuilder {
             sender: issuer_acct.public_keys(),
             receiver: investor1_acct.public_keys(),
-            asset_id,
+            asset,
             amount: 500,
-            mediator: asset_auditor,
         })
         .encryt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
@@ -815,7 +806,7 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
 
     // The issuer tries to affirm the settlement as the receiver, which should fail.
     let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
-    let sk_e = issuer_acct.decrypt_sk_e(&chain, &leg_ref, LegRole::Sender)?;
+    let leg_enc_rand = issuer_acct.decrypt_leg_randomness(&chain, &leg_ref, LegRole::Sender)?;
 
     // Get the issuer's account state for the asset.
     let mut asset_state = issuer_acct.get_account_asset_state(asset_id)?;
@@ -823,8 +814,8 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
     let proof = ReceiverAffirmationProof::new(
         &mut rng,
         &leg_ref,
-        sk_e,
         &leg_enc,
+        &leg_enc_rand,
         &mut asset_state,
         account_tree.prover_account_tree(),
     )?;

@@ -98,8 +98,14 @@ impl DartUserAccountInner {
                 asset_id
             ));
         }
-        let (proof, mut asset_state) =
-            AccountAssetRegistrationProof::new(rng, &self.keys, asset_id, self.address.ctx())?;
+        let (proof, mut asset_state) = AccountAssetRegistrationProof::new(
+            rng,
+            &self.keys,
+            asset_id,
+            0,
+            self.address.ctx(),
+            chain.account_tree.params(),
+        )?;
         chain.initialize_account_asset(&self.address, proof)?;
         asset_state.commit_pending_state()?;
         self.assets.insert(asset_id, asset_state);
@@ -135,7 +141,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
         let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
@@ -165,8 +171,8 @@ impl DartUserAccountInner {
             rng,
             leg_ref,
             amount,
-            sk_e,
             &leg_enc,
+            &leg_enc_rand,
             asset_state,
             account_tree,
         )?;
@@ -187,7 +193,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc)?;
+        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Receiver, &self.keys.enc)?;
         let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
@@ -213,8 +219,14 @@ impl DartUserAccountInner {
 
         // Create the receiver affirmation proof.
         log::info!("Receiver generate affirmation proof");
-        let proof =
-            ReceiverAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree)?;
+        let proof = ReceiverAffirmationProof::new(
+            rng,
+            leg_ref,
+            &leg_enc,
+            &leg_enc_rand,
+            asset_state,
+            account_tree,
+        )?;
         log::info!("Receiver affirms");
         chain.receiver_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state()?;
@@ -230,14 +242,20 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Mediator decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Mediator, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Mediator, &self.keys.enc)?;
+        let leg = leg_enc.decrypt(LegRole::Mediator(0), &self.keys.enc)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
         // Create the mediator affirmation proof.
         log::info!("Mediator generate affirmation proof");
-        let proof =
-            MediatorAffirmationProof::new(rng, leg_ref, sk_e, &leg_enc, &self.keys.acct, accept)?;
+        let proof = MediatorAffirmationProof::new(
+            rng,
+            leg_ref,
+            leg.asset_id,
+            &leg_enc,
+            &self.keys.enc,
+            0,
+            accept,
+        )?;
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())
@@ -256,17 +274,16 @@ impl DartUserAccountInner {
         Ok(leg)
     }
 
-    pub fn decrypt_sk_e(
+    pub fn decrypt_leg_randomness(
         &self,
         chain: &DartChainState,
         leg_ref: &LegRef,
         role: LegRole,
-    ) -> Result<EncryptionSecretKey> {
-        log::info!("Decrypting sk_e for role: {:?}", role);
+    ) -> Result<LegEncryptionRandomness> {
+        log::info!("Decrypting leg randomness for role: {:?}", role);
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(role, &self.keys.enc)?;
-        log::info!("Decrypted sk_e: {:?}", sk_e);
-        Ok(sk_e)
+        let leg_enc_rand = leg_enc.get_encryption_randomness(role, &self.keys.enc)?;
+        Ok(leg_enc_rand)
     }
 
     pub fn receiver_claims<R: RngCore + CryptoRng>(
@@ -278,7 +295,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg for claim");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Receiver, &self.keys.enc)?;
+        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Receiver, &self.keys.enc)?;
         let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
@@ -295,8 +312,8 @@ impl DartUserAccountInner {
             rng,
             leg_ref,
             amount,
-            sk_e,
             &leg_enc,
+            &leg_enc_rand,
             asset_state,
             account_tree,
         )?;
@@ -314,7 +331,7 @@ impl DartUserAccountInner {
         leg_ref: &LegRef,
     ) -> Result<()> {
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
         let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
 
@@ -326,8 +343,14 @@ impl DartUserAccountInner {
 
         // Create the sender counter update proof.
         log::info!("Sender generate counter update proof");
-        let proof =
-            SenderCounterUpdateProof::new(rng, leg_ref, sk_e, &leg_enc, asset_state, account_tree)?;
+        let proof = SenderCounterUpdateProof::new(
+            rng,
+            leg_ref,
+            &leg_enc,
+            &leg_enc_rand,
+            asset_state,
+            account_tree,
+        )?;
         log::info!("Sender updates counter");
         chain.sender_counter_update(&self.address, proof)?;
         asset_state.commit_pending_state()?;
@@ -343,7 +366,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg for reversal");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let sk_e = leg_enc.decrypt_sk_e(LegRole::Sender, &self.keys.enc)?;
+        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
         let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
@@ -360,8 +383,8 @@ impl DartUserAccountInner {
             rng,
             leg_ref,
             amount,
-            sk_e,
             &leg_enc,
+            &leg_enc_rand,
             asset_state,
             account_tree,
         )?;
@@ -490,13 +513,16 @@ impl DartUserAccount {
         self.0.read().unwrap().decrypt_leg(chain, leg_ref, role)
     }
 
-    pub fn decrypt_sk_e(
+    pub fn decrypt_leg_randomness(
         &self,
         chain: &DartChainState,
         leg_ref: &LegRef,
         role: LegRole,
-    ) -> Result<EncryptionSecretKey> {
-        self.0.read().unwrap().decrypt_sk_e(chain, leg_ref, role)
+    ) -> Result<LegEncryptionRandomness> {
+        self.0
+            .read()
+            .unwrap()
+            .decrypt_leg_randomness(chain, leg_ref, role)
     }
 
     pub fn receiver_claims<R: RngCore + CryptoRng>(
@@ -555,10 +581,11 @@ impl DartUser {
     pub fn create_asset(
         &self,
         chain: &mut DartChainState,
-        auditor: AuditorOrMediator,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
     ) -> Result<AssetId> {
         chain
-            .create_dart_asset(&self.address, auditor)
+            .create_dart_asset(&self.address, auditors, mediators)
             .map(|details| details.asset_id)
     }
 
@@ -593,29 +620,28 @@ pub struct DartAssetDetails {
     pub asset_id: AssetId,
     pub owner: SignerAddress,
     pub total_supply: Balance,
-    pub auditor: AuditorOrMediator,
+    pub auditors: Vec<EncryptionPublicKey>,
+    pub mediators: Vec<EncryptionPublicKey>,
 }
 
 impl DartAssetDetails {
-    pub fn new(asset_id: AssetId, owner: SignerAddress, auditor: AuditorOrMediator) -> Self {
+    pub fn new(
+        asset_id: AssetId,
+        owner: SignerAddress,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
+    ) -> Self {
         Self {
             asset_id,
             owner,
             total_supply: 0,
-            auditor,
+            auditors: auditors.into(),
+            mediators: mediators.into(),
         }
     }
 
     pub fn asset_state(&self) -> AssetState {
-        let (is_mediator, pk) = match &self.auditor {
-            AuditorOrMediator::Auditor(pk) => (false, pk.clone()),
-            AuditorOrMediator::Mediator(pk) => {
-                // HACK: Shouldn't we be using the mediator's encryption key here?
-                (true, pk.acct.into())
-                //(true, pk.enc.clone())
-            }
-        };
-        AssetState::new(self.asset_id, is_mediator, pk)
+        AssetState::new(self.asset_id, &self.auditors, &self.mediators)
     }
 }
 
@@ -1333,14 +1359,15 @@ impl DartChainState {
     pub fn create_dart_asset(
         &mut self,
         caller: &SignerAddress,
-        auditor: AuditorOrMediator,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
     ) -> Result<DartAssetDetails> {
         self.ensure_caller(caller)?;
 
         let asset_id = self.next_asset_id;
         self.next_asset_id += 1;
 
-        let asset_details = DartAssetDetails::new(asset_id, caller.clone(), auditor);
+        let asset_details = DartAssetDetails::new(asset_id, caller.clone(), auditors, mediators);
         let asset_state = asset_details.asset_state();
 
         self.asset_tree.set_asset_state(asset_state)?;
@@ -1349,6 +1376,13 @@ impl DartChainState {
         self.asset_tree.store_root()?;
 
         Ok(asset_details)
+    }
+
+    pub fn get_asset_state(&self, asset_id: AssetId) -> Result<AssetState> {
+        self.ensure_asset_exists(asset_id)?;
+        self.asset_tree
+            .get_asset_state(asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} does not exist in the asset tree", asset_id))
     }
 
     pub fn ensure_asset_exists(&self, asset_id: AssetId) -> Result<&DartAssetDetails> {
@@ -1415,12 +1449,15 @@ impl DartChainState {
         }
 
         // Verify the proof for the account and asset.
-        proof.verify(caller.ctx()).with_context(|| {
-            format!(
-                "Invalid proof for account {:?} and asset ID {}",
-                proof.account, proof.asset_id
-            )
-        })?;
+        let mut rng = rand::thread_rng();
+        proof
+            .verify(caller.ctx(), 0, self.account_tree.params(), &mut rng)
+            .with_context(|| {
+                format!(
+                    "Invalid proof for account {:?} and asset ID {}",
+                    proof.account, proof.asset_id
+                )
+            })?;
 
         // Add the account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment)?;

@@ -9,7 +9,7 @@ use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
 use scale_info::TypeInfo;
 
-use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
+use ark_ec::{AffineRepr, CurveConfig};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{format, string::String, vec::Vec};
 use blake2::{Blake2b512, Blake2s256};
@@ -19,8 +19,15 @@ use bounded_collections::{BoundedVec, ConstU32, Get};
 
 use digest::Digest;
 use dock_crypto_utils::commitment::PedersenCommitmentKey;
-use polymesh_dart_bp::{account as bp_account, keys as bp_keys, leg as bp_leg};
-use polymesh_dart_common::{LegId, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS, SettlementId};
+use polymesh_dart_bp::{
+    account as bp_account, account_registration, keys as bp_keys, leg as bp_leg,
+};
+use polymesh_dart_common::{
+    LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    SettlementId,
+};
+
+use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
 
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
@@ -34,11 +41,19 @@ pub trait DartLimits: Clone + core::fmt::Debug {
 
     /// The maximum settlement memo length.
     type MaxSettlementMemoLength: Get<u32> + Clone + core::fmt::Debug;
+
+    /// The maximum number of asset auditors.
+    type MaxAssetAuditors: Get<u32> + Clone + core::fmt::Debug;
+
+    /// The maximum number of asset mediators.
+    type MaxAssetMediators: Get<u32> + Clone + core::fmt::Debug;
 }
 
 impl DartLimits for () {
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
+    type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
+    type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
 }
 
 pub type LeafIndex = u64;
@@ -52,9 +67,14 @@ pub type PallasParameters = ark_pallas::PallasConfig;
 pub type VestaParameters = ark_vesta::VestaConfig;
 pub type PallasA = ark_pallas::Affine;
 pub type PallasScalar = <PallasA as AffineRepr>::ScalarField;
+pub type VestaA = ark_vesta::Affine;
+pub type VestaScalar = <VestaA as AffineRepr>::ScalarField;
 
 type BPAccountState = bp_account::AccountState<PallasA>;
 type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
+
+pub type AssetCommitmentData =
+    bp_leg::AssetData<PallasScalar, VestaScalar, PallasParameters, VestaParameters>;
 
 /// Constants that are hashed to generate the generators for the Dart BP protocol.
 pub const DART_GEN_DOMAIN: &'static [u8] = b"polymesh-dart-generators";
@@ -62,9 +82,13 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
+pub const DART_GEN_POSEIDON2: &'static [u8] = b"polymesh-dart-poseidon2";
+
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
+
+    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new(DART_GEN_POSEIDON2).expect("Failed to create Poseidon parameters");
 }
 
 #[cfg(feature = "std")]
@@ -86,6 +110,43 @@ pub fn dart_gens() -> &'static DartBPGenerators {
     }
 }
 
+#[cfg(feature = "std")]
+pub fn poseidon_params() -> &'static PoseidonParameters {
+    &POSEIDON_PARAMS
+}
+
+#[cfg(not(feature = "std"))]
+static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn poseidon_params() -> &'static PoseidonParameters {
+    unsafe {
+        if POSEIDON_PARAMS.is_none() {
+            POSEIDON_PARAMS = Some(
+                PoseidonParameters::new(DART_GEN_POSEIDON2)
+                    .expect("Failed to create Poseidon parameters"),
+            );
+        }
+        POSEIDON_PARAMS.as_ref().unwrap()
+    }
+}
+
+pub struct PoseidonParameters {
+    pub params: Poseidon2Params<PallasScalar>,
+}
+
+impl PoseidonParameters {
+    pub fn new(label: &[u8]) -> Result<Self, Error> {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(label).into());
+        let full_rounds = 8;
+        let partial_rounds = 56;
+        Ok(Self {
+            params: Poseidon2Params::new_with_randoms(&mut rng, 3, 5, full_rounds, partial_rounds)?,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
 pub struct AccountCommitmentKey {
     #[codec(encoded_as = "CompressedAffine")]
@@ -98,6 +159,8 @@ pub struct AccountCommitmentKey {
     pub asset_id_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     pub rho_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub current_rho_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     pub randomness_gen: PallasA,
 }
@@ -123,6 +186,10 @@ impl AccountCommitmentKey {
             label,
             b" : rho_gen"
         ]);
+        let current_rho_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : rho_gen"
+        ]);
         let randomness_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
             label,
             b" : randomness_gen"
@@ -134,6 +201,7 @@ impl AccountCommitmentKey {
             counter_gen,
             asset_id_gen,
             rho_gen,
+            current_rho_gen,
             randomness_gen,
         }
     }
@@ -158,6 +226,10 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
 
     fn rho_gen(&self) -> PallasA {
         self.rho_gen
+    }
+
+    fn current_rho_gen(&self) -> PallasA {
+        self.current_rho_gen
     }
 
     fn randomness_gen(&self) -> PallasA {
@@ -218,17 +290,20 @@ impl DartBPGenerators {
             label,
             b" : sig_gen"
         ]);
-        // HACK: The sender affirmation fails if this isn't the same.
-        //let pk_enc_g = PallasA::rand(&mut rng);
-        let enc_gen = sig_gen;
+        let enc_gen = affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+            label,
+            b" : enc_gen"
+        ]);
 
         let account_comm_key = AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY);
 
         let asset_comm_key = AssetCommitmentKey::new::<Blake2b512>(DART_GEN_ASSET_KEY);
 
-        // HACK: The sender affirmation fails if this isn't the same.
-        //let leg_g = PallasA::rand(&mut rng);
-        let enc_sig_gen = enc_gen;
+        let enc_sig_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+                label,
+                b" : enc_sig_gen"
+            ]);
         let leg_asset_value_gen =
             affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
                 label,
@@ -263,7 +338,7 @@ impl DartBPGenerators {
         ]
     }
 
-    pub fn sig_gen(&self) -> PallasA {
+    pub fn sig_key_gen(&self) -> PallasA {
         self.sig_gen
     }
 
@@ -271,7 +346,7 @@ impl DartBPGenerators {
         self.enc_gen
     }
 
-    pub fn enc_sig_gen(&self) -> PallasA {
+    pub fn enc_key_gen(&self) -> PallasA {
         self.enc_sig_gen
     }
 
@@ -398,7 +473,7 @@ pub struct EncryptionKeyPair {
 impl EncryptionKeyPair {
     /// Generates a new set of encryption keys using the provided RNG.
     pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
-        let (enc, enc_pk) = bp_keys::keygen_enc(rng, dart_gens().enc_gen());
+        let (enc, enc_pk) = bp_keys::keygen_enc(rng, dart_gens().enc_key_gen());
         Ok(Self {
             public: EncryptionPublicKey::from_bp_key(enc_pk)?,
             secret: EncryptionSecretKey(enc),
@@ -439,7 +514,7 @@ pub struct AccountKeyPair {
 impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
     pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
-        let (account, account_pk) = bp_keys::keygen_sig(rng, dart_gens().sig_gen());
+        let (account, account_pk) = bp_keys::keygen_sig(rng, dart_gens().sig_key_gen());
         Ok(Self {
             public: AccountPublicKey::from_bp_key(account_pk)?,
             secret: AccountSecretKey(account),
@@ -450,12 +525,17 @@ impl AccountKeyPair {
         &self,
         rng: &mut R,
         asset_id: AssetId,
+        counter: u16,
     ) -> Result<AccountState, Error> {
-        Ok(AccountState(BPAccountState::new(
+        let params = poseidon_params();
+        let state = BPAccountState::new(
             rng,
             self.secret.0.0,
             asset_id,
-        )?))
+            counter,
+            params.params.clone(),
+        )?;
+        Ok(AccountState(state))
     }
 }
 
@@ -491,8 +571,9 @@ impl AccountKeys {
         &self,
         rng: &mut R,
         asset_id: AssetId,
+        counter: u16,
     ) -> Result<AccountAssetState, Error> {
-        AccountAssetState::new(rng, self, asset_id)
+        AccountAssetState::new(rng, self, asset_id, counter)
     }
 
     /// Returns the public keys for the account.
@@ -562,8 +643,9 @@ impl AccountAssetState {
         rng: &mut R,
         account: &AccountKeys,
         asset_id: AssetId,
+        counter: u16,
     ) -> Result<Self, Error> {
-        let current_state = account.acct.account_state(rng, asset_id)?;
+        let current_state = account.acct.account_state(rng, asset_id, counter)?;
         let current_state_commitment = current_state.commitment()?;
         Ok(Self {
             account: *account,
@@ -575,71 +657,48 @@ impl AccountAssetState {
         })
     }
 
-    pub fn mint<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        amount: Balance,
-    ) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_mint(rng, amount)?);
+    pub fn mint(&mut self, amount: Balance) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_mint(amount)?);
         self._set_pending_state(state.clone());
         Ok(state)
     }
 
-    pub fn get_sender_affirm_state<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        amount: Balance,
-    ) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_send(rng, amount)?);
+    pub fn get_sender_affirm_state(&mut self, amount: Balance) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_send(amount)?);
         self._set_pending_state(state.clone());
         Ok(state)
     }
 
-    pub fn get_receiver_affirm_state<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_receive(rng));
+    pub fn get_receiver_affirm_state(&mut self) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_receive());
         self._set_pending_state(state.clone());
         Ok(state)
     }
 
-    pub fn get_state_for_claiming_received<R: RngCore + CryptoRng>(
+    pub fn get_state_for_claiming_received(
         &mut self,
-        rng: &mut R,
         amount: Balance,
     ) -> Result<AccountState, Error> {
         let state = AccountState(
             self.current_state
                 .0
-                .get_state_for_claiming_received(rng, amount)?,
+                .get_state_for_claiming_received(amount)?,
         );
         self._set_pending_state(state.clone());
         Ok(state)
     }
 
-    pub fn get_state_for_reversing_send<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        amount: Balance,
-    ) -> Result<AccountState, Error> {
-        let state = AccountState(
-            self.current_state
-                .0
-                .get_state_for_reversing_send(rng, amount)?,
-        );
+    pub fn get_state_for_reversing_send(&mut self, amount: Balance) -> Result<AccountState, Error> {
+        let state = AccountState(self.current_state.0.get_state_for_reversing_send(amount)?);
         self._set_pending_state(state.clone());
         Ok(state)
     }
 
-    pub fn get_state_for_decreasing_counter<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<AccountState, Error> {
+    pub fn get_state_for_decreasing_counter(&mut self) -> Result<AccountState, Error> {
         let state = AccountState(
             self.current_state
                 .0
-                .get_state_for_decreasing_counter(rng, None)?,
+                .get_state_for_decreasing_counter(None)?,
         );
         self._set_pending_state(state.clone());
         Ok(state)
@@ -666,59 +725,45 @@ impl AccountAssetState {
 #[derive(Clone, Debug, Encode, Decode, TypeInfo)]
 pub struct AssetState {
     asset_id: AssetId,
-    is_mediator: bool,
-    pk: EncryptionPublicKey,
+    auditors: Vec<EncryptionPublicKey>,
+    mediators: Vec<EncryptionPublicKey>,
 }
 
 impl AssetState {
     /// Creates a new asset state with the given asset ID, mediator status, and public key.
-    pub fn new(asset_id: AssetId, is_mediator: bool, pk: EncryptionPublicKey) -> Self {
+    pub fn new(
+        asset_id: AssetId,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
+    ) -> Self {
         Self {
             asset_id,
-            is_mediator,
-            pk,
+            auditors: auditors.into(),
+            mediators: mediators.into(),
         }
     }
 
-    /// Changes the auditor or mediator for the asset.
-    pub fn change_auditor(&mut self, is_mediator: bool, pk: EncryptionPublicKey) {
-        self.is_mediator = is_mediator;
-        self.pk = pk;
+    pub fn keys(&self) -> Vec<(bool, PallasA)> {
+        let mut keys = Vec::with_capacity(self.auditors.len() + self.mediators.len());
+        for auditor in &self.auditors {
+            keys.push((true, auditor.get_affine().unwrap()));
+        }
+        for mediator in &self.mediators {
+            keys.push((false, mediator.get_affine().unwrap()));
+        }
+        keys
     }
 
-    /// Given commitment key `leaf_comm_key`, the leaf is `leaf_comm_key[0] * role + leaf_comm_key[1] * asset_id + pk`
-    /// where `role` equals 1 if `pk` is the public key of mediator else its 0.A
-    pub fn commitment(&self) -> Result<AssetStateCommitment, Error> {
-        let leaf_comm_key = dart_gens().asset_comm_g();
-        let comm = if self.is_mediator {
-            leaf_comm_key[0]
-        } else {
-            <PallasA as AffineRepr>::zero()
-        };
-        AssetStateCommitment::from_affine(
-            (comm
-                + (leaf_comm_key[1] * PallasScalar::from(self.asset_id))
-                + self.pk.get_affine()?)
-            .into_affine(),
-        )
-    }
-}
-
-/// Represents the commitment of an asset state in the Dart BP protocol.
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
-pub struct AssetStateCommitment(CompressedAffine);
-
-impl AssetStateCommitment {
-    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
-        Ok(Self(CompressedAffine::try_from(affine)?))
-    }
-
-    pub fn get_affine(&self) -> Result<PallasA, Error> {
-        Ok(PallasA::try_from(&self.0)?)
-    }
-
-    pub fn as_leaf_value(&self) -> Result<LeafValue<PallasParameters>, Error> {
-        Ok(LeafValue(self.get_affine()?))
+    pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
+        let tree_params = get_asset_curve_tree_parameters();
+        let asset_comm_params = get_asset_commitment_parameters();
+        let asset_data = AssetCommitmentData::new(
+            self.asset_id,
+            self.keys(),
+            asset_comm_params,
+            tree_params.odd_parameters.delta,
+        )?;
+        Ok(asset_data)
     }
 }
 
@@ -748,7 +793,8 @@ impl AssetCurveTree {
     pub fn set_asset_state(&mut self, state: AssetState) -> Result<LeafIndex, Error> {
         let asset_id = state.asset_id;
         // Get the new asset state commitment.
-        let leaf = state.commitment()?;
+        let asset_data = state.asset_data()?;
+        let leaf = asset_data.commitment;
 
         // Update or insert the asset state.
         use std::collections::hash_map::Entry;
@@ -758,12 +804,12 @@ impl AssetCurveTree {
                 *existing_state = state;
                 let index = *index;
                 // Update the leaf in the curve tree.
-                self.tree.update(leaf.as_leaf_value()?, index)?;
+                self.tree.update(leaf.into(), index)?;
 
                 Ok(index)
             }
             Entry::Vacant(entry) => {
-                let index = self.tree.insert(leaf.as_leaf_value()?)?;
+                let index = self.tree.insert(leaf.into())?;
                 entry.insert((index, state));
 
                 Ok(index)
@@ -821,7 +867,7 @@ pub struct AccountAssetRegistrationProof {
     pub account_state_commitment: AccountStateCommitment,
     pub asset_id: AssetId,
 
-    proof: WrappedCanonical<bp_account::RegTxnProof<PallasA>>,
+    proof: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
 
 impl AccountAssetRegistrationProof {
@@ -830,18 +876,26 @@ impl AccountAssetRegistrationProof {
         rng: &mut R,
         account: &AccountKeys,
         asset_id: AssetId,
+        counter: u16,
         ctx: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
-        let account_state = account.init_asset_state(rng, asset_id)?;
+        let account_state = account.init_asset_state(rng, asset_id, counter)?;
         let account_state_commitment = account_state.current_state_commitment;
-        let proof = bp_account::RegTxnProof::new(
+        let params = poseidon_params();
+        let gens = dart_gens();
+        let proof = account_registration::RegTxnProof::new(
             rng,
             account.acct.public.get_affine()?,
             &account_state.current_state.0,
             account_state_commitment.as_commitment()?,
+            counter,
             ctx,
-            dart_gens().account_comm_key(),
-            dart_gens().sig_gen(),
+            gens.account_comm_key(),
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            &params.params,
+            None,
         )?;
         Ok((
             Self {
@@ -855,15 +909,27 @@ impl AccountAssetRegistrationProof {
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
-    pub fn verify(&self, ctx: &[u8]) -> Result<(), Error> {
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        counter: u16,
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         let proof = self.proof.decode()?;
+        let params = poseidon_params();
         proof.verify(
+            rng,
             &self.account.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
+            counter,
             ctx,
             dart_gens().account_comm_key(),
-            dart_gens().sig_gen(),
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            &params.params,
+            None,
         )?;
         Ok(())
     }
@@ -924,7 +990,7 @@ impl<
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
-        let mint_account_state = account_asset.mint(rng, amount)?;
+        let mint_account_state = account_asset.mint(amount)?;
         let mint_account_commitment = mint_account_state.commitment()?;
 
         let pk = account_asset.account.acct.public;
@@ -933,6 +999,8 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
@@ -942,7 +1010,7 @@ impl<
             &mint_account_state.0,
             mint_account_commitment.as_commitment()?,
             current_account_path,
-            &tree_lookup.root_node()?,
+            &root,
             b"",
             tree_lookup.params(),
             dart_gens().account_comm_key(),
@@ -973,7 +1041,7 @@ impl<
             })?;
         let root = root.decode()?;
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
             self.pk.get_affine()?,
             self.asset_id,
             self.amount,
@@ -983,7 +1051,6 @@ impl<
             b"",
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().sig_gen(),
             rng,
         )?;
         Ok(())
@@ -1003,12 +1070,12 @@ impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
 /// Represents the auditor or mediator in a leg of the Dart BP protocol.
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub enum AuditorOrMediator {
-    Mediator(AccountPublicKeys),
+    Mediator(EncryptionPublicKey),
     Auditor(EncryptionPublicKey),
 }
 
 impl AuditorOrMediator {
-    pub fn mediator(pk: &AccountPublicKeys) -> Self {
+    pub fn mediator(pk: &EncryptionPublicKey) -> Self {
         Self::Mediator(*pk)
     }
 
@@ -1016,16 +1083,10 @@ impl AuditorOrMediator {
         Self::Auditor(*pk)
     }
 
-    pub fn get_keys(
-        &self,
-    ) -> (
-        EncryptionPublicKey,
-        Option<AccountPublicKey>,
-        Option<EncryptionPublicKey>,
-    ) {
+    pub fn get_keys(&self) -> Vec<(bool, PallasA)> {
         match self {
-            AuditorOrMediator::Mediator(pk) => (pk.enc, Some(pk.acct), None),
-            AuditorOrMediator::Auditor(pk) => (*pk, None, Some(*pk)),
+            AuditorOrMediator::Mediator(pk) => vec![(true, pk.get_affine().unwrap())],
+            AuditorOrMediator::Auditor(pk) => vec![(false, pk.get_affine().unwrap())],
         }
     }
 }
@@ -1081,74 +1142,86 @@ impl LegRef {
 pub enum LegRole {
     Sender,
     Receiver,
-    Auditor,
-    Mediator,
+    Auditor(u8),
+    Mediator(u8),
+}
+
+impl LegRole {
+    pub fn is_sender_or_receiver(&self) -> bool {
+        matches!(self, LegRole::Sender | LegRole::Receiver)
+    }
+
+    pub fn is_sender(&self) -> bool {
+        matches!(self, LegRole::Sender)
+    }
 }
 
 /// The decrypted leg details in the Dart BP protocol.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Leg(bp_leg::Leg<PallasA>);
+pub struct Leg {
+    pub sender: AccountPublicKey,
+    pub receiver: AccountPublicKey,
+    pub asset_id: AssetId,
+    pub amount: Balance,
+}
 
 impl Leg {
     pub fn new(
         sender: AccountPublicKey,
         receiver: AccountPublicKey,
-        mediator: Option<AccountPublicKey>,
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<Self, Error> {
-        let leg = bp_leg::Leg::new(
-            sender.get_affine()?,
-            receiver.get_affine()?,
-            mediator.map(|m| m.get_affine()).transpose()?,
-            amount,
+        Ok(Self {
+            sender,
+            receiver,
             asset_id,
-        )?;
-        Ok(Self(leg))
+            amount,
+        })
     }
 
     pub fn encrypt<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
-        ephemeral_key: EphemeralSkEncryption,
-        pk_e: &EncryptionPublicKey,
-    ) -> Result<(LegEncrypted, LegEncryptionRandomness), Error> {
-        let (leg_enc, leg_enc_rand) = self.0.encrypt(
+        sender: EncryptionPublicKey,
+        receiver: EncryptionPublicKey,
+        asset_keys: &[(bool, PallasA)],
+    ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
+        let leg = bp_leg::Leg::new(
+            self.sender.get_affine()?,
+            self.receiver.get_affine()?,
+            asset_keys.into_iter().map(|(_, pk)| *pk).collect(),
+            self.amount,
+            self.asset_id,
+        )?;
+        let (leg_enc, leg_enc_rand) = leg.encrypt::<_, Blake2b512>(
             rng,
-            &pk_e.get_affine()?,
-            dart_gens().enc_sig_gen(),
+            sender.get_affine()?,
+            receiver.get_affine()?,
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-        );
+        )?;
         Ok((
-            LegEncrypted {
-                leg_enc,
-                ephemeral_key,
-            },
+            leg,
+            LegEncrypted { leg_enc },
             LegEncryptionRandomness(leg_enc_rand),
         ))
     }
 
     pub fn sender(&self) -> Result<AccountPublicKey, Error> {
-        AccountPublicKey::from_affine(self.0.pk_s)
+        Ok(self.sender)
     }
 
     pub fn receiver(&self) -> Result<AccountPublicKey, Error> {
-        AccountPublicKey::from_affine(self.0.pk_r)
-    }
-
-    pub fn mediator(&self) -> Result<Option<AccountPublicKey>, Error> {
-        self.0
-            .pk_m
-            .map(|m| AccountPublicKey::from_affine(m))
-            .transpose()
+        Ok(self.receiver)
     }
 
     pub fn asset_id(&self) -> AssetId {
-        self.0.asset_id
+        self.asset_id
     }
 
     pub fn amount(&self) -> Balance {
-        self.0.amount
+        self.amount
     }
 }
 
@@ -1156,9 +1229,8 @@ impl Leg {
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
     pub receiver: AccountPublicKeys,
-    pub asset_id: AssetId,
+    pub asset: AssetState,
     pub amount: Balance,
-    pub mediator: AuditorOrMediator,
 }
 
 impl LegBuilder {
@@ -1166,26 +1238,24 @@ impl LegBuilder {
     pub fn new(
         sender: AccountPublicKeys,
         receiver: AccountPublicKeys,
-        asset_id: AssetId,
+        asset: AssetState,
         amount: Balance,
-        mediator: AuditorOrMediator,
     ) -> Self {
         Self {
             sender,
             receiver,
-            asset_id,
+            asset,
             amount,
-            mediator,
         }
     }
 
     pub fn encryt_and_prove<
         R: RngCore + CryptoRng,
         C: CurveTreeConfig<
-                F0 = <PallasParameters as CurveConfig>::ScalarField,
-                F1 = <VestaParameters as CurveConfig>::ScalarField,
-                P0 = PallasParameters,
-                P1 = VestaParameters,
+                F0 = <VestaParameters as CurveConfig>::ScalarField,
+                F1 = <PallasParameters as CurveConfig>::ScalarField,
+                P0 = VestaParameters,
+                P1 = PallasParameters,
             >,
     >(
         self,
@@ -1193,26 +1263,23 @@ impl LegBuilder {
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<SettlementLegProof<C>, Error> {
-        let (mediator_enc, mediator_acct, auditor_enc) = self.mediator.get_keys();
+        let asset_data = self.asset.asset_data()?;
+
         let leg = Leg::new(
             self.sender.acct,
             self.receiver.acct,
-            mediator_acct,
-            self.asset_id,
+            self.asset.asset_id,
             self.amount,
         )?;
-        let (ephemeral_key, eph_rand, pk_e) =
-            EphemeralSkEncryption::new(rng, self.sender.enc, self.receiver.enc, mediator_enc)?;
-        let (leg_enc, leg_enc_rand) = leg.encrypt(rng, ephemeral_key, &pk_e)?;
+        let (leg, leg_enc, leg_enc_rand) =
+            leg.encrypt(rng, self.sender.enc, self.receiver.enc, &asset_data.keys)?;
 
         let leg_proof = SettlementLegProof::new(
             rng,
             leg,
             leg_enc,
             &leg_enc_rand,
-            eph_rand,
-            pk_e,
-            auditor_enc,
+            asset_data,
             ctx,
             asset_tree,
         )?;
@@ -1244,10 +1311,10 @@ impl<T: DartLimits> SettlementBuilder<T> {
     pub fn encryt_and_prove<
         R: RngCore + CryptoRng,
         C: CurveTreeConfig<
-                F0 = <PallasParameters as CurveConfig>::ScalarField,
-                F1 = <VestaParameters as CurveConfig>::ScalarField,
-                P0 = PallasParameters,
-                P1 = VestaParameters,
+                F0 = <VestaParameters as CurveConfig>::ScalarField,
+                F1 = <PallasParameters as CurveConfig>::ScalarField,
+                P0 = VestaParameters,
+                P1 = PallasParameters,
             >,
     >(
         self,
@@ -1296,10 +1363,10 @@ impl<T: DartLimits, C: CurveTreeConfig> Eq for SettlementProof<T, C> {}
 impl<
     T: DartLimits,
     C: CurveTreeConfig<
-            F0 = <PallasParameters as CurveConfig>::ScalarField,
-            F1 = <VestaParameters as CurveConfig>::ScalarField,
-            P0 = PallasParameters,
-            P1 = VestaParameters,
+            F0 = <VestaParameters as CurveConfig>::ScalarField,
+            F1 = <PallasParameters as CurveConfig>::ScalarField,
+            P0 = VestaParameters,
+            P1 = PallasParameters,
         >,
 > SettlementProof<T, C>
 {
@@ -1341,7 +1408,7 @@ impl<
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     leg_enc: WrappedCanonical<LegEncrypted>,
 
-    proof: WrappedCanonical<bp_leg::SettlementTxnProof<ASSET_TREE_L, C::F0, C::F1, C::P0, C::P1>>,
+    proof: WrappedCanonical<bp_leg::SettlementTxnProof<ASSET_TREE_L, C::F1, C::F0, C::P1, C::P0>>,
 }
 
 impl<C: CurveTreeConfig> core::fmt::Debug for SettlementLegProof<C> {
@@ -1355,42 +1422,37 @@ impl<C: CurveTreeConfig> core::fmt::Debug for SettlementLegProof<C> {
 
 impl<
     C: CurveTreeConfig<
-            F0 = <PallasParameters as CurveConfig>::ScalarField,
-            F1 = <VestaParameters as CurveConfig>::ScalarField,
-            P0 = PallasParameters,
-            P1 = VestaParameters,
+            F0 = <VestaParameters as CurveConfig>::ScalarField,
+            F1 = <PallasParameters as CurveConfig>::ScalarField,
+            P0 = VestaParameters,
+            P1 = PallasParameters,
         >,
 > SettlementLegProof<C>
 {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        leg: Leg,
+        leg: bp_leg::Leg<PallasA>,
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
-        eph_rand: PallasScalar,
-        pk_e: EncryptionPublicKey,
-        auditor_enc: Option<EncryptionPublicKey>,
+        asset_data: AssetCommitmentData,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id() as LeafIndex)?;
+        let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id as LeafIndex)?;
+        let asset_comm_params = get_asset_commitment_parameters();
 
         let proof = bp_leg::SettlementTxnProof::new(
             rng,
-            leg.0,
+            leg,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            leg_enc.ephemeral_key.enc.clone(),
-            eph_rand,
-            pk_e.get_affine()?,
-            auditor_enc.map(|m| m.get_affine()).transpose()?,
             asset_path,
+            asset_data,
             ctx,
             asset_tree.params(),
-            &dart_gens().asset_comm_g(),
-            dart_gens().enc_sig_gen(),
+            asset_comm_params,
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            &dart_gens().ped_comm_key(),
         )?;
 
         Ok(Self {
@@ -1406,7 +1468,7 @@ impl<
 
     pub fn has_mediator(&self) -> Result<bool, Error> {
         let leg_enc = self.leg_enc.decode()?;
-        Ok(leg_enc.leg_enc.ct_m.is_some())
+        Ok(leg_enc.leg_enc.eph_pk_auds_meds.len() > 0)
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -1416,22 +1478,19 @@ impl<
         params: &CurveTreeParameters<C>,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
-        let pk_e = leg_enc.ephemeral_key.pk_e;
         log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
-            leg_enc.ephemeral_key.enc.clone(),
-            pk_e.get_affine()?,
             &root,
             ctx,
             params,
-            &dart_gens().asset_comm_g(),
-            dart_gens().enc_sig_gen(),
+            asset_comm_params,
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            &dart_gens().ped_comm_key(),
-            rng,
         )?;
         Ok(())
     }
@@ -1566,81 +1625,56 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     }
 }
 
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct EphemeralSkEncryption {
-    pub(crate) enc: bp_leg::EphemeralSkEncryption<PallasA>,
-    pub(crate) pk_e: EncryptionPublicKey,
-}
-
-impl EphemeralSkEncryption {
-    pub(crate) fn new<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        sender: EncryptionPublicKey,
-        receiver: EncryptionPublicKey,
-        mediator: EncryptionPublicKey,
-    ) -> Result<(Self, PallasScalar, EncryptionPublicKey), Error> {
-        let (ephemeral_key, eph_key_rand, _sk_e, pk_e) =
-            bp_leg::EphemeralSkEncryption::new::<_, Blake2b512>(
-                rng,
-                sender.get_affine()?,
-                receiver.get_affine()?,
-                mediator.get_affine()?,
-                dart_gens().enc_sig_gen(),
-                dart_gens().leg_asset_value_gen(),
-            )?;
-        let pk_e = EncryptionPublicKey::from_bp_key(pk_e)?;
-        Ok((
-            Self {
-                enc: ephemeral_key,
-                pk_e,
-            },
-            eph_key_rand,
-            pk_e,
-        ))
-    }
-}
-
-pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasA>);
+pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasScalar>);
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct LegEncrypted {
     pub(crate) leg_enc: bp_leg::LegEncryption<PallasA>,
-    pub(crate) ephemeral_key: EphemeralSkEncryption,
 }
 
 impl LegEncrypted {
-    pub fn decrypt_sk_e(
+    pub fn get_encryption_randomness(
         &self,
         role: LegRole,
         keys: &EncryptionKeyPair,
-    ) -> Result<EncryptionSecretKey, Error> {
-        let sk = keys.secret.0.0;
-        let sk_e = match role {
-            LegRole::Sender => self
-                .ephemeral_key
-                .enc
-                .decrypt_for_sender::<Blake2b512>(sk)?,
-            LegRole::Receiver => self
-                .ephemeral_key
-                .enc
-                .decrypt_for_receiver::<Blake2b512>(sk)?,
-            LegRole::Auditor | LegRole::Mediator => self
-                .ephemeral_key
-                .enc
-                .decrypt_for_mediator_or_auditor::<Blake2b512>(sk)?,
+    ) -> Result<LegEncryptionRandomness, Error> {
+        let is_sender = match role {
+            LegRole::Sender => true,
+            LegRole::Receiver => false,
+            _ => {
+                return Err(Error::LegDecryptionError(format!(
+                    "Invalid role for encryption randomness: {:?}",
+                    role
+                )));
+            }
         };
-        Ok(EncryptionSecretKey(bp_keys::DecKey(sk_e)))
+        let randomness = self
+            .leg_enc
+            .get_encryption_randomness::<Blake2b512>(&keys.secret.0.0, is_sender)?;
+        Ok(LegEncryptionRandomness(randomness))
     }
 
-    /// Decrypts the leg using the provided secret key and role.
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Result<Leg, Error> {
-        let sk_e = self.decrypt_sk_e(role, keys)?;
-        log::debug!("Decrypted sk_e: {:?}", sk_e.0.0);
-        let leg = self
-            .leg_enc
-            .decrypt(&sk_e.0.0, dart_gens().leg_asset_value_gen())?;
-        Ok(Leg(leg))
+        let enc_key_gen = dart_gens().enc_key_gen();
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        let (sender, receiver, asset_id, amount) = match role {
+            LegRole::Sender | LegRole::Receiver => {
+                let randomness = self.get_encryption_randomness(role, keys)?;
+                self.leg_enc
+                    .decrypt_given_r(randomness.0, enc_key_gen, enc_gen)?
+            }
+            LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
+                self.leg_enc
+                    .decrypt_given_key(&keys.secret.0.0, idx as usize, enc_gen)?
+            }
+        };
+        Ok(Leg {
+            sender: AccountPublicKey::from_affine(sender)?,
+            receiver: AccountPublicKey::from_affine(receiver)?,
+            asset_id,
+            amount,
+        })
     }
 }
 
@@ -1686,13 +1720,13 @@ impl<
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
-        sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
-        let new_account_state = account_asset.get_sender_affirm_state(rng, amount)?;
+        let new_account_state = account_asset.get_sender_affirm_state(amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1700,21 +1734,24 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
             rng,
             amount,
-            sk_e.0.0,
             leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
             &current_account_state,
             &new_account_state.0,
             new_account_commitment.as_commitment()?,
             current_account_path,
+            &root,
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -1745,7 +1782,8 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1753,9 +1791,8 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            rng,
         )?;
         Ok(())
     }
@@ -1812,13 +1849,13 @@ impl<
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
-        let new_account_state = account_asset.get_receiver_affirm_state(rng)?;
+        let new_account_state = account_asset.get_receiver_affirm_state()?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1826,20 +1863,23 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
             rng,
-            sk_e.0.0,
             leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
             &current_account_state,
             &new_account_state.0,
             new_account_commitment.as_commitment()?,
             current_account_path,
+            &root,
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -1870,7 +1910,8 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -1878,9 +1919,8 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            rng,
         )?;
         Ok(())
     }
@@ -1938,13 +1978,13 @@ impl<
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
-        sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
-        let new_account_state = account_asset.get_state_for_claiming_received(rng, amount)?;
+        let new_account_state = account_asset.get_state_for_claiming_received(amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -1952,21 +1992,24 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
             rng,
             amount,
-            sk_e.0.0,
             leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
             &current_account_state,
             &new_account_state.0,
             new_account_commitment.as_commitment()?,
             current_account_path,
+            &root,
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -1997,7 +2040,8 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -2005,9 +2049,8 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            rng,
         )?;
         Ok(())
     }
@@ -2064,13 +2107,13 @@ impl<
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
-        let new_account_state = account_asset.get_state_for_decreasing_counter(rng)?;
+        let new_account_state = account_asset.get_state_for_decreasing_counter()?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -2078,20 +2121,23 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
             rng,
-            sk_e.0.0,
             leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
             &current_account_state,
             &new_account_state.0,
             new_account_commitment.as_commitment()?,
             current_account_path,
+            &root,
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -2122,7 +2168,8 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -2130,9 +2177,8 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            rng,
         )?;
         Ok(())
     }
@@ -2190,13 +2236,13 @@ impl<
         rng: &mut R,
         leg_ref: &LegRef,
         amount: Balance,
-        sk_e: EncryptionSecretKey,
         leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
-        let new_account_state = account_asset.get_state_for_reversing_send(rng, amount)?;
+        let new_account_state = account_asset.get_state_for_reversing_send(amount)?;
         let new_account_commitment = new_account_state.commitment()?;
 
         let current_account_state = &account_asset.current_state.0;
@@ -2204,21 +2250,24 @@ impl<
             .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
 
         let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root_node()?;
+        let root = root.decode()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
             rng,
             amount,
-            sk_e.0.0,
             leg_enc.leg_enc.clone(),
+            leg_enc_rand.0.clone(),
             &current_account_state,
             &new_account_state.0,
             new_account_commitment.as_commitment()?,
             current_account_path,
+            &root,
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -2249,7 +2298,8 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
-        proof.verify_with_rng(
+        proof.verify(
+            rng,
             leg_enc.leg_enc.clone(),
             &root,
             self.updated_account_state_commitment.as_commitment()?,
@@ -2257,9 +2307,8 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            rng,
         )?;
         Ok(())
     }
@@ -2280,6 +2329,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,
+    pub key_index: u8,
 
     proof: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
 }
@@ -2288,27 +2338,28 @@ impl MediatorAffirmationProof {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        eph_sk: EncryptionSecretKey,
+        asset_id: AssetId,
         leg_enc: &LegEncrypted,
-        mediator_sk: &AccountKeyPair,
+        mediator_sk: &EncryptionKeyPair,
+        key_index: u8,
         accept: bool,
     ) -> Result<Self, Error> {
         let ctx = leg_ref.context();
-        let eph_pk = leg_enc.ephemeral_key.pk_e;
         let proof = bp_leg::MediatorTxnProof::new(
             rng,
             leg_enc.leg_enc.clone(),
-            eph_sk.0.0,
-            eph_pk.get_affine()?,
+            asset_id,
             mediator_sk.secret.0.0,
             accept,
+            key_index as usize,
             ctx.as_bytes(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
         )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
             accept,
+            key_index,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
@@ -2316,14 +2367,13 @@ impl MediatorAffirmationProof {
 
     pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
-        let eph_pk = leg_enc.ephemeral_key.pk_e;
         let proof = self.proof.decode()?;
         proof.verify(
             leg_enc.leg_enc.clone(),
-            eph_pk.get_affine()?,
             self.accept,
+            self.key_index as usize,
             ctx.as_bytes(),
-            dart_gens().enc_sig_gen(),
+            dart_gens().enc_key_gen(),
         )?;
         Ok(())
     }

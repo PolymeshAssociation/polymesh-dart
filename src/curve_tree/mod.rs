@@ -5,11 +5,15 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::{Zero, vec::Vec};
+use blake2::Blake2b512;
 
 pub use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
     curve_tree_prover::{CurveTreeWitnessPath, WitnessNode},
 };
+
+use polymesh_dart_bp::leg as bp_leg;
+use polymesh_dart_common::MAX_ASSET_KEYS;
 
 use codec::{Decode, Encode};
 use scale_info::TypeInfo;
@@ -24,20 +28,36 @@ pub use backends::*;
 mod common;
 pub use common::*;
 
+pub type AssetCommitmentParameters<C> =
+    bp_leg::AssetCommitmentParams<<C as CurveTreeConfig>::P1, <C as CurveTreeConfig>::P0>;
+
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
+    static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
+        AssetCommitmentParameters::<AssetTreeConfig>::new::<Blake2b512>(
+            b"asset-comm-params",
+            MAX_ASSET_KEYS,
+            &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens,
+        );
     static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();
 }
 
 #[cfg(not(feature = "std"))]
 static mut ASSET_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AssetTreeConfig>> = None;
 #[cfg(not(feature = "std"))]
+static mut ASSET_COMMITMENT_PARAMETERS: Option<AssetCommitmentParameters<AssetTreeConfig>> = None;
+#[cfg(not(feature = "std"))]
 static mut ACCOUNT_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AccountTreeConfig>> = None;
 
 #[cfg(feature = "std")]
 pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTreeConfig> {
     &ASSET_CURVE_TREE_PARAMETERS
+}
+
+#[cfg(feature = "std")]
+pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
+    &ASSET_COMMITMENT_PARAMETERS
 }
 
 #[cfg(feature = "std")]
@@ -54,6 +74,18 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
             ASSET_CURVE_TREE_PARAMETERS = Some(parameters);
         }
         ASSET_CURVE_TREE_PARAMETERS.as_ref().unwrap()
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
+    unsafe {
+        if ASSET_COMMITMENT_PARAMETERS.is_none() {
+            let parameters = AssetTreeConfig::build_parameters();
+            ASSET_COMMITMENT_PARAMETERS = Some(parameters);
+        }
+        ASSET_COMMITMENT_PARAMETERS.as_ref().unwrap()
     }
 }
 
@@ -102,10 +134,10 @@ impl CurveTreeConfig for AssetTreeConfig {
     const EVEN_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
     const ODD_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
 
-    type F0 = <PallasParameters as CurveConfig>::ScalarField;
-    type F1 = <VestaParameters as CurveConfig>::ScalarField;
-    type P0 = PallasParameters;
-    type P1 = VestaParameters;
+    type F0 = <VestaParameters as CurveConfig>::ScalarField;
+    type F1 = <PallasParameters as CurveConfig>::ScalarField;
+    type P0 = VestaParameters;
+    type P1 = PallasParameters;
 
     type BlockNumber = BlockNumber;
 }
@@ -457,6 +489,10 @@ impl<
             self.leaf_to_index.insert(leaf_buf, last_index as u64);
             last_index += 1;
         }
+    }
+
+    pub fn params(&self) -> &CurveTreeParameters<C> {
+        self.tree.parameters()
     }
 }
 

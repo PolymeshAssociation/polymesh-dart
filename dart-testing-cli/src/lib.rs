@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use polymesh_dart::curve_tree::CurveTreeRoot;
+use polymesh_dart::curve_tree::{get_account_curve_tree_parameters, CurveTreeRoot};
 use polymesh_dart::*;
 
 mod sqlite_curve_tree;
@@ -208,7 +208,8 @@ pub struct AssetInfo {
     pub id: i64,
     pub asset_id: AssetId,
     pub issuer_signer_id: i64,
-    pub auditor_or_mediator: Vec<u8>, // Serialized AuditorOrMediator
+    pub auditors: Vec<u8>,  // Serialized Vec<EncryptionPublicKey>
+    pub mediators: Vec<u8>, // Serialized Vec<EncryptionPublicKey>
     pub total_supply: Balance,
 }
 
@@ -368,7 +369,8 @@ impl DartTestingDb {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_id INTEGER NOT NULL UNIQUE,
                 issuer_signer_id INTEGER NOT NULL,
-                auditor_or_mediator BLOB NOT NULL,
+                auditors BLOB NOT NULL,
+                mediators BLOB NOT NULL,
                 total_supply INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(issuer_signer_id) REFERENCES signers(id)
             )",
@@ -636,7 +638,8 @@ impl DartTestingDb {
     pub fn create_asset(
         &mut self,
         issuer_signer_name: &str,
-        auditor: AuditorOrMediator,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
     ) -> Result<AssetInfo> {
         let signer = self.get_signer_by_name(issuer_signer_name)?;
 
@@ -647,27 +650,30 @@ impl DartTestingDb {
             |row| row.get(0),
         )?;
 
-        let auditor_bytes = auditor.encode();
+        let auditors_bytes = auditors.encode();
+        let mediators_bytes = mediators.encode();
 
         self.conn.execute(
-            "INSERT INTO assets (asset_id, issuer_signer_id, auditor_or_mediator, total_supply) 
-             VALUES (?1, ?2, ?3, 0)",
-            params![asset_id, signer.id, auditor_bytes],
+            "INSERT INTO assets (asset_id, issuer_signer_id, auditors, mediators, total_supply) 
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            params![asset_id, signer.id, auditors_bytes, mediators_bytes],
         )?;
 
         let id = self.conn.last_insert_rowid();
 
         // Update the asset tree
-        let asset_state = self.create_asset_state(asset_id, &auditor)?;
+        let asset_state = self.create_asset_state(asset_id, auditors, mediators)?;
+        let asset_data = asset_state.asset_data()?;
         let leaf_index = asset_id as _;
         self.asset_tree
-            .update_leaf(leaf_index, asset_state.commitment()?.as_leaf_value()?)?;
+            .update_leaf(leaf_index, asset_data.commitment.into())?;
 
         Ok(AssetInfo {
             id,
             asset_id,
             issuer_signer_id: signer.id,
-            auditor_or_mediator: auditor_bytes,
+            auditors: auditors_bytes,
+            mediators: mediators_bytes,
             total_supply: 0,
         })
     }
@@ -675,18 +681,15 @@ impl DartTestingDb {
     fn create_asset_state(
         &self,
         asset_id: AssetId,
-        auditor: &AuditorOrMediator,
+        auditors: &[EncryptionPublicKey],
+        mediators: &[EncryptionPublicKey],
     ) -> Result<AssetState> {
-        let (is_mediator, pk) = match auditor {
-            AuditorOrMediator::Auditor(pk) => (false, pk.clone()),
-            AuditorOrMediator::Mediator(pk) => (true, pk.acct.into()),
-        };
-        Ok(AssetState::new(asset_id, is_mediator, pk))
+        Ok(AssetState::new(asset_id, auditors, mediators))
     }
 
     pub fn get_asset_by_id(&self, asset_id: AssetId) -> Result<AssetInfo> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, asset_id, issuer_signer_id, auditor_or_mediator, total_supply FROM assets WHERE asset_id = ?1"
+            "SELECT id, asset_id, issuer_signer_id, auditors, mediators, total_supply FROM assets WHERE asset_id = ?1"
         )?;
 
         let asset = stmt.query_row(params![asset_id], |row| {
@@ -694,8 +697,9 @@ impl DartTestingDb {
                 id: row.get(0)?,
                 asset_id: row.get(1)?,
                 issuer_signer_id: row.get(2)?,
-                auditor_or_mediator: row.get(3)?,
-                total_supply: row.get(4)?,
+                auditors: row.get(3)?,
+                mediators: row.get(3)?,
+                total_supply: row.get(5)?,
             })
         })?;
         Ok(asset)
@@ -793,6 +797,7 @@ impl DartTestingDb {
                 asset_id
             ));
         }
+        let params = get_account_curve_tree_parameters();
 
         let (proof, mut asset_state) = if let Some(proof) = proof_action.get_proof()? {
             // Get and update account asset state
@@ -805,7 +810,9 @@ impl DartTestingDb {
                 rng,
                 &account_keys,
                 asset_id,
+                0,
                 signer_name.as_bytes(),
+                params,
             )?;
 
             // Update the account state with the pending state change.
@@ -821,7 +828,7 @@ impl DartTestingDb {
         }
 
         // Verify the proof
-        proof.verify(signer_name.as_bytes())?;
+        proof.verify(signer_name.as_bytes(), 0, params, rng)?;
 
         if proof_action.is_dry_run() {
             // If dry run, just verify and return
@@ -980,15 +987,17 @@ impl DartTestingDb {
 
             let sender_keys = self.get_account_public_keys(&sender_info)?;
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
-            let auditor =
-                AuditorOrMediator::decode(&mut asset_info.auditor_or_mediator.as_slice())?;
+            let auditors: Vec<EncryptionPublicKey> =
+                Decode::decode(&mut asset_info.auditors.as_slice())?;
+            let mediators: Vec<EncryptionPublicKey> =
+                Decode::decode(&mut asset_info.mediators.as_slice())?;
+            let asset_state = AssetState::new(asset_id, &auditors, &mediators);
 
             leg_builders.push(LegBuilder {
                 sender: sender_keys,
                 receiver: receiver_keys,
-                asset_id,
+                asset: asset_state,
                 amount,
-                mediator: auditor,
             });
         }
 
@@ -1077,7 +1086,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg, sk_e, account_state, account_tree, rng| {
+            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1087,8 +1096,8 @@ impl DartTestingDb {
                     rng,
                     &leg_ref,
                     amount,
-                    sk_e,
                     leg_enc,
+                    leg_enc_rand,
                     account_state,
                     account_tree,
                 )?)
@@ -1142,13 +1151,13 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, _leg, sk_e, account_state, account_tree, rng| {
+            |_account_keys, leg_ref, leg_enc, leg_enc_rand, _leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::new(
                     rng,
                     &leg_ref,
-                    sk_e,
                     &leg_enc,
+                    &leg_enc_rand,
                     account_state,
                     account_tree,
                 )?)
@@ -1202,15 +1211,15 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg, sk_e, account_state, account_tree, rng| {
+            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
                 Ok(SenderReversalProof::new(
                     rng,
                     &leg_ref,
                     amount,
-                    sk_e,
                     &leg_enc,
+                    &leg_enc_rand,
                     account_state,
                     account_tree,
                 )?)
@@ -1269,7 +1278,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::Receiver,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg, sk_e, asset_state, account_tree, rng| {
+            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1278,8 +1287,8 @@ impl DartTestingDb {
                 Ok(ReceiverAffirmationProof::new(
                     rng,
                     &leg_ref,
-                    sk_e,
                     &leg_enc,
+                    &leg_enc_rand,
                     asset_state,
                     account_tree,
                 )?)
@@ -1343,16 +1352,16 @@ impl DartTestingDb {
             proof
         } else {
             // Decrypt leg
-            let sk_e = encrypted_leg.decrypt_sk_e(LegRole::Mediator, &account_keys.enc)?;
-            let _leg = encrypted_leg.decrypt(LegRole::Mediator, &account_keys.enc)?;
+            let leg = encrypted_leg.decrypt(LegRole::Mediator(0), &account_keys.enc)?;
 
             // Create mediator affirmation proof
             MediatorAffirmationProof::new(
                 rng,
                 &leg_ref,
-                sk_e,
+                leg.asset_id,
                 &encrypted_leg,
-                &account_keys.acct,
+                &account_keys.enc,
+                0,
                 accept,
             )?
         };
@@ -1416,14 +1425,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::Receiver,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg, sk_e, asset_state, account_tree, rng| {
+            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 // Create receiver claim proof
                 Ok(ReceiverClaimProof::new(
                     rng,
                     &leg_ref,
                     leg.amount(),
-                    sk_e,
                     &leg_enc,
+                    &leg_enc_rand,
                     asset_state,
                     account_tree,
                 )?)
@@ -1601,15 +1610,16 @@ impl DartTestingDb {
 
     pub fn list_assets(&self) -> Result<Vec<AssetInfo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, asset_id, issuer_signer_id, auditor_or_mediator, total_supply FROM assets ORDER BY asset_id"
+            "SELECT id, asset_id, issuer_signer_id, auditors, mediators, total_supply FROM assets ORDER BY asset_id"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(AssetInfo {
                 id: row.get(0)?,
                 asset_id: row.get(1)?,
                 issuer_signer_id: row.get(2)?,
-                auditor_or_mediator: row.get(3)?,
-                total_supply: row.get(4)?,
+                auditors: row.get(3)?,
+                mediators: row.get(4)?,
+                total_supply: row.get(5)?,
             })
         })?;
 
@@ -1712,8 +1722,8 @@ impl DartTestingDb {
             &AccountKeys,
             LegRef,
             &LegEncrypted,
+            &LegEncryptionRandomness,
             &Leg,
-            EncryptionSecretKey,
             &mut AccountAssetState,
             &AccountCurveTree,
             &mut R,
@@ -1737,15 +1747,15 @@ impl DartTestingDb {
             proof
         } else {
             // Decrypt leg and verify sender
-            let sk_e = encrypted_leg.decrypt_sk_e(role, &account_keys.enc)?;
+            let leg_enc_rand = encrypted_leg.get_encryption_randomness(role, &account_keys.enc)?;
 
             // Create sender affirmation proof
             let proof = gen_proof(
                 &account_keys,
                 leg_ref,
                 &encrypted_leg,
+                &leg_enc_rand,
                 &leg,
-                sk_e,
                 &mut asset_state,
                 &self.account_tree,
                 rng,

@@ -78,6 +78,10 @@ pub enum Error {
     /// Curve tree backend is read-only.
     #[error("Curve tree backend is read-only.")]
     CurveTreeBackendReadOnly,
+
+    /// Leg decryption error.
+    #[error("Leg decryption error: {0}")]
+    LegDecryptionError(String),
 }
 
 impl From<ark_serialize::SerializationError> for Error {
