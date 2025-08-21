@@ -1141,7 +1141,7 @@ impl Leg {
         let leg = bp_leg::Leg::new(
             self.sender.get_affine()?,
             self.receiver.get_affine()?,
-            asset_keys.into_iter().map(|(_, pk)| *pk).collect(),
+            asset_keys.into(),
             self.amount,
             self.asset_id,
         )?;
@@ -1418,8 +1418,19 @@ impl<
     }
 
     pub fn has_mediator(&self) -> Result<bool, Error> {
+        let count = self.mediator_count()?;
+        Ok(count > 0)
+    }
+
+    pub fn mediator_count(&self) -> Result<usize, Error> {
         let leg_enc = self.leg_enc.decode()?;
-        Ok(leg_enc.leg_enc.eph_pk_auds_meds.len() > 0)
+        let mediator_count = leg_enc
+            .leg_enc
+            .eph_pk_auds_meds
+            .iter()
+            .filter(|(is_auditor, _pk)| !is_auditor)
+            .count();
+        Ok(mediator_count)
     }
 
     pub fn verify<R: RngCore + CryptoRng>(

@@ -213,6 +213,16 @@ pub struct AssetInfo {
     pub total_supply: Balance,
 }
 
+impl AssetInfo {
+    pub fn auditors(&self) -> Result<Vec<EncryptionPublicKey>> {
+        Ok(Decode::decode(&mut self.auditors.as_slice())?)
+    }
+
+    pub fn mediators(&self) -> Result<Vec<EncryptionPublicKey>> {
+        Ok(Decode::decode(&mut self.mediators.as_slice())?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettlementInfo {
     pub id: i64,
@@ -698,7 +708,7 @@ impl DartTestingDb {
                 asset_id: row.get(1)?,
                 issuer_signer_id: row.get(2)?,
                 auditors: row.get(3)?,
-                mediators: row.get(3)?,
+                mediators: row.get(4)?,
                 total_supply: row.get(5)?,
             })
         })?;
@@ -987,10 +997,8 @@ impl DartTestingDb {
 
             let sender_keys = self.get_account_public_keys(&sender_info)?;
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
-            let auditors: Vec<EncryptionPublicKey> =
-                Decode::decode(&mut asset_info.auditors.as_slice())?;
-            let mediators: Vec<EncryptionPublicKey> =
-                Decode::decode(&mut asset_info.mediators.as_slice())?;
+            let auditors = asset_info.auditors()?;
+            let mediators = asset_info.mediators()?;
             let asset_state = AssetState::new(asset_id, &auditors, &mediators);
 
             leg_builders.push(LegBuilder {
