@@ -218,11 +218,9 @@ impl TypeInfo for DartBPGenerators {
             .path(Path::new("DartBPGenerators", module_path!()))
             .composite(
                 Fields::named()
-                    .field(|f| f.name("sig_gen").ty::<CompressedAffine>())
-                    .field(|f| f.name("enc_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("sig_key_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("enc_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
-                    .field(|f| f.name("asset_comm_key").ty::<AssetCommitmentKey>())
-                    .field(|f| f.name("enc_sig_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("ped_comm_key_g").ty::<CompressedAffine>())
                     .field(|f| f.name("ped_comm_key_h").ty::<CompressedAffine>()),
@@ -244,20 +242,6 @@ impl TypeInfo for AccountCommitmentKey {
                     .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("rho_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("randomness_gen").ty::<CompressedAffine>()),
-            )
-    }
-}
-
-impl TypeInfo for AssetCommitmentKey {
-    type Identity = Self;
-
-    fn type_info() -> Type {
-        Type::builder()
-            .path(Path::new("AssetCommitmentKey", module_path!()))
-            .composite(
-                Fields::named()
-                    .field(|f| f.name("is_mediator_gen").ty::<CompressedAffine>())
-                    .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>()),
             )
     }
 }

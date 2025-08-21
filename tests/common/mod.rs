@@ -1451,7 +1451,7 @@ impl DartChainState {
         // Verify the proof for the account and asset.
         let mut rng = rand::thread_rng();
         proof
-            .verify(caller.ctx(), 0, self.account_tree.params(), &mut rng)
+            .verify(caller.ctx(), self.account_tree.params(), &mut rng)
             .with_context(|| {
                 format!(
                     "Invalid proof for account {:?} and asset ID {}",

@@ -828,7 +828,7 @@ impl DartTestingDb {
         }
 
         // Verify the proof
-        proof.verify(signer_name.as_bytes(), 0, params, rng)?;
+        proof.verify(signer_name.as_bytes(), params, rng)?;
 
         if proof_action.is_dry_run() {
             // If dry run, just verify and return

@@ -81,7 +81,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AccountAssetRegistrationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(ctx), 0, &account_params, &mut rng)
+                .verify(black_box(ctx), &account_params, &mut rng)
                 .expect("Failed to verify proof");
         })
     });

@@ -167,9 +167,7 @@ pub struct AccountCommitmentKey {
 
 impl AccountCommitmentKey {
     /// Create a new account commitment key
-    pub fn new<D: Digest>(label: &[u8]) -> Self {
-        let sk_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![label, b" : sk_gen"]);
+    pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA) -> Self {
         let balance_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
             label,
             b" : balance_gen"
@@ -237,44 +235,14 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
-pub struct AssetCommitmentKey {
-    #[codec(encoded_as = "CompressedAffine")]
-    pub is_mediator_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
-    pub asset_id_gen: PallasA,
-}
-
-impl AssetCommitmentKey {
-    /// Create a new asset commitment key
-    pub fn new<D: Digest>(label: &[u8]) -> Self {
-        let is_mediator_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
-            label,
-            b" : is_mediator_gen"
-        ]);
-        let asset_id_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
-            label,
-            b" : asset_id_gen"
-        ]);
-
-        Self {
-            is_mediator_gen,
-            asset_id_gen,
-        }
-    }
-}
-
 /// The generators for the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct DartBPGenerators {
     #[codec(encoded_as = "CompressedAffine")]
-    sig_gen: PallasA,
+    sig_key_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
-    enc_gen: PallasA,
+    enc_key_gen: PallasA,
     account_comm_key: AccountCommitmentKey,
-    asset_comm_key: AssetCommitmentKey,
-    #[codec(encoded_as = "CompressedAffine")]
-    enc_sig_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     leg_asset_value_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
@@ -286,24 +254,20 @@ pub struct DartBPGenerators {
 impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
     pub fn new(label: &[u8]) -> Self {
-        let sig_gen = affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
-            label,
-            b" : sig_gen"
-        ]);
-        let enc_gen = affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
-            label,
-            b" : enc_gen"
-        ]);
-
-        let account_comm_key = AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY);
-
-        let asset_comm_key = AssetCommitmentKey::new::<Blake2b512>(DART_GEN_ASSET_KEY);
-
-        let enc_sig_gen =
+        let sig_key_gen =
             affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
                 label,
-                b" : enc_sig_gen"
+                b" : sig_key_gen"
             ]);
+        let enc_key_gen =
+            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+                label,
+                b" : enc_key_gen"
+            ]);
+
+        let account_comm_key =
+            AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen);
+
         let leg_asset_value_gen =
             affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
                 label,
@@ -314,11 +278,9 @@ impl DartBPGenerators {
             PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"polymesh-dart-comm-key");
 
         Self {
-            sig_gen,
-            enc_gen,
+            sig_key_gen,
+            enc_key_gen,
             account_comm_key,
-            asset_comm_key,
-            enc_sig_gen,
             leg_asset_value_gen,
             ped_comm_key_g: ped_comm_key.g,
             ped_comm_key_h: ped_comm_key.h,
@@ -330,24 +292,12 @@ impl DartBPGenerators {
         self.account_comm_key
     }
 
-    /// Returns the generators for asset state commitments.
-    pub fn asset_comm_g(&self) -> [PallasA; 2] {
-        [
-            self.asset_comm_key.is_mediator_gen,
-            self.asset_comm_key.asset_id_gen,
-        ]
-    }
-
     pub fn sig_key_gen(&self) -> PallasA {
-        self.sig_gen
-    }
-
-    pub fn enc_gen(&self) -> PallasA {
-        self.enc_gen
+        self.sig_key_gen
     }
 
     pub fn enc_key_gen(&self) -> PallasA {
-        self.enc_sig_gen
+        self.enc_key_gen
     }
 
     pub fn leg_asset_value_gen(&self) -> PallasA {
@@ -866,6 +816,7 @@ pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub account_state_commitment: AccountStateCommitment,
     pub asset_id: AssetId,
+    pub counter: u16,
 
     proof: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
@@ -902,6 +853,7 @@ impl AccountAssetRegistrationProof {
                 account: account.acct.public,
                 account_state_commitment,
                 asset_id,
+                counter,
                 proof: WrappedCanonical::wrap(&proof)?,
             },
             account_state,
@@ -912,7 +864,6 @@ impl AccountAssetRegistrationProof {
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
-        counter: u16,
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<(), Error> {
@@ -923,7 +874,7 @@ impl AccountAssetRegistrationProof {
             &self.account.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
-            counter,
+            self.counter,
             ctx,
             dart_gens().account_comm_key(),
             &tree_params.even_parameters.pc_gens,
