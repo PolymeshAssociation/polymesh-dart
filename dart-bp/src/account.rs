@@ -3048,7 +3048,7 @@ pub mod tests {
         LegEncryption<PallasA>,
         LegEncryptionRandomness<Fr>,
     ) {
-        let leg = Leg::new(pk_s, pk_r, vec![pk_a_e], amount, asset_id).unwrap();
+        let leg = Leg::new(pk_s, pk_r, vec![(true, pk_a_e)], amount, asset_id).unwrap();
         let (leg_enc, leg_enc_rand) = leg
             .encrypt::<_, Blake2b512>(rng, pk_s_e, pk_r_e, enc_key_gen, enc_gen)
             .unwrap();
@@ -3881,7 +3881,7 @@ pub mod tests {
             let (leg, leg_enc, leg_enc_rand) = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                let leg = Leg::new(pk_other.0, pk.0, vec![pk_a.0], amount, asset_id).unwrap();
+                let leg = Leg::new(pk_other.0, pk.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e_other.0, pk_e.0, enc_key_gen, enc_gen)
                     .unwrap();
@@ -3889,7 +3889,7 @@ pub mod tests {
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                let leg = Leg::new(pk.0, pk_other.0, vec![pk_a.0], amount, asset_id).unwrap();
+                let leg = Leg::new(pk.0, pk_other.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e.0, pk_e_other.0, enc_key_gen, enc_gen)
                     .unwrap();

@@ -80,6 +80,10 @@ pub enum Error {
     #[error("Expected {0} responses for Sigma protocol but found {1}")]
     DifferentNumberOfResponsesForSigmaProtocol(usize, usize),
 
+    /// Invalid key index
+    #[error("Invalid key index {0}")]
+    InvalidKeyIndex(usize),
+
     /// Mediator not found at index
     #[error("Expected mediator at index {0} in the keys list but it wasn't found")]
     MediatorNotFoundAtIndex(usize),

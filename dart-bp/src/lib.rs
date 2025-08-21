@@ -16,9 +16,9 @@ pub use polymesh_dart_common::{
     AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID, PendingTxnCounter,
 };
 
-// TODO: The ephemeral public key created during instance should be added to the transcript.
-
 // TODO: General question: Should i be hashing a generator/commitment every time i use it so that the instance is always hashed in order of invoking the protocol?
+
+// TODO: Check if root should be added to the transcript before its used.
 
 // Venue creating settlement
 // - takes sender key, receiver key, amount, asset id, and auditor/mediator key
