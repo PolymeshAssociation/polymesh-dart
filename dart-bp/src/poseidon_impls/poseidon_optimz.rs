@@ -1,32 +1,37 @@
 // The native implementation is taken from here https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon/poseidon.rs
 // Following Appendix B of the paper and https://extgit.isec.tugraz.at/krypto/hadeshash/-/blob/master/code/poseidonperm_x3_64_24_optimized.sage
 
-use std::ops::Range;
-use ark_ff::{Field, PrimeField};
-use bulletproofs::r1cs::{ConstraintSystem, R1CSError, LinearCombination};
-use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
-use crate::poseidon_impls::poseidon_old::{SboxType, PoseidonParams as UnoptParams};
+use crate::poseidon_impls::poseidon_old::{PoseidonParams as UnoptParams, SboxType};
 use crate::poseidon_impls::utils;
+use ark_ff::{Field, PrimeField};
+use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
+use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError};
+use std::ops::Range;
 
 pub struct PoseidonParams<F: Field> {
     pub base: UnoptParams<F>,
     pub opt_round_constants: Vec<Vec<F>>,
     pub w_hat: Vec<Vec<F>>,
     pub v: Vec<Vec<F>>,
-    pub m_i: Vec<Vec<F>>
+    pub m_i: Vec<Vec<F>>,
 }
 
 impl<F: Field> PoseidonParams<F> {
     pub fn new(width: usize, full_rounds: usize, partial_rounds: usize) -> PoseidonParams<F> {
         let base = UnoptParams::new(width, full_rounds, partial_rounds);
         let (m_i, v, w_hat) = Self::equivalent_matrices(&base.MDS_matrix, width, partial_rounds);
-        let opt_round_constants = Self::equivalent_round_constants(&base.round_constants, &base.MDS_matrix, full_rounds/2, partial_rounds);
+        let opt_round_constants = Self::equivalent_round_constants(
+            &base.round_constants,
+            &base.MDS_matrix,
+            full_rounds / 2,
+            partial_rounds,
+        );
         Self {
             base,
             opt_round_constants,
             w_hat,
             v,
-            m_i
+            m_i,
         }
     }
 
@@ -113,7 +118,6 @@ impl<F: Field> PoseidonParams<F> {
         new_state
     }
 
-
     pub fn get_total_rounds(&self) -> usize {
         self.base.full_rounds + self.base.partial_rounds
     }
@@ -122,16 +126,14 @@ impl<F: Field> PoseidonParams<F> {
 pub fn Poseidon_permutation<F: PrimeField>(
     input: &[F],
     params: &PoseidonParams<F>,
-    sbox: &SboxType<F>
+    sbox: &SboxType<F>,
 ) -> Vec<F> {
     let width = params.base.width;
     assert_eq!(input.len(), width);
 
     // Helper functions
     fn add_rc<F: Field>(input: &[F], rc: &[F]) -> Vec<F> {
-        input.iter().zip(rc.iter()).map(|(a, b)| {
-            *a + *b
-        }).collect()
+        input.iter().zip(rc.iter()).map(|(a, b)| *a + *b).collect()
     }
     fn sbox_full<F: Field>(input: &[F], sbox: &SboxType<F>) -> Vec<F> {
         input.iter().map(|i| sbox.apply_sbox(*i)).collect()
@@ -151,7 +153,7 @@ pub fn Poseidon_permutation<F: PrimeField>(
         state: &mut Vec<F>,
         params: &PoseidonParams<F>,
         sbox: &SboxType<F>,
-        range: Range<usize>
+        range: Range<usize>,
     ) {
         for r in range {
             *state = add_rc(state, &params.base.round_constants[r]);
@@ -174,9 +176,7 @@ pub fn Poseidon_permutation<F: PrimeField>(
     for r in rounds_f_beginning..p_end {
         current_state[0] = sbox_partial(current_state[0], sbox);
         if r < p_end - 1 {
-            current_state[0].add_assign(
-                &params.opt_round_constants[r + 1 - rounds_f_beginning][0],
-            );
+            current_state[0].add_assign(&params.opt_round_constants[r + 1 - rounds_f_beginning][0]);
         }
         current_state = params.cheap_matmul(&current_state, p_end - r - 1);
         println!("After round {r}: {:?}", current_state);
@@ -203,7 +203,10 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     let total_rounds = params.base.full_rounds + params.base.partial_rounds;
     let p_end = rounds_f_beginning + rounds_p;
 
-    fn apply_round_constants<F: PrimeField>(vars: &mut [LinearCombination<F>], round_constants: &[F]) {
+    fn apply_round_constants<F: PrimeField>(
+        vars: &mut [LinearCombination<F>],
+        round_constants: &[F],
+    ) {
         for (v, rc) in vars.iter_mut().zip(round_constants.iter()) {
             *v = v.clone() + LinearCombination::<F>::from(*rc);
         }
@@ -225,7 +228,10 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     }
 
     // Matrix multiplication helper for constraints
-    fn mat_vec_mul<F: PrimeField>(mat: &[Vec<F>], vec: &[LinearCombination<F>]) -> Vec<LinearCombination<F>> {
+    fn mat_vec_mul<F: PrimeField>(
+        mat: &[Vec<F>],
+        vec: &[LinearCombination<F>],
+    ) -> Vec<LinearCombination<F>> {
         let width = vec.len();
         let mut out = vec![LinearCombination::<F>::default(); width];
         for i in 0..width {
@@ -236,7 +242,11 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         out
     }
 
-    pub fn cheap_matmul_constraints<F: PrimeField>(output_vars: &[LinearCombination<F>], params: &PoseidonParams<F>, r: usize) -> Vec<LinearCombination<F>> {
+    pub fn cheap_matmul_constraints<F: PrimeField>(
+        output_vars: &[LinearCombination<F>],
+        params: &PoseidonParams<F>,
+        r: usize,
+    ) -> Vec<LinearCombination<F>> {
         let v = &params.v[r];
         let w_hat = &params.w_hat[r];
         let width = params.base.width;
@@ -269,7 +279,10 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
             .into();
         output_vars = sbox_outputs;
         if r < p_end - 1 {
-            output_vars[0] = output_vars[0].clone() + LinearCombination::<F>::from(params.opt_round_constants[r + 1 - rounds_f_beginning][0]);
+            output_vars[0] = output_vars[0].clone()
+                + LinearCombination::<F>::from(
+                    params.opt_round_constants[r + 1 - rounds_f_beginning][0],
+                );
         }
         output_vars = cheap_matmul_constraints(&output_vars, params, p_end - r - 1);
     }
@@ -295,7 +308,8 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
     assert_eq!(output.len(), width);
 
     let input_vars: Vec<LinearCombination<F>> = input.iter().map(|e| (*e).into()).collect();
-    let permutation_output = Poseidon_permutation_constraints::<F, CS>(cs, input_vars, params, sbox_type)?;
+    let permutation_output =
+        Poseidon_permutation_constraints::<F, CS>(cs, input_vars, params, sbox_type)?;
 
     for i in 0..width {
         constrain_lc_with_scalar::<F, CS>(cs, permutation_output[i].to_owned(), output[i]);
@@ -306,16 +320,16 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
     use super::*;
-    use ark_std::UniformRand;
     use crate::poseidon_impls::poseidon_old::SboxType;
-    use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
-    use bulletproofs::{BulletproofGens, PedersenGens};
-    use dock_crypto_utils::transcript::MerlinTranscript;
     use ark_pallas::Affine as PallasA;
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
+    use ark_std::UniformRand;
+    use bulletproofs::r1cs::{Prover, Verifier};
+    use bulletproofs::{BulletproofGens, PedersenGens};
+    use dock_crypto_utils::transcript::MerlinTranscript;
+    use std::time::Instant;
 
     #[ignore]
     #[test]
@@ -348,13 +362,16 @@ mod tests {
             }
 
             let start = Instant::now();
-            assert!(Poseidon_permutation_gadget(
-                &mut prover,
-                vars.clone(),
-                &params,
-                &sbox_type,
-                &expected_output
-            ).is_ok());
+            assert!(
+                Poseidon_permutation_gadget(
+                    &mut prover,
+                    vars.clone(),
+                    &params,
+                    &sbox_type,
+                    &expected_output
+                )
+                .is_ok()
+            );
 
             println!(
                 "For Poseidon optimized perm width={width} full rounds {full_rounds}, partial rounds {partial_rounds}, no of constraints is {}",
@@ -363,7 +380,11 @@ mod tests {
 
             let proof = prover.prove(&bp_gens).unwrap();
 
-            println!("Proving time is {:?} and size is {}", start.elapsed(), proof.compressed_size());
+            println!(
+                "Proving time is {:?} and size is {}",
+                start.elapsed(),
+                proof.compressed_size()
+            );
 
             (proof, comms)
         };
@@ -378,13 +399,10 @@ mod tests {
         }
 
         let start = Instant::now();
-        assert!(Poseidon_permutation_gadget(
-            &mut verifier,
-            vars,
-            &params,
-            &sbox_type,
-            &expected_output
-        ).is_ok());
+        assert!(
+            Poseidon_permutation_gadget(&mut verifier, vars, &params, &sbox_type, &expected_output)
+                .is_ok()
+        );
 
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
         println!("Verification time is {:?}", start.elapsed());

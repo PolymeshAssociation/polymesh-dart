@@ -4,9 +4,9 @@
 pub mod keys;
 pub mod util;
 
-mod error;
-pub mod account_registration;
 pub mod account;
+pub mod account_registration;
+mod error;
 pub mod leg;
 pub mod poseidon_impls;
 

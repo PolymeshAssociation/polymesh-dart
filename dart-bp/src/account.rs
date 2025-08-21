@@ -3,6 +3,7 @@ use ark_std::collections::{BTreeMap, BTreeSet};
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
+use crate::poseidon_impls::poseidon_2::{Poseidon_hash_2_simple, Poseidon2Params};
 use crate::util::{
     bp_gens_for_vec_commitment,
     enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
@@ -25,8 +26,8 @@ use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::{vec, vec::Vec};
-use bulletproofs::{BulletproofGens, PedersenGens};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
+use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -38,7 +39,6 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_simple};
 
 pub const NUM_GENERATORS: usize = 7;
 
@@ -597,13 +597,22 @@ impl<
         rng: &mut R,
     ) -> Result<()> {
         if self.resp_leaf.len() != 7 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(7, self.resp_leaf.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                7,
+                self.resp_leaf.len(),
+            ));
         }
         if self.resp_acc_new.len() != 6 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, self.resp_acc_new.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                6,
+                self.resp_acc_new.len(),
+            ));
         }
         if self.resp_bp.len() != 6 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, self.resp_bp.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                6,
+                self.resp_bp.len(),
+            ));
         }
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -1131,35 +1140,33 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
-        let (comm_bp_bal_blinding, comm_bp_bal) =
-            enforce_balance_change_prover(
-                rng,
-                account.balance,
-                updated_account.balance,
-                amount,
-                has_balance_decreased,
-                &mut even_prover,
-                bp_gens
-            )?;
+        let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
+            rng,
+            account.balance,
+            updated_account.balance,
+            amount,
+            has_balance_decreased,
+            &mut even_prover,
+            bp_gens,
+        )?;
 
         let mut transcript = even_prover.transcript();
 
         let amount_blinding = F0::rand(rng);
-        let (t_comm_bp_bal, t_leg_amount) =
-            generate_schnorr_t_values_for_balance_change(
-                rng,
-                amount,
-                ct_amount,
-                old_balance_blinding,
-                new_balance_blinding,
-                amount_blinding,
-                r_3,
-                pc_gens,
-                bp_gens,
-                enc_key_gen,
-                enc_gen,
-                &mut transcript,
-            )?;
+        let (t_comm_bp_bal, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
+            rng,
+            amount,
+            ct_amount,
+            old_balance_blinding,
+            new_balance_blinding,
+            amount_blinding,
+            r_3,
+            pc_gens,
+            bp_gens,
+            enc_key_gen,
+            enc_gen,
+            &mut transcript,
+        )?;
         Ok(Self {
             amount,
             old_balance: account.balance,
@@ -1173,16 +1180,15 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
     pub fn gen_proof(self, challenge: &F0) -> Result<BalanceChangeProof<F0, G0>> {
         let t_comm_bp_bal = self.t_comm_bp_bal.t;
-        let (resp_comm_bp_bal, resp_leg_amount) =
-            generate_schnorr_responses_for_balance_change(
-                self.old_balance,
-                self.new_balance,
-                self.amount,
-                self.comm_bp_bal_blinding,
-                self.t_comm_bp_bal,
-                self.t_leg_amount,
-                challenge,
-            )?;
+        let (resp_comm_bp_bal, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
+            self.old_balance,
+            self.new_balance,
+            self.amount,
+            self.comm_bp_bal_blinding,
+            self.t_comm_bp_bal,
+            self.t_leg_amount,
+            challenge,
+        )?;
         Ok(BalanceChangeProof {
             comm_bp_bal: self.comm_bp_bal,
             t_comm_bp_bal,
@@ -1218,13 +1224,22 @@ impl<
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
         if proof.resp_leaf.len() != 8 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(8, proof.resp_leaf.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                8,
+                proof.resp_leaf.len(),
+            ));
         }
         if proof.resp_acc_new.len() != 7 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(7, proof.resp_acc_new.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                7,
+                proof.resp_acc_new.len(),
+            ));
         }
         if proof.resp_bp_randomness_relations.len() != 6 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(6, proof.resp_bp_randomness_relations.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                6,
+                proof.resp_bp_randomness_relations.len(),
+            ));
         }
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
@@ -3195,7 +3210,7 @@ pub mod tests {
         let (
             ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3299,9 +3314,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3403,9 +3418,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3509,8 +3524,8 @@ pub mod tests {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3610,8 +3625,8 @@ pub mod tests {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
-            ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3714,15 +3729,15 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
         let amount = 100;
 
-        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        let (_leg, leg_enc, leg_enc_rand) = setup_leg(
             &mut rng,
             pk_s.0,
             pk_r.0,
@@ -3855,8 +3870,8 @@ pub mod tests {
 
         let (
             ((sk, pk), (_, pk_e)),
-            ((sk_r, pk_other), (_, pk_e_other)),
-            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_r, pk_other), (_, pk_e_other)),
+            ((_sk_a, pk_a), (_sk_a_e, _pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3881,7 +3896,8 @@ pub mod tests {
             let (leg, leg_enc, leg_enc_rand) = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                let leg = Leg::new(pk_other.0, pk.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
+                let leg =
+                    Leg::new(pk_other.0, pk.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e_other.0, pk_e.0, enc_key_gen, enc_gen)
                     .unwrap();
@@ -3889,7 +3905,8 @@ pub mod tests {
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                let leg = Leg::new(pk.0, pk_other.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
+                let leg =
+                    Leg::new(pk.0, pk_other.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e.0, pk_e_other.0, enc_key_gen, enc_gen)
                     .unwrap();

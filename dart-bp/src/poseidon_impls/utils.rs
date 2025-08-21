@@ -1,8 +1,8 @@
-use ark_ff::{Field};
-use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Variable};
-use bulletproofs::r1cs::linear_combination::AllocatedScalar;
-use bulletproofs::errors::R1CSError;
+use ark_ff::Field;
 use ark_std::{marker::PhantomData, vec, vec::Vec};
+use bulletproofs::errors::R1CSError;
+use bulletproofs::r1cs::linear_combination::AllocatedScalar;
+use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Variable};
 
 /// Return result of Matrix x vect
 pub fn mat_vec_mul<F: Field>(mat: &[Vec<F>], vect: &[F]) -> Vec<F> {

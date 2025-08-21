@@ -1,12 +1,12 @@
 // The native implementation is taken from here https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2.rs
 
+use crate::error::{Error, Result};
 use crate::poseidon_impls::poseidon_old::ZERO_CONST;
 use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use ark_ff::PrimeField;
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError, Variable};
 use rand_core::CryptoRngCore;
-use crate::error::{Error, Result};
 
 #[derive(Clone, Debug)]
 pub struct Poseidon2Params<F: PrimeField> {
@@ -35,13 +35,13 @@ impl<F: PrimeField> Poseidon2Params<F> {
     ) -> Result<Self> {
         // We only need t to be 3 for now. Support for 2 is simple so keeping it
         if state_size != 2 && state_size != 3 {
-            return Err(Error::UnexpectedStateSizeForPoseidon2(state_size))
+            return Err(Error::UnexpectedStateSizeForPoseidon2(state_size));
         }
         if degree != 3 && degree != 5 && degree != 7 {
-            return Err(Error::UnexpectedDegreeForPoseidon2(degree))
+            return Err(Error::UnexpectedDegreeForPoseidon2(degree));
         }
         if rounds_f % 2 == 1 {
-            return Err(Error::IncorrectNumberOfFullRoundsForPoseidon2(rounds_f))
+            return Err(Error::IncorrectNumberOfFullRoundsForPoseidon2(rounds_f));
         }
         let r = rounds_f / 2;
         let rounds = rounds_f + rounds_p;
@@ -66,8 +66,7 @@ impl<F: PrimeField> Poseidon2Params<F> {
         degree: usize,
         rounds_f: usize,
         rounds_p: usize,
-    ) -> Result<Self>
-    {
+    ) -> Result<Self> {
         let mat_internal_diag_m_1: Vec<F> = (0..state_size).map(|_| F::rand(rng)).collect();
         let mat_internal: Vec<Vec<F>> = (0..state_size)
             .map(|_| (0..state_size).map(|_| F::rand(rng)).collect())
@@ -75,9 +74,15 @@ impl<F: PrimeField> Poseidon2Params<F> {
         let round_constants: Vec<Vec<F>> = (0..(rounds_f + rounds_p))
             .map(|_| (0..state_size).map(|_| F::rand(rng)).collect())
             .collect();
-        
+
         Self::new(
-            state_size, degree, rounds_f, rounds_p, &mat_internal_diag_m_1, &mat_internal, &round_constants,
+            state_size,
+            degree,
+            rounds_f,
+            rounds_p,
+            &mat_internal_diag_m_1,
+            &mat_internal,
+            &round_constants,
         )
     }
 
@@ -125,7 +130,7 @@ impl<F: PrimeField> Poseidon2<F> {
     pub fn permutation(&self, input: &[F]) -> Result<Vec<F>> {
         let t = self.params.state_size;
         if input.len() != t {
-            return Err(Error::UnequalInputSizeAndStateSize(input.len(), t))
+            return Err(Error::UnequalInputSizeAndStateSize(input.len(), t));
         }
 
         let mut current_state = input.to_owned();
@@ -320,7 +325,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
 ) -> Result<Vec<LinearCombination<F>>> {
     let t = params.state_size;
     if input.len() != t {
-        return Err(Error::UnequalInputSizeAndStateSize(input.len(), t))
+        return Err(Error::UnequalInputSizeAndStateSize(input.len(), t));
     }
 
     let mut output_vars = input;
@@ -370,7 +375,7 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
 ) -> Result<()> {
     let width = params.state_size;
     if input.len() != width {
-        return Err(Error::UnequalInputSizeAndStateSize(output.len(), width))
+        return Err(Error::UnequalInputSizeAndStateSize(output.len(), width));
     }
 
     let input_vars: Vec<LinearCombination<F>> = input.iter().map(|e| (*e).into()).collect();
@@ -473,9 +478,15 @@ fn matmul_internal_constraints<F: PrimeField>(
     }
 }
 
-pub fn Poseidon_hash_2_simple<F: PrimeField>(xl: F, xr: F, params: Poseidon2Params<F>) -> Result<F> {
+pub fn Poseidon_hash_2_simple<F: PrimeField>(
+    xl: F,
+    xr: F,
+    params: Poseidon2Params<F>,
+) -> Result<F> {
     let poseidon2 = Poseidon2::new(params);
-    poseidon2.permutation(&[xl, xr, F::from(ZERO_CONST)]).map(|x| x[0])
+    poseidon2
+        .permutation(&[xl, xr, F::from(ZERO_CONST)])
+        .map(|x| x[0])
 }
 
 pub fn Poseidon_hash_2_constraints_simple<F: PrimeField, CS: ConstraintSystem<F>>(
@@ -510,11 +521,11 @@ mod tests {
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
-    use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
+    use bulletproofs::r1cs::{Prover, Verifier};
     use bulletproofs::{BulletproofGens, PedersenGens};
     use dock_crypto_utils::transcript::MerlinTranscript;
-    use std::time::Instant;
     use rand_core::CryptoRngCore;
+    use std::time::Instant;
 
     fn poseidon2_perm_sbox<R: CryptoRngCore>(
         rng: &mut R,
@@ -531,7 +542,8 @@ mod tests {
             degree,
             full_rounds,
             partial_rounds,
-        ).unwrap();
+        )
+        .unwrap();
 
         let poseidon2 = Poseidon2::new(params.clone());
 
@@ -598,7 +610,8 @@ mod tests {
             degree,
             full_rounds,
             partial_rounds,
-        ).unwrap();
+        )
+        .unwrap();
 
         let xl = Fr::rand(rng);
         let xr = Fr::rand(rng);
@@ -615,7 +628,6 @@ mod tests {
 
             let (comm, mut vars) = prover.commit_vec(&[xl, xr], Fr::rand(rng), &bp_gens);
 
-
             assert!(
                 Poseidon_hash_2_gadget_simple(
                     &mut prover,
@@ -624,7 +636,7 @@ mod tests {
                     &params,
                     expected_output
                 )
-                    .is_ok()
+                .is_ok()
             );
 
             println!(
@@ -658,7 +670,7 @@ mod tests {
                 &params,
                 expected_output
             )
-                .is_ok()
+            .is_ok()
         );
 
         assert!(verifier.verify(&proof, &pc_gens, &bp_gens).is_ok());
@@ -675,13 +687,6 @@ mod tests {
     #[test]
     fn test_poseidon2_hash_2_simple_quint_sbox() {
         let mut rng = rand::thread_rng();
-        poseidon2_hash_2_simple(
-            &mut rng,
-            5,
-            8,
-            56,
-            b"Poseidon_hash_2_quint",
-        );
+        poseidon2_hash_2_simple(&mut rng, 5, 8, 56, b"Poseidon_hash_2_quint");
     }
-
 }

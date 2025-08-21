@@ -480,7 +480,7 @@ pub mod tests {
     type PallasA = ark_pallas::Affine;
     type Fr = ark_pallas::Fr;
 
-    pub fn get_poseidon_params<R: CryptoRngCore>(rng: &mut R, width: usize) -> PoseidonParams<Fr> {
+    pub fn get_poseidon_params<R: CryptoRngCore>(_rng: &mut R, width: usize) -> PoseidonParams<Fr> {
         let full_rounds = 8;
         let partial_rounds = 56;
         PoseidonParams::new(width, full_rounds, partial_rounds)
@@ -525,7 +525,10 @@ pub mod tests {
 
             println!(
                 "For Poseidon perm width={width}, {:?}, full rounds {}, partial rounds {}, no of constraints is {}",
-                sbox_type, s_params.full_rounds, s_params.partial_rounds, &prover.number_of_constraints()
+                sbox_type,
+                s_params.full_rounds,
+                s_params.partial_rounds,
+                &prover.number_of_constraints()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();

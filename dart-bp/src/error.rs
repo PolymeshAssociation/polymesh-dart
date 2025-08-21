@@ -93,7 +93,9 @@ pub enum Error {
     IncompatibleAssetId(AssetId, AssetId),
 
     /// pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness
-    #[error("pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness")]
+    #[error(
+        "pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness"
+    )]
     PkTAndEncryptedRandomnessInconsistent,
 
     /// Can't invert 0

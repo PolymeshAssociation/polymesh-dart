@@ -1,7 +1,7 @@
+use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
     initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
 };
-use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -17,15 +17,17 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndReran
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::ped_comm_group_elems::{prove_naive, verify_naive};
 use curve_tree_relations::range_proof::range_proof;
-use digest::{Digest};
+use digest::Digest;
 use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::{affine_group_elem_from_try_and_incr, hash_to_field};
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
-use rand_core::{CryptoRng, CryptoRngCore, RngCore};
-use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
+use rand_core::CryptoRngCore;
+use schnorr_pok::discrete_log::{
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
@@ -94,8 +96,11 @@ impl<
         params: &AssetCommitmentParams<G0, G1>,
         delta: Affine<G0>,
     ) -> Result<Self> {
-        if params.comm_key.len() < keys.len() + 1{
-            return Err(Error::InsufficientCommitmentKeyLength(params.comm_key.len(), keys.len() + 1))
+        if params.comm_key.len() < keys.len() + 1 {
+            return Err(Error::InsufficientCommitmentKeyLength(
+                params.comm_key.len(),
+                keys.len() + 1,
+            ));
         }
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
         // but that pushes asset id into the other group which makes the settlement txn proof quite expensive
@@ -215,12 +220,15 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let ct_amount = (enc_key_gen * r3 + enc_gen * F::from(self.amount)).into_affine();
         let ct_asset_id = (enc_key_gen * r4 + enc_gen * F::from(self.asset_id)).into_affine();
         let eph_pk_auds_meds = self.pk_auds_meds.iter().map(|(role, pk)| {
-            (*role, EphemeralPublicKey::<G>(
-                (*pk * r1).into_affine(),
-                (*pk * r2).into_affine(),
-                (*pk * r3).into_affine(),
-                (*pk * r4).into_affine(),
-            ))
+            (
+                *role,
+                EphemeralPublicKey::<G>(
+                    (*pk * r1).into_affine(),
+                    (*pk * r2).into_affine(),
+                    (*pk * r3).into_affine(),
+                    (*pk * r4).into_affine(),
+                ),
+            )
         });
 
         let eph_pk_s = (pk_s_enc * y).into_affine();
@@ -369,8 +377,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         if key_index >= self.eph_pk_auds_meds.len() {
             return Err(Error::InvalidKeyIndex(key_index));
         }
-        let amount =
-            Self::decrypt_as_group_element(sk, self.ct_amount, self.eph_pk_auds_meds[key_index].1.2)?;
+        let amount = Self::decrypt_as_group_element(
+            sk,
+            self.ct_amount,
+            self.eph_pk_auds_meds[key_index].1.2,
+        )?;
         solve_discrete_log_bsgs_alt::<G::Group>(MAX_AMOUNT, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
@@ -457,7 +468,7 @@ impl<
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
         if leg.asset_id != asset_data.id {
-            return Err(Error::IncompatibleAssetId(leg.asset_id, asset_data.id))
+            return Err(Error::IncompatibleAssetId(leg.asset_id, asset_data.id));
         }
         let (mut even_prover, mut odd_prover, re_randomized_path, re_randomization_of_leaf) =
             initialize_curve_tree_prover(
@@ -564,20 +575,36 @@ impl<
 
         let comm_r_i_blinding = F0::rand(rng);
         // Commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
-        let (comm_r_i_amount, vars) = odd_prover.commit_vec(&[r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv, amount], comm_r_i_blinding, &tree_parameters.odd_parameters.bp_gens);
+        let (comm_r_i_amount, vars) = odd_prover.commit_vec(
+            &[
+                r_1,
+                r_2,
+                r_3,
+                r_4,
+                r_2_r_1_inv,
+                r_3_r_1_inv,
+                r_4_r_1_inv,
+                amount,
+            ],
+            comm_r_i_blinding,
+            &tree_parameters.odd_parameters.bp_gens,
+        );
         Self::enforce_constraints(&mut odd_prover, Some(leg.amount), vars)?;
 
-        let t_comm_r_i_amount = SchnorrCommitment::new(&Self::bp_gens_vec(tree_parameters), vec![
-            F0::rand(rng),
-            r_1_blinding,
-            r_2_blinding,
-            r_3_blinding,
-            r_4_blinding,
-            r_2_r_1_inv_blinding,
-            r_3_r_1_inv_blinding,
-            r_4_r_1_inv_blinding,
-            amount_blinding,
-        ]);
+        let t_comm_r_i_amount = SchnorrCommitment::new(
+            &Self::bp_gens_vec(tree_parameters),
+            vec![
+                F0::rand(rng),
+                r_1_blinding,
+                r_2_blinding,
+                r_3_blinding,
+                r_4_blinding,
+                r_2_r_1_inv_blinding,
+                r_3_r_1_inv_blinding,
+                r_4_r_1_inv_blinding,
+                amount_blinding,
+            ],
+        );
 
         let mut transcript = odd_prover.transcript();
 
@@ -601,16 +628,22 @@ impl<
                 blindings_r1.push(r_1_blinding);
             }
             let t_1 = if *role {
-                SchnorrCommitment::new(&[
-                    re_randomized_points[i + 1], // since first point commits to asset-id
-                    blinding_base,
-                    aud_role_base,
-                ], blindings_r1)
+                SchnorrCommitment::new(
+                    &[
+                        re_randomized_points[i + 1], // since first point commits to asset-id
+                        blinding_base,
+                        aud_role_base,
+                    ],
+                    blindings_r1,
+                )
             } else {
-                SchnorrCommitment::new(&[
-                    re_randomized_points[i + 1], // since first point commits to asset-id
-                    blinding_base,
-                ], blindings_r1)
+                SchnorrCommitment::new(
+                    &[
+                        re_randomized_points[i + 1], // since first point commits to asset-id
+                        blinding_base,
+                    ],
+                    blindings_r1,
+                )
             };
 
             let base = &leg_enc.eph_pk_auds_meds[i].1.0;
@@ -660,9 +693,21 @@ impl<
             re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
             t_points_r1[i].challenge_contribution(&mut transcript)?;
             let base = &leg_enc.eph_pk_auds_meds[i].1.0;
-            t_points_r2[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.1, &mut transcript)?;
-            t_points_r3[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.2, &mut transcript)?;
-            t_points_r4[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.3, &mut transcript)?;
+            t_points_r2[i].challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.1,
+                &mut transcript,
+            )?;
+            t_points_r3[i].challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.2,
+                &mut transcript,
+            )?;
+            t_points_r4[i].challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.3,
+                &mut transcript,
+            )?;
         }
 
         t_amount_enc.challenge_contribution(
@@ -687,13 +732,28 @@ impl<
         let prover_challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
         let resp_comm_r_i_amount = t_comm_r_i_amount.response(
-            &[comm_r_i_blinding, r_1, r_2, r_3, r_4, r_2_r_1_inv, r_3_r_1_inv, r_4_r_1_inv, amount],
-            &prover_challenge
+            &[
+                comm_r_i_blinding,
+                r_1,
+                r_2,
+                r_3,
+                r_4,
+                r_2_r_1_inv,
+                r_3_r_1_inv,
+                r_4_r_1_inv,
+                amount,
+            ],
+            &prover_challenge,
         )?;
 
         let mut resp_eph_pk_auds_meds = Vec::with_capacity(asset_data.keys.len());
 
-        for (i, ((t_points_r2, t_points_r3), t_points_r4)) in t_points_r2.into_iter().zip(t_points_r3.into_iter()).zip(t_points_r4.into_iter()).enumerate() {
+        for (i, ((t_points_r2, t_points_r3), t_points_r4)) in t_points_r2
+            .into_iter()
+            .zip(t_points_r3.into_iter())
+            .zip(t_points_r4.into_iter())
+            .enumerate()
+        {
             let role = asset_data.keys[i].0;
 
             let mut wits1 = vec![r_1, r_1 * blindings_for_points[i + 1]];
@@ -751,13 +811,22 @@ impl<
         enc_gen: Affine<G0>,
     ) -> Result<()> {
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
-            return Err(Error::InsufficientCommitmentKeyLength(asset_comm_params.comm_key.len(), self.re_randomized_points.len()))
+            return Err(Error::InsufficientCommitmentKeyLength(
+                asset_comm_params.comm_key.len(),
+                self.re_randomized_points.len(),
+            ));
         }
         if self.re_randomized_points.len() != self.resp_eph_pk_auds_meds.len() + 1 {
-            return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(self.re_randomized_points.len(), self.resp_eph_pk_auds_meds.len() + 1))
+            return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(
+                self.re_randomized_points.len(),
+                self.resp_eph_pk_auds_meds.len() + 1,
+            ));
         }
         if self.resp_comm_r_i_amount.len() != 9 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(9, self.resp_comm_r_i_amount.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                9,
+                self.resp_comm_r_i_amount.len(),
+            ));
         }
 
         let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
@@ -796,7 +865,8 @@ impl<
 
         let mut transcript = odd_verifier.transcript();
 
-        self.t_comm_r_i_amount.serialize_compressed(&mut transcript)?;
+        self.t_comm_r_i_amount
+            .serialize_compressed(&mut transcript)?;
 
         for i in 0..self.resp_eph_pk_auds_meds.len() {
             self.re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
@@ -805,15 +875,21 @@ impl<
                 .0
                 .serialize_compressed(&mut transcript)?;
             let base = &leg_enc.eph_pk_auds_meds[i].1.0;
-            self.resp_eph_pk_auds_meds[i]
-                .r_2
-                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.1, &mut transcript)?;
-            self.resp_eph_pk_auds_meds[i]
-                .r_3
-                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.2, &mut transcript)?;
-            self.resp_eph_pk_auds_meds[i]
-                .r_4
-                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.3, &mut transcript)?;
+            self.resp_eph_pk_auds_meds[i].r_2.challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.1,
+                &mut transcript,
+            )?;
+            self.resp_eph_pk_auds_meds[i].r_3.challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.2,
+                &mut transcript,
+            )?;
+            self.resp_eph_pk_auds_meds[i].r_4.challenge_contribution(
+                base,
+                &leg_enc.eph_pk_auds_meds[i].1.3,
+                &mut transcript,
+            )?;
         }
 
         self.resp_amount_enc.challenge_contribution(
@@ -882,7 +958,12 @@ impl<
             ));
         }
 
-        self.resp_comm_r_i_amount.is_valid(&Self::bp_gens_vec(tree_parameters), &self.comm_r_i_amount, &self.t_comm_r_i_amount, &verifier_challenge)?;
+        self.resp_comm_r_i_amount.is_valid(
+            &Self::bp_gens_vec(tree_parameters),
+            &self.comm_r_i_amount,
+            &self.t_comm_r_i_amount,
+            &verifier_challenge,
+        )?;
 
         let aud_role_base = asset_comm_params.j_0.neg();
         let blinding_base = tree_parameters
@@ -926,32 +1007,29 @@ impl<
                 )?;
             }
 
-            if !resp.r_2.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.1,
-                D_r1,
-                &verifier_challenge,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    format!("resp_leaf_points[{i}].r_2 verification mismatch"),
-                ));
+            if !resp
+                .r_2
+                .verify(&leg_enc.eph_pk_auds_meds[i].1.1, D_r1, &verifier_challenge)
+            {
+                return Err(Error::ProofVerificationError(format!(
+                    "resp_leaf_points[{i}].r_2 verification mismatch"
+                )));
             }
-            if !resp.r_3.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.2,
-                D_r1,
-                &verifier_challenge,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    format!("resp_leaf_points[{i}].r_3 verification mismatch"),
-                ));
+            if !resp
+                .r_3
+                .verify(&leg_enc.eph_pk_auds_meds[i].1.2, D_r1, &verifier_challenge)
+            {
+                return Err(Error::ProofVerificationError(format!(
+                    "resp_leaf_points[{i}].r_3 verification mismatch"
+                )));
             }
-            if !resp.r_4.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.3,
-                D_r1,
-                &verifier_challenge,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    format!("resp_leaf_points[{i}].r_4 verification mismatch"),
-                ));
+            if !resp
+                .r_4
+                .verify(&leg_enc.eph_pk_auds_meds[i].1.3, D_r1, &verifier_challenge)
+            {
+                return Err(Error::ProofVerificationError(format!(
+                    "resp_leaf_points[{i}].r_4 verification mismatch"
+                )));
             }
 
             if resp.r_1.1.0[0] != self.resp_comm_r_i_amount.0[1] {
@@ -1010,16 +1088,13 @@ impl<
         cs.constrain(var_r_4 - var_r_4_);
 
         // TODO: What if we do range proof outside circuit? Or using another protocol like Bulletproofs++?
-        range_proof(
-            cs,
-            var_amount.into(),
-            amount,
-            AMOUNT_BITS.into(),
-        )?;
+        range_proof(cs, var_amount.into(), amount, AMOUNT_BITS.into())?;
         Ok(())
     }
 
-    pub(crate)fn bp_gens_vec(account_tree_params: &SelRerandParameters<G1, G0>) -> [Affine<G0>; 9] {
+    pub(crate) fn bp_gens_vec(
+        account_tree_params: &SelRerandParameters<G1, G0>,
+    ) -> [Affine<G0>; 9] {
         let mut gens = bp_gens_for_vec_commitment(8, &account_tree_params.odd_parameters.bp_gens);
         [
             account_tree_params.odd_parameters.pc_gens.B_blinding,
@@ -1159,6 +1234,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::account::AccountCommitmentKeyTrait;
+    use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
     use ark_ec::VariableBaseMSM;
     use ark_std::UniformRand;
@@ -1166,8 +1243,6 @@ pub mod tests {
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use rand_core::CryptoRngCore;
     use std::time::Instant;
-    use crate::account_registration::tests::setup_comm_key;
-    use crate::account::AccountCommitmentKeyTrait;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1231,12 +1306,12 @@ pub mod tests {
             );
 
         // Account signing (affirmation) keys
-        let (sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
-        let (sk_r, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+        let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+        let (_sk_r, pk_r) = keygen_sig(&mut rng, sig_key_gen);
 
         // Encryption keys
         let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
-        let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
         let keys_auditor = (0..num_auditors)
             .map(|_| {
@@ -1273,7 +1348,8 @@ pub mod tests {
             keys.clone(),
             &asset_comm_params,
             asset_tree_params.odd_parameters.delta,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Check asset_data is correctly constructed
         let points = AssetData::points(asset_id, &asset_data.keys, &asset_comm_params);
@@ -1315,14 +1391,7 @@ pub mod tests {
 
         let clock = Instant::now();
 
-        let leg = Leg::new(
-            pk_s.0,
-            pk_r.0,
-            keys.clone(),
-            amount,
-            asset_id,
-        )
-        .unwrap();
+        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, asset_id).unwrap();
         let (leg_enc, leg_enc_rand) = leg
             .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
             .unwrap();
@@ -1394,8 +1463,7 @@ pub mod tests {
         println!("total proof size = {}", proof.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+            prover_time, verifier_time
         );
     }
 
@@ -1408,14 +1476,13 @@ pub mod tests {
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
 
-
         // Account signing (affirmation) keys
-        let (sk_s, pk_s) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        let (sk_r, pk_r) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (_sk_s, pk_s) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (_sk_r, pk_r) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         // Encryption keys
-        let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
-        let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
         let asset_id = 1;
         let amount = 100;
@@ -1453,10 +1520,18 @@ pub mod tests {
                 .into_iter(),
         );
 
-
-
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone().into_iter().map(|(role, k, _)| (role, k)).collect(), amount, asset_id).unwrap();
+        let leg = Leg::new(
+            pk_s.0,
+            pk_r.0,
+            keys.clone()
+                .into_iter()
+                .map(|(role, k, _)| (role, k))
+                .collect(),
+            amount,
+            asset_id,
+        )
+        .unwrap();
         let (leg_enc, _) = leg
             .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
             .unwrap();
@@ -1479,12 +1554,21 @@ pub mod tests {
             mediator_index_in_keys,
             nonce,
             enc_gen,
-        ).unwrap();
+        )
+        .unwrap();
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
 
-        proof.verify(leg_enc.clone(), accept, mediator_index_in_keys, nonce, enc_gen).unwrap();
+        proof
+            .verify(
+                leg_enc.clone(),
+                accept,
+                mediator_index_in_keys,
+                nonce,
+                enc_gen,
+            )
+            .unwrap();
 
         let verifier_time = clock.elapsed();
 
@@ -1495,12 +1579,20 @@ pub mod tests {
             verifier_time
         );
 
-        match proof.verify(leg_enc.clone(), accept, 10, nonce, enc_gen).err().unwrap() {
+        match proof
+            .verify(leg_enc.clone(), accept, 10, nonce, enc_gen)
+            .err()
+            .unwrap()
+        {
             Error::InvalidKeyIndex(i) => assert_eq!(i, 10),
             _ => panic!("Didn't error but should have"),
         }
 
-        match proof.verify(leg_enc.clone(), accept, 0, nonce, enc_gen).err().unwrap() {
+        match proof
+            .verify(leg_enc.clone(), accept, 0, nonce, enc_gen)
+            .err()
+            .unwrap()
+        {
             Error::MediatorNotFoundAtIndex(i) => assert_eq!(i, 0),
             _ => panic!("Didn't error but should have"),
         }

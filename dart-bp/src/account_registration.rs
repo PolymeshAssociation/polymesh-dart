@@ -1,30 +1,15 @@
-use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
-};
-use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-// use arkworks_r1cs_gadgets::poseidon::{PoseidonGadget, FieldHasherGadget};
 use crate::account::{
     AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, TXN_CHALLENGE_LABEL,
     TXN_INSTANCE_LABEL,
 };
 use crate::error::*;
+use crate::poseidon_impls::poseidon_2::{Poseidon_hash_2_constraints_simple, Poseidon2Params};
 use crate::util::bp_gens_for_vec_commitment;
-use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
-use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
-use ark_crypto_primitives::{
-    crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
-    sponge::poseidon::PoseidonConfig,
-};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::{Field, PrimeField, Zero};
-use ark_r1cs_std::alloc::AllocVar;
-use ark_r1cs_std::{
-    R1CSVar,
-    fields::fp::{AllocatedFp, FpVar},
-};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier,
@@ -41,7 +26,10 @@ use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand_core::CryptoRngCore;
-use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_constraints_simple};
+use schnorr_pok::discrete_log::{
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
+use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 /// Proof of encrypted randomness
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
@@ -443,11 +431,17 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             return Err(Error::PkTAndEncryptedRandomnessInconsistent);
         }
         if self.resp_comm_rho_bp.len() != 4 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(4, self.resp_comm_rho_bp.len()))
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                4,
+                self.resp_comm_rho_bp.len(),
+            ));
         }
         if let Some(enc_rand) = &self.encrypted_randomness {
             if enc_rand.resp_comm_s_chunks_bp.len() != (NUM_CHUNKS + 1) {
-                return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(NUM_CHUNKS + 1, enc_rand.resp_comm_s_chunks_bp.len()))
+                return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                    NUM_CHUNKS + 1,
+                    enc_rand.resp_comm_s_chunks_bp.len(),
+                ));
             }
         }
 
@@ -503,13 +497,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut verifier = Verifier::new(verifier_transcript);
 
         let vars = verifier.commit_vec(3, self.comm_rho_bp);
-        Self::enforce_constraints(
-            &mut verifier,
-            asset_id,
-            counter,
-            vars,
-            poseidon_config,
-        )?;
+        Self::enforce_constraints(&mut verifier, asset_id, counter, vars, poseidon_config)?;
 
         if let Some(enc_rand) = &self.encrypted_randomness {
             let mut vars = verifier.commit_vec(NUM_CHUNKS, enc_rand.comm_s_chunks_bp);
@@ -642,7 +630,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     ));
                 }
 
-                if enc_rand.resp_comm_s_chunks_bp.0[i+1] != enc_rand.resp_encrypted[i].response2 {
+                if enc_rand.resp_comm_s_chunks_bp.0[i + 1] != enc_rand.resp_encrypted[i].response2 {
                     return Err(Error::ProofVerificationError(
                         "Mismatch in commitment randomness chunk".to_string(),
                     ));
@@ -692,8 +680,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let lc_rho: LinearCombination<G::ScalarField> = var_rho.into();
         let combined = AccountState::<G>::concat_asset_id_counter(asset_id, counter);
         let c = LinearCombination::from(combined);
-        let lc_rho_1 =
-            Poseidon_hash_2_constraints_simple(cs, var_sk.into(), c, poseidon_config)?;
+        let lc_rho_1 = Poseidon_hash_2_constraints_simple(cs, var_sk.into(), c, poseidon_config)?;
         let (_, _, var_rho_sq_1) = cs.multiply(lc_rho.clone(), lc_rho.clone());
         cs.constrain(lc_rho_1 - lc_rho);
         cs.constrain(var_rho_sq_1 - var_rho_sq);
@@ -1189,16 +1176,26 @@ pub mod tests {
     use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
-    use ark_crypto_primitives::sponge::Absorb;
+    use crate::poseidon_impls::poseidon_2::Poseidon2Params;
+    use crate::poseidon_impls::poseidon_old::{PoseidonParams, SboxType};
+    use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
+    use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
+    use ark_crypto_primitives::{
+        crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
+        sponge::poseidon::PoseidonConfig,
+    };
     use ark_ff::{Field, PrimeField};
+    use ark_r1cs_std::alloc::AllocVar;
+    use ark_r1cs_std::{
+        R1CSVar,
+        fields::fp::{AllocatedFp, FpVar},
+    };
     use ark_std::UniformRand;
     use curve_tree_relations::curve_tree::SelRerandParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::marker::PhantomData;
     use std::time::Instant;
-    use crate::poseidon_impls::poseidon_2::Poseidon2Params;
-    use crate::poseidon_impls::poseidon_old::{PoseidonParams, SboxType};
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1235,7 +1232,7 @@ pub mod tests {
     }
 
     pub fn test_params_for_poseidon<R: CryptoRngCore, F: PrimeField>(
-        rng: &mut R,
+        _rng: &mut R,
     ) -> (PoseidonParams<F>, SboxType<F>) {
         let full_rounds = 8;
         let partial_rounds = 140;
@@ -1326,8 +1323,7 @@ pub mod tests {
         // Issuer creates keys
         let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let (account, c, poseidon_config) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+        let (account, c, poseidon_config) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
