@@ -615,6 +615,11 @@ impl DartTestingDb {
         signer_name: &str,
         account_name: &str,
     ) -> Result<DartAccountInfo> {
+        log::debug!(
+            "Getting Dart account for signer '{}' and account '{}'",
+            signer_name,
+            account_name
+        );
         let mut stmt = self.conn.prepare(
             "SELECT da.id, da.signer_id, da.name, da.account_key, da.encryption_key, da.key_seed
              FROM dart_accounts da
@@ -942,6 +947,11 @@ impl DartTestingDb {
         account_info: &DartAccountInfo,
         asset_id: AssetId,
     ) -> Result<AccountAssetState> {
+        log::debug!(
+            "Getting account asset state for account '{}' and asset '{}'",
+            account_info.name,
+            asset_id
+        );
         let mut stmt = self.conn.prepare(
             "SELECT aas.id, aas.account_db_id, aas.asset_db_id, aas.state_data 
              FROM account_asset_states aas
@@ -957,6 +967,12 @@ impl DartTestingDb {
                 state_data: row.get(3)?,
             })
         })?;
+        log::debug!(
+            "Found account asset state info: {:?} for account '{}' and asset '{}'",
+            state_info,
+            account_info.name,
+            asset_id
+        );
 
         state_info.get_state(account_info)
     }
@@ -1071,6 +1087,11 @@ impl DartTestingDb {
         amount: Balance,
         proof_action: ProofAction,
     ) -> Result<()> {
+        log::debug!(
+            "Sender affirmation for settlement {}, leg {}",
+            settlement_id,
+            leg_index
+        );
         // Check settlement is in pending state
         let settlement_status = self.get_settlement_status(settlement_id)?;
         let settlement_status = SettlementStatus::from_str(&settlement_status)?;
@@ -1469,6 +1490,11 @@ impl DartTestingDb {
         settlement_id: SettlementId,
         leg_index: LegId,
     ) -> Result<LegEncrypted> {
+        log::debug!(
+            "Getting encrypted leg for settlement {}, leg {}",
+            settlement_id,
+            leg_index
+        );
         let mut stmt = self.conn.prepare(
             "SELECT encrypted_leg FROM settlement_legs 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
@@ -1476,6 +1502,7 @@ impl DartTestingDb {
 
         let encrypted_leg_data: Vec<u8> =
             stmt.query_row(params![settlement_id, leg_index], |row| row.get(0))?;
+        log::debug!("Encrypted leg data length: {}", encrypted_leg_data.len());
 
         let encrypted_leg = LegEncrypted::decode(&mut encrypted_leg_data.as_slice())?;
         Ok(encrypted_leg)
@@ -1639,6 +1666,7 @@ impl DartTestingDb {
     }
 
     pub fn get_settlement_status(&self, settlement_id: SettlementId) -> Result<String> {
+        log::debug!("Getting status for settlement ID {}", settlement_id);
         let mut stmt = self
             .conn
             .prepare("SELECT status FROM settlements WHERE settlement_id = ?1")?;
@@ -1655,6 +1683,11 @@ impl DartTestingDb {
         AffirmationStatus,
         Option<AffirmationStatus>,
     )> {
+        log::debug!(
+            "Getting affirmation statuses for settlement ID {}, leg index {}",
+            settlement_id,
+            leg_index
+        );
         let mut stmt = self.conn.prepare(
             "SELECT sender_status, receiver_status, mediator_status FROM settlement_legs 
              WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
@@ -1664,6 +1697,12 @@ impl DartTestingDb {
             .query_row(params![settlement_id, leg_index], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })?;
+        log::debug!(
+            "Leg statuses - sender: {}, receiver: {}, mediator: {:?}",
+            sender_str,
+            receiver_str,
+            mediator_str
+        );
 
         let sender_status = AffirmationStatus::from_str(&sender_str)?;
         let receiver_status = AffirmationStatus::from_str(&receiver_str)?;
