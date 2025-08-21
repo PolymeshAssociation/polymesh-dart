@@ -139,8 +139,9 @@ pub struct Leg<G: AffineRepr> {
     pub pk_s: G,
     /// Public key of receiver
     pub pk_r: G,
-    /// Public keys of auditors and mediators in the order they appear in [`AssetData`]
-    pub pk_auds_meds: Vec<G>,
+    /// Public keys of auditors and mediators in the order they appear in [`AssetData`].
+    /// If role is auditor, then boolean = true else false
+    pub pk_auds_meds: Vec<(bool, G)>,
     pub amount: Balance,
     pub asset_id: AssetId,
 }
@@ -164,7 +165,9 @@ pub struct LegEncryption<G: AffineRepr> {
     pub eph_pk_s: G,
     /// Used by receiver to recover `r_i`
     pub eph_pk_r: G,
-    pub eph_pk_auds_meds: Vec<EphemeralPublicKey<G>>,
+    /// Ephemeral public keys of auditors and mediators in the order they appear in [`AssetData`].
+    /// If role is auditor, then boolean = true else false
+    pub eph_pk_auds_meds: Vec<(bool, EphemeralPublicKey<G>)>,
 }
 
 impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
@@ -174,7 +177,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
     pub fn new(
         pk_s: G,
         pk_r: G,
-        pk_auds_meds: Vec<G>,
+        pk_auds_meds: Vec<(bool, G)>,
         amount: Balance,
         asset_id: AssetId,
     ) -> Result<Self> {
@@ -211,13 +214,13 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let ct_r = (enc_key_gen * r2 + self.pk_r).into_affine();
         let ct_amount = (enc_key_gen * r3 + enc_gen * F::from(self.amount)).into_affine();
         let ct_asset_id = (enc_key_gen * r4 + enc_gen * F::from(self.asset_id)).into_affine();
-        let eph_pk_auds_meds = self.pk_auds_meds.iter().map(|pk| {
-            EphemeralPublicKey::<G>(
+        let eph_pk_auds_meds = self.pk_auds_meds.iter().map(|(role, pk)| {
+            (*role, EphemeralPublicKey::<G>(
                 (*pk * r1).into_affine(),
                 (*pk * r2).into_affine(),
                 (*pk * r3).into_affine(),
                 (*pk * r4).into_affine(),
-            )
+            ))
         });
 
         let eph_pk_s = (pk_s_enc * y).into_affine();
@@ -309,10 +312,13 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         key_index: usize,
         enc_gen: G,
     ) -> Result<(G, G, AssetId, Balance)> {
+        if key_index >= self.eph_pk_auds_meds.len() {
+            return Err(Error::InvalidKeyIndex(key_index));
+        }
         let sender =
-            Self::decrypt_as_group_element(sk, self.ct_s, self.eph_pk_auds_meds[key_index].0)?;
+            Self::decrypt_as_group_element(sk, self.ct_s, self.eph_pk_auds_meds[key_index].1.0)?;
         let receiver =
-            Self::decrypt_as_group_element(sk, self.ct_r, self.eph_pk_auds_meds[key_index].1)?;
+            Self::decrypt_as_group_element(sk, self.ct_r, self.eph_pk_auds_meds[key_index].1.1)?;
         let enc_gen = enc_gen.into_group();
         let asset_id = self.decrypt_asset_id(sk, key_index, enc_gen)? as AssetId;
         let amount = self.decrypt_amount(sk, key_index, enc_gen)?;
@@ -347,18 +353,24 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     }
 
     pub fn decrypt_asset_id(&self, sk: &F, key_index: usize, enc_gen: G::Group) -> Result<u64> {
+        if key_index >= self.eph_pk_auds_meds.len() {
+            return Err(Error::InvalidKeyIndex(key_index));
+        }
         let asset_id = Self::decrypt_as_group_element(
             sk,
             self.ct_asset_id,
-            self.eph_pk_auds_meds[key_index].3,
+            self.eph_pk_auds_meds[key_index].1.3,
         )?;
         solve_discrete_log_bsgs_alt::<G::Group>(MAX_ASSET_ID as u64, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
 
     pub fn decrypt_amount(&self, sk: &F, key_index: usize, enc_gen: G::Group) -> Result<u64> {
+        if key_index >= self.eph_pk_auds_meds.len() {
+            return Err(Error::InvalidKeyIndex(key_index));
+        }
         let amount =
-            Self::decrypt_as_group_element(sk, self.ct_amount, self.eph_pk_auds_meds[key_index].2)?;
+            Self::decrypt_as_group_element(sk, self.ct_amount, self.eph_pk_auds_meds[key_index].1.2)?;
         solve_discrete_log_bsgs_alt::<G::Group>(MAX_AMOUNT, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
@@ -384,7 +396,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 /// and ensuring `pk` is the correct public key for the asset auditor/mediator
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RespEphemeralPublicKey<G: SWCurveConfig> {
-    pub role: bool,
     pub r_1: (Affine<G>, SchnorrResponse<Affine<G>>),
     pub r_2: PokDiscreteLog<Affine<G>>,
     pub r_3: PokDiscreteLog<Affine<G>>,
@@ -415,7 +426,8 @@ pub struct SettlementTxnProof<
     pub comm_r_i_amount: Affine<G0>,
     pub t_comm_r_i_amount: Affine<G0>,
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
-    pub resp_leaf_points: Vec<RespEphemeralPublicKey<G0>>,
+    /// Response for proving correctness of ephemeral public keys. Is in the same order as the keys in [`AssetData`]
+    pub resp_eph_pk_auds_meds: Vec<RespEphemeralPublicKey<G0>>,
 }
 
 impl<
@@ -430,7 +442,7 @@ impl<
     // is to assume that other proofs will be created along this and `Self::new` should accept transcript which are being shared
     // by other proofs. Also, this could take a randomized mult-checker which is shared by others.
 
-    pub fn new<R: RngCore + CryptoRng>(
+    pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         leg: Leg<Affine<G0>>,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -601,9 +613,10 @@ impl<
                 ], blindings_r1)
             };
 
-            let t_2 = PokDiscreteLogProtocol::init(r_2_r_1_inv, r_2_r_1_inv_blinding, &leg_enc.eph_pk_auds_meds[i].0);
-            let t_3 = PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, &leg_enc.eph_pk_auds_meds[i].0);
-            let t_4 = PokDiscreteLogProtocol::init(r_4_r_1_inv, r_4_r_1_inv_blinding, &leg_enc.eph_pk_auds_meds[i].0);
+            let base = &leg_enc.eph_pk_auds_meds[i].1.0;
+            let t_2 = PokDiscreteLogProtocol::init(r_2_r_1_inv, r_2_r_1_inv_blinding, base);
+            let t_3 = PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, base);
+            let t_4 = PokDiscreteLogProtocol::init(r_4_r_1_inv, r_4_r_1_inv_blinding, base);
 
             t_points_r1.push(t_1);
             t_points_r2.push(t_2);
@@ -646,9 +659,10 @@ impl<
         for i in 0..asset_data.keys.len() {
             re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
             t_points_r1[i].challenge_contribution(&mut transcript)?;
-            t_points_r2[i].challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].1, &mut transcript)?;
-            t_points_r3[i].challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].2, &mut transcript)?;
-            t_points_r4[i].challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].3, &mut transcript)?;
+            let base = &leg_enc.eph_pk_auds_meds[i].1.0;
+            t_points_r2[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.1, &mut transcript)?;
+            t_points_r3[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.2, &mut transcript)?;
+            t_points_r4[i].challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.3, &mut transcript)?;
         }
 
         t_amount_enc.challenge_contribution(
@@ -677,7 +691,7 @@ impl<
             &prover_challenge
         )?;
 
-        let mut resp_leaf_points = Vec::with_capacity(asset_data.keys.len());
+        let mut resp_eph_pk_auds_meds = Vec::with_capacity(asset_data.keys.len());
 
         for (i, ((t_points_r2, t_points_r3), t_points_r4)) in t_points_r2.into_iter().zip(t_points_r3.into_iter()).zip(t_points_r4.into_iter()).enumerate() {
             let role = asset_data.keys[i].0;
@@ -694,8 +708,7 @@ impl<
             let resp_3 = t_points_r3.gen_proof(&prover_challenge);
 
             let resp_4 = t_points_r4.gen_proof(&prover_challenge);
-            resp_leaf_points.push(RespEphemeralPublicKey {
-                role,
+            resp_eph_pk_auds_meds.push(RespEphemeralPublicKey {
                 r_1: (t_points_r1[i].t, resp_1),
                 r_2: resp_2,
                 r_3: resp_3,
@@ -721,7 +734,7 @@ impl<
             comm_r_i_amount,
             t_comm_r_i_amount: t_comm_r_i_amount.t,
             resp_comm_r_i_amount,
-            resp_leaf_points,
+            resp_eph_pk_auds_meds,
         })
     }
 
@@ -740,8 +753,8 @@ impl<
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(asset_comm_params.comm_key.len(), self.re_randomized_points.len()))
         }
-        if self.re_randomized_points.len() != self.resp_leaf_points.len() + 1 {
-            return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(self.re_randomized_points.len(), self.resp_leaf_points.len() + 1))
+        if self.re_randomized_points.len() != self.resp_eph_pk_auds_meds.len() + 1 {
+            return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(self.re_randomized_points.len(), self.resp_eph_pk_auds_meds.len() + 1))
         }
         if self.resp_comm_r_i_amount.len() != 9 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(9, self.resp_comm_r_i_amount.len()))
@@ -769,7 +782,6 @@ impl<
             .transcript()
             .append_message_without_static_label(SETTLE_TXN_INSTANCE_LABEL, &leg_instance);
 
-
         let rerandomized_leaf = self.re_randomized_path.get_rerandomized_leaf();
 
         verify_naive(
@@ -786,21 +798,22 @@ impl<
 
         self.t_comm_r_i_amount.serialize_compressed(&mut transcript)?;
 
-        for i in 0..self.resp_leaf_points.len() {
+        for i in 0..self.resp_eph_pk_auds_meds.len() {
             self.re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
-            self.resp_leaf_points[i]
+            self.resp_eph_pk_auds_meds[i]
                 .r_1
                 .0
                 .serialize_compressed(&mut transcript)?;
-            self.resp_leaf_points[i]
+            let base = &leg_enc.eph_pk_auds_meds[i].1.0;
+            self.resp_eph_pk_auds_meds[i]
                 .r_2
-                .challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].1, &mut transcript)?;
-            self.resp_leaf_points[i]
+                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.1, &mut transcript)?;
+            self.resp_eph_pk_auds_meds[i]
                 .r_3
-                .challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].2, &mut transcript)?;
-            self.resp_leaf_points[i]
+                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.2, &mut transcript)?;
+            self.resp_eph_pk_auds_meds[i]
                 .r_4
-                .challenge_contribution(&leg_enc.eph_pk_auds_meds[i].0, &leg_enc.eph_pk_auds_meds[i].3, &mut transcript)?;
+                .challenge_contribution(base, &leg_enc.eph_pk_auds_meds[i].1.3, &mut transcript)?;
         }
 
         self.resp_amount_enc.challenge_contribution(
@@ -880,9 +893,10 @@ impl<
             .neg()
             .into_affine();
 
-        for i in 0..self.resp_leaf_points.len() {
-            let resp = &self.resp_leaf_points[i];
-            let role = resp.role;
+        for i in 0..self.resp_eph_pk_auds_meds.len() {
+            let resp = &self.resp_eph_pk_auds_meds[i];
+            let role = leg_enc.eph_pk_auds_meds[i].0;
+            let D_r1 = &leg_enc.eph_pk_auds_meds[i].1.0;
 
             if role {
                 resp.r_1.1.is_valid(
@@ -891,7 +905,7 @@ impl<
                         blinding_base,
                         aud_role_base,
                     ],
-                    &leg_enc.eph_pk_auds_meds[i].0,
+                    D_r1,
                     &resp.r_1.0,
                     &verifier_challenge,
                 )?;
@@ -906,15 +920,15 @@ impl<
                         self.re_randomized_points[i + 1], // since first point commits to asset-id
                         blinding_base,
                     ],
-                    &leg_enc.eph_pk_auds_meds[i].0,
+                    D_r1,
                     &resp.r_1.0,
                     &verifier_challenge,
                 )?;
             }
 
             if !resp.r_2.verify(
-                &leg_enc.eph_pk_auds_meds[i].1,
-                &leg_enc.eph_pk_auds_meds[i].0,
+                &leg_enc.eph_pk_auds_meds[i].1.1,
+                D_r1,
                 &verifier_challenge,
             ) {
                 return Err(Error::ProofVerificationError(
@@ -922,8 +936,8 @@ impl<
                 ));
             }
             if !resp.r_3.verify(
-                &leg_enc.eph_pk_auds_meds[i].2,
-                &leg_enc.eph_pk_auds_meds[i].0,
+                &leg_enc.eph_pk_auds_meds[i].1.2,
+                D_r1,
                 &verifier_challenge,
             ) {
                 return Err(Error::ProofVerificationError(
@@ -931,8 +945,8 @@ impl<
                 ));
             }
             if !resp.r_4.verify(
-                &leg_enc.eph_pk_auds_meds[i].3,
-                &leg_enc.eph_pk_auds_meds[i].0,
+                &leg_enc.eph_pk_auds_meds[i].1.3,
+                D_r1,
                 &verifier_challenge,
             ) {
                 return Err(Error::ProofVerificationError(
@@ -1039,9 +1053,12 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         enc_gen: G,
     ) -> Result<Self> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
+            return Err(Error::InvalidKeyIndex(index_in_asset_data));
+        }
+        // Role should be false for mediator
+        if leg_enc.eph_pk_auds_meds[index_in_asset_data].0 {
             return Err(Error::MediatorNotFoundAtIndex(index_in_asset_data));
         }
-        // I could also additionally check if index does correspond to a mediator and not auditor.
 
         let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
@@ -1052,7 +1069,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
         }
 
-        let D = leg_enc.eph_pk_auds_meds[index_in_asset_data].3;
+        let D = leg_enc.eph_pk_auds_meds[index_in_asset_data].1.3;
         let minus_h = enc_gen.into_group().neg().into_affine();
         let enc_pk = PokPedersenCommitmentProtocol::init(
             mediator_sk,
@@ -1089,6 +1106,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         enc_gen: G,
     ) -> Result<()> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
+            return Err(Error::InvalidKeyIndex(index_in_asset_data));
+        }
+        // Role should be false for mediator
+        if leg_enc.eph_pk_auds_meds[index_in_asset_data].0 {
             return Err(Error::MediatorNotFoundAtIndex(index_in_asset_data));
         }
 
@@ -1101,7 +1122,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
         }
 
-        let D = leg_enc.eph_pk_auds_meds[index_in_asset_data].3;
+        let D = leg_enc.eph_pk_auds_meds[index_in_asset_data].1.3;
         let minus_h = enc_gen.into_group().neg().into_affine();
 
         self.resp_enc_pk.challenge_contribution(
@@ -1297,7 +1318,7 @@ pub mod tests {
         let leg = Leg::new(
             pk_s.0,
             pk_r.0,
-            keys.into_iter().map(|(_, k)| k).collect(),
+            keys.clone(),
             amount,
             asset_id,
         )
@@ -1435,7 +1456,7 @@ pub mod tests {
 
 
         // Venue has successfully created the settlement and leg commitment has been stored on chain
-        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone().into_iter().map(|(_, k, _)| k).collect(), amount, asset_id).unwrap();
+        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone().into_iter().map(|(role, k, _)| (role, k)).collect(), amount, asset_id).unwrap();
         let (leg_enc, _) = leg
             .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
             .unwrap();
@@ -1473,5 +1494,15 @@ pub mod tests {
             prover_time,
             verifier_time
         );
+
+        match proof.verify(leg_enc.clone(), accept, 10, nonce, enc_gen).err().unwrap() {
+            Error::InvalidKeyIndex(i) => assert_eq!(i, 10),
+            _ => panic!("Didn't error but should have"),
+        }
+
+        match proof.verify(leg_enc.clone(), accept, 0, nonce, enc_gen).err().unwrap() {
+            Error::MediatorNotFoundAtIndex(i) => assert_eq!(i, 0),
+            _ => panic!("Didn't error but should have"),
+        }
     }
 }

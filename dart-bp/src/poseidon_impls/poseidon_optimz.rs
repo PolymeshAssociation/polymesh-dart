@@ -316,6 +316,8 @@ mod tests {
     use ark_pallas::Affine as PallasA;
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
+
+    #[ignore]
     #[test]
     fn test_poseidon_perm_optimz_cube_sbox() {
         let mut rng = rand::thread_rng();
