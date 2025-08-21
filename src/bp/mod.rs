@@ -2315,7 +2315,7 @@ impl MediatorAffirmationProof {
             accept,
             key_index as usize,
             ctx.as_bytes(),
-            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
         )?;
 
         Ok(Self {
@@ -2335,7 +2335,7 @@ impl MediatorAffirmationProof {
             self.accept,
             self.key_index as usize,
             ctx.as_bytes(),
-            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
         )?;
         Ok(())
     }
