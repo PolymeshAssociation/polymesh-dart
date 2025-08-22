@@ -1568,6 +1568,7 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasScalar>);
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
@@ -1618,6 +1619,28 @@ impl LegEncrypted {
             asset_id,
             amount,
         })
+    }
+
+    pub fn decrypt_with_randomness(
+        &self,
+        role: LegRole,
+        keys: &EncryptionKeyPair,
+    ) -> Result<(Leg, LegEncryptionRandomness), Error> {
+        let enc_key_gen = dart_gens().enc_key_gen();
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        let randomness = self.get_encryption_randomness(role, keys)?;
+        let (sender, receiver, asset_id, amount) =
+            self.leg_enc
+                .decrypt_given_r(randomness.0, enc_key_gen, enc_gen)?;
+        Ok((
+            Leg {
+                sender: AccountPublicKey::from_affine(sender)?,
+                receiver: AccountPublicKey::from_affine(receiver)?,
+                asset_id,
+                amount,
+            },
+            randomness,
+        ))
     }
 }
 

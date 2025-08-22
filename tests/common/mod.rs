@@ -141,8 +141,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -193,8 +193,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Receiver, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys.enc)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -295,8 +295,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg for claim");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Receiver, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Receiver, &self.keys.enc)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 
@@ -331,8 +331,8 @@ impl DartUserAccountInner {
         leg_ref: &LegRef,
     ) -> Result<()> {
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
 
         // Get the asset state for the account.
@@ -366,8 +366,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg for reversal");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg_enc_rand = leg_enc.get_encryption_randomness(LegRole::Sender, &self.keys.enc)?;
-        let leg = leg_enc.decrypt(LegRole::Sender, &self.keys.enc)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys.enc)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 

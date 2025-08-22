@@ -157,7 +157,7 @@ pub struct Leg<G: AffineRepr> {
 pub struct EphemeralPublicKey<G: AffineRepr>(pub G, pub G, pub G, pub G);
 
 /// (r_1, r_2, r_3, r_4)
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct LegEncryptionRandomness<F: PrimeField>(pub F, pub F, pub F, pub F);
 
 /// Twisted Elgamal encryption of sender, receiver public keys, amount and asset id for all the auditors and mediators
