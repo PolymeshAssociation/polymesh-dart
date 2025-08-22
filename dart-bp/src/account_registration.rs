@@ -10,6 +10,7 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier,
@@ -395,7 +396,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             None
         };
 
-        let proof = prover.prove(leaf_level_bp_gens)?;
+        let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
 
         Ok(Self {
             resp_comm,
@@ -930,7 +931,7 @@ impl<
         )?;
         let resp_pk = t_pk.gen_proof(&prover_challenge);
 
-        let proof = prover.prove(leaf_level_bp_gens)?;
+        let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
 
         Ok(Self {
             T_1,
@@ -1177,7 +1178,6 @@ pub mod tests {
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use crate::poseidon_impls::poseidon_2::Poseidon2Params;
-    use crate::poseidon_impls::poseidon_old::{PoseidonParams, SboxType};
     use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
     use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
     use ark_crypto_primitives::{
@@ -1194,7 +1194,6 @@ pub mod tests {
     use curve_tree_relations::curve_tree::SelRerandParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
-    use std::marker::PhantomData;
     use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
@@ -1229,17 +1228,6 @@ pub mod tests {
         }
 
         PoseidonConfig::<F>::new(FULL_ROUNDS, PARTIAL_ROUNDS, ALPHA, mds, ark, RATE, CAPACITY)
-    }
-
-    pub fn test_params_for_poseidon<R: CryptoRngCore, F: PrimeField>(
-        _rng: &mut R,
-    ) -> (PoseidonParams<F>, SboxType<F>) {
-        let full_rounds = 8;
-        let partial_rounds = 140;
-        (
-            PoseidonParams::new(3, full_rounds, partial_rounds),
-            SboxType::Cube(PhantomData),
-        )
     }
 
     pub fn test_params_for_poseidon2<R: CryptoRngCore, F: PrimeField>(

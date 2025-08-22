@@ -3,6 +3,7 @@ use thiserror::Error;
 use polymesh_dart_common::AssetId;
 
 use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
+use ark_std::string::String;
 
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]

@@ -1,4 +1,5 @@
 use ark_ff::Field;
+use ark_std::borrow::ToOwned;
 use ark_std::{marker::PhantomData, vec, vec::Vec};
 use bulletproofs::errors::R1CSError;
 use bulletproofs::r1cs::linear_combination::AllocatedScalar;
@@ -79,12 +80,12 @@ pub fn mat_inverse<F: Field>(mat: &[Vec<F>]) -> Vec<Vec<F>> {
         let el_inv = m[row][row].inverse().unwrap();
         for col in 0..n {
             match col.cmp(&row) {
-                std::cmp::Ordering::Less => inv[row][col] *= el_inv,
-                std::cmp::Ordering::Equal => {
+                core::cmp::Ordering::Less => inv[row][col] *= el_inv,
+                core::cmp::Ordering::Equal => {
                     m[row][col] = F::one();
                     inv[row][col] *= el_inv
                 }
-                std::cmp::Ordering::Greater => inv[row][col] *= el_inv,
+                core::cmp::Ordering::Greater => inv[row][col] *= el_inv,
             }
         }
     }

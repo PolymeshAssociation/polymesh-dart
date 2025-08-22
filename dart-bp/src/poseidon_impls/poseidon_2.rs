@@ -1,12 +1,15 @@
 // The native implementation is taken from here https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2.rs
 
 use crate::error::{Error, Result};
-use crate::poseidon_impls::poseidon_old::ZERO_CONST;
 use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use ark_ff::PrimeField;
+use ark_std::borrow::ToOwned;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError, Variable};
 use rand_core::CryptoRngCore;
+
+pub const ZERO_CONST: u64 = 0;
 
 #[derive(Clone, Debug)]
 pub struct Poseidon2Params<F: PrimeField> {

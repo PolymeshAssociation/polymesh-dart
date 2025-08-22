@@ -715,6 +715,11 @@ impl AssetState {
         )?;
         Ok(asset_data)
     }
+
+    pub fn commitment(&self) -> Result<LeafValue<VestaParameters>, Error> {
+        let asset_data = self.asset_data()?;
+        Ok(asset_data.commitment.into())
+    }
 }
 
 /// Represents a tree of asset states in the Dart BP protocol.
@@ -1015,30 +1020,6 @@ impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
 
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
-    }
-}
-
-/// Represents the auditor or mediator in a leg of the Dart BP protocol.
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
-pub enum AuditorOrMediator {
-    Mediator(EncryptionPublicKey),
-    Auditor(EncryptionPublicKey),
-}
-
-impl AuditorOrMediator {
-    pub fn mediator(pk: &EncryptionPublicKey) -> Self {
-        Self::Mediator(*pk)
-    }
-
-    pub fn auditor(pk: &EncryptionPublicKey) -> Self {
-        Self::Auditor(*pk)
-    }
-
-    pub fn get_keys(&self) -> Vec<(bool, PallasA)> {
-        match self {
-            AuditorOrMediator::Mediator(pk) => vec![(true, pk.get_affine().unwrap())],
-            AuditorOrMediator::Auditor(pk) => vec![(false, pk.get_affine().unwrap())],
-        }
     }
 }
 

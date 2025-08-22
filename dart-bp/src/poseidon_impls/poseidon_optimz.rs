@@ -4,6 +4,8 @@
 use crate::poseidon_impls::poseidon_old::{PoseidonParams as UnoptParams, SboxType};
 use crate::poseidon_impls::utils;
 use ark_ff::{Field, PrimeField};
+use ark_std::borrow::ToOwned;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError};
 use std::ops::Range;

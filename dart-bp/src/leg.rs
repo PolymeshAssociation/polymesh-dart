@@ -8,6 +8,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::format;
 use ark_std::iter;
 use ark_std::ops::Neg;
 use ark_std::{vec, vec::Vec};

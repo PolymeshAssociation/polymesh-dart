@@ -25,6 +25,8 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::format;
+use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};

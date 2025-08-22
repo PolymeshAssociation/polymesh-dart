@@ -82,7 +82,12 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
     unsafe {
         if ASSET_COMMITMENT_PARAMETERS.is_none() {
-            let parameters = AssetTreeConfig::build_parameters();
+            let tree_parameters = get_asset_curve_tree_parameters();
+            let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new::<Blake2b512>(
+                b"asset-comm-params",
+                MAX_ASSET_KEYS,
+                &tree_parameters.even_parameters.bp_gens,
+            );
             ASSET_COMMITMENT_PARAMETERS = Some(parameters);
         }
         ASSET_COMMITMENT_PARAMETERS.as_ref().unwrap()

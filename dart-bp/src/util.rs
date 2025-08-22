@@ -6,9 +6,11 @@ use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
-use ark_std::vec;
+use ark_std::string::ToString;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Variable, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
+use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
@@ -18,7 +20,6 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use std::iter::Copied;
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
 /// Also re-randomizes the path and enforces the corresponding constraints. Returns the even prover,

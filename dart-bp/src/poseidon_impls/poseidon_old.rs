@@ -1,6 +1,7 @@
 use crate::poseidon_impls::utils::mat_mut_vec_mul;
 use ark_ec::AffineRepr;
 use ark_ff::Field;
+use ark_std::borrow::ToOwned;
 use ark_std::marker::PhantomData;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::PedersenGens;
