@@ -413,7 +413,7 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(CurveTreeRoot::new(&root)?)
             }
 
-            fn get_block_number(&self) -> Result<C::BlockNumber, error::Error> {
+            fn get_block_number(&self) -> Result<BlockNumber, error::Error> {
                 Ok($curve_tree_ty::get_block_number(self).map_err(|_| error::Error::CurveTreeBlockNumberNotFound)?)
             }
         }
@@ -426,7 +426,7 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error>,
         > ValidateCurveTreeRoot<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
         {
-            fn get_block_root(&self, block: C::BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
+            fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
                 let root = self.fetch_root(block).ok()?;
                 CurveTreeRoot::new(&root).ok()
             }
@@ -652,23 +652,23 @@ macro_rules! impl_curve_tree_with_backend {
                 }
             }
 
-            pub $($async_fn)* fn get_block_number(&self) -> Result<C::BlockNumber, Error> {
+            pub $($async_fn)* fn get_block_number(&self) -> Result<BlockNumber, Error> {
                 let block_number = self.backend.get_block_number()$($await)*?;
                 Ok(block_number)
             }
 
-            pub $($async_fn)* fn set_block_number(&mut self, block_number: C::BlockNumber) -> Result<(), Error> {
+            pub $($async_fn)* fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
                 self.backend.set_block_number(block_number)$($await)*?;
                 Ok(())
             }
 
-            pub $($async_fn)* fn store_root(&mut self) -> Result<C::BlockNumber, Error> {
+            pub $($async_fn)* fn store_root(&mut self) -> Result<BlockNumber, Error> {
                 let root = self.root_node()$($await)*?;
                 let block_number = self.backend.store_root(root)$($await)*?;
                 Ok(block_number)
             }
 
-            pub $($async_fn)* fn fetch_root(&self, block_number: C::BlockNumber) -> Result<Root<L, M, C::P0, C::P1>, Error> {
+            pub $($async_fn)* fn fetch_root(&self, block_number: BlockNumber) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 self.backend.fetch_root(block_number)$($await)*.map_err(|_| crate::Error::CurveTreeRootNotFound.into())
             }
 

@@ -14,7 +14,7 @@ pub struct LeafPathAndRoot<'p, const L: usize, const M: usize, C: CurveTreeConfi
     pub leaf: LeafValue<C::P0>,
     pub leaf_index: LeafIndex,
     pub path: CurveTreePath<L, C>,
-    pub block_number: C::BlockNumber,
+    pub block_number: BlockNumber,
     pub root: CurveTreeRoot<L, M, C>,
     pub params: &'p CurveTreeParameters<C>,
 }
@@ -46,7 +46,7 @@ impl<'p, const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, 
         Ok(self.root.clone())
     }
 
-    fn get_block_number(&self) -> Result<C::BlockNumber, Error> {
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
         Ok(self.block_number)
     }
 }
@@ -58,22 +58,19 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
 
-    fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error>;
+    fn get_block_number(&self) -> Result<BlockNumber, Self::Error>;
 
-    fn set_block_number(&mut self, _block_number: C::BlockNumber) -> Result<(), Self::Error> {
+    fn set_block_number(&mut self, _block_number: BlockNumber) -> Result<(), Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
-    fn store_root(
-        &mut self,
-        _root: Root<L, M, C::P0, C::P1>,
-    ) -> Result<C::BlockNumber, Self::Error> {
+    fn store_root(&mut self, _root: Root<L, M, C::P0, C::P1>) -> Result<BlockNumber, Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
     fn fetch_root(
         &self,
-        block_number: C::BlockNumber,
+        block_number: BlockNumber,
     ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error>;
 
     fn height(&self) -> NodeLevel;
@@ -119,11 +116,11 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn parameters(&self) -> impl Future<Output = &SelRerandParameters<C::P0, C::P1>> + Send;
 
-    fn get_block_number(&self) -> impl Future<Output = Result<C::BlockNumber, Self::Error>> + Send;
+    fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
     fn set_block_number(
         &mut self,
-        _block_number: C::BlockNumber,
+        _block_number: BlockNumber,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
@@ -131,13 +128,13 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn store_root(
         &mut self,
         _root: Root<L, M, C::P0, C::P1>,
-    ) -> impl Future<Output = Result<C::BlockNumber, Self::Error>> + Send {
+    ) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
     fn fetch_root(
         &self,
-        block_number: C::BlockNumber,
+        block_number: BlockNumber,
     ) -> impl Future<Output = Result<Root<L, M, C::P0, C::P1>, Self::Error>> + Send;
 
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
@@ -231,21 +228,18 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         &self.parameters
     }
 
-    fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error> {
+    fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         Ok(self.block_number.into())
     }
 
-    fn set_block_number(&mut self, block_number: C::BlockNumber) -> Result<(), Self::Error> {
+    fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
         self.block_number = block_number
             .try_into()
             .expect("Block number conversion failed");
         Ok(())
     }
 
-    fn store_root(
-        &mut self,
-        root: Root<L, M, C::P0, C::P1>,
-    ) -> Result<C::BlockNumber, Self::Error> {
+    fn store_root(&mut self, root: Root<L, M, C::P0, C::P1>) -> Result<BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
         self.roots.insert(block_number, root);
@@ -254,7 +248,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
 
     fn fetch_root(
         &self,
-        block_number: C::BlockNumber,
+        block_number: BlockNumber,
     ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
         let block_number: BlockNumber = block_number
             .try_into()
@@ -334,11 +328,11 @@ where
         &self.parameters
     }
 
-    async fn get_block_number(&self) -> Result<C::BlockNumber, Self::Error> {
+    async fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         Ok(self.block_number.into())
     }
 
-    async fn set_block_number(&mut self, block_number: C::BlockNumber) -> Result<(), Self::Error> {
+    async fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Self::Error> {
         self.block_number = block_number
             .try_into()
             .expect("Block number conversion failed");
@@ -348,7 +342,7 @@ where
     async fn store_root(
         &mut self,
         root: Root<L, M, C::P0, C::P1>,
-    ) -> Result<C::BlockNumber, Self::Error> {
+    ) -> Result<BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
         self.roots.insert(block_number, root);
@@ -357,7 +351,7 @@ where
 
     async fn fetch_root(
         &self,
-        block_number: C::BlockNumber,
+        block_number: BlockNumber,
     ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
         let block_number: BlockNumber = block_number
             .try_into()
