@@ -5,6 +5,7 @@ use crate::util::{
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
@@ -21,7 +22,7 @@ use curve_tree_relations::range_proof::range_proof;
 use digest::Digest;
 use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::concat_slices;
-use dock_crypto_utils::hashing_utils::{affine_group_elem_from_try_and_incr, hash_to_field};
+use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
@@ -248,27 +249,19 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         ))
     }
 
-    /// Hash `shared_secret` with counter to get `r_i`
+    /// Hash `shared_secret` to get `r_i`
     fn encryption_randomness<D: FullDigest>(shared_secret: G) -> Result<(F, F, F, F)> {
         let mut shared_secret_bytes = vec![];
         shared_secret.serialize_compressed(&mut shared_secret_bytes)?;
+
+        let hasher = <DefaultFieldHasher<D> as HashToField<F>>::new(SK_EPH_GEN_LABEL);
+        let mut r = hasher.hash_to_field(&shared_secret_bytes, 4);
+
         Ok((
-            hash_to_field::<F, D>(
-                SK_EPH_GEN_LABEL,
-                &concat_slices![&shared_secret_bytes, b":", 1_u8.to_le_bytes()],
-            ),
-            hash_to_field::<F, D>(
-                SK_EPH_GEN_LABEL,
-                &concat_slices![&shared_secret_bytes, b":", 2_u8.to_le_bytes()],
-            ),
-            hash_to_field::<F, D>(
-                SK_EPH_GEN_LABEL,
-                &concat_slices![&shared_secret_bytes, b":", 3_u8.to_le_bytes()],
-            ),
-            hash_to_field::<F, D>(
-                SK_EPH_GEN_LABEL,
-                &concat_slices![&shared_secret_bytes, b":", 4_u8.to_le_bytes()],
-            ),
+            r.remove(0),
+            r.remove(0),
+            r.remove(0),
+            r.remove(0)
         ))
     }
 }
@@ -292,7 +285,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         Ok(LegEncryptionRandomness(r_1, r_2, r_3, r_4))
     }
 
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg
+    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given r_i
     pub fn decrypt_given_r(
         &self,
         r: LegEncryptionRandomness<F>,
@@ -314,7 +307,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         ))
     }
 
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg
+    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
+    /// `key_index` is the index of auditor/mediator key in [`AssetData`]
     pub fn decrypt_given_key(
         &self,
         sk: &F,
@@ -1312,7 +1306,7 @@ pub mod tests {
 
         // Encryption keys
         let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
-        let (_sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
         let keys_auditor = (0..num_auditors)
             .map(|_| {
@@ -1436,6 +1430,14 @@ pub mod tests {
             .unwrap();
 
         let verifier_time = clock.elapsed();
+
+        let _r = leg_enc
+            .get_encryption_randomness::<Blake2b512>(&sk_r_e.0, false)
+            .unwrap();
+        assert_eq!(_r.0, leg_enc_rand.0);
+        assert_eq!(_r.1, leg_enc_rand.1);
+        assert_eq!(_r.2, leg_enc_rand.2);
+        assert_eq!(_r.3, leg_enc_rand.3);
 
         let r = leg_enc
             .get_encryption_randomness::<Blake2b512>(&sk_s_e.0, true)
