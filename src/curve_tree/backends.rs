@@ -19,6 +19,10 @@ pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConf
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L, M, C> {
+    pub fn new() -> Self {
+        Self { paths: Vec::new() }
+    }
+
     pub fn first(&self) -> Option<&LeafPathAndRoot<L, M, C>> {
         self.paths.first()
     }

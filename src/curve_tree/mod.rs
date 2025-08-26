@@ -533,13 +533,20 @@ impl<
     ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
         let leaf_buf = leaf.encode();
         if let Some(&leaf_index) = self.leaf_to_index.get(&leaf_buf) {
-            Ok(self
-                .tree
-                .get_path_and_root(leaf_index)
-                .map_err(|_| Error::LeafNotFound)?)
+            self.get_path_and_root_by_index(leaf_index)
         } else {
             Err(Error::LeafNotFound)
         }
+    }
+
+    pub fn get_path_and_root_by_index(
+        &self,
+        leaf_index: LeafIndex,
+    ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
+        Ok(self
+            .tree
+            .get_path_and_root(leaf_index)
+            .map_err(|_| Error::LeafIndexNotFound(leaf_index))?)
     }
 }
 

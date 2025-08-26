@@ -751,9 +751,9 @@ impl AccountAssetState {
 /// Represents the state of an asset in the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct AssetState {
-    asset_id: AssetId,
-    auditors: Vec<EncryptionPublicKey>,
-    mediators: Vec<EncryptionPublicKey>,
+    pub asset_id: AssetId,
+    pub auditors: Vec<EncryptionPublicKey>,
+    pub mediators: Vec<EncryptionPublicKey>,
 }
 
 impl AssetState {
@@ -1306,8 +1306,8 @@ impl LegBuilder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct SettlementBuilder<T: DartLimits = ()> {
-    memo: Vec<u8>,
-    legs: Vec<LegBuilder>,
+    pub memo: Vec<u8>,
+    pub legs: Vec<LegBuilder>,
     _marker: PhantomData<T>,
 }
 
