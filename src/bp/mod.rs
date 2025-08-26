@@ -56,6 +56,16 @@ impl DartLimits for () {
     type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PolymeshPrivateLimits;
+
+impl DartLimits for PolymeshPrivateLimits {
+    type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
+    type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
+    type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
+    type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
+}
+
 pub type LeafIndex = u64;
 pub type TreeIndex = u8;
 pub type NodeLevel = u8;
@@ -315,6 +325,7 @@ impl DartBPGenerators {
 pub trait AccountStateUpdate {
     fn account_state_commitment(&self) -> AccountStateCommitment;
     fn nullifier(&self) -> AccountStateNullifier;
+    fn root_block(&self) -> BlockNumber;
 }
 
 pub trait AccountLookup {
@@ -1021,6 +1032,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
     }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
+    }
 }
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
@@ -1279,7 +1294,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
 #[scale_info(skip_type_params(T, C))]
 pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
-    root_block: BlockNumber,
+    pub root_block: BlockNumber,
 
     pub legs: BoundedVec<SettlementLegProof<C>, T::MaxSettlementLegs>,
 }
@@ -1772,6 +1787,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
     }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
+    }
 }
 
 /// The receiver affirmation proof in the Dart BP protocol.
@@ -1899,6 +1918,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverAffirmationProof<C> {
 
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
+    }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
     }
 }
 
@@ -2030,6 +2053,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
     }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
+    }
 }
 
 /// Sender counter update proof in the Dart BP protocol.
@@ -2157,6 +2184,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderCounterUpdateProof<C> {
 
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
+    }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
     }
 }
 
@@ -2287,6 +2318,10 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
 
     fn nullifier(&self) -> AccountStateNullifier {
         self.nullifier
+    }
+
+    fn root_block(&self) -> BlockNumber {
+        self.root_block
     }
 }
 

@@ -233,15 +233,30 @@ pub trait ValidateCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConf
     fn params(&self) -> &CurveTreeParameters<C>;
 }
 
-impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
-    for CurveTreeRoot<L, M, C>
+impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig>
+    for CurveTreeRoot<L, M, AssetTreeConfig>
 {
-    fn get_block_root(&self, _block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
+    fn get_block_root(&self, _block: BlockNumber) -> Option<CurveTreeRoot<L, M, AssetTreeConfig>> {
         Some(self.clone())
     }
 
-    fn params(&self) -> &CurveTreeParameters<C> {
-        panic!("CurveTreeRoot does not have parameters");
+    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
+        get_asset_curve_tree_parameters()
+    }
+}
+
+impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AccountTreeConfig>
+    for CurveTreeRoot<L, M, AccountTreeConfig>
+{
+    fn get_block_root(
+        &self,
+        _block: BlockNumber,
+    ) -> Option<CurveTreeRoot<L, M, AccountTreeConfig>> {
+        Some(self.clone())
+    }
+
+    fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
+        get_account_curve_tree_parameters()
     }
 }
 
