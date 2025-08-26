@@ -888,14 +888,13 @@ macro_rules! impl_curve_tree_with_backend {
                     .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
                 let path = self.get_path_to_leaf(leaf_index, 0)$($await)*?;
                 let block_number = self.get_block_number()$($await)*?;
-                let root = CurveTreeRoot::new(&self.root_node()$($await)*?)?;
+                let root = self.root_node()$($await)*?;
                 Ok(LeafPathAndRoot {
                     leaf,
                     leaf_index,
                     path,
                     block_number,
                     root,
-                    params: self.parameters()$($await)*,
                 })
             }
         }

@@ -1,5 +1,8 @@
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{collections::BTreeMap, vec::Vec};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
+
+use codec::{Decode, Encode};
 
 use super::common::*;
 use crate::{
@@ -10,17 +13,68 @@ use crate::{
     error::*,
 };
 
-pub struct LeafPathAndRoot<'p, const L: usize, const M: usize, C: CurveTreeConfig> {
+#[derive(Clone, Encode, Decode)]
+pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
+    pub paths: Vec<LeafPathAndRoot<L, M, C>>,
+}
+
+impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L, M, C> {
+    pub fn first(&self) -> Option<&LeafPathAndRoot<L, M, C>> {
+        self.paths.first()
+    }
+}
+
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C>
+    for MultiLeafPathAndRoot<L, M, C>
+{
+    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
+        for leaf_path in &self.paths {
+            if leaf_path.leaf_index == leaf_index {
+                return Ok(leaf_path.path.clone());
+            }
+        }
+        Err(Error::LeafIndexNotFound(leaf_index))
+    }
+
+    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
+        for leaf_path in &self.paths {
+            if leaf_path.leaf == leaf {
+                return Ok(leaf_path.path.clone());
+            }
+        }
+        Err(Error::LeafNotFound)
+    }
+
+    fn params(&self) -> &CurveTreeParameters<C> {
+        C::parameters()
+    }
+
+    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
+        self.first().expect("No paths available").root_node()
+    }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        self.first().expect("No paths available").get_block_number()
+    }
+}
+
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct LeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub leaf: LeafValue<C::P0>,
     pub leaf_index: LeafIndex,
     pub path: CurveTreePath<L, C>,
     pub block_number: BlockNumber,
-    pub root: CurveTreeRoot<L, M, C>,
-    pub params: &'p CurveTreeParameters<C>,
+    pub root: Root<L, M, C::P0, C::P1>,
 }
 
-impl<'p, const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C>
-    for LeafPathAndRoot<'p, L, M, C>
+impl<const L: usize, const M: usize, C: CurveTreeConfig> LeafPathAndRoot<L, M, C> {
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.encode()
+    }
+}
+
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C>
+    for LeafPathAndRoot<L, M, C>
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         if self.leaf_index == leaf_index {
@@ -39,11 +93,11 @@ impl<'p, const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, 
     }
 
     fn params(&self) -> &CurveTreeParameters<C> {
-        self.params
+        C::parameters()
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(self.root.clone())
+        CurveTreeRoot::new(&self.root)
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {

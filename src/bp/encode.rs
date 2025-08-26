@@ -9,7 +9,7 @@ use ark_std::vec::Vec;
 use core::mem;
 
 use crate::{
-    curve_tree::{CurveTreeConfig, Inner, LeafValue},
+    curve_tree::{CurveTreeConfig, Inner, LeafPathAndRoot, LeafValue},
     *,
 };
 
@@ -249,8 +249,14 @@ impl TypeInfo for AccountCommitmentKey {
 // TypeInfo, SCALE encoding and decoding for `LegEncrypted`.
 impl_scale_and_type_info!(LegEncrypted as Vec);
 
+// TypeInfo, SCALE encoding and decoding for `LegEncryptedRandomness`.
+impl_scale_and_type_info!(LegEncryptionRandomness as Vec);
+
 // TypeInfo, SCALE encoding and decoding for `AccountState`.
 impl_scale_and_type_info!(AccountState as Vec);
+
+// TypeInfo, SCALE encoding and decoding for `LeafPathAndRoot<L, M, C>`.
+impl_scale_and_type_info!(LeafPathAndRoot as Vec<const L: usize, const M: usize, C: CurveTreeConfig>);
 
 // TypeInfo, SCALE encoding and decoding for `Inner<C>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, C: CurveTreeConfig>);

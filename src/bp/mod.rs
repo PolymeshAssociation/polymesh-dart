@@ -1653,38 +1653,8 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize)]
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasScalar>);
-
-#[cfg(feature = "testing")]
-impl EncodeLike for LegEncryptionRandomness {}
-
-#[cfg(feature = "testing")]
-impl Encode for LegEncryptionRandomness {
-    #[inline]
-    fn size_hint(&self) -> usize {
-        self.0.compressed_size()
-    }
-
-    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
-        let mut buf = Vec::with_capacity(self.size_hint());
-        self.0
-            .serialize_compressed(&mut buf)
-            .expect("Failed to serialize");
-        dest.write(&*buf);
-    }
-}
-
-#[cfg(feature = "testing")]
-impl Decode for LegEncryptionRandomness {
-    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        let buf: [u8; 32] = Decode::decode(input)?;
-        Ok(Self(
-            bp_leg::LegEncryptionRandomness::<PallasScalar>::deserialize_compressed(&buf[..])
-                .map_err(|_| CodecError::from("Failed to deserialize"))?,
-        ))
-    }
-}
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]

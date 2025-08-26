@@ -123,6 +123,8 @@ pub trait CurveTreeConfig:
         SelRerandParameters::new(Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
             .expect("Failed to create SelRerandParameters")
     }
+
+    fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1>;
 }
 
 #[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
@@ -137,6 +139,10 @@ impl CurveTreeConfig for AssetTreeConfig {
     type F1 = <PallasParameters as CurveConfig>::ScalarField;
     type P0 = VestaParameters;
     type P1 = PallasParameters;
+
+    fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
+        get_asset_curve_tree_parameters()
+    }
 }
 
 #[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
@@ -151,6 +157,10 @@ impl CurveTreeConfig for AccountTreeConfig {
     type F1 = <VestaParameters as CurveConfig>::ScalarField;
     type P0 = PallasParameters;
     type P1 = VestaParameters;
+
+    fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
+        get_account_curve_tree_parameters()
+    }
 }
 
 #[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
@@ -515,6 +525,21 @@ impl<
 
     pub fn params(&self) -> &CurveTreeParameters<C> {
         self.tree.parameters()
+    }
+
+    pub fn get_path_and_root(
+        &self,
+        leaf: LeafValue<C::P0>,
+    ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
+        let leaf_buf = leaf.encode();
+        if let Some(&leaf_index) = self.leaf_to_index.get(&leaf_buf) {
+            Ok(self
+                .tree
+                .get_path_and_root(leaf_index)
+                .map_err(|_| Error::LeafNotFound)?)
+        } else {
+            Err(Error::LeafNotFound)
+        }
     }
 }
 
