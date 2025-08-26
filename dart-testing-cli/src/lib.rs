@@ -1030,7 +1030,7 @@ impl DartTestingDb {
         for leg in leg_builders {
             builder = builder.leg(leg);
         }
-        let settlement = builder.encryt_and_prove(rng, &self.asset_tree.0)?;
+        let settlement = builder.encrypt_and_prove(rng, &self.asset_tree.0)?;
 
         Ok(settlement)
     }

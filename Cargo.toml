@@ -47,7 +47,10 @@ ark-ff = { version = "0.4", default-features = false }
 ark-ec = { version = "0.4", default-features = false }
 ark-serialize = { version = "0.4", default-features = false }
 ark-std = { version = "0.4", default-features = false }
-ark-crypto-primitives = { version = "0.4.0", default-features = false, features = ["crh", "r1cs"] }
+ark-crypto-primitives = { version = "0.4.0", default-features = false, features = [
+    "crh",
+    "r1cs",
+] }
 ark-relations = { version = "0.4.0", default-features = false }
 ark-r1cs-std = { version = "0.4.0", default-features = false }
 digest = { version = "0.10.7", default-features = false }
@@ -120,9 +123,11 @@ name = "proof_benchmark"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
+default = ["std", "asm", "parallel", "backend_bp", "async_tree", "testing"]
 
 async_tree = []
+
+testing = ["polymesh-dart-bp?/testing"]
 
 backend_bp = [
     "polymesh-dart-bp",

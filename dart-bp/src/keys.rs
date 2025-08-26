@@ -7,12 +7,14 @@ use rand_core::CryptoRngCore;
 pub struct VerKey<PK: AffineRepr>(pub PK);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(CanonicalSerialize, CanonicalDeserialize))]
 pub struct SigKey<PK: AffineRepr>(pub PK::ScalarField);
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct EncKey<PK: AffineRepr>(pub PK);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(CanonicalSerialize, CanonicalDeserialize))]
 pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
 // NOTE that the generators used in both keys is same for now but will be made different soon.

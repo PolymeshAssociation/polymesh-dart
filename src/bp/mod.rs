@@ -3,6 +3,8 @@ use core::marker::PhantomData;
 use std::collections::HashMap;
 
 use codec::{Decode, Encode, MaxEncodedLen};
+#[cfg(feature = "testing")]
+use codec::{EncodeLike, Error as CodecError, Input, Output};
 use curve_tree_relations::curve_tree::Root;
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
@@ -425,7 +427,38 @@ impl EncryptionPublicKey {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EncryptionSecretKey(bp_keys::DecKey<PallasA>);
 
+#[cfg(feature = "testing")]
+impl EncodeLike for EncryptionSecretKey {}
+
+#[cfg(feature = "testing")]
+impl Encode for EncryptionSecretKey {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.0.compressed_size()
+    }
+
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        let mut buf = Vec::with_capacity(self.size_hint());
+        self.0
+            .serialize_compressed(&mut buf)
+            .expect("Failed to serialize");
+        dest.write(&*buf);
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Decode for EncryptionSecretKey {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        let buf: [u8; 32] = Decode::decode(input)?;
+        Ok(Self(
+            bp_keys::DecKey::<PallasA>::deserialize_compressed(&buf[..])
+                .map_err(|_| CodecError::from("Failed to deserialize"))?,
+        ))
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct EncryptionKeyPair {
     pub public: EncryptionPublicKey,
     secret: EncryptionSecretKey,
@@ -466,7 +499,38 @@ impl AccountPublicKey {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AccountSecretKey(bp_keys::SigKey<PallasA>);
 
+#[cfg(feature = "testing")]
+impl EncodeLike for AccountSecretKey {}
+
+#[cfg(feature = "testing")]
+impl Encode for AccountSecretKey {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.0.compressed_size()
+    }
+
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        let mut buf = Vec::with_capacity(self.size_hint());
+        self.0
+            .serialize_compressed(&mut buf)
+            .expect("Failed to serialize");
+        dest.write(&*buf);
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Decode for AccountSecretKey {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        let buf: [u8; 32] = Decode::decode(input)?;
+        Ok(Self(
+            bp_keys::SigKey::<PallasA>::deserialize_compressed(&buf[..])
+                .map_err(|_| CodecError::from("Failed to deserialize"))?,
+        ))
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct AccountKeyPair {
     pub public: AccountPublicKey,
     secret: AccountSecretKey,
@@ -507,6 +571,7 @@ pub struct AccountPublicKeys {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct AccountKeys {
     pub enc: EncryptionKeyPair,
     pub acct: AccountKeyPair,
@@ -590,6 +655,7 @@ impl AccountStateCommitment {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct AccountAssetState {
     pub account: AccountKeys,
     pub asset_id: AssetId,
@@ -683,7 +749,7 @@ impl AccountAssetState {
 }
 
 /// Represents the state of an asset in the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct AssetState {
     asset_id: AssetId,
     auditors: Vec<EncryptionPublicKey>,
@@ -1173,6 +1239,8 @@ impl Leg {
 }
 
 /// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
     pub receiver: AccountPublicKeys,
@@ -1196,7 +1264,7 @@ impl LegBuilder {
         }
     }
 
-    pub fn encryt_and_prove<
+    pub fn encrypt_and_prove<
         R: RngCore + CryptoRng,
         C: CurveTreeConfig<
                 F0 = <VestaParameters as CurveConfig>::ScalarField,
@@ -1235,6 +1303,8 @@ impl LegBuilder {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     memo: Vec<u8>,
     legs: Vec<LegBuilder>,
@@ -1255,7 +1325,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
         self
     }
 
-    pub fn encryt_and_prove<
+    pub fn encrypt_and_prove<
         R: RngCore + CryptoRng,
         C: CurveTreeConfig<
                 F0 = <VestaParameters as CurveConfig>::ScalarField,
@@ -1276,7 +1346,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
 
         for (idx, leg_builder) in self.legs.into_iter().enumerate() {
             let ctx = (&memo, idx as u8).encode();
-            let leg_proof = leg_builder.encryt_and_prove(rng, &ctx, &asset_tree)?;
+            let leg_proof = leg_builder.encrypt_and_prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
 
@@ -1585,6 +1655,36 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
 
 #[derive(Clone, Copy)]
 pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasScalar>);
+
+#[cfg(feature = "testing")]
+impl EncodeLike for LegEncryptionRandomness {}
+
+#[cfg(feature = "testing")]
+impl Encode for LegEncryptionRandomness {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.0.compressed_size()
+    }
+
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        let mut buf = Vec::with_capacity(self.size_hint());
+        self.0
+            .serialize_compressed(&mut buf)
+            .expect("Failed to serialize");
+        dest.write(&*buf);
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Decode for LegEncryptionRandomness {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        let buf: [u8; 32] = Decode::decode(input)?;
+        Ok(Self(
+            bp_leg::LegEncryptionRandomness::<PallasScalar>::deserialize_compressed(&buf[..])
+                .map_err(|_| CodecError::from("Failed to deserialize"))?,
+        ))
+    }
+}
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]

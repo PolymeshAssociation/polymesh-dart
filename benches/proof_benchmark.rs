@@ -166,7 +166,7 @@ fn proof_benchmark(c: &mut Criterion) {
                     asset: asset_state.clone(),
                     amount: leg_amount,
                 }))
-                .encryt_and_prove(&mut rng, &asset_tree.tree)
+                .encrypt_and_prove(&mut rng, &asset_tree.tree)
                 .expect("Failed to create settlement");
         })
     });
@@ -179,7 +179,7 @@ fn proof_benchmark(c: &mut Criterion) {
             asset: asset_state.clone(),
             amount: leg_amount,
         })
-        .encryt_and_prove(&mut rng, &asset_tree.tree)
+        .encrypt_and_prove(&mut rng, &asset_tree.tree)
         .expect("Failed to create settlement");
 
     // Benchmark: Verify settlement proof.

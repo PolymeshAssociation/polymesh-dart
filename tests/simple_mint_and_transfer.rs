@@ -64,7 +64,7 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
             asset,
             amount: 500,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
     let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
     let leg_ref = LegRef::new(settlement_id.into(), 0);
@@ -183,7 +183,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
             asset,
             amount: 500,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
     let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
     let leg_ref = LegRef::new(settlement_id.into(), 0);
@@ -349,7 +349,7 @@ fn test_atomic_swap() -> Result<()> {
             asset: asset1.clone(),
             amount: 1000,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating funding settlement: {:?}", funding_settlement1);
     let funding_settlement1_id = issuer1.create_settlement(&mut chain, funding_settlement1)?;
     let funding_leg1_ref = LegRef::new(funding_settlement1_id.into(), 0);
@@ -362,7 +362,7 @@ fn test_atomic_swap() -> Result<()> {
             asset: asset2.clone(),
             amount: 1500,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating funding settlement: {:?}", funding_settlement2);
     let funding_settlement2_id = issuer2.create_settlement(&mut chain, funding_settlement2)?;
     let funding_leg2_ref = LegRef::new(funding_settlement2_id.into(), 0);
@@ -454,7 +454,7 @@ fn test_atomic_swap() -> Result<()> {
             asset: asset2,
             amount: 750,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     eprintln!("Creating swap settlement: {:?}", swap_settlement);
     let swap_settlement_id = investor1.create_settlement(&mut chain, swap_settlement)?;
     let swap_leg1_ref = LegRef::new(swap_settlement_id.into(), 0);
@@ -658,7 +658,7 @@ fn test_reject_after_sender_affirms() -> Result<()> {
             asset,
             amount: 500,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
 
     let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
     let leg_ref = LegRef::new(settlement_id.into(), 0);
@@ -781,7 +781,7 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
             asset,
             amount: 500,
         })
-        .encryt_and_prove(&mut rng, chain.asset_tree())?;
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.
     let settlement_id = issuer.create_settlement(&mut chain, settlement)?;
     let leg_ref = LegRef::new(settlement_id.into(), 0);
