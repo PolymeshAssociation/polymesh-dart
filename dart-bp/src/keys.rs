@@ -1,11 +1,15 @@
+use crate::account::{TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
+use crate::error::{Error, Result};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::One;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{UniformRand, string::ToString, {vec, vec::Vec}};
+use ark_std::{
+    UniformRand,
+    string::ToString,
+    {vec, vec::Vec},
+};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
-use crate::account::{TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
-use crate::error::{Result, Error};
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
@@ -59,7 +63,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
         nonce: &[u8],
         sig_key_gen: G,
-        enc_key_gen: G
+        enc_key_gen: G,
     ) -> Result<Self> {
         // Note: This proof can be reduced to half in size if both sig and enc keys use the same generator
 
@@ -97,7 +101,10 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
             c = c * challenge;
         }
 
-        Ok(Self {sig: (t_sig, s_sig), enc: (t_enc, s_enc)})
+        Ok(Self {
+            sig: (t_sig, s_sig),
+            enc: (t_enc, s_enc),
+        })
     }
 
     /// Each item of `keys` is a pair where the first element is the signing public key and the
@@ -107,7 +114,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         pub_keys: Vec<(G, G)>,
         nonce: &[u8],
         sig_key_gen: G,
-        enc_key_gen: G
+        enc_key_gen: G,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(INVESTOR_KEY_REG_TXN_LABEL);
         let mut extra_instance = vec![];
@@ -137,13 +144,17 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 
         // Even the following 2 checks can be combined into 1 with RLC
 
-        if sig_key_gen * self.sig.1 != (self.sig.0 + G::Group::msm_unchecked(&sig_keys, &challenge_powers)) {
+        if sig_key_gen * self.sig.1
+            != (self.sig.0 + G::Group::msm_unchecked(&sig_keys, &challenge_powers))
+        {
             return Err(Error::ProofVerificationError(
                 "Signature key proof verification failed".to_string(),
             ));
         }
 
-        if enc_key_gen * self.enc.1 != (self.enc.0 + G::Group::msm_unchecked(&enc_keys, &challenge_powers)) {
+        if enc_key_gen * self.enc.1
+            != (self.enc.0 + G::Group::msm_unchecked(&enc_keys, &challenge_powers))
+        {
             return Err(Error::ProofVerificationError(
                 "Encryption key proof verification failed".to_string(),
             ));
@@ -167,7 +178,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         rng: &mut R,
         keys: Vec<(G, G::ScalarField)>,
         nonce: &[u8],
-        enc_key_gen: G
+        enc_key_gen: G,
     ) -> Result<Self> {
         let mut transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
         let mut extra_instance = vec![];
@@ -197,12 +208,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         Ok(Self { t, s })
     }
 
-    pub fn verify(
-        &self,
-        pub_keys: Vec<G>,
-        nonce: &[u8],
-        enc_key_gen: G
-    ) -> Result<()> {
+    pub fn verify(&self, pub_keys: Vec<G>, nonce: &[u8], enc_key_gen: G) -> Result<()> {
         let mut transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance)?;
@@ -225,7 +231,8 @@ impl<G: AffineRepr> AudMedRegProof<G> {
             challenge_powers.push(c);
         }
 
-        if enc_key_gen * self.s != (self.t + G::Group::msm_unchecked(&enc_keys, &challenge_powers)) {
+        if enc_key_gen * self.s != (self.t + G::Group::msm_unchecked(&enc_keys, &challenge_powers))
+        {
             return Err(Error::ProofVerificationError(
                 "Encryption key proof verification failed".to_string(),
             ));
@@ -263,49 +270,26 @@ pub mod tests {
 
         let nonce = b"test-nonce";
 
-        let proof = InvestorKeyRegProof::new(
-            &mut rng,
-            keypairs,
-            nonce,
-            sig_key_gen,
-            enc_key_gen
-        ).unwrap();
+        let proof =
+            InvestorKeyRegProof::new(&mut rng, keypairs, nonce, sig_key_gen, enc_key_gen).unwrap();
 
-        proof.verify(
-            pub_keys.clone(),
-            nonce,
-            sig_key_gen,
-            enc_key_gen
-        ).unwrap();
+        proof
+            .verify(pub_keys.clone(), nonce, sig_key_gen, enc_key_gen)
+            .unwrap();
 
         // Fail when less keys are provided
         let fewer_public_keys = pub_keys[..3].to_vec();
-        let result = proof.verify(
-            fewer_public_keys,
-            nonce,
-            sig_key_gen,
-            enc_key_gen
-        );
+        let result = proof.verify(fewer_public_keys, nonce, sig_key_gen, enc_key_gen);
         assert!(result.is_err());
 
         // Fail when wrong keys are provided
         let mut wrong_public_keys = pub_keys.clone();
         wrong_public_keys[0] = (PallasA::rand(&mut rng), PallasA::rand(&mut rng));
-        let result = proof.verify(
-            wrong_public_keys,
-            nonce,
-            sig_key_gen,
-            enc_key_gen
-        );
+        let result = proof.verify(wrong_public_keys, nonce, sig_key_gen, enc_key_gen);
         assert!(result.is_err());
 
         // Fail when wrong generators are provided
-        let result = proof.verify(
-            pub_keys,
-            nonce,
-            enc_key_gen,
-            sig_key_gen
-        );
+        let result = proof.verify(pub_keys, nonce, enc_key_gen, sig_key_gen);
         assert!(result.is_err());
     }
 
@@ -328,45 +312,24 @@ pub mod tests {
 
         let nonce = b"test-aud-med-nonce";
 
-        let proof = AudMedRegProof::new(
-            &mut rng,
-            keypairs,
-            nonce,
-            enc_key_gen
-        ).unwrap();
+        let proof = AudMedRegProof::new(&mut rng, keypairs, nonce, enc_key_gen).unwrap();
 
-        proof.verify(
-            pub_keys.clone(),
-            nonce,
-            enc_key_gen
-        ).unwrap();
+        proof.verify(pub_keys.clone(), nonce, enc_key_gen).unwrap();
 
         // Fail when less keys are provided
         let fewer_public_keys = pub_keys[..3].to_vec();
-        let result = proof.verify(
-            fewer_public_keys,
-            nonce,
-            enc_key_gen
-        );
+        let result = proof.verify(fewer_public_keys, nonce, enc_key_gen);
         assert!(result.is_err());
 
         // Fail when wrong keys are provided
         let mut wrong_public_keys = pub_keys.clone();
         wrong_public_keys[0] = PallasA::rand(&mut rng);
-        let result = proof.verify(
-            wrong_public_keys,
-            nonce,
-            enc_key_gen
-        );
+        let result = proof.verify(wrong_public_keys, nonce, enc_key_gen);
         assert!(result.is_err());
 
         // Fail when wrong generator is provided
         let wrong_enc_gen = PallasA::rand(&mut rng);
-        let result = proof.verify(
-            pub_keys,
-            nonce,
-            wrong_enc_gen
-        );
+        let result = proof.verify(pub_keys, nonce, wrong_enc_gen);
         assert!(result.is_err());
     }
 }

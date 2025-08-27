@@ -5,8 +5,8 @@ use crate::util::{
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::PrimeField;
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::format;
@@ -257,12 +257,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let hasher = <DefaultFieldHasher<D> as HashToField<F>>::new(SK_EPH_GEN_LABEL);
         let mut r = hasher.hash_to_field(&shared_secret_bytes, 4);
 
-        Ok((
-            r.remove(0),
-            r.remove(0),
-            r.remove(0),
-            r.remove(0)
-        ))
+        Ok((r.remove(0), r.remove(0), r.remove(0), r.remove(0)))
     }
 }
 
