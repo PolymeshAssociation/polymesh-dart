@@ -252,10 +252,10 @@ pub struct AccountAssetStateInfo {
 
 impl AccountAssetStateInfo {
     pub fn get_state(&self, account_info: &DartAccountInfo) -> Result<AccountAssetState> {
-        let account = account_info.account_keys()?;
+        let account = account_info.account_public_keys()?;
         let db_state = AccountAssetStateDb::decode(&mut self.state_data.as_slice())?;
         Ok(AccountAssetState {
-            account,
+            account: account.acct,
             asset_id: db_state.asset_id,
             current_state: db_state.current_state,
             current_state_commitment: db_state.current_state_commitment,
@@ -271,7 +271,7 @@ pub struct AccountAssetStateDb {
     pub current_state: AccountState,
     pub current_state_commitment: AccountStateCommitment,
     pub current_tx_id: u64,
-    pub pending_state: Option<AccountState>,
+    pub pending_state: Option<(AccountState, AccountStateCommitment)>,
 }
 
 impl AccountAssetStateDb {
@@ -823,7 +823,7 @@ impl DartTestingDb {
             // Create registration proof and initial state.
             let (proof, asset_state) = AccountAssetRegistrationProof::new(
                 rng,
-                &account_keys,
+                &account_keys.acct,
                 asset_id,
                 0,
                 signer_name.as_bytes(),
@@ -893,8 +893,15 @@ impl DartTestingDb {
         let proof = if let Some(proof) = proof_action.get_proof()? {
             proof
         } else {
+            let account_keys = account_info.account_keys()?;
             // Create minting proof
-            let proof = AssetMintingProof::new(rng, &mut asset_state, &self.account_tree, amount)?;
+            let proof = AssetMintingProof::new(
+                rng,
+                &account_keys.acct,
+                &mut asset_state,
+                &self.account_tree,
+                amount,
+            )?;
 
             // Update the account state with the pending state change.
             self.update_account_asset_state(&account_info, &asset_state)?;
@@ -1115,7 +1122,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1123,6 +1130,7 @@ impl DartTestingDb {
                 // Generate sender affirmation proof
                 Ok(SenderAffirmationProof::new(
                     rng,
+                    &account_keys.acct,
                     &leg_ref,
                     amount,
                     leg_enc,
@@ -1180,10 +1188,11 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg_enc_rand, _leg, account_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg_enc_rand, _leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::new(
                     rng,
+                    &account_keys.acct,
                     &leg_ref,
                     &leg_enc,
                     &leg_enc_rand,
@@ -1240,11 +1249,12 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
                 Ok(SenderReversalProof::new(
                     rng,
+                    &account_keys.acct,
                     &leg_ref,
                     amount,
                     &leg_enc,
@@ -1307,7 +1317,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::Receiver,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1315,6 +1325,7 @@ impl DartTestingDb {
                 // Create receiver affirmation proof
                 Ok(ReceiverAffirmationProof::new(
                     rng,
+                    &account_keys.acct,
                     &leg_ref,
                     &leg_enc,
                     &leg_enc_rand,
@@ -1454,10 +1465,11 @@ impl DartTestingDb {
             leg_index,
             LegRole::Receiver,
             proof_action,
-            |_account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 // Create receiver claim proof
                 Ok(ReceiverClaimProof::new(
                     rng,
+                    &account_keys.acct,
                     &leg_ref,
                     leg.amount(),
                     &leg_enc,

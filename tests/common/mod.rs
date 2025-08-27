@@ -100,7 +100,7 @@ impl DartUserAccountInner {
         }
         let (proof, mut asset_state) = AccountAssetRegistrationProof::new(
             rng,
-            &self.keys,
+            &self.keys.acct,
             asset_id,
             0,
             self.address.ctx(),
@@ -124,7 +124,8 @@ impl DartUserAccountInner {
             .assets
             .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
-        let proof = AssetMintingProof::new(rng, asset_state, account_tree, amount)?;
+        let proof =
+            AssetMintingProof::new(rng, &self.keys.acct, asset_state, account_tree, amount)?;
         chain.mint_assets(&self.address, proof)?;
         asset_state.commit_pending_state()?;
         Ok(())
@@ -169,6 +170,7 @@ impl DartUserAccountInner {
         log::info!("Sender generate affirmation proof");
         let proof = SenderAffirmationProof::new(
             rng,
+            &self.keys.acct,
             leg_ref,
             amount,
             &leg_enc,
@@ -221,6 +223,7 @@ impl DartUserAccountInner {
         log::info!("Receiver generate affirmation proof");
         let proof = ReceiverAffirmationProof::new(
             rng,
+            &self.keys.acct,
             leg_ref,
             &leg_enc,
             &leg_enc_rand,
@@ -310,6 +313,7 @@ impl DartUserAccountInner {
         log::info!("Receiver generate claim proof");
         let proof = ReceiverClaimProof::new(
             rng,
+            &self.keys.acct,
             leg_ref,
             amount,
             &leg_enc,
@@ -345,6 +349,7 @@ impl DartUserAccountInner {
         log::info!("Sender generate counter update proof");
         let proof = SenderCounterUpdateProof::new(
             rng,
+            &self.keys.acct,
             leg_ref,
             &leg_enc,
             &leg_enc_rand,
@@ -381,6 +386,7 @@ impl DartUserAccountInner {
         log::info!("Sender generate reversal proof");
         let proof = SenderReversalProof::new(
             rng,
+            &self.keys.acct,
             leg_ref,
             amount,
             &leg_enc,
@@ -410,6 +416,10 @@ impl DartUserAccount {
 
     pub fn public_keys(&self) -> AccountPublicKeys {
         self.0.read().unwrap().public_keys()
+    }
+
+    pub fn keys(&self) -> AccountKeys {
+        self.0.read().unwrap().keys.clone()
     }
 
     pub fn get_account_asset_state(&self, asset_id: AssetId) -> Result<AccountAssetState> {

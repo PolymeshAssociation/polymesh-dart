@@ -813,6 +813,7 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
 
     let proof = ReceiverAffirmationProof::new(
         &mut rng,
+        &issuer_acct.keys().acct,
         &leg_ref,
         &leg_enc,
         &leg_enc_rand,

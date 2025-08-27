@@ -12,8 +12,13 @@ use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
 use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig};
+use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{format, string::String, vec::Vec};
+use ark_std::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
@@ -461,7 +466,7 @@ impl Decode for EncryptionSecretKey {
 #[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct EncryptionKeyPair {
     pub public: EncryptionPublicKey,
-    secret: EncryptionSecretKey,
+    pub secret: EncryptionSecretKey,
 }
 
 impl EncryptionKeyPair {
@@ -533,7 +538,7 @@ impl Decode for AccountSecretKey {
 #[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct AccountKeyPair {
     pub public: AccountPublicKey,
-    secret: AccountSecretKey,
+    pub secret: AccountSecretKey,
 }
 
 impl AccountKeyPair {
@@ -544,6 +549,16 @@ impl AccountKeyPair {
             public: AccountPublicKey::from_bp_key(account_pk)?,
             secret: AccountSecretKey(account),
         })
+    }
+
+    /// Initializes a new asset state for the account.
+    pub fn init_asset_state<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        asset_id: AssetId,
+        counter: u16,
+    ) -> Result<AccountAssetState, Error> {
+        AccountAssetState::new(rng, &self, asset_id, counter)
     }
 
     pub fn account_state<R: RngCore + CryptoRng>(
@@ -560,7 +575,7 @@ impl AccountKeyPair {
             counter,
             params.params.clone(),
         )?;
-        Ok(AccountState(state))
+        Ok(state.into())
     }
 }
 
@@ -599,7 +614,7 @@ impl AccountKeys {
         asset_id: AssetId,
         counter: u16,
     ) -> Result<AccountAssetState, Error> {
-        AccountAssetState::new(rng, self, asset_id, counter)
+        self.acct.init_asset_state(rng, asset_id, counter)
     }
 
     /// Returns the public keys for the account.
@@ -612,11 +627,132 @@ impl AccountKeys {
 }
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct AccountState(BPAccountState);
+pub struct AccountState {
+    pub balance: Balance,
+    pub counter: PendingTxnCounter,
+    pub asset_id: AssetId,
+    pub rho: PallasScalar,
+    pub current_rho: PallasScalar,
+    pub randomness: PallasScalar,
+}
 
 impl AccountState {
-    pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
-        AccountStateCommitment::from_affine(self.0.commit(dart_gens().account_comm_key())?.0)
+    pub fn bp_state(
+        &self,
+        account: &AccountKeyPair,
+    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        let state = BPAccountState {
+            sk: account.secret.0.0,
+            balance: self.balance,
+            counter: self.counter,
+            asset_id: self.asset_id,
+            rho: self.rho,
+            current_rho: self.current_rho,
+            randomness: self.randomness,
+        };
+        let commitment = state.commit(dart_gens().account_comm_key())?;
+        Ok((state, commitment))
+    }
+
+    pub fn commitment(&self, account: &AccountKeyPair) -> Result<AccountStateCommitment, Error> {
+        let (_state, commitment) = self.bp_state(account)?;
+        AccountStateCommitment::from_affine(commitment.0)
+    }
+
+    pub fn get_state_for_mint(&self, amount: u64) -> Result<Self, Error> {
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
+        let mut new_state = self.clone();
+        new_state.balance += amount;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_send(&self, amount: u64) -> Result<Self, Error> {
+        if amount > self.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        let mut new_state = self.clone();
+        new_state.balance -= amount;
+        new_state.counter += 1;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_receive(&self) -> Result<Self, Error> {
+        let mut new_state = self.clone();
+        new_state.counter += 1;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_claiming_received(&self, amount: u64) -> Result<Self, Error> {
+        if self.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
+        let mut new_state = self.clone();
+        new_state.balance += amount;
+        new_state.counter -= 1;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_reversing_send(&self, amount: u64) -> Result<Self, Error> {
+        if self.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.balance > MAX_AMOUNT {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
+        let mut new_state = self.clone();
+        new_state.balance += amount;
+        new_state.counter -= 1;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_decreasing_counter(
+        &self,
+        decrease_counter_by: Option<PendingTxnCounter>,
+    ) -> Result<Self, Error> {
+        let decrease_counter_by = decrease_counter_by.unwrap_or(1);
+        if self.counter < decrease_counter_by {
+            return Err(Error::ProofOfBalanceError(
+                "Counter cannot be decreased below zero".to_string(),
+            ));
+        }
+        let mut new_state = self.clone();
+        new_state.counter -= decrease_counter_by;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    /// Set rho and commitment randomness to new values. Used as each update to the account state
+    /// needs these refreshed.
+    pub fn refresh_randomness_for_state_change(&mut self) {
+        self.current_rho = self.current_rho * self.rho;
+        self.randomness.square_in_place();
+    }
+}
+
+impl From<BPAccountState> for AccountState {
+    fn from(state: BPAccountState) -> Self {
+        Self {
+            balance: state.balance,
+            counter: state.counter,
+            asset_id: state.asset_id,
+            rho: state.rho,
+            current_rho: state.current_rho,
+            randomness: state.randomness,
+        }
     }
 }
 
@@ -655,27 +791,55 @@ impl AccountStateCommitment {
 }
 
 #[derive(Clone, Debug)]
+pub struct AccountAssetStateChange {
+    pub current_state: BPAccountState,
+    pub current_commitment: BPAccountStateCommitment,
+    pub new_state: BPAccountState,
+    pub new_commitment: BPAccountStateCommitment,
+}
+
+impl AccountAssetStateChange {
+    pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
+        AccountStateCommitment::from_affine(self.new_commitment.0)
+    }
+
+    pub fn get_path<
+        C: CurveTreeConfig<
+                F0 = <PallasParameters as CurveConfig>::ScalarField,
+                F1 = <VestaParameters as CurveConfig>::ScalarField,
+                P0 = PallasParameters,
+                P1 = VestaParameters,
+            >,
+    >(
+        &self,
+        tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+    ) -> Result<CurveTreePath<ACCOUNT_TREE_L, C>, Error> {
+        tree_lookup.get_path_to_leaf(self.current_commitment.0.into())
+    }
+}
+
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "testing", derive(Encode, Decode))]
 pub struct AccountAssetState {
-    pub account: AccountKeys,
+    pub account: AccountPublicKey,
     pub asset_id: AssetId,
     pub current_state: AccountState,
     pub current_state_commitment: AccountStateCommitment,
     pub current_tx_id: u64,
-    pub pending_state: Option<AccountState>,
+    pub pending_state: Option<(AccountState, AccountStateCommitment)>,
 }
 
 impl AccountAssetState {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeys,
+        account: &AccountKeyPair,
         asset_id: AssetId,
         counter: u16,
     ) -> Result<Self, Error> {
-        let current_state = account.acct.account_state(rng, asset_id, counter)?;
-        let current_state_commitment = current_state.commitment()?;
+        let current_state = account.account_state(rng, asset_id, counter)?;
+        let current_state_commitment = current_state.commitment(account)?;
         Ok(Self {
-            account: *account,
+            account: account.public,
             asset_id,
             current_state,
             current_state_commitment,
@@ -684,62 +848,96 @@ impl AccountAssetState {
         })
     }
 
-    pub fn mint(&mut self, amount: Balance) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_mint(amount)?);
-        self._set_pending_state(state.clone());
-        Ok(state)
+    pub fn bp_current_state(
+        &self,
+        account: &AccountKeyPair,
+    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        self.current_state.bp_state(account)
     }
 
-    pub fn get_sender_affirm_state(&mut self, amount: Balance) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_send(amount)?);
-        self._set_pending_state(state.clone());
-        Ok(state)
+    fn state_change(
+        &mut self,
+        account: &AccountKeyPair,
+        new_state: AccountState,
+    ) -> Result<AccountAssetStateChange, Error> {
+        self._set_pending_state(account, new_state.clone())?;
+        let (current_state, current_commitment) = self.bp_current_state(account)?;
+        let (new_state, new_commitment) = new_state.bp_state(account)?;
+        Ok(AccountAssetStateChange {
+            current_state,
+            current_commitment,
+            new_state,
+            new_commitment,
+        })
     }
 
-    pub fn get_receiver_affirm_state(&mut self) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_receive());
-        self._set_pending_state(state.clone());
-        Ok(state)
+    pub fn mint(
+        &mut self,
+        account: &AccountKeyPair,
+        amount: Balance,
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_mint(amount)?;
+        self.state_change(account, state)
+    }
+
+    pub fn get_sender_affirm_state(
+        &mut self,
+        account: &AccountKeyPair,
+        amount: Balance,
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_send(amount)?;
+        self.state_change(account, state)
+    }
+
+    pub fn get_receiver_affirm_state(
+        &mut self,
+        account: &AccountKeyPair,
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_receive()?;
+        self.state_change(account, state)
     }
 
     pub fn get_state_for_claiming_received(
         &mut self,
+        account: &AccountKeyPair,
         amount: Balance,
-    ) -> Result<AccountState, Error> {
-        let state = AccountState(
-            self.current_state
-                .0
-                .get_state_for_claiming_received(amount)?,
-        );
-        self._set_pending_state(state.clone());
-        Ok(state)
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_claiming_received(amount)?;
+        self.state_change(account, state)
     }
 
-    pub fn get_state_for_reversing_send(&mut self, amount: Balance) -> Result<AccountState, Error> {
-        let state = AccountState(self.current_state.0.get_state_for_reversing_send(amount)?);
-        self._set_pending_state(state.clone());
-        Ok(state)
+    pub fn get_state_for_reversing_send(
+        &mut self,
+        account: &AccountKeyPair,
+        amount: Balance,
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_reversing_send(amount)?;
+        self.state_change(account, state)
     }
 
-    pub fn get_state_for_decreasing_counter(&mut self) -> Result<AccountState, Error> {
-        let state = AccountState(
-            self.current_state
-                .0
-                .get_state_for_decreasing_counter(None)?,
-        );
-        self._set_pending_state(state.clone());
-        Ok(state)
+    pub fn get_state_for_decreasing_counter(
+        &mut self,
+        account: &AccountKeyPair,
+    ) -> Result<AccountAssetStateChange, Error> {
+        let state = self.current_state.get_state_for_decreasing_counter(None)?;
+        self.state_change(account, state)
     }
 
-    fn _set_pending_state(&mut self, state: AccountState) {
-        self.pending_state = Some(state);
+    fn _set_pending_state(
+        &mut self,
+        account: &AccountKeyPair,
+        state: AccountState,
+    ) -> Result<(), Error> {
+        let commitment = state.commitment(account)?;
+        self.pending_state = Some((state, commitment));
+        Ok(())
     }
 
     pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
         match self.pending_state.take() {
-            Some(pending_state) => {
+            Some((pending_state, pending_state_commitment)) => {
                 self.current_state = pending_state;
-                self.current_state_commitment = self.current_state.commitment()?;
+                self.current_state_commitment = pending_state_commitment;
                 self.current_tx_id += 1;
                 Ok(true)
             }
@@ -907,21 +1105,22 @@ impl AccountAssetRegistrationProof {
     /// Generate a new account state for an asset and a registration proof for it.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeys,
+        account: &AccountKeyPair,
         asset_id: AssetId,
         counter: u16,
         ctx: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
+        let pk = account.public;
         let account_state = account.init_asset_state(rng, asset_id, counter)?;
-        let account_state_commitment = account_state.current_state_commitment;
+        let (bp_state, commitment) = account_state.bp_current_state(account)?;
         let params = poseidon_params();
         let gens = dart_gens();
         let proof = account_registration::RegTxnProof::new(
             rng,
-            account.acct.public.get_affine()?,
-            &account_state.current_state.0,
-            account_state_commitment.as_commitment()?,
+            pk.get_affine()?,
+            &bp_state,
+            commitment,
             counter,
             ctx,
             gens.account_comm_key(),
@@ -932,8 +1131,8 @@ impl AccountAssetRegistrationProof {
         )?;
         Ok((
             Self {
-                account: account.acct.public,
-                account_state_commitment,
+                account: pk,
+                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
                 asset_id,
                 counter,
                 proof: WrappedCanonical::wrap(&proof)?,
@@ -1018,18 +1217,16 @@ impl<
     /// Generate a new asset minting proof.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
-        let mint_account_state = account_asset.mint(amount)?;
-        let mint_account_commitment = mint_account_state.commitment()?;
-
-        let pk = account_asset.account.acct.public;
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.mint(account, amount)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
+        let pk = account_asset.account;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -1039,9 +1236,9 @@ impl<
             rng,
             pk.get_affine()?,
             amount,
-            current_account_state,
-            &mint_account_state.0,
-            mint_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             b"",
@@ -1053,7 +1250,7 @@ impl<
             asset_id: account_asset.asset_id,
             amount,
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: mint_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
@@ -1769,6 +1966,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
@@ -1777,12 +1975,9 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
-        let new_account_state = account_asset.get_sender_affirm_state(amount)?;
-        let new_account_commitment = new_account_state.commitment()?;
-
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.get_sender_affirm_state(account, amount)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -1794,9 +1989,9 @@ impl<
             amount,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            &current_account_state,
-            &new_account_state.0,
-            new_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             ctx.as_bytes(),
@@ -1809,7 +2004,7 @@ impl<
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: new_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
@@ -1903,6 +2098,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         leg_ref: &LegRef,
         leg_enc: &LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
@@ -1910,12 +2106,9 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
-        let new_account_state = account_asset.get_receiver_affirm_state()?;
-        let new_account_commitment = new_account_state.commitment()?;
-
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.get_receiver_affirm_state(account)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -1926,9 +2119,9 @@ impl<
             rng,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            &current_account_state,
-            &new_account_state.0,
-            new_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             ctx.as_bytes(),
@@ -1941,7 +2134,7 @@ impl<
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: new_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
@@ -2035,6 +2228,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
@@ -2043,12 +2237,9 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for claiming received assets.
-        let new_account_state = account_asset.get_state_for_claiming_received(amount)?;
-        let new_account_commitment = new_account_state.commitment()?;
-
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.get_state_for_claiming_received(account, amount)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -2060,9 +2251,9 @@ impl<
             amount,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            &current_account_state,
-            &new_account_state.0,
-            new_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             ctx.as_bytes(),
@@ -2075,7 +2266,7 @@ impl<
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: new_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
@@ -2169,6 +2360,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         leg_ref: &LegRef,
         leg_enc: &LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
@@ -2176,12 +2368,9 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for decreasing the counter.
-        let new_account_state = account_asset.get_state_for_decreasing_counter()?;
-        let new_account_commitment = new_account_state.commitment()?;
-
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.get_state_for_decreasing_counter(account)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -2192,9 +2381,9 @@ impl<
             rng,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            &current_account_state,
-            &new_account_state.0,
-            new_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             ctx.as_bytes(),
@@ -2207,7 +2396,7 @@ impl<
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: new_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,
@@ -2301,6 +2490,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        account: &AccountKeyPair,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
@@ -2309,12 +2499,9 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for reversing the send.
-        let new_account_state = account_asset.get_state_for_reversing_send(amount)?;
-        let new_account_commitment = new_account_state.commitment()?;
-
-        let current_account_state = &account_asset.current_state.0;
-        let current_account_path = tree_lookup
-            .get_path_to_leaf(account_asset.current_state_commitment.as_leaf_value()?)?;
+        let state_change = account_asset.get_state_for_reversing_send(account, amount)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -2326,9 +2513,9 @@ impl<
             amount,
             leg_enc.leg_enc.clone(),
             leg_enc_rand.0.clone(),
-            &current_account_state,
-            &new_account_state.0,
-            new_account_commitment.as_commitment()?,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
             current_account_path,
             &root,
             ctx.as_bytes(),
@@ -2341,7 +2528,7 @@ impl<
         Ok(Self {
             leg_ref: leg_ref.clone(),
             root_block: try_block_number(root_block)?,
-            updated_account_state_commitment: new_account_commitment,
+            updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
             proof: WrappedCanonical::wrap(&proof)?,

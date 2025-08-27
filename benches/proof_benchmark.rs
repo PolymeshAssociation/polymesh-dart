@@ -46,7 +46,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let (_proof, mut _account_state) = AccountAssetRegistrationProof::new(
                 &mut rng,
-                black_box(&issuer_keys),
+                black_box(&issuer_keys.acct),
                 asset_id,
                 0,
                 ctx,
@@ -59,7 +59,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let (proof, mut account_state) = AccountAssetRegistrationProof::new(
         &mut rng,
-        black_box(&issuer_keys),
+        black_box(&issuer_keys.acct),
         asset_id,
         0,
         ctx,
@@ -89,7 +89,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Register the investor's account state.
     let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::new(
         &mut rng,
-        &investor_keys,
+        &investor_keys.acct,
         asset_id,
         0,
         ctx,
@@ -119,15 +119,26 @@ fn proof_benchmark(c: &mut Criterion) {
     let leg_amount = 500u64;
     c.bench_function("AssetMintingProof generate", |b| {
         b.iter(|| {
-            let _proof =
-                AssetMintingProof::new(&mut rng, &mut account_state, &account_tree, mint_amount)
-                    .expect("Failed to generate asset minting proof");
+            let _proof = AssetMintingProof::new(
+                &mut rng,
+                &issuer_keys.acct,
+                &mut account_state,
+                &account_tree,
+                mint_amount,
+            )
+            .expect("Failed to generate asset minting proof");
         })
     });
 
     // Generate a proof to benchmark verification.
-    let proof = AssetMintingProof::new(&mut rng, &mut account_state, &account_tree, mint_amount)
-        .expect("Failed to generate asset minting proof");
+    let proof = AssetMintingProof::new(
+        &mut rng,
+        &issuer_keys.acct,
+        &mut account_state,
+        &account_tree,
+        mint_amount,
+    )
+    .expect("Failed to generate asset minting proof");
 
     // Benchmark: Verify asset minting proof.
     c.bench_function("AssetMintingProof verify", |b| {
@@ -204,6 +215,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: SenderAffirmationProof = SenderAffirmationProof::new(
                 &mut rng,
+                &issuer_keys.acct,
                 &leg_ref,
                 leg_amount,
                 &leg_enc,
@@ -218,6 +230,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: SenderAffirmationProof = SenderAffirmationProof::new(
         &mut rng,
+        &issuer_keys.acct,
         &leg_ref,
         leg_amount,
         &leg_enc,
@@ -241,6 +254,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
                 &mut rng,
+                &investor_keys.acct,
                 &leg_ref,
                 &leg_enc,
                 &leg_enc_rand,
@@ -254,6 +268,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
         &mut rng,
+        &investor_keys.acct,
         &leg_ref,
         &leg_enc,
         &leg_enc_rand,
@@ -331,6 +346,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: ReceiverClaimProof = ReceiverClaimProof::new(
                 &mut rng,
+                &investor_keys.acct,
                 &leg_ref,
                 leg_amount,
                 &leg_enc,
@@ -345,6 +361,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: ReceiverClaimProof = ReceiverClaimProof::new(
         &mut rng,
+        &investor_keys.acct,
         &leg_ref,
         leg_amount,
         &leg_enc,

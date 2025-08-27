@@ -28,6 +28,14 @@ pub enum Error {
     #[error("Account/Encryption public key already exists.")]
     AccountPublicKeyExists,
 
+    /// Account state amount too large.
+    #[error("Account state amount too large: {0}")]
+    AmountTooLarge(u64),
+
+    /// Account state proof of balance error.
+    #[error("Account state proof of balance error: {0}")]
+    ProofOfBalanceError(String),
+
     /// Bounded container size limit exceeded.
     #[error("Bounded container size limit exceeded.")]
     BoundedContainerSizeLimitExceeded,
