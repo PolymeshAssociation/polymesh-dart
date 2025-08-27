@@ -123,11 +123,9 @@ name = "proof_benchmark"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel", "backend_bp", "async_tree", "testing"]
+default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
 
 async_tree = []
-
-testing = ["polymesh-dart-bp?/testing"]
 
 backend_bp = [
     "polymesh-dart-bp",

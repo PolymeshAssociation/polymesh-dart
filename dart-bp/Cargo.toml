@@ -47,8 +47,6 @@ default = ["std", "asm", "parallel"]
 
 no_std = []
 
-testing = []
-
 std = [
 	"bulletproofs/std",
 	"curve_tree_relations/std",

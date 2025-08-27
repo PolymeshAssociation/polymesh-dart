@@ -53,6 +53,47 @@ macro_rules! impl_scale_and_type_info {
         });
     };
     (@impl_ {
+        $type:ident as Array32;
+        $(
+            impl_generics { $( $impl_generics:tt )* }
+            generics { $( $generics:tt )* }
+            trailing { > }
+        )?
+    }) => {
+        impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
+            type Identity = Self;
+            fn type_info() -> Type {
+                Type::builder()
+                    .path(Path::new(stringify!($type), module_path!()))
+                    .composite(Fields::unnamed().field(|f| f.ty::<[u8; 32]>()))
+            }
+        }
+
+        impl $(< $( $impl_generics )* >)? EncodeLike for $type $(< $( $generics )* >)? { }
+
+        impl $(< $( $impl_generics )* >)? Encode for $type $(< $( $generics )* >)? {
+            #[inline]
+            fn size_hint(&self) -> usize {
+                self.compressed_size()
+            }
+
+            fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+                let mut buf = [0u8; 32];
+                self.serialize_compressed(&mut buf[..])
+                    .expect("Failed to serialize");
+                dest.write(&buf[..]);
+            }
+        }
+
+        impl $(< $( $impl_generics )* >)? Decode for $type $(< $( $generics )* >)? {
+            fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+                let buf: [u8; 32] = Decode::decode(input)?;
+                Ok(Self::deserialize_compressed(&buf[..])
+                    .map_err(|_| CodecError::from("Failed to deserialize"))?)
+            }
+        }
+    };
+    (@impl_ {
         $type:ident as Vec;
         $(
             impl_generics { $( $impl_generics:tt )* }
@@ -254,6 +295,12 @@ impl_scale_and_type_info!(LegEncryptionRandomness as Vec);
 
 // TypeInfo, SCALE encoding and decoding for `AccountState`.
 impl_scale_and_type_info!(AccountState as Vec);
+
+// TypeInfo, SCALE encoding and decoding for `AccountSecretKey`.
+impl_scale_and_type_info!(AccountSecretKey as Array32);
+
+// TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
+impl_scale_and_type_info!(EncryptionSecretKey as Array32);
 
 // TypeInfo, SCALE encoding and decoding for `LeafPathAndRoot<L, M, C>`.
 impl_scale_and_type_info!(LeafPathAndRoot as Vec<const L: usize, const M: usize, C: CurveTreeConfig>);

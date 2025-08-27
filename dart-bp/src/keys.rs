@@ -14,15 +14,13 @@ use rand_core::CryptoRngCore;
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "testing", derive(CanonicalSerialize, CanonicalDeserialize))]
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct SigKey<PK: AffineRepr>(pub PK::ScalarField);
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct EncKey<PK: AffineRepr>(pub PK);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "testing", derive(CanonicalSerialize, CanonicalDeserialize))]
+#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
 pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(
