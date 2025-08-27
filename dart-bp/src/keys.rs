@@ -1,7 +1,7 @@
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::One;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{UniformRand, vec::Vec};
+use ark_std::{UniformRand, string::ToString, {vec, vec::Vec}};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use crate::account::{TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
