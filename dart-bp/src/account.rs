@@ -142,22 +142,18 @@ pub struct AccountStateCommitment<G: AffineRepr>(pub G);
 impl<G> AccountState<G>
 where
     G: AffineRepr,
-    // G::ScalarField: Absorb,
 {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         sk: G::ScalarField,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-        // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: Poseidon2Params<G::ScalarField>,
     ) -> Result<Self> {
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
         let combined = Self::concat_asset_id_counter(asset_id, counter);
-        // unwrap is fine as there is no way this can fail
-        // let rho = TwoToOneCRH::<G::ScalarField>::compress(poseidon_config, sk, combined).unwrap();
         let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config)?;
         let current_rho = rho.square();
 
