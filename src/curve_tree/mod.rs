@@ -1,3 +1,6 @@
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use ark_ec::AffineRepr;
 pub use ark_ec::CurveConfig;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
@@ -187,6 +190,7 @@ pub type CurveTreePath<const L: usize, C> =
 
 #[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(L, M, C))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig>(
     pub WrappedCanonical<Root<L, M, C::P0, C::P1>>,
 );

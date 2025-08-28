@@ -2,6 +2,9 @@ use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::HashMap;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use codec::{Decode, Encode, MaxEncodedLen};
 use curve_tree_relations::curve_tree::Root;
 use dock_crypto_utils::concat_slices;
@@ -10,13 +13,8 @@ use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
 use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig};
-use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{
-    format,
-    string::{String, ToString},
-    vec::Vec,
-};
+use ark_std::{format, string::String, vec::Vec};
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
@@ -401,6 +399,7 @@ impl AccountLookupMap {
     Eq,
     Hash,
 )]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct EncryptionPublicKey(CompressedAffine);
 
 impl From<AccountPublicKey> for EncryptionPublicKey {
@@ -448,6 +447,7 @@ impl EncryptionKeyPair {
 }
 
 #[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountPublicKey(CompressedAffine);
 
 impl AccountPublicKey {
@@ -511,7 +511,7 @@ impl AccountKeyPair {
             counter,
             params.params.clone(),
         )?;
-        Ok(state.into())
+        Ok(state.try_into()?)
     }
 }
 
@@ -561,14 +561,15 @@ impl AccountKeys {
     }
 }
 
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountState {
-    pub balance: Balance,
-    pub counter: PendingTxnCounter,
-    pub asset_id: AssetId,
-    pub rho: PallasScalar,
-    pub current_rho: PallasScalar,
-    pub randomness: PallasScalar,
+    balance: Balance,
+    counter: PendingTxnCounter,
+    asset_id: AssetId,
+    rho: WrappedCanonical<PallasScalar>,
+    current_rho: WrappedCanonical<PallasScalar>,
+    randomness: WrappedCanonical<PallasScalar>,
 }
 
 impl AccountState {
@@ -581,9 +582,9 @@ impl AccountState {
             balance: self.balance,
             counter: self.counter,
             asset_id: self.asset_id,
-            rho: self.rho,
-            current_rho: self.current_rho,
-            randomness: self.randomness,
+            rho: self.rho.decode()?,
+            current_rho: self.current_rho.decode()?,
+            randomness: self.randomness.decode()?,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
@@ -593,105 +594,25 @@ impl AccountState {
         let (_state, commitment) = self.bp_state(account)?;
         AccountStateCommitment::from_affine(commitment.0)
     }
-
-    pub fn get_state_for_mint(&self, amount: u64) -> Result<Self, Error> {
-        if amount + self.balance > MAX_AMOUNT {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_send(&self, amount: u64) -> Result<Self, Error> {
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
-        let mut new_state = self.clone();
-        new_state.balance -= amount;
-        new_state.counter += 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_receive(&self) -> Result<Self, Error> {
-        let mut new_state = self.clone();
-        new_state.counter += 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_claiming_received(&self, amount: u64) -> Result<Self, Error> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_AMOUNT {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.counter -= 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_reversing_send(&self, amount: u64) -> Result<Self, Error> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_AMOUNT {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.counter -= 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_decreasing_counter(
-        &self,
-        decrease_counter_by: Option<PendingTxnCounter>,
-    ) -> Result<Self, Error> {
-        let decrease_counter_by = decrease_counter_by.unwrap_or(1);
-        if self.counter < decrease_counter_by {
-            return Err(Error::ProofOfBalanceError(
-                "Counter cannot be decreased below zero".to_string(),
-            ));
-        }
-        let mut new_state = self.clone();
-        new_state.counter -= decrease_counter_by;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    /// Set rho and commitment randomness to new values. Used as each update to the account state
-    /// needs these refreshed.
-    pub fn refresh_randomness_for_state_change(&mut self) {
-        self.current_rho = self.current_rho * self.rho;
-        self.randomness.square_in_place();
-    }
 }
 
-impl From<BPAccountState> for AccountState {
-    fn from(state: BPAccountState) -> Self {
-        Self {
+impl TryFrom<BPAccountState> for AccountState {
+    type Error = Error;
+
+    fn try_from(state: BPAccountState) -> Result<Self, Self::Error> {
+        Ok(Self {
             balance: state.balance,
             counter: state.counter,
             asset_id: state.asset_id,
-            rho: state.rho,
-            current_rho: state.current_rho,
-            randomness: state.randomness,
-        }
+            rho: WrappedCanonical::wrap(&state.rho)?,
+            current_rho: WrappedCanonical::wrap(&state.current_rho)?,
+            randomness: WrappedCanonical::wrap(&state.randomness)?,
+        })
     }
 }
 
 #[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountStateNullifier(CompressedAffine);
 
 impl AccountStateNullifier {
@@ -705,6 +626,7 @@ impl AccountStateNullifier {
 }
 
 #[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountStateCommitment(CompressedAffine);
 
 impl AccountStateCommitment {
@@ -754,6 +676,7 @@ impl AccountAssetStateChange {
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountAssetState {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
@@ -792,11 +715,17 @@ impl AccountAssetState {
     fn state_change(
         &mut self,
         account: &AccountKeyPair,
-        new_state: AccountState,
+        update: impl FnOnce(&BPAccountState) -> Result<BPAccountState, Error>,
     ) -> Result<AccountAssetStateChange, Error> {
-        self._set_pending_state(account, new_state.clone())?;
         let (current_state, current_commitment) = self.bp_current_state(account)?;
-        let (new_state, new_commitment) = new_state.bp_state(account)?;
+
+        // Update the state.
+        let new_state = update(&current_state)?;
+        let new_commitment = new_state.commit(dart_gens().account_comm_key())?;
+
+        // Set the pending state.
+        self._set_pending_state(new_state.clone(), new_commitment)?;
+
         Ok(AccountAssetStateChange {
             current_state,
             current_commitment,
@@ -810,8 +739,7 @@ impl AccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_mint(amount)?;
-        self.state_change(account, state)
+        self.state_change(account, |state| Ok(state.get_state_for_mint(amount)?))
     }
 
     pub fn get_sender_affirm_state(
@@ -819,16 +747,14 @@ impl AccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_send(amount)?;
-        self.state_change(account, state)
+        self.state_change(account, |state| Ok(state.get_state_for_send(amount)?))
     }
 
     pub fn get_receiver_affirm_state(
         &mut self,
         account: &AccountKeyPair,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_receive()?;
-        self.state_change(account, state)
+        self.state_change(account, |state| Ok(state.get_state_for_receive()))
     }
 
     pub fn get_state_for_claiming_received(
@@ -836,8 +762,9 @@ impl AccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_claiming_received(amount)?;
-        self.state_change(account, state)
+        self.state_change(account, |state| {
+            Ok(state.get_state_for_claiming_received(amount)?)
+        })
     }
 
     pub fn get_state_for_reversing_send(
@@ -845,25 +772,27 @@ impl AccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_reversing_send(amount)?;
-        self.state_change(account, state)
+        self.state_change(account, |state| {
+            Ok(state.get_state_for_reversing_send(amount)?)
+        })
     }
 
     pub fn get_state_for_decreasing_counter(
         &mut self,
         account: &AccountKeyPair,
     ) -> Result<AccountAssetStateChange, Error> {
-        let state = self.current_state.get_state_for_decreasing_counter(None)?;
-        self.state_change(account, state)
+        self.state_change(account, |state| {
+            Ok(state.get_state_for_decreasing_counter(None)?)
+        })
     }
 
     fn _set_pending_state(
         &mut self,
-        account: &AccountKeyPair,
-        state: AccountState,
+        state: BPAccountState,
+        commitment: BPAccountStateCommitment,
     ) -> Result<(), Error> {
-        let commitment = state.commitment(account)?;
-        self.pending_state = Some((state, commitment));
+        let commitment = AccountStateCommitment::from_affine(commitment.0)?;
+        self.pending_state = Some((state.try_into()?, commitment));
         Ok(())
     }
 
@@ -882,6 +811,7 @@ impl AccountAssetState {
 
 /// Represents the state of an asset in the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetState {
     pub asset_id: AssetId,
     pub auditors: Vec<EncryptionPublicKey>,

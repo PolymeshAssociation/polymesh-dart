@@ -890,11 +890,11 @@ macro_rules! impl_curve_tree_with_backend {
                 let block_number = self.get_block_number()$($await)*?;
                 let root = self.root_node()$($await)*?;
                 Ok(LeafPathAndRoot {
-                    leaf,
+                    leaf: leaf.0.try_into()?,
                     leaf_index,
-                    path,
+                    path: WrappedCanonical::wrap(&path)?,
                     block_number,
-                    root,
+                    root: CurveTreeRoot::new(&root)?,
                 })
             }
         }
@@ -903,6 +903,12 @@ macro_rules! impl_curve_tree_with_backend {
 
 #[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
 pub struct LeafValue<P0: SWCurveConfig>(pub(crate) Affine<P0>);
+
+impl<P0: SWCurveConfig> LeafValue<P0> {
+    pub fn as_compressed_affline(&self) -> Result<CompressedAffine, Error> {
+        self.0.try_into()
+    }
+}
 
 impl<P0: SWCurveConfig + Copy + Send> core::ops::Deref for LeafValue<P0> {
     type Target = Affine<P0>;

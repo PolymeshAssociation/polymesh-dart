@@ -1,4 +1,6 @@
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use ark_std::{collections::BTreeMap, vec::Vec};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 
@@ -6,7 +8,7 @@ use codec::{Decode, Encode};
 
 use super::common::*;
 use crate::{
-    BlockNumber, LeafIndex, NodeLevel,
+    BlockNumber, CompressedAffine, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
         CurveTreeConfig, CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot,
     },
@@ -14,6 +16,7 @@ use crate::{
 };
 
 #[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub paths: Vec<LeafPathAndRoot<L, M, C>>,
 }
@@ -34,16 +37,17 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         for leaf_path in &self.paths {
             if leaf_path.leaf_index == leaf_index {
-                return Ok(leaf_path.path.clone());
+                return leaf_path.get_path();
             }
         }
         Err(Error::LeafIndexNotFound(leaf_index))
     }
 
     fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
+        let leaf = leaf.as_compressed_affline()?;
         for leaf_path in &self.paths {
             if leaf_path.leaf == leaf {
-                return Ok(leaf_path.path.clone());
+                return leaf_path.get_path();
             }
         }
         Err(Error::LeafNotFound)
@@ -62,18 +66,19 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     }
 }
 
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
-    pub leaf: LeafValue<C::P0>,
+    pub leaf: CompressedAffine,
     pub leaf_index: LeafIndex,
-    pub path: CurveTreePath<L, C>,
+    pub path: WrappedCanonical<CurveTreePath<L, C>>,
     pub block_number: BlockNumber,
-    pub root: Root<L, M, C::P0, C::P1>,
+    pub root: CurveTreeRoot<L, M, C>,
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> LeafPathAndRoot<L, M, C> {
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.encode()
+    pub fn get_path(&self) -> Result<CurveTreePath<L, C>, Error> {
+        self.path.decode()
     }
 }
 
@@ -82,15 +87,16 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         if self.leaf_index == leaf_index {
-            Ok(self.path.clone())
+            self.get_path()
         } else {
             Err(Error::LeafIndexNotFound(leaf_index))
         }
     }
 
     fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
+        let leaf = leaf.as_compressed_affline()?;
         if self.leaf == leaf {
-            Ok(self.path.clone())
+            self.get_path()
         } else {
             Err(Error::LeafNotFound)
         }
@@ -101,7 +107,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     }
 
     fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        CurveTreeRoot::new(&self.root)
+        Ok(self.root.clone())
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {

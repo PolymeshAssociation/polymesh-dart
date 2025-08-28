@@ -38,6 +38,15 @@ thiserror = { version = "2", default-features = false }
 log = { version = "0.4.27", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 
+# serde support
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_with = { version = "3.14", default-features = false, features = [
+    "hex",
+    "macros",
+] }
+serde_arrays = { version = "0.2", default-features = false }
+
 # Substrate/SCALE deps.
 bounded-collections = { version = "0.1.4", default-features = false }
 codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false }
@@ -96,6 +105,18 @@ scale-info = { workspace = true, default-features = false, features = [
 ] }
 bounded-collections = { workspace = true, default-features = false }
 
+# serde support
+serde = { workspace = true, default-features = false, features = [
+    "derive",
+], optional = true }
+serde_json = { workspace = true, default-features = false, optional = true }
+serde_with = { workspace = true, default-features = false, features = [
+    "alloc",
+    "hex",
+    "macros",
+], optional = true }
+serde_arrays = { workspace = true, default-features = false, optional = true }
+
 # dart-bp dependencies
 ark-ff = { workspace = true, default-features = false, optional = true }
 ark-ec = { workspace = true, default-features = false, optional = true }
@@ -123,7 +144,9 @@ name = "proof_benchmark"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
+default = ["std", "asm", "parallel", "backend_bp", "async_tree", "serde"]
+
+serde = ["dep:serde", "serde_json", "serde_with", "serde_arrays"]
 
 async_tree = []
 
@@ -143,11 +166,20 @@ backend_bp = [
     "ark-secq256k1",
 ]
 
-no_std = []
+no_std = ["alloc"]
+
+alloc = [
+    "serde?/alloc",
+    "serde_json?/alloc",
+    "serde_with?/alloc",
+    "serde_arrays?/alloc",
+]
 
 std = [
     "log/std",
     "hex/std",
+    "serde?/std",
+    "serde_json?/std",
     "lazy_static",
     "polymesh-dart-bp?/std",
     "thiserror/std",

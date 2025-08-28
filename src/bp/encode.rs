@@ -3,13 +3,18 @@ use codec::{
 };
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "serde")]
+use serde_with::serde_as;
+
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
 use core::mem;
 
 use crate::{
-    curve_tree::{CurveTreeConfig, Inner, LeafPathAndRoot, LeafValue},
+    curve_tree::{CurveTreeConfig, Inner, LeafValue},
     *,
 };
 
@@ -194,7 +199,10 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     Eq,
     Hash,
 )]
-pub struct CompressedAffine(CompressedPoint);
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct CompressedAffine(
+    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))] CompressedPoint,
+);
 
 impl core::fmt::Debug for CompressedAffine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -282,6 +290,7 @@ impl TypeInfo for AccountCommitmentKey {
                     .field(|f| f.name("counter_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("rho_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("current_rho_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("randomness_gen").ty::<CompressedAffine>()),
             )
     }
@@ -293,17 +302,11 @@ impl_scale_and_type_info!(LegEncrypted as Vec);
 // TypeInfo, SCALE encoding and decoding for `LegEncryptedRandomness`.
 impl_scale_and_type_info!(LegEncryptionRandomness as Vec);
 
-// TypeInfo, SCALE encoding and decoding for `AccountState`.
-impl_scale_and_type_info!(AccountState as Vec);
-
 // TypeInfo, SCALE encoding and decoding for `AccountSecretKey`.
 impl_scale_and_type_info!(AccountSecretKey as Array32);
 
 // TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
-
-// TypeInfo, SCALE encoding and decoding for `LeafPathAndRoot<L, M, C>`.
-impl_scale_and_type_info!(LeafPathAndRoot as Vec<const L: usize, const M: usize, C: CurveTreeConfig>);
 
 // TypeInfo, SCALE encoding and decoding for `Inner<C>`.
 impl_scale_and_type_info!(Inner as Vec<const M: usize, C: CurveTreeConfig>);
@@ -313,8 +316,12 @@ impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
+#[cfg_attr(feature = "serde", serde_as)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct WrappedCanonical<T> {
+    #[cfg_attr(feature = "serde", serde_as(as = "Hex"))]
     wrapped: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     _marker: core::marker::PhantomData<T>,
 }
 
