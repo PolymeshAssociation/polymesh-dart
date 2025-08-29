@@ -202,9 +202,7 @@ fn proof_benchmark(c: &mut Criterion) {
         })
     });
 
-    let leg_enc = settlement.legs[0]
-        .leg_enc()
-        .expect("Failed to get leg encoding from settlement proof");
+    let leg_enc = settlement.legs[0].leg_enc.clone();
     let leg_enc_rand = leg_enc
         .get_encryption_randomness(LegRole::Sender, &issuer_keys.enc)
         .expect("Failed to decrypt sender's secret key");

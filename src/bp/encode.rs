@@ -296,12 +296,6 @@ impl TypeInfo for AccountCommitmentKey {
     }
 }
 
-// TypeInfo, SCALE encoding and decoding for `LegEncrypted`.
-impl_scale_and_type_info!(LegEncrypted as Vec);
-
-// TypeInfo, SCALE encoding and decoding for `LegEncryptedRandomness`.
-impl_scale_and_type_info!(LegEncryptionRandomness as Vec);
-
 // TypeInfo, SCALE encoding and decoding for `AccountSecretKey`.
 impl_scale_and_type_info!(AccountSecretKey as Array32);
 

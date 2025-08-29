@@ -1069,7 +1069,7 @@ impl DartTestingDb {
         // Store settlement legs
         for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
             // For encrypted leg, try SCALE encoding first
-            let encrypted_leg = leg_proof.leg_enc()?.encode();
+            let encrypted_leg = leg_proof.leg_enc.encode();
             let has_mediator = leg_proof.has_mediator()?;
             let mediator_status = if has_mediator { Some("Pending") } else { None };
 
@@ -1516,7 +1516,7 @@ impl DartTestingDb {
             stmt.query_row(params![settlement_id, leg_index], |row| row.get(0))?;
         log::debug!("Encrypted leg data length: {}", encrypted_leg_data.len());
 
-        let encrypted_leg = LegEncrypted::decode(&mut encrypted_leg_data.as_slice())?;
+        let encrypted_leg = Decode::decode(&mut encrypted_leg_data.as_slice())?;
         Ok(encrypted_leg)
     }
 

@@ -1289,8 +1289,8 @@ impl Leg {
         )?;
         Ok((
             leg,
-            LegEncrypted { leg_enc },
-            LegEncryptionRandomness(leg_enc_rand),
+            LegEncrypted::new(leg_enc)?,
+            LegEncryptionRandomness::new(leg_enc_rand)?,
         ))
     }
 
@@ -1494,7 +1494,7 @@ impl<
 #[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
-    leg_enc: WrappedCanonical<LegEncrypted>,
+    pub leg_enc: LegEncrypted,
 
     proof: WrappedCanonical<bp_leg::SettlementTxnProof<ASSET_TREE_L, C::F1, C::F0, C::P1, C::P0>>,
 }
@@ -1532,8 +1532,8 @@ impl<
         let proof = bp_leg::SettlementTxnProof::new(
             rng,
             leg,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             asset_path,
             asset_data,
             ctx,
@@ -1544,14 +1544,10 @@ impl<
         )?;
 
         Ok(Self {
-            leg_enc: WrappedCanonical::wrap(&leg_enc)?,
+            leg_enc,
 
             proof: WrappedCanonical::wrap(&proof)?,
         })
-    }
-
-    pub fn leg_enc(&self) -> Result<LegEncrypted, Error> {
-        self.leg_enc.decode()
     }
 
     pub fn has_mediator(&self) -> Result<bool, Error> {
@@ -1562,7 +1558,6 @@ impl<
     pub fn mediator_count(&self) -> Result<usize, Error> {
         let leg_enc = self.leg_enc.decode()?;
         let mediator_count = leg_enc
-            .leg_enc
             .eph_pk_auds_meds
             .iter()
             .filter(|(is_auditor, _pk)| !is_auditor)
@@ -1579,11 +1574,11 @@ impl<
     ) -> Result<(), Error> {
         let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
-        log::debug!("Verify leg: {:?}", leg_enc.leg_enc);
+        log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.clone(),
             &root,
             ctx,
             params,
@@ -1724,21 +1719,56 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     }
 }
 
-#[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize)]
-pub struct LegEncryptionRandomness(bp_leg::LegEncryptionRandomness<PallasScalar>);
+#[derive(Clone, Encode, Decode)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct LegEncryptionRandomness(WrappedCanonical<bp_leg::LegEncryptionRandomness<PallasScalar>>);
 
-/// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct LegEncrypted {
-    pub(crate) leg_enc: bp_leg::LegEncryption<PallasA>,
+impl LegEncryptionRandomness {
+    pub fn new(rand: bp_leg::LegEncryptionRandomness<PallasScalar>) -> Result<Self, Error> {
+        Ok(Self(WrappedCanonical::wrap(&rand)?))
+    }
+
+    pub fn decode(&self) -> Result<bp_leg::LegEncryptionRandomness<PallasScalar>, Error> {
+        self.0.decode()
+    }
 }
 
+/// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct LegEncrypted(WrappedCanonical<bp_leg::LegEncryption<PallasA>>);
+
 impl LegEncrypted {
+    pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {
+        Ok(Self(WrappedCanonical::wrap(&leg_enc)?))
+    }
+
+    pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
+        self.0.decode()
+    }
+
     pub fn get_encryption_randomness(
         &self,
         role: LegRole,
         keys: &EncryptionKeyPair,
     ) -> Result<LegEncryptionRandomness, Error> {
+        let (rand, _leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        LegEncryptionRandomness::new(rand)
+    }
+
+    fn bp_decrypt_randomness_and_leg(
+        &self,
+        role: LegRole,
+        keys: &EncryptionKeyPair,
+    ) -> Result<
+        (
+            bp_leg::LegEncryptionRandomness<PallasScalar>,
+            bp_leg::LegEncryption<PallasA>,
+        ),
+        Error,
+    > {
         let is_sender = match role {
             LegRole::Sender => true,
             LegRole::Receiver => false,
@@ -1749,10 +1779,10 @@ impl LegEncrypted {
                 )));
             }
         };
-        let randomness = self
-            .leg_enc
-            .get_encryption_randomness::<Blake2b512>(&keys.secret.0.0, is_sender)?;
-        Ok(LegEncryptionRandomness(randomness))
+        let leg_enc = self.decode()?;
+        let randomness =
+            leg_enc.get_encryption_randomness::<Blake2b512>(&keys.secret.0.0, is_sender)?;
+        Ok((randomness, leg_enc))
     }
 
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Result<Leg, Error> {
@@ -1760,13 +1790,12 @@ impl LegEncrypted {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
             LegRole::Sender | LegRole::Receiver => {
-                let randomness = self.get_encryption_randomness(role, keys)?;
-                self.leg_enc
-                    .decrypt_given_r(randomness.0, enc_key_gen, enc_gen)?
+                let (rand, leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+                leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?
             }
             LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
-                self.leg_enc
-                    .decrypt_given_key(&keys.secret.0.0, idx as usize, enc_gen)?
+                let leg_enc = self.decode()?;
+                leg_enc.decrypt_given_key(&keys.secret.0.0, idx as usize, enc_gen)?
             }
         };
         Ok(Leg {
@@ -1784,10 +1813,9 @@ impl LegEncrypted {
     ) -> Result<(Leg, LegEncryptionRandomness), Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let randomness = self.get_encryption_randomness(role, keys)?;
+        let (rand, leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
         let (sender, receiver, asset_id, amount) =
-            self.leg_enc
-                .decrypt_given_r(randomness.0, enc_key_gen, enc_gen)?;
+            leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?;
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,
@@ -1795,7 +1823,7 @@ impl LegEncrypted {
                 asset_id,
                 amount,
             },
-            randomness,
+            LegEncryptionRandomness::new(rand)?,
         ))
     }
 }
@@ -1861,8 +1889,8 @@ impl<
         let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
             rng,
             amount,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -1904,7 +1932,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -1991,8 +2019,8 @@ impl<
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
             rng,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -2034,7 +2062,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -2123,8 +2151,8 @@ impl<
         let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
             rng,
             amount,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -2166,7 +2194,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -2253,8 +2281,8 @@ impl<
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
             rng,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -2296,7 +2324,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -2385,8 +2413,8 @@ impl<
         let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
             rng,
             amount,
-            leg_enc.leg_enc.clone(),
-            leg_enc_rand.0.clone(),
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -2428,7 +2456,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -2479,7 +2507,7 @@ impl MediatorAffirmationProof {
         let ctx = leg_ref.context();
         let proof = bp_leg::MediatorTxnProof::new(
             rng,
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             asset_id,
             mediator_sk.secret.0.0,
             accept,
@@ -2501,7 +2529,7 @@ impl MediatorAffirmationProof {
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
         proof.verify(
-            leg_enc.leg_enc.clone(),
+            leg_enc.decode()?,
             self.accept,
             self.key_index as usize,
             ctx.as_bytes(),

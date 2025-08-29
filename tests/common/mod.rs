@@ -926,7 +926,7 @@ impl DartSettlement {
             .map(|leg| {
                 let mediator = leg.has_mediator()?.then_some(AffirmationStatus::Pending);
                 Ok(DartSettlementLeg {
-                    enc: leg.leg_enc()?,
+                    enc: leg.leg_enc,
                     sender: AffirmationStatus::Pending,
                     receiver: AffirmationStatus::Pending,
                     mediator,
