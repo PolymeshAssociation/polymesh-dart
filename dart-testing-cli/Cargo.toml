@@ -23,7 +23,7 @@ hex = { workspace = true, default-features = false }
 anyhow = { workspace = true }
 env_logger = { version = "0.11" }
 rand = { workspace = true }
-rusqlite = { version = "0.37.0" }
+rusqlite = { version = "0.32.0" }
 clap = { version = "4.0", features = ["derive"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 

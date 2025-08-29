@@ -32,6 +32,9 @@ use polymesh_dart_common::{
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
 
+#[cfg(feature = "sqlx")]
+pub mod sqlx;
+
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
 
@@ -1166,10 +1169,14 @@ impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
 }
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum SettlementRef {
     /// ID based reference.
+    #[cfg_attr(feature = "utoipa", schema(value_type = u32))]
     ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
+    #[cfg_attr(feature = "utoipa", schema(value_type = [u8; 32]))]
     Hash(SettlementHash),
 }
 
@@ -1180,10 +1187,13 @@ impl From<SettlementId> for SettlementRef {
 }
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
     /// The leg ID within the settlement.
+    #[cfg_attr(feature = "utoipa", schema(value_type = u8))]
     pub leg_id: LegId,
 }
 
@@ -1213,6 +1223,8 @@ impl LegRef {
 }
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum LegRole {
     Sender,
     Receiver,
