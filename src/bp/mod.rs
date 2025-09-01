@@ -77,7 +77,6 @@ pub type TreeIndex = u8;
 pub type NodeLevel = u8;
 pub type NodeIndex = LeafIndex;
 pub type ChildIndex = LeafIndex;
-pub type SettlementHash = [u8; 32];
 
 pub type PallasParameters = ark_pallas::PallasConfig;
 pub type VestaParameters = ark_vesta::VestaConfig;
@@ -1170,13 +1169,17 @@ impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SettlementHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
+
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum SettlementRef {
     /// ID based reference.
     #[cfg_attr(feature = "utoipa", schema(value_type = u32))]
     ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
-    #[cfg_attr(feature = "utoipa", schema(value_type = [u8; 32]))]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
     Hash(SettlementHash),
 }
 
@@ -1462,7 +1465,7 @@ impl<
         let mut hasher = Blake2s256::new();
         let data = self.encode();
         hasher.update(&data);
-        hasher.finalize().into()
+        SettlementHash(hasher.finalize().into())
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -1719,10 +1722,15 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     }
 }
 
+pub type WrappedLegEncryptionRandomness =
+    WrappedCanonical<bp_leg::LegEncryptionRandomness<PallasScalar>>;
+
 #[derive(Clone, Encode, Decode)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct LegEncryptionRandomness(WrappedCanonical<bp_leg::LegEncryptionRandomness<PallasScalar>>);
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+pub struct LegEncryptionRandomness(WrappedLegEncryptionRandomness);
 
 impl LegEncryptionRandomness {
     pub fn new(rand: bp_leg::LegEncryptionRandomness<PallasScalar>) -> Result<Self, Error> {
@@ -1734,11 +1742,15 @@ impl LegEncryptionRandomness {
     }
 }
 
+pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>;
+
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct LegEncrypted(WrappedCanonical<bp_leg::LegEncryption<PallasA>>);
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+pub struct LegEncrypted(WrappedLegEncryption);
 
 impl LegEncrypted {
     pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {

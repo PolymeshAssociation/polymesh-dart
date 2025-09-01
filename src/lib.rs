@@ -5,6 +5,11 @@ mod bp;
 #[cfg(feature = "backend_bp")]
 pub use bp::*;
 
+#[cfg(feature = "serde")]
+mod serde_impl;
+#[cfg(feature = "serde")]
+pub use serde_impl::*;
+
 mod error;
 pub use error::Error;
 

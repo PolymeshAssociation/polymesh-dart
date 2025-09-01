@@ -5,8 +5,6 @@ use scale_info::{Path, Type, TypeInfo, build::Fields};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "serde")]
-use serde_with::serde_as;
 
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -201,7 +199,7 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CompressedAffine(
-    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))] CompressedPoint,
+    #[cfg_attr(feature = "serde", serde(with = "human_hex"))] CompressedPoint,
 );
 
 impl core::fmt::Debug for CompressedAffine {
@@ -310,10 +308,13 @@ impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
-#[cfg_attr(feature = "serde", serde_as)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(bound = ""))]
 pub struct WrappedCanonical<T> {
-    #[cfg_attr(feature = "serde", serde_as(as = "Hex"))]
+    #[cfg_attr(feature = "serde", serde(with = "human_hex"))]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
     wrapped: Vec<u8>,
     #[cfg_attr(feature = "serde", serde(skip))]
     _marker: core::marker::PhantomData<T>,
