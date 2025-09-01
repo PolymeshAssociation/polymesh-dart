@@ -10,17 +10,38 @@ use ark_std::{
 };
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Zeroize,
+    ZeroizeOnDrop,
+)]
 pub struct SigKey<PK: AffineRepr>(pub PK::ScalarField);
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct EncKey<PK: AffineRepr>(pub PK);
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Zeroize,
+    ZeroizeOnDrop,
+)]
 pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
 pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(

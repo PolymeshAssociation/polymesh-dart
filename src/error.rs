@@ -83,6 +83,10 @@ pub enum Error {
     /// Leg decryption error.
     #[error("Leg decryption error: {0}")]
     LegDecryptionError(String),
+
+    /// Hex decode error.
+    #[error("Hex decode error")]
+    HexDecodeError,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

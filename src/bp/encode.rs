@@ -198,9 +198,17 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0x00ceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
 pub struct CompressedAffine(
     #[cfg_attr(feature = "serde", serde(with = "human_hex"))] CompressedPoint,
 );
+
+impl Default for CompressedAffine {
+    fn default() -> Self {
+        Self([0u8; ARK_EC_POINT_SIZE])
+    }
+}
 
 impl core::fmt::Debug for CompressedAffine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -209,6 +217,14 @@ impl core::fmt::Debug for CompressedAffine {
 }
 
 impl CompressedAffine {
+    /// Creates a `CompressedAffine` from a hex string.
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        let offset = if s.starts_with("0x") { 2 } else { 0 };
+        let mut point = [0u8; ARK_EC_POINT_SIZE];
+        hex::decode_to_slice(&s[offset..], &mut point[..]).map_err(|_| Error::HexDecodeError)?;
+        Ok(Self(point))
+    }
+
     /// Returns the underlying byte array.
     pub fn as_bytes(&self) -> &[u8; ARK_EC_POINT_SIZE] {
         &self.0
@@ -268,9 +284,7 @@ impl TypeInfo for DartBPGenerators {
                     .field(|f| f.name("sig_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("enc_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
-                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>())
-                    .field(|f| f.name("ped_comm_key_g").ty::<CompressedAffine>())
-                    .field(|f| f.name("ped_comm_key_h").ty::<CompressedAffine>()),
+                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>()),
             )
     }
 }

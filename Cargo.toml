@@ -37,6 +37,7 @@ lazy_static = { version = "1.5.0", default-features = false }
 thiserror = { version = "2", default-features = false }
 log = { version = "0.4.27", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 
 # serde support
 serde = { version = "1.0", default-features = false, features = ["derive"] }
@@ -97,6 +98,7 @@ lazy_static = { workspace = true, default-features = false, optional = true }
 thiserror = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
 hex = { workspace = true, default-features = false }
+zeroize = { workspace = true, default-features = false }
 
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
@@ -157,7 +159,16 @@ name = "proof_benchmark"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel", "backend_bp", "async_tree"]
+default = [
+    "std",
+    "asm",
+    "parallel",
+    "backend_bp",
+    "async_tree",
+    "serde",
+    "utoipa",
+    "sqlx",
+]
 
 serde = ["dep:serde", "serde_json", "serde_with", "serde_arrays"]
 
@@ -204,6 +215,7 @@ std = [
     "codec/std",
     "ark-pallas?/std",
     "ark-vesta?/std",
+    "zeroize/std",
 ]
 
 asm = ["polymesh-dart-bp?/asm"]

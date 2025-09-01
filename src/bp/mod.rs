@@ -21,7 +21,6 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 use bounded_collections::{BoundedVec, ConstU32, Get};
 
 use digest::Digest;
-use dock_crypto_utils::commitment::PedersenCommitmentKey;
 use polymesh_dart_bp::{
     account as bp_account, account_registration, keys as bp_keys, leg as bp_leg,
 };
@@ -37,6 +36,7 @@ pub mod sqlx;
 
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::curve_tree::*;
 use crate::*;
@@ -260,10 +260,6 @@ pub struct DartBPGenerators {
     account_comm_key: AccountCommitmentKey,
     #[codec(encoded_as = "CompressedAffine")]
     leg_asset_value_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
-    ped_comm_key_g: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
-    ped_comm_key_h: PallasA,
 }
 
 impl DartBPGenerators {
@@ -289,16 +285,11 @@ impl DartBPGenerators {
                 b" : leg_asset_value_gen"
             ]);
 
-        let ped_comm_key =
-            PedersenCommitmentKey::<PallasA>::new::<Blake2b512>(b"polymesh-dart-comm-key");
-
         Self {
             sig_key_gen,
             enc_key_gen,
             account_comm_key,
             leg_asset_value_gen,
-            ped_comm_key_g: ped_comm_key.g,
-            ped_comm_key_h: ped_comm_key.h,
         }
     }
 
@@ -317,13 +308,6 @@ impl DartBPGenerators {
 
     pub fn leg_asset_value_gen(&self) -> PallasA {
         self.leg_asset_value_gen
-    }
-
-    pub fn ped_comm_key(&self) -> PedersenCommitmentKey<PallasA> {
-        PedersenCommitmentKey {
-            g: self.ped_comm_key_g,
-            h: self.ped_comm_key_h,
-        }
     }
 }
 
@@ -387,12 +371,14 @@ impl AccountLookupMap {
     }
 }
 
+/// The encryption public key, which can be shared freely.
 #[derive(
     Copy,
     Clone,
     MaxEncodedLen,
     Encode,
     Decode,
+    Default,
     TypeInfo,
     Debug,
     CanonicalSerialize,
@@ -402,36 +388,52 @@ impl AccountLookupMap {
     Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct EncryptionPublicKey(CompressedAffine);
 
-impl From<AccountPublicKey> for EncryptionPublicKey {
-    fn from(account_pk: AccountPublicKey) -> Self {
-        EncryptionPublicKey(account_pk.0)
-    }
-}
-
 impl EncryptionPublicKey {
+    /// Creates a `EncryptionPublicKey` from a hex string.
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::from_str(s)?))
+    }
+
+    /// Creates a `EncryptionPublicKey` from an affine point.
     pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
         Ok(Self(CompressedAffine::try_from(affine)?))
     }
 
+    /// Gets the affine point corresponding to the `EncryptionPublicKey`.
     pub fn get_affine(&self) -> Result<PallasA, Error> {
         Ok(PallasA::try_from(&self.0)?)
     }
 
+    /// Creates an `EncryptionPublicKey` from a BP encryption key.
     pub fn from_bp_key(pk: bp_keys::EncKey<PallasA>) -> Result<Self, Error> {
         Self::from_affine(pk.0)
     }
 
+    /// Gets the BP encryption key corresponding to the `EncryptionPublicKey`.
     pub fn get_bp_key(&self) -> Result<bp_keys::EncKey<PallasA>, Error> {
         Ok(bp_keys::EncKey(self.get_affine()?))
     }
 }
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+/// The encryption secret key, which should be kept private.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Zeroize,
+    ZeroizeOnDrop,
+)]
 pub struct EncryptionSecretKey(bp_keys::DecKey<PallasA>);
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq)]
+/// The encryption key pair, consisting of the public and secret keys.
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct EncryptionKeyPair {
     pub public: EncryptionPublicKey,
     pub secret: EncryptionSecretKey,
@@ -448,32 +450,57 @@ impl EncryptionKeyPair {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+/// The account public key, which can be shared freely.
+#[derive(
+    Copy, Clone, MaxEncodedLen, Encode, Decode, Default, TypeInfo, Debug, PartialEq, Eq, Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountPublicKey(CompressedAffine);
 
 impl AccountPublicKey {
+    /// Creates a `AccountPublicKey` from a hex string.
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        Ok(Self(CompressedAffine::from_str(s)?))
+    }
+
+    /// Creates a `AccountPublicKey` from an affine point.
     pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
         Ok(Self(CompressedAffine::try_from(affine)?))
     }
 
+    /// Gets the affine point corresponding to the `AccountPublicKey`.
     pub fn get_affine(&self) -> Result<PallasA, Error> {
         Ok(PallasA::try_from(&self.0)?)
     }
 
+    /// Creates an `AccountPublicKey` from a BP verification key.
     pub fn from_bp_key(pk: bp_keys::VerKey<PallasA>) -> Result<Self, Error> {
         Self::from_affine(pk.0)
     }
 
+    /// Gets the BP verification key corresponding to the `AccountPublicKey`.
     pub fn get_bp_key(&self) -> Result<bp_keys::VerKey<PallasA>, Error> {
         Ok(bp_keys::VerKey(self.get_affine()?))
     }
 }
 
-#[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
+/// The account secret key, which should be kept private.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    CanonicalSerialize,
+    CanonicalDeserialize,
+    PartialEq,
+    Eq,
+    Zeroize,
+    ZeroizeOnDrop,
+)]
 pub struct AccountSecretKey(bp_keys::SigKey<PallasA>);
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq)]
+/// The account key pair, consisting of the public and secret keys.
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct AccountKeyPair {
     pub public: AccountPublicKey,
     pub secret: AccountSecretKey,
@@ -517,13 +544,15 @@ impl AccountKeyPair {
     }
 }
 
+/// The pair of public keys for an account: the encryption public key and the account public key.
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode, PartialEq, Eq)]
+/// The pair of key pairs for an account: the encryption key pair and the account key pair.
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct AccountKeys {
     pub enc: EncryptionKeyPair,
     pub acct: AccountKeyPair,

@@ -191,6 +191,7 @@ pub type CurveTreePath<const L: usize, C> =
 #[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(L, M, C))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct CurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig>(
     pub WrappedCanonical<Root<L, M, C::P0, C::P1>>,
 );

@@ -13,6 +13,7 @@ digest = { workspace = true, default-features = false }
 blake2 = { workspace = true, default-features = false }
 rayon = { workspace = true, default-features = false, optional = true }
 thiserror = { workspace = true, default-features = false }
+zeroize = { workspace = true, default-features = false }
 
 ark-ff = { workspace = true, default-features = false }
 ark-ec = { workspace = true, default-features = false }
@@ -56,6 +57,7 @@ std = [
 	"ark-crypto-primitives/std",
 	"ark-relations/std",
 	"ark-r1cs-std/std",
+	"zeroize/std",
 	#	"equality_across_groups/std"
 ]
 
