@@ -25,8 +25,8 @@ use polymesh_dart_bp::{
     account as bp_account, account_registration, keys as bp_keys, leg as bp_leg,
 };
 use polymesh_dart_common::{
-    LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
-    SettlementId,
+    LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MEMO_MAX_LENGTH, MediatorId,
+    SETTLEMENT_MAX_LEGS, SettlementId,
 };
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
@@ -1580,19 +1580,20 @@ impl<
         })
     }
 
-    pub fn has_mediator(&self) -> Result<bool, Error> {
-        let count = self.mediator_count()?;
-        Ok(count > 0)
+    pub fn mediator_count(&self) -> Result<usize, Error> {
+        self.get_mediator_ids().map(|ids| ids.len())
     }
 
-    pub fn mediator_count(&self) -> Result<usize, Error> {
+    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
         let leg_enc = self.leg_enc.decode()?;
-        let mediator_count = leg_enc
+        let mediators = leg_enc
             .eph_pk_auds_meds
             .iter()
-            .filter(|(is_auditor, _pk)| !is_auditor)
-            .count();
-        Ok(mediator_count)
+            .enumerate()
+            .filter(|(_idx, (is_auditor, _pk))| !is_auditor)
+            .map(|(idx, _)| idx as MediatorId)
+            .collect();
+        Ok(mediators)
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -2528,7 +2529,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,
-    pub key_index: u8,
+    pub key_index: MediatorId,
 
     proof: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
 }
@@ -2540,7 +2541,7 @@ impl MediatorAffirmationProof {
         asset_id: AssetId,
         leg_enc: &LegEncrypted,
         mediator_sk: &EncryptionKeyPair,
-        key_index: u8,
+        key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
         let ctx = leg_ref.context();

@@ -1060,7 +1060,7 @@ impl DartTestingDb {
         for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
             // For encrypted leg, try SCALE encoding first
             let encrypted_leg = leg_proof.leg_enc.encode();
-            let has_mediator = leg_proof.has_mediator()?;
+            let has_mediator = leg_proof.mediator_count()? > 0;
             let mediator_status = if has_mediator { Some("Pending") } else { None };
 
             self.conn.execute(

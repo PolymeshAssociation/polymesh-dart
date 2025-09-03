@@ -7,6 +7,7 @@ pub type BlockNumber = u32;
 
 pub type SettlementId = u64;
 pub type LegId = u8;
+pub type MediatorId = u8;
 
 pub type NullifierSkGenCounter = u16;
 

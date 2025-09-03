@@ -3,11 +3,11 @@
 use anyhow::{Context, Result, anyhow};
 use ark_std::rand;
 use codec::{Decode, Encode};
-use polymesh_dart_common::{SETTLEMENT_MAX_LEGS, SettlementId};
+use polymesh_dart_common::{MediatorId, SETTLEMENT_MAX_LEGS, SettlementId};
 use rand_core::{CryptoRng, RngCore};
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
@@ -703,7 +703,7 @@ pub struct DartSettlementLeg {
     pub enc: LegEncrypted,
     pub sender: AffirmationStatus,
     pub receiver: AffirmationStatus,
-    pub mediator: Option<AffirmationStatus>,
+    pub mediators: BTreeMap<MediatorId, AffirmationStatus>,
     pub status: AffirmationStatus,
 }
 
@@ -711,8 +711,8 @@ impl DartSettlementLeg {
     /// Try to update the status of the leg based on the current sender, receiver, and mediator statuses.
     fn update_status(&mut self) -> Result<()> {
         let mut affirmation = self.sender.apply(self.receiver)?;
-        if let Some(mediator) = self.mediator {
-            affirmation = affirmation.apply(mediator)?;
+        for (_, mediator) in &self.mediators {
+            affirmation = affirmation.apply(*mediator)?;
         }
         self.status = affirmation;
         Ok(())
@@ -743,7 +743,7 @@ impl DartSettlementLeg {
     /// When a settlement is rejected or affirmed (all legs are affirmed), then we can finalize the mediators.
     pub fn finalize_mediators(&mut self) {
         // Mark the mediator as finalized if it exists.  Since they cannot affirm or reject anymore.
-        if let Some(mediator) = &mut self.mediator {
+        for (_, mediator) in &mut self.mediators {
             *mediator = AffirmationStatus::Finalized;
         }
     }
@@ -794,10 +794,15 @@ impl DartSettlementLeg {
 
     /// Verify a mediator affirmation proof for this leg.
     pub fn mediator_affirmation(&mut self, proof: &MediatorAffirmationProof) -> Result<()> {
-        if self.mediator.is_none() {
+        if self.mediators.is_empty() {
             return Err(anyhow!("Leg does not require a mediator affirmation"));
         }
-        if self.mediator != Some(AffirmationStatus::Pending) {
+        let mediator_id = proof.key_index;
+        let mediator = self
+            .mediators
+            .get_mut(&mediator_id)
+            .ok_or_else(|| anyhow!("Invalid mediator key index for this leg"))?;
+        if *mediator != AffirmationStatus::Pending {
             return Err(anyhow!("Mediator has already affirmed this leg"));
         }
         // verify the proof.
@@ -807,9 +812,9 @@ impl DartSettlementLeg {
 
         // Update the leg's mediator status based on the proof.
         if proof.accept {
-            self.mediator = Some(AffirmationStatus::Affirmed);
+            *mediator = AffirmationStatus::Affirmed;
         } else {
-            self.mediator = Some(AffirmationStatus::Rejected);
+            *mediator = AffirmationStatus::Rejected;
         }
         self.update_status()?;
         Ok(())
@@ -924,12 +929,16 @@ impl DartSettlement {
             .legs
             .into_iter()
             .map(|leg| {
-                let mediator = leg.has_mediator()?.then_some(AffirmationStatus::Pending);
+                let mediators = leg
+                    .get_mediator_ids()?
+                    .into_iter()
+                    .map(|idx| (idx, AffirmationStatus::Pending))
+                    .collect();
                 Ok(DartSettlementLeg {
                     enc: leg.leg_enc,
                     sender: AffirmationStatus::Pending,
                     receiver: AffirmationStatus::Pending,
-                    mediator,
+                    mediators,
                     status: AffirmationStatus::Pending,
                 })
             })
