@@ -69,8 +69,10 @@ fn proof_benchmark(c: &mut Criterion) {
     account_state
         .commit_pending_state()
         .expect("Failed to commit pending state");
-    let leaf = account_state
-        .current_state_commitment
+    let current_commitment = account_state
+        .current_commitment(&issuer_keys.acct)
+        .expect("Failed to get current commitment");
+    let leaf = current_commitment
         .as_leaf_value()
         .expect("Failed to get leaf value from asset state commitment");
     account_tree
@@ -99,8 +101,10 @@ fn proof_benchmark(c: &mut Criterion) {
     investor_account_state
         .commit_pending_state()
         .expect("Failed to commit pending state");
-    let leaf = investor_account_state
-        .current_state_commitment
+    let current_commitment = investor_account_state
+        .current_commitment(&investor_keys.acct)
+        .expect("Failed to get current commitment");
+    let leaf = current_commitment
         .as_leaf_value()
         .expect("Failed to get leaf value from asset state commitment");
     account_tree

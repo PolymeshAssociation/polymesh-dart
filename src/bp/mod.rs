@@ -32,7 +32,7 @@ use polymesh_dart_common::{
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
 
 #[cfg(feature = "sqlx")]
-pub mod sqlx;
+pub mod sqlx_impl;
 
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
@@ -594,13 +594,14 @@ impl AccountKeys {
 
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct AccountState {
-    balance: Balance,
-    counter: PendingTxnCounter,
-    asset_id: AssetId,
-    rho: WrappedCanonical<PallasScalar>,
-    current_rho: WrappedCanonical<PallasScalar>,
-    randomness: WrappedCanonical<PallasScalar>,
+    pub balance: Balance,
+    pub counter: PendingTxnCounter,
+    pub asset_id: AssetId,
+    pub rho: WrappedCanonical<PallasScalar>,
+    pub current_rho: WrappedCanonical<PallasScalar>,
+    pub randomness: WrappedCanonical<PallasScalar>,
 }
 
 impl AccountState {
@@ -624,6 +625,13 @@ impl AccountState {
     pub fn commitment(&self, account: &AccountKeyPair) -> Result<AccountStateCommitment, Error> {
         let (_state, commitment) = self.bp_state(account)?;
         AccountStateCommitment::from_affine(commitment.0)
+    }
+
+    pub fn nullifier(&self) -> Result<AccountStateNullifier, Error> {
+        let account_comm_key = dart_gens().account_comm_key();
+        let current_rho = self.current_rho.decode()?;
+        let nullifier = (account_comm_key.current_rho_gen() * current_rho).into();
+        AccountStateNullifier::from_affine(nullifier)
     }
 }
 
@@ -709,12 +717,8 @@ impl AccountAssetStateChange {
 #[derive(Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountAssetState {
-    pub account: AccountPublicKey,
-    pub asset_id: AssetId,
     pub current_state: AccountState,
-    pub current_state_commitment: AccountStateCommitment,
-    pub current_tx_id: u64,
-    pub pending_state: Option<(AccountState, AccountStateCommitment)>,
+    pub pending_state: Option<AccountState>,
 }
 
 impl AccountAssetState {
@@ -725,15 +729,21 @@ impl AccountAssetState {
         counter: u16,
     ) -> Result<Self, Error> {
         let current_state = account.account_state(rng, asset_id, counter)?;
-        let current_state_commitment = current_state.commitment(account)?;
         Ok(Self {
-            account: account.public,
-            asset_id,
             current_state,
-            current_state_commitment,
-            current_tx_id: 0,
             pending_state: None,
         })
+    }
+
+    pub fn current_commitment(
+        &self,
+        account: &AccountKeyPair,
+    ) -> Result<AccountStateCommitment, Error> {
+        self.current_state.commitment(account)
+    }
+
+    pub fn asset_id(&self) -> AssetId {
+        self.current_state.asset_id
     }
 
     pub fn bp_current_state(
@@ -755,7 +765,7 @@ impl AccountAssetState {
         let new_commitment = new_state.commit(dart_gens().account_comm_key())?;
 
         // Set the pending state.
-        self._set_pending_state(new_state.clone(), new_commitment)?;
+        self.pending_state = Some(new_state.clone().try_into()?);
 
         Ok(AccountAssetStateChange {
             current_state,
@@ -817,22 +827,10 @@ impl AccountAssetState {
         })
     }
 
-    fn _set_pending_state(
-        &mut self,
-        state: BPAccountState,
-        commitment: BPAccountStateCommitment,
-    ) -> Result<(), Error> {
-        let commitment = AccountStateCommitment::from_affine(commitment.0)?;
-        self.pending_state = Some((state.try_into()?, commitment));
-        Ok(())
-    }
-
     pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
         match self.pending_state.take() {
-            Some((pending_state, pending_state_commitment)) => {
+            Some(pending_state) => {
                 self.current_state = pending_state;
-                self.current_state_commitment = pending_state_commitment;
-                self.current_tx_id += 1;
                 Ok(true)
             }
             None => Ok(false),
@@ -1121,7 +1119,7 @@ impl<
         let state_change = account_asset.mint(account, amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
-        let pk = account_asset.account;
+        let pk = account.public;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
@@ -1142,7 +1140,7 @@ impl<
         )?;
         Ok(Self {
             pk,
-            asset_id: account_asset.asset_id,
+            asset_id: account_asset.asset_id(),
             amount,
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment,

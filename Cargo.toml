@@ -122,6 +122,7 @@ serde_arrays = { workspace = true, default-features = false, optional = true }
 # SQLx support.
 sqlx = { version = "0.8", default-features = false, features = [
     "any",
+    "macros",
 ], optional = true }
 sqlx-core = { version = "0.8", default-features = false, features = [
     "any",

@@ -251,15 +251,10 @@ pub struct AccountAssetStateInfo {
 }
 
 impl AccountAssetStateInfo {
-    pub fn get_state(&self, account_info: &DartAccountInfo) -> Result<AccountAssetState> {
-        let account = account_info.account_public_keys()?;
+    pub fn get_state(&self) -> Result<AccountAssetState> {
         let db_state = AccountAssetStateDb::decode(&mut self.state_data.as_slice())?;
         Ok(AccountAssetState {
-            account: account.acct,
-            asset_id: db_state.asset_id,
             current_state: db_state.current_state,
-            current_state_commitment: db_state.current_state_commitment,
-            current_tx_id: db_state.current_tx_id,
             pending_state: db_state.pending_state,
         })
     }
@@ -267,20 +262,14 @@ impl AccountAssetStateInfo {
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct AccountAssetStateDb {
-    pub asset_id: AssetId,
     pub current_state: AccountState,
-    pub current_state_commitment: AccountStateCommitment,
-    pub current_tx_id: u64,
-    pub pending_state: Option<(AccountState, AccountStateCommitment)>,
+    pub pending_state: Option<AccountState>,
 }
 
 impl AccountAssetStateDb {
     pub fn from_state(state: AccountAssetState) -> Self {
         Self {
-            asset_id: state.asset_id,
             current_state: state.current_state,
-            current_state_commitment: state.current_state_commitment,
-            current_tx_id: state.current_tx_id,
             pending_state: state.pending_state,
         }
     }
@@ -814,12 +803,12 @@ impl DartTestingDb {
         }
         let params = get_account_curve_tree_parameters();
 
+        let account_keys = account_info.account_keys()?;
         let (proof, mut asset_state) = if let Some(proof) = proof_action.get_proof()? {
             // Get and update account asset state
             let asset_state = self.get_account_asset_state(&account_info, asset_id)?;
             (proof, asset_state)
         } else {
-            let account_keys = account_info.account_keys()?;
             // Create registration proof and initial state.
             let (proof, asset_state) = AccountAssetRegistrationProof::new(
                 rng,
@@ -835,6 +824,7 @@ impl DartTestingDb {
 
             (proof, asset_state)
         };
+        let current_commitment = asset_state.current_commitment(&account_keys.acct)?;
 
         // If proof action is to generate only, save proof and return
         if !proof_action.apply_proof() {
@@ -861,7 +851,7 @@ impl DartTestingDb {
         self.update_account_asset_state(&account_info, &asset_state)?;
 
         // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
+        self.append_account_commitment(current_commitment)?;
 
         Ok(())
     }
@@ -981,7 +971,7 @@ impl DartTestingDb {
             asset_id
         );
 
-        state_info.get_state(account_info)
+        state_info.get_state()
     }
 
     fn update_account_asset_state(
@@ -989,7 +979,7 @@ impl DartTestingDb {
         account_info: &DartAccountInfo,
         state: &AccountAssetState,
     ) -> Result<()> {
-        let asset_id = state.asset_id;
+        let asset_id = state.asset_id();
         let state_db = AccountAssetStateDb::from_state(state.clone());
         let state_data = state_db.encode();
 
@@ -1758,9 +1748,6 @@ impl DartTestingDb {
         // Commit the pending state change and save the state.
         asset_state.commit_pending_state()?;
         self.update_account_asset_state(&account_info, &asset_state)?;
-
-        // Append the account commitment to the account tree
-        self.append_account_commitment(asset_state.current_state_commitment)?;
 
         Ok(())
     }
