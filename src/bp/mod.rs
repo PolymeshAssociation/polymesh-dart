@@ -14,7 +14,11 @@ use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{format, string::String, vec::Vec};
+use ark_std::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
@@ -1203,7 +1207,7 @@ pub struct SettlementHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum SettlementRef {
     /// ID based reference.
-    #[cfg_attr(feature = "utoipa", schema(value_type = u32))]
+    #[cfg_attr(feature = "utoipa", schema(example = 1, value_type = u32))]
     ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
@@ -1789,12 +1793,66 @@ impl LegEncrypted {
         self.0.decode()
     }
 
+    /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
+    pub fn try_decrypt_with_key(
+        &self,
+        keys: &EncryptionKeyPair,
+        key_index: Option<usize>,
+        max_asset_id: Option<AssetId>,
+    ) -> Result<(Leg, usize), Error> {
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        let leg_enc = self.decode()?;
+        let (key_index, (sender, receiver, asset_id, amount)) = if let Some(key_index) = key_index {
+            // The key index is provided, use it directly.
+            (
+                key_index,
+                leg_enc.decrypt_given_key_with_limits(
+                    &keys.secret.0.0,
+                    key_index,
+                    enc_gen,
+                    max_asset_id,
+                    None,
+                )?,
+            )
+        } else {
+            // No key index provided, try all key indices until one works.
+            let max_keys = leg_enc.eph_pk_auds_meds.len();
+            let mut idx = 0;
+            loop {
+                if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
+                    &keys.secret.0.0,
+                    idx,
+                    enc_gen,
+                    max_asset_id,
+                    None,
+                ) {
+                    break (idx, res);
+                }
+                idx += 1;
+                if idx >= max_keys {
+                    return Err(Error::LegDecryptionError(
+                        "Failed to decrypt leg with provided key".to_string(),
+                    ));
+                }
+            }
+        };
+        Ok((
+            Leg {
+                sender: AccountPublicKey::from_affine(sender)?,
+                receiver: AccountPublicKey::from_affine(receiver)?,
+                asset_id,
+                amount,
+            },
+            key_index,
+        ))
+    }
+
     pub fn get_encryption_randomness(
         &self,
         role: LegRole,
         keys: &EncryptionKeyPair,
     ) -> Result<LegEncryptionRandomness, Error> {
-        let (rand, _leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        let (rand, _leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
         LegEncryptionRandomness::new(rand)
     }
 
@@ -1806,6 +1864,7 @@ impl LegEncrypted {
         (
             bp_leg::LegEncryptionRandomness<PallasScalar>,
             bp_leg::LegEncryption<PallasA>,
+            bool,
         ),
         Error,
     > {
@@ -1822,7 +1881,7 @@ impl LegEncrypted {
         let leg_enc = self.decode()?;
         let randomness =
             leg_enc.get_encryption_randomness::<Blake2b512>(&keys.secret.0.0, is_sender)?;
-        Ok((randomness, leg_enc))
+        Ok((randomness, leg_enc, is_sender))
     }
 
     pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Result<Leg, Error> {
@@ -1830,7 +1889,7 @@ impl LegEncrypted {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
             LegRole::Sender | LegRole::Receiver => {
-                let (rand, leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
                 leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?
             }
             LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
@@ -1853,9 +1912,32 @@ impl LegEncrypted {
     ) -> Result<(Leg, LegEncryptionRandomness), Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
         let (sender, receiver, asset_id, amount) =
             leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?;
+        Ok((
+            Leg {
+                sender: AccountPublicKey::from_affine(sender)?,
+                receiver: AccountPublicKey::from_affine(receiver)?,
+                asset_id,
+                amount,
+            },
+            LegEncryptionRandomness::new(rand)?,
+        ))
+    }
+
+    pub fn decrypt_with_randomness_checked(
+        &self,
+        role: LegRole,
+        keys: &EncryptionKeyPair,
+        account_pk: &AccountPublicKey,
+    ) -> Result<(Leg, LegEncryptionRandomness), Error> {
+        let enc_key_gen = dart_gens().enc_key_gen();
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        let pk = account_pk.get_affine()?;
+        let (sender, receiver, asset_id, amount) =
+            leg_enc.decrypt_given_r_checked(rand, enc_key_gen, enc_gen, pk, is_sender)?;
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,
