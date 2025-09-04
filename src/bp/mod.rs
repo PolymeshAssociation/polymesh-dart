@@ -1886,17 +1886,33 @@ impl LegEncrypted {
         Ok((randomness, leg_enc, is_sender))
     }
 
-    pub fn decrypt(&self, role: LegRole, keys: &EncryptionKeyPair) -> Result<Leg, Error> {
+    pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
-            LegRole::Sender | LegRole::Receiver => {
-                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
-                leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?
+            LegRole::Sender => {
+                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+                leg_enc.decrypt_given_r_checked(
+                    rand,
+                    enc_key_gen,
+                    enc_gen,
+                    keys.acct.public.get_affine()?,
+                    true,
+                )?
+            }
+            LegRole::Receiver => {
+                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+                leg_enc.decrypt_given_r_checked(
+                    rand,
+                    enc_key_gen,
+                    enc_gen,
+                    keys.acct.public.get_affine()?,
+                    false,
+                )?
             }
             LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
                 let leg_enc = self.decode()?;
-                leg_enc.decrypt_given_key(&keys.secret.0.0, idx as usize, enc_gen)?
+                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, idx as usize, enc_gen)?
             }
         };
         Ok(Leg {
@@ -1910,13 +1926,18 @@ impl LegEncrypted {
     pub fn decrypt_with_randomness(
         &self,
         role: LegRole,
-        keys: &EncryptionKeyPair,
+        keys: &AccountKeys,
     ) -> Result<(Leg, LegEncryptionRandomness), Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
-        let (sender, receiver, asset_id, amount) =
-            leg_enc.decrypt_given_r(rand, enc_key_gen, enc_gen)?;
+        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+        let (sender, receiver, asset_id, amount) = leg_enc.decrypt_given_r_checked(
+            rand,
+            enc_key_gen,
+            enc_gen,
+            keys.acct.public.get_affine()?,
+            role.is_sender(),
+        )?;
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,

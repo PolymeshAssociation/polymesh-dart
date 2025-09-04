@@ -287,13 +287,31 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_key_gen: G,
         enc_gen: G,
     ) -> Result<(G, G, AssetId, Balance)> {
+        self.decrypt_given_r_with_limits(r, enc_key_gen, enc_gen, None, None)
+    }
+
+    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given r_i
+    pub fn decrypt_given_r_with_limits(
+        &self,
+        r: LegEncryptionRandomness<F>,
+        enc_key_gen: G,
+        enc_gen: G,
+        max_asset_id: Option<AssetId>,
+        max_amount: Option<Balance>,
+    ) -> Result<(G, G, AssetId, Balance)> {
         let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = r;
         let enc_key_gen = enc_key_gen.into_group();
         let enc_gen = enc_gen.into_group();
+        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
+        let max_amount = max_amount.unwrap_or(MAX_AMOUNT);
+
+        // Decrypt asset-id first as they will fail quickly if the wrong `r_i` is used.
+        let asset_id =
+            self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen, max_asset_id)? as AssetId;
+        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen, max_amount)?;
+
         let sender = Self::decrypt_as_group_element_given_r(&r_1, self.ct_s, enc_key_gen);
         let receiver = Self::decrypt_as_group_element_given_r(&r_2, self.ct_r, enc_key_gen);
-        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen)?;
-        let asset_id = self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen)? as AssetId;
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
@@ -340,8 +358,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         };
 
         let enc_gen = enc_gen.into_group();
-        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen)?;
-        let asset_id = self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen)? as AssetId;
+        let asset_id =
+            self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen, MAX_ASSET_ID)? as AssetId;
+        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen, MAX_AMOUNT)?;
         Ok((sender, receiver, asset_id, amount))
     }
 
@@ -372,15 +391,26 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_AMOUNT);
 
+        // Compute inverse of secret key once.
+        let sk_inv = sk
+            .inverse()
+            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
+
         // Try to decrypt asset-id and amount first as they will fail if the wrong secret key is used.
         let enc_gen = enc_gen.into_group();
-        let asset_id = self.decrypt_asset_id(sk, key_index, enc_gen, max_asset_id)? as AssetId;
-        let amount = self.decrypt_amount(sk, key_index, enc_gen, max_amount)?;
+        let asset_id = self.decrypt_asset_id(&sk_inv, key_index, enc_gen, max_asset_id)? as AssetId;
+        let amount = self.decrypt_amount(&sk_inv, key_index, enc_gen, max_amount)?;
 
-        let sender =
-            Self::decrypt_as_group_element(sk, self.ct_s, self.eph_pk_auds_meds[key_index].1.0)?;
-        let receiver =
-            Self::decrypt_as_group_element(sk, self.ct_r, self.eph_pk_auds_meds[key_index].1.1)?;
+        let sender = Self::decrypt_as_group_element(
+            &sk_inv,
+            self.ct_s,
+            self.eph_pk_auds_meds[key_index].1.0,
+        );
+        let receiver = Self::decrypt_as_group_element(
+            &sk_inv,
+            self.ct_r,
+            self.eph_pk_auds_meds[key_index].1.1,
+        );
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
@@ -394,9 +424,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         r_i: &F,
         enc_key_gen: G::Group,
         enc_gen: G::Group,
+        max_asset_id: AssetId,
     ) -> Result<u64> {
         let asset_id = Self::decrypt_as_group_element_given_r(r_i, self.ct_asset_id, enc_key_gen);
-        solve_discrete_log_bsgs_alt::<G::Group>(MAX_ASSET_ID as u64, enc_gen, asset_id)
+        solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as u64, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
 
@@ -405,15 +436,16 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         r_i: &F,
         enc_key_gen: G::Group,
         enc_gen: G::Group,
+        max_amount: Balance,
     ) -> Result<u64> {
         let amount = Self::decrypt_as_group_element_given_r(r_i, self.ct_amount, enc_key_gen);
-        solve_discrete_log_bsgs_alt::<G::Group>(MAX_AMOUNT, enc_gen, amount)
+        solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
 
     pub fn decrypt_asset_id(
         &self,
-        sk: &F,
+        sk_inv: &F,
         key_index: usize,
         enc_gen: G::Group,
         max_asset_id: AssetId,
@@ -422,17 +454,17 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             return Err(Error::InvalidKeyIndex(key_index));
         }
         let asset_id = Self::decrypt_as_group_element(
-            sk,
+            sk_inv,
             self.ct_asset_id,
             self.eph_pk_auds_meds[key_index].1.3,
-        )?;
+        );
         solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as _, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
 
     pub fn decrypt_amount(
         &self,
-        sk: &F,
+        sk_inv: &F,
         key_index: usize,
         enc_gen: G::Group,
         max_amount: Balance,
@@ -441,10 +473,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             return Err(Error::InvalidKeyIndex(key_index));
         }
         let amount = Self::decrypt_as_group_element(
-            sk,
+            sk_inv,
             self.ct_amount,
             self.eph_pk_auds_meds[key_index].1.2,
-        )?;
+        );
         solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
@@ -457,12 +489,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         encrypted.into_group() - enc_key_gen * *r_i
     }
 
-    pub fn decrypt_as_group_element(sk: &F, encrypted: G, eph_pk: G) -> Result<G::Group> {
-        let g_k = (eph_pk
-            * sk.inverse()
-                .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?)
-        .into_affine();
-        Ok(encrypted.into_group() - g_k)
+    pub fn decrypt_as_group_element(sk_inv: &F, encrypted: G, eph_pk: G) -> G::Group {
+        let g_k = (eph_pk * sk_inv).into_affine();
+        encrypted.into_group() - g_k
     }
 }
 

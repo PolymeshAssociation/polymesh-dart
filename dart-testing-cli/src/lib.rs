@@ -1382,7 +1382,7 @@ impl DartTestingDb {
             proof
         } else {
             // Decrypt leg
-            let leg = encrypted_leg.decrypt(LegRole::Mediator(0), &account_keys.enc)?;
+            let leg = encrypted_leg.decrypt(LegRole::Mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
             MediatorAffirmationProof::new(
@@ -1783,7 +1783,7 @@ impl DartTestingDb {
         // Get settlement leg
         let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
         let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
-        let (leg, leg_enc_rand) = encrypted_leg.decrypt_with_randomness(role, &account_keys.enc)?;
+        let (leg, leg_enc_rand) = encrypted_leg.decrypt_with_randomness(role, &account_keys)?;
         let asset_id = leg.asset_id();
 
         // Get and update account asset state
