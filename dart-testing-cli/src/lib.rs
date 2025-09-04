@@ -208,8 +208,8 @@ pub struct AssetInfo {
     pub id: i64,
     pub asset_id: AssetId,
     pub issuer_signer_id: i64,
-    pub auditors: Vec<u8>,  // Serialized Vec<EncryptionPublicKey>
     pub mediators: Vec<u8>, // Serialized Vec<EncryptionPublicKey>
+    pub auditors: Vec<u8>,  // Serialized Vec<EncryptionPublicKey>
     pub total_supply: Balance,
 }
 
@@ -642,8 +642,8 @@ impl DartTestingDb {
     pub fn create_asset(
         &mut self,
         issuer_signer_name: &str,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
     ) -> Result<AssetInfo> {
         let signer = self.get_signer_by_name(issuer_signer_name)?;
 
@@ -666,7 +666,7 @@ impl DartTestingDb {
         let id = self.conn.last_insert_rowid();
 
         // Update the asset tree
-        let asset_state = self.create_asset_state(asset_id, auditors, mediators)?;
+        let asset_state = self.create_asset_state(asset_id, mediators, auditors)?;
         let asset_data = asset_state.asset_data()?;
         let leaf_index = asset_id as _;
         self.asset_tree
@@ -676,8 +676,8 @@ impl DartTestingDb {
             id,
             asset_id,
             issuer_signer_id: signer.id,
-            auditors: auditors_bytes,
             mediators: mediators_bytes,
+            auditors: auditors_bytes,
             total_supply: 0,
         })
     }
@@ -685,10 +685,10 @@ impl DartTestingDb {
     fn create_asset_state(
         &self,
         asset_id: AssetId,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
     ) -> Result<AssetState> {
-        Ok(AssetState::new(asset_id, auditors, mediators))
+        Ok(AssetState::new(asset_id, mediators, auditors))
     }
 
     pub fn get_asset_by_id(&self, asset_id: AssetId) -> Result<AssetInfo> {
@@ -1010,9 +1010,9 @@ impl DartTestingDb {
 
             let sender_keys = self.get_account_public_keys(&sender_info)?;
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
-            let auditors = asset_info.auditors()?;
             let mediators = asset_info.mediators()?;
-            let asset_state = AssetState::new(asset_id, &auditors, &mediators);
+            let auditors = asset_info.auditors()?;
+            let asset_state = AssetState::new(asset_id, &mediators, &auditors);
 
             leg_builders.push(LegBuilder {
                 sender: sender_keys,

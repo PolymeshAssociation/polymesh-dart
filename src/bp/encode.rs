@@ -196,6 +196,8 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]

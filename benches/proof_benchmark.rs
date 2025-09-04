@@ -29,7 +29,7 @@ fn proof_benchmark(c: &mut Criterion) {
     let ctx = b"benchmark";
 
     let asset_id = 0 as _;
-    let asset_state = AssetState::new(asset_id, &[], &[mediator_acct.enc]);
+    let asset_state = AssetState::new(asset_id, &[mediator_acct.enc], &[]);
 
     // Create the asset.
     asset_tree

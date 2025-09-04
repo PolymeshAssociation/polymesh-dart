@@ -351,7 +351,7 @@ fn main() -> Result<()> {
                 AuditorType::Mediator => (vec![], vec![auditor_keys.enc]),
             };
 
-            let asset = db.create_asset(&signer, &auditors, &mediators)?;
+            let asset = db.create_asset(&signer, &mediators, &auditors)?;
             println!(
                 "Created asset {} with issuer '{}' and {} '{}:{}'",
                 asset.asset_id,

@@ -22,7 +22,7 @@ use ark_std::{
 use blake2::{Blake2b512, Blake2s256};
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
-use bounded_collections::{BoundedVec, ConstU32, Get};
+use bounded_collections::{BoundedBTreeSet, BoundedVec, ConstU32, Get};
 
 use digest::Digest;
 use polymesh_dart_bp::{
@@ -390,6 +390,8 @@ impl AccountLookupMap {
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -843,25 +845,53 @@ impl AccountAssetState {
 }
 
 /// Represents the state of an asset in the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct AssetState {
+pub struct AssetState<T: DartLimits = ()> {
     pub asset_id: AssetId,
-    pub auditors: Vec<EncryptionPublicKey>,
-    pub mediators: Vec<EncryptionPublicKey>,
+    pub mediators: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetMediators>,
+    pub auditors: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
 }
 
-impl AssetState {
+impl<T: DartLimits> AssetState<T> {
     /// Creates a new asset state with the given asset ID, mediator status, and public key.
     pub fn new(
         asset_id: AssetId,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
+    ) -> Self {
+        let mut state = Self {
+            asset_id,
+            auditors: Default::default(),
+            mediators: Default::default(),
+        };
+
+        for mediator in mediators {
+            state
+                .mediators
+                .try_insert(*mediator)
+                .expect("Too many asset mediators");
+        }
+        for auditor in auditors {
+            state
+                .auditors
+                .try_insert(*auditor)
+                .expect("Too many asset auditors");
+        }
+
+        state
+    }
+
+    /// Creates a new asset state with the given asset ID, mediator status, and public key.
+    pub fn new_bounded(
+        asset_id: AssetId,
+        mediators: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetMediators>,
+        auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
     ) -> Self {
         Self {
             asset_id,
-            auditors: auditors.into(),
-            mediators: mediators.into(),
+            auditors: auditors.clone(),
+            mediators: mediators.clone(),
         }
     }
 
@@ -1348,7 +1378,7 @@ impl Leg {
 }
 
 /// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
     pub receiver: AccountPublicKeys,
@@ -1411,7 +1441,7 @@ impl LegBuilder {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,

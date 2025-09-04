@@ -586,8 +586,8 @@ impl DartUser {
     pub fn create_asset(
         &self,
         chain: &mut DartChainState,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
     ) -> Result<AssetId> {
         chain
             .create_dart_asset(&self.address, auditors, mediators)
@@ -633,20 +633,20 @@ impl DartAssetDetails {
     pub fn new(
         asset_id: AssetId,
         owner: SignerAddress,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
     ) -> Self {
         Self {
             asset_id,
             owner,
             total_supply: 0,
-            auditors: auditors.into(),
             mediators: mediators.into(),
+            auditors: auditors.into(),
         }
     }
 
     pub fn asset_state(&self) -> AssetState {
-        AssetState::new(self.asset_id, &self.auditors, &self.mediators)
+        AssetState::new(self.asset_id, &self.mediators, &self.auditors)
     }
 }
 
@@ -1373,15 +1373,15 @@ impl DartChainState {
     pub fn create_dart_asset(
         &mut self,
         caller: &SignerAddress,
-        auditors: &[EncryptionPublicKey],
         mediators: &[EncryptionPublicKey],
+        auditors: &[EncryptionPublicKey],
     ) -> Result<DartAssetDetails> {
         self.ensure_caller(caller)?;
 
         let asset_id = self.next_asset_id;
         self.next_asset_id += 1;
 
-        let asset_details = DartAssetDetails::new(asset_id, caller.clone(), auditors, mediators);
+        let asset_details = DartAssetDetails::new(asset_id, caller.clone(), mediators, auditors);
         let asset_state = asset_details.asset_state();
 
         self.asset_tree.set_asset_state(asset_state)?;
