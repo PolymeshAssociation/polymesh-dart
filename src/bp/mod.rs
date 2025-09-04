@@ -1207,7 +1207,7 @@ pub struct SettlementHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum SettlementRef {
     /// ID based reference.
-    #[cfg_attr(feature = "utoipa", schema(example = 1, value_type = u32))]
+    #[cfg_attr(feature = "utoipa", schema(example = json!({"ID": 1})))]
     ID(#[codec(compact)] SettlementId),
     /// Hash based reference.
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
@@ -1227,7 +1227,7 @@ pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
     /// The leg ID within the settlement.
-    #[cfg_attr(feature = "utoipa", schema(value_type = u8))]
+    #[cfg_attr(feature = "utoipa", schema(example = 0, value_type = u8))]
     pub leg_id: LegId,
 }
 
@@ -1277,7 +1277,9 @@ impl LegRole {
 }
 
 /// The decrypted leg details in the Dart BP protocol.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
     pub sender: AccountPublicKey,
     pub receiver: AccountPublicKey,
