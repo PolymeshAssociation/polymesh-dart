@@ -1406,35 +1406,15 @@ pub mod tests {
         let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
         let keys_auditor = (0..num_auditors)
-            .map(|_| {
-                (
-                    keygen_sig(&mut rng, sig_key_gen),
-                    keygen_enc(&mut rng, enc_key_gen),
-                )
-            })
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
         let keys_mediator = (0..num_mediators)
-            .map(|_| {
-                (
-                    keygen_sig(&mut rng, sig_key_gen),
-                    keygen_enc(&mut rng, enc_key_gen),
-                )
-            })
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
 
         let mut keys = Vec::with_capacity(num_auditors + num_mediators);
-        keys.extend(
-            keys_auditor
-                .iter()
-                .map(|(_, (_, k))| (true, k.0))
-                .into_iter(),
-        );
-        keys.extend(
-            keys_mediator
-                .iter()
-                .map(|(_, (_, k))| (false, k.0))
-                .into_iter(),
-        );
+        keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
+        keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
         let asset_data = AssetData::new(
             asset_id,
             keys.clone(),
@@ -1449,13 +1429,13 @@ pub mod tests {
         for i in 0..num_auditors {
             assert_eq!(
                 points[i + 1].into_group(),
-                asset_comm_params.j_0 + keys_auditor[i].1.1.0
+                asset_comm_params.j_0 + keys_auditor[i].1.0
             );
         }
         for i in 0..num_mediators {
             assert_eq!(
                 points[i + 1 + num_auditors].into_group(),
-                keys_mediator[i].1.1.0
+                keys_mediator[i].1.0
             );
         }
 
@@ -1551,7 +1531,7 @@ pub mod tests {
         assert_eq!(b, amount);
 
         let mut index = 0;
-        for (_, (d, _)) in keys_auditor.into_iter().chain(keys_mediator.into_iter()) {
+        for (d, _) in keys_auditor.into_iter().chain(keys_mediator.into_iter()) {
             let (p1, p2, a, b) = leg_enc.decrypt_given_key(&d.0, index, enc_gen).unwrap();
             assert_eq!(p1, pk_s.0);
             assert_eq!(p2, pk_r.0);
@@ -1590,33 +1570,23 @@ pub mod tests {
         let num_auditors = 2;
         let num_mediators = 3;
         let keys_auditor = (0..num_auditors)
-            .map(|_| {
-                (
-                    keygen_sig(&mut rng, account_comm_key.sk_gen()),
-                    keygen_enc(&mut rng, enc_key_gen),
-                )
-            })
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
         let keys_mediator = (0..num_mediators)
-            .map(|_| {
-                (
-                    keygen_sig(&mut rng, account_comm_key.sk_gen()),
-                    keygen_enc(&mut rng, enc_key_gen),
-                )
-            })
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
 
         let mut keys = Vec::with_capacity(num_auditors + num_mediators);
         keys.extend(
             keys_auditor
                 .iter()
-                .map(|(_, (s, k))| (true, k.0, s.0))
+                .map(|(s, k)| (true, k.0, s.0))
                 .into_iter(),
         );
         keys.extend(
             keys_mediator
                 .iter()
-                .map(|(_, (s, k))| (false, k.0, s.0))
+                .map(|(s, k)| (false, k.0, s.0))
                 .into_iter(),
         );
 

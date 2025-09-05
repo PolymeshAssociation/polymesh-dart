@@ -20,6 +20,10 @@ pub use polymesh_dart_common::{
 
 // TODO: Check if root should be added to the transcript before its used.
 
+// TODO: Add protocol specific prefixes to labels
+
+// TODO: Ensure all intermediate secret values are being zeroed.
+
 // Venue creating settlement
 // - takes sender key, receiver key, amount, asset id, and auditor/mediator key
 // - creates leg enc. and corresponding proof

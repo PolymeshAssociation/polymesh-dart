@@ -59,7 +59,7 @@ pub struct EncryptedRandomness<
 /// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
-    pub resp_comm: PokPedersenCommitment<G>,
+    pub resp_acc_comm: PokPedersenCommitment<G>,
     pub resp_initial_nullifier: PokDiscreteLog<G>,
     /// Called `N` in the report. This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub initial_nullifier: G,
@@ -101,7 +101,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
-
         T: Option<(G, G, G)>,
     ) -> Result<Self> {
         let _ = Self::CHECK_CHUNK_BITS;
@@ -174,6 +173,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         )?;
 
         // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
+        // Break randomness `s` in `NUM_CHUNKS` chunks and encrypt each chunk using exponent Elgamal. Then initialize sigma
+        // protocols for proving correctness of each ciphertext
         let enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             let (s_chunks, s_chunks_as_u64) =
                 digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
@@ -247,7 +248,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
 
-        // NOTE: We can save 1 group element in commitment by committing all variables (including chunks) in
+        // NOTE: We can save 2 group elements in total by committing all variables (including chunks) in
         // a single commitment. It complicates the implementation a bit
 
         let com_rho_bp_blinding = G::ScalarField::rand(rng);
@@ -277,7 +278,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let t_pk =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
 
-        // Commit to each chunk of randomness and prove that each chunk in range
+        // Commit to each chunk of randomness and prove that each chunk in range using BP
         let (comm_s_chunks_bp, com_s_bp_blinding) =
             if let Some((s_chunks, s_chunks_as_u64, _, _, _, _, _)) = &enc_prep {
                 let com_s_bp_blinding = G::ScalarField::rand(rng);
@@ -301,6 +302,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
         t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript_ref)?;
 
+        // Take challenge contribution of ciphertext of each chunk
         let (t_comm_s_chunks_bp, combined_s_proto) =
             if let Some((_, _, enc_rands, _, s_chunks_blindings, _, _)) = &enc_prep {
                 let mut blindings = vec![G::ScalarField::rand(rng)];
@@ -399,7 +401,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
 
         Ok(Self {
-            resp_comm,
+            resp_acc_comm: resp_comm,
             resp_initial_nullifier,
             t_comm_rho_bp: t_comm_rho_bp.t,
             resp_comm_rho_bp,
@@ -424,7 +426,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
-
         T: Option<(G, G, G)>,
     ) -> Result<()> {
         let _ = Self::CHECK_CHUNK_BITS;
@@ -465,7 +466,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
                 .into_affine();
-        self.resp_comm.challenge_contribution(
+        self.resp_acc_comm.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
             &reduced_acc_comm,
@@ -478,6 +479,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &mut verifier_transcript,
         )?;
 
+        // Take challenge contribution of ciphertext of each chunk
         if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             let enc_rand = self.encrypted_randomness.as_ref().unwrap();
             for i in 0..NUM_CHUNKS {
@@ -500,6 +502,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let vars = verifier.commit_vec(3, self.comm_rho_bp);
         Self::enforce_constraints(&mut verifier, asset_id, counter, vars, poseidon_config)?;
 
+        // Check if each chunk is in range
         if let Some(enc_rand) = &self.encrypted_randomness {
             let mut vars = verifier.commit_vec(NUM_CHUNKS, enc_rand.comm_s_chunks_bp);
             for _ in 0..NUM_CHUNKS {
@@ -548,7 +551,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let verifier_challenge =
             transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        if !self.resp_comm.verify(
+        if !self.resp_acc_comm.verify(
             &reduced_acc_comm,
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
@@ -595,7 +598,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 "Initial rho mismatch between BP commitment and initial nullifier".to_string(),
             ));
         }
-        if self.resp_comm_rho_bp.0[3] != self.resp_comm.response1 {
+        if self.resp_comm_rho_bp.0[3] != self.resp_acc_comm.response1 {
             return Err(Error::ProofVerificationError(
                 "Rho mismatch between account and BP commitment".to_string(),
             ));
@@ -656,7 +659,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 ));
             }
 
-            if enc_rand.resp_combined_s.response2 != self.resp_comm.response2 {
+            if enc_rand.resp_combined_s.response2 != self.resp_acc_comm.response2 {
                 return Err(Error::ProofVerificationError(
                     "Mismatch in commitment randomness".to_string(),
                 ));

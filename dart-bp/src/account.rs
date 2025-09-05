@@ -127,6 +127,7 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
+    // TODO: Remove this later.
     pub sk: G::ScalarField,
     pub balance: Balance,
     pub counter: PendingTxnCounter,
@@ -2499,10 +2500,15 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
+    /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg
     pub resp_asset_id: Vec<PokDiscreteLog<G>>,
+    /// For proving correctness of twisted Elgamal ciphertext of sender public key. Used when prover is sender.
     pub resp_pk_send: BTreeMap<usize, PokDiscreteLog<G>>,
+    /// For proving correctness of twisted Elgamal ciphertext of receiver public key. Used when prover is receiver.
     pub resp_pk_recv: BTreeMap<usize, PokDiscreteLog<G>>,
+    /// Proving knowledge of `\sum{r_3}` in `\sum{C_v} - h * \sum{v} = g * \sum{r_3}` where prover is receiver. `\sum{v}` is the total received amount in the legs
     pub resp_recv_amount: PokDiscreteLog<G>,
+    /// Proving knowledge of `\sum{r_3}` in `\sum{C_v} - h * \sum{v} = g * \sum{r_3}` where prover is sender. `\sum{v}` is the total sent amount in the legs
     pub resp_sent_amount: PokDiscreteLog<G>,
 }
 
@@ -2575,7 +2581,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         // For proving correctness of twisted Elgamal ciphertext of sender public key. Used when prover is sender.
         let mut t_pk_send = BTreeMap::new();
-        // For proving correctness of twisted Elgamal ciphertext of sender public key. Used when prover is receiver.
+        // For proving correctness of twisted Elgamal ciphertext of receiver public key. Used when prover is receiver.
         let mut t_pk_recv = BTreeMap::new();
 
         // Sum of all r_3 where prover is sender
@@ -2585,13 +2591,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let t_acc = SchnorrCommitment::new(
             &[
-                account_comm_key.sk_gen(),
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
             ],
             vec![
-                sk_blinding,
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
                 G::ScalarField::rand(rng),
@@ -2641,10 +2645,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             t_asset_id.push(t_leg_asset_id);
         }
 
-        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is sender
+        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is sender. \sum{v} is the total sent amount in the legs
         let t_sent_amount =
             PokDiscreteLogProtocol::init(sum_r_3_sent, G::ScalarField::rand(rng), &enc_key_gen);
-        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is receiver
+        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is receiver. \sum{v} is the total received amount in the legs
         let t_recv_amount =
             PokDiscreteLogProtocol::init(sum_r_3_recv, G::ScalarField::rand(rng), &enc_key_gen);
 
@@ -2709,12 +2713,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         // TODO: Eliminate duplicate responses
         let resp_acc = t_acc.response(
-            &[
-                account.sk,
-                account.rho,
-                account.current_rho,
-                account.randomness,
-            ],
+            &[account.rho, account.current_rho, account.randomness],
             &prover_challenge,
         )?;
         let resp_null = t_null.gen_proof(&prover_challenge);
@@ -2880,12 +2879,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             verifier_transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
-            - (account_comm_key.balance_gen() * G::ScalarField::from(balance)
+            - (pk.into_group()
+                + account_comm_key.balance_gen() * G::ScalarField::from(balance)
                 + account_comm_key.counter_gen() * G::ScalarField::from(counter)
                 + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
         self.resp_acc.is_valid(
             &[
-                account_comm_key.sk_gen(),
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
@@ -2977,15 +2976,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         }
 
         // rho matches the one in nullifier
-        if self.resp_acc.0[2] != self.resp_null.response {
+        if self.resp_acc.0[1] != self.resp_null.response {
             return Err(Error::ProofVerificationError(
                 "Rho mismatch between account and nullifier".to_string(),
-            ));
-        }
-        // Sk in account matches the one in public key
-        if self.resp_acc.0[0] != self.resp_pk.response {
-            return Err(Error::ProofVerificationError(
-                "Secret key mismatch between account and public key".to_string(),
             ));
         }
 
@@ -3869,7 +3862,7 @@ pub mod tests {
         let (
             ((sk, pk), (_, pk_e)),
             ((_sk_r, pk_other), (_, pk_e_other)),
-            ((_sk_a, pk_a), (_sk_a_e, _pk_a_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3891,26 +3884,26 @@ pub mod tests {
         let mut receiver_in_leg_indices = BTreeSet::new();
         for i in 0..num_pending_txns as usize {
             // for odd i, account is sender, for even i, its receiver
-            let (leg, leg_enc, leg_enc_rand) = if i % 2 == 0 {
+            let (leg_enc, leg_enc_rand) = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
                 let leg =
-                    Leg::new(pk_other.0, pk.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
+                    Leg::new(pk_other.0, pk.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e_other.0, pk_e.0, enc_key_gen, enc_gen)
                     .unwrap();
-                (leg, leg_enc, leg_enc_rand)
+                (leg_enc, leg_enc_rand)
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
                 let leg =
-                    Leg::new(pk.0, pk_other.0, vec![(true, pk_a.0)], amount, asset_id).unwrap();
+                    Leg::new(pk.0, pk_other.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e.0, pk_e_other.0, enc_key_gen, enc_gen)
                     .unwrap();
-                (leg, leg_enc, leg_enc_rand)
+                (leg_enc, leg_enc_rand)
             };
-            legs.push((leg, leg_enc, leg_enc_rand));
+            legs.push((leg_enc, leg_enc_rand));
         }
 
         let nonce = b"test-nonce";
@@ -3922,7 +3915,7 @@ pub mod tests {
             &pk.0,
             &account,
             account_comm.clone(),
-            legs.clone().into_iter().map(|(_, e, r)| (e, r)).collect(),
+            legs.clone(),
             sender_in_leg_indices.clone(),
             receiver_in_leg_indices.clone(),
             pending_sent_amount,
@@ -3945,7 +3938,7 @@ pub mod tests {
                 account.counter,
                 &pk.0,
                 account_comm,
-                legs.into_iter().map(|l| l.1).collect(),
+                legs.into_iter().map(|l| l.0).collect(),
                 sender_in_leg_indices.clone(),
                 receiver_in_leg_indices.clone(),
                 pending_sent_amount,

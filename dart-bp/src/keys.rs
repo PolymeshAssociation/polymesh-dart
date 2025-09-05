@@ -8,6 +8,7 @@ use ark_std::{
     string::ToString,
     {vec, vec::Vec},
 };
+use core::ops::Neg;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -163,17 +164,17 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 
         // Even the following 2 checks can be combined into 1 with RLC
 
-        if sig_key_gen * self.sig.1
-            != (self.sig.0 + G::Group::msm_unchecked(&sig_keys, &challenge_powers))
-        {
+        sig_keys.push(sig_key_gen);
+        challenge_powers.push(-self.sig.1);
+        if self.sig.0.into_group().neg() != G::Group::msm_unchecked(&sig_keys, &challenge_powers) {
             return Err(Error::ProofVerificationError(
                 "Signature key proof verification failed".to_string(),
             ));
         }
 
-        if enc_key_gen * self.enc.1
-            != (self.enc.0 + G::Group::msm_unchecked(&enc_keys, &challenge_powers))
-        {
+        enc_keys.push(enc_key_gen);
+        challenge_powers[enc_keys.len() - 1] = -self.enc.1;
+        if self.enc.0.into_group().neg() != G::Group::msm_unchecked(&enc_keys, &challenge_powers) {
             return Err(Error::ProofVerificationError(
                 "Encryption key proof verification failed".to_string(),
             ));
@@ -250,8 +251,9 @@ impl<G: AffineRepr> AudMedRegProof<G> {
             challenge_powers.push(c);
         }
 
-        if enc_key_gen * self.s != (self.t + G::Group::msm_unchecked(&enc_keys, &challenge_powers))
-        {
+        enc_keys.push(enc_key_gen);
+        challenge_powers.push(-self.s);
+        if self.t.into_group().neg() != G::Group::msm_unchecked(&enc_keys, &challenge_powers) {
             return Err(Error::ProofVerificationError(
                 "Encryption key proof verification failed".to_string(),
             ));
