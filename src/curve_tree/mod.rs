@@ -249,10 +249,10 @@ pub trait ValidateCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConf
 }
 
 impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig>
-    for CurveTreeRoot<L, M, AssetTreeConfig>
+    for &CurveTreeRoot<L, M, AssetTreeConfig>
 {
     fn get_block_root(&self, _block: BlockNumber) -> Option<CurveTreeRoot<L, M, AssetTreeConfig>> {
-        Some(self.clone())
+        Some((*self).clone())
     }
 
     fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
@@ -261,13 +261,13 @@ impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig
 }
 
 impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AccountTreeConfig>
-    for CurveTreeRoot<L, M, AccountTreeConfig>
+    for &CurveTreeRoot<L, M, AccountTreeConfig>
 {
     fn get_block_root(
         &self,
         _block: BlockNumber,
     ) -> Option<CurveTreeRoot<L, M, AccountTreeConfig>> {
-        Some(self.clone())
+        Some((*self).clone())
     }
 
     fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
@@ -294,7 +294,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
     }
 
     /// Adds a new root to the history.
-    pub fn add_root(&mut self, root: CurveTreeRoot<L, M, C>) {
+    pub fn add_root(&mut self, root: CurveTreeRoot<L, M, C>) -> BlockNumber {
         let block_number = self.next_block_number;
         self.next_block_number += 1;
 
@@ -303,6 +303,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
             self.block_roots.remove(&to_remove);
         }
         self.block_roots.insert(block_number, root);
+        block_number
     }
 }
 

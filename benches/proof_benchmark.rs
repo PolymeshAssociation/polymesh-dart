@@ -6,8 +6,6 @@ use polymesh_dart::{curve_tree::*, *};
 fn proof_benchmark(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
     let mut asset_tree = AssetCurveTree::new().expect("Failed to create asset tree");
-    let mut asset_roots =
-        RootHistory::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(10, asset_tree.params());
 
     // The account curve tree.
     let mut account_tree =
@@ -17,8 +15,6 @@ fn proof_benchmark(c: &mut Criterion) {
         )
         .expect("Failed to create account tree");
     let account_params = account_tree.params().clone();
-    let mut account_roots =
-        RootHistory::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(10, &account_params);
 
     let issuer_keys = AccountKeys::rand(&mut rng).expect("Failed to generate issuer keys");
     let issuer_acct = issuer_keys.public_keys();
@@ -35,11 +31,9 @@ fn proof_benchmark(c: &mut Criterion) {
     asset_tree
         .set_asset_state(asset_state.clone())
         .expect("Failed to insert asset state into asset tree");
-    asset_roots.add_root(
-        (&asset_tree)
+    let asset_root = asset_tree
             .root_node()
-            .expect("Failed to get asset tree root"),
-    );
+            .expect("Failed to get asset tree root");
 
     // Benchmark: Generate account asset registration proof.
     c.bench_function("AccountAssetRegistrationProof generate", |b| {
@@ -112,11 +106,9 @@ fn proof_benchmark(c: &mut Criterion) {
         .expect("Failed to insert asset state commitment into account tree");
 
     // Update account tree roots.
-    account_roots.add_root(
-        (&account_tree)
+    let account_root = (&account_tree)
             .root_node()
-            .expect("Failed to get account tree root"),
-    );
+            .expect("Failed to get account tree root");
 
     // Benchmark: Generate asset minting proof.
     let mint_amount = 1000u64;
@@ -148,7 +140,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AssetMintingProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(&account_roots), &mut rng)
+                .verify(black_box(&account_root), &mut rng)
                 .expect("Failed to verify proof");
         })
     });
@@ -165,11 +157,9 @@ fn proof_benchmark(c: &mut Criterion) {
                 .expect("Failed to get leaf value from asset state commitment"),
         )
         .expect("Failed to insert updated account state commitment into account tree");
-    account_roots.add_root(
-        (&account_tree)
+    let account_root = (&account_tree)
             .root_node()
-            .expect("Failed to get account tree root"),
-    );
+            .expect("Failed to get account tree root");
 
     // Benchmark: Generate settlement creation proof.
     c.bench_function("SettlementProof generate", |b| {
@@ -201,7 +191,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("SettlementProof verify", |b| {
         b.iter(|| {
             settlement
-                .verify(black_box(&asset_roots), &mut rng)
+                .verify(black_box(&asset_root), &mut rng)
                 .expect("Failed to verify settlement proof");
         })
     });
@@ -246,7 +236,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("SenderAffirmationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(&leg_enc, black_box(&account_roots), &mut rng)
+                .verify(&leg_enc, black_box(&account_root), &mut rng)
                 .expect("Failed to verify sender affirmation proof");
         })
     });
@@ -283,7 +273,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("ReceiverAffirmationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(&leg_enc, black_box(&account_roots), &mut rng)
+                .verify(&leg_enc, black_box(&account_root), &mut rng)
                 .expect("Failed to verify receiver affirmation proof");
         })
     });
@@ -300,11 +290,9 @@ fn proof_benchmark(c: &mut Criterion) {
                 .expect("Failed to get leaf value from asset state commitment"),
         )
         .expect("Failed to insert updated account state commitment into account tree");
-    account_roots.add_root(
-        (&account_tree)
+    let account_root = (&account_tree)
             .root_node()
-            .expect("Failed to get account tree root"),
-    );
+            .expect("Failed to get account tree root");
 
     // Benchmark: Generate mediator affirmation proof.
     c.bench_function("MediatorAffirmationProof generate", |b| {
@@ -377,7 +365,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("ReceiverClaimProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(&leg_enc, black_box(&account_roots), &mut rng)
+                .verify(&leg_enc, black_box(&account_root), &mut rng)
                 .expect("Failed to verify receiver claim assets proof");
         })
     });
