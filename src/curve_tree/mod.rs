@@ -23,6 +23,7 @@ use scale_info::TypeInfo;
 
 use super::*;
 use crate::curve_tree::{LeafIndex, NodeLevel};
+use crate::encode::{CompressedAffine, CompressedBaseField};
 
 pub mod backends;
 pub use backends::*;
@@ -598,5 +599,291 @@ impl<
             .tree
             .get_block_number()
             .map_err(|_| Error::CurveTreeBlockNumberNotFound)?)
+    }
+}
+
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+pub struct CompressedCurveTreeRoot<const L: usize, const M: usize> {
+    pub commitments: [CompressedAffine; M],
+    pub x_coord_children: Vec<[CompressedBaseField; L]>,
+    pub height: NodeLevel,
+}
+
+impl<const L: usize, const M: usize> Default for CompressedCurveTreeRoot<L, M> {
+    fn default() -> Self {
+        Self {
+            commitments: [CompressedAffine::default(); M],
+            x_coord_children: vec![[CompressedBaseField::default(); L]; M],
+            height: 0,
+        }
+    }
+}
+
+impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
+    pub fn new<
+        P0: SWCurveConfig + Copy + Send,
+        P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    >() -> Self {
+        let mut root = Self::default();
+        let commitments = [Affine::<P0>::zero(); M];
+        for (tree_index, com) in commitments.iter().enumerate() {
+            root.commitments[tree_index] = CompressedAffine::from(com);
+        }
+        root
+    }
+
+    pub fn is_even(&self) -> bool {
+        self.height % 2 == 0
+    }
+
+    pub fn update<
+        P0: SWCurveConfig + Copy + Send,
+        P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    >(
+        &mut self,
+        commitments: &[Affine<P0>; M],
+        x_coords: &[P1::BaseField; M],
+        child_index: ChildIndex,
+    ) -> Result<(), Error> {
+        for (tree_index, (com, x_coord)) in commitments.iter().zip(x_coords.iter()).enumerate() {
+            self.commitments[tree_index] = CompressedAffine::from(com);
+            self.x_coord_children[tree_index][child_index as usize] =
+                CompressedBaseField::from_base_field(x_coord)?;
+        }
+        Ok(())
+    }
+
+    pub fn root_node<C: CurveTreeConfig>(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
+        let root = if self.is_even() {
+            let mut commitments = [Affine::<C::P0>::zero(); M];
+            let mut x_coord_children = Vec::with_capacity(M);
+            for ((self_com, self_x_coords), commitment) in self
+                .commitments
+                .iter()
+                .zip(self.x_coord_children.iter())
+                .zip(commitments.iter_mut())
+            {
+                *commitment = self_com.try_into()?;
+                let mut x_coords = [C::F0::zero(); L];
+                for (self_x_coord, x_coord) in self_x_coords.iter().zip(x_coords.iter_mut()) {
+                    *x_coord = self_x_coord.to_base_field()?;
+                }
+                x_coord_children.push(x_coords);
+            }
+            Root::Even(RootNode {
+                commitments,
+                x_coord_children,
+            })
+        } else {
+            let mut commitments = [Affine::<C::P1>::zero(); M];
+            let mut x_coord_children = Vec::with_capacity(M);
+            for ((self_com, self_x_coords), commitment) in self
+                .commitments
+                .iter()
+                .zip(self.x_coord_children.iter())
+                .zip(commitments.iter_mut())
+            {
+                *commitment = self_com.try_into()?;
+                let mut x_coords = [C::F1::zero(); L];
+                for (self_x_coord, x_coord) in self_x_coords.iter().zip(x_coords.iter_mut()) {
+                    *x_coord = self_x_coord.to_base_field()?;
+                }
+                x_coord_children.push(x_coords);
+            }
+            Root::Odd(RootNode {
+                commitments,
+                x_coord_children,
+            })
+        };
+
+        Ok(CurveTreeRoot::new(&root)?)
+    }
+}
+
+/// A lean curve tree that only stores the inner nodes that are necessary to update the tree root.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+pub struct LeanCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
+    even_nodes: BTreeMap<NodePosition, [Affine<C::P0>; M]>,
+    odd_nodes: BTreeMap<NodePosition, [Affine<C::P1>; M]>,
+    leaves: BTreeMap<LeafIndex, LeafValue<C::P0>>,
+    height: NodeLevel,
+    next_leaf_index: LeafIndex,
+}
+
+impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> {
+    /// Creates a new instance of `LeanCurveTree` with the given height.
+    pub fn new(height: NodeLevel, params: &CurveTreeParameters<C>, root: &mut CompressedCurveTreeRoot<L, M>) -> Result<Self, Error> {
+        let mut tree = Self {
+            even_nodes: BTreeMap::new(),
+            odd_nodes: BTreeMap::new(),
+            leaves: BTreeMap::new(),
+            height,
+            next_leaf_index: 0,
+        };
+        //*
+        tree.update_leaf(
+            LeafValue::default(),
+            0,
+            params,
+            root,
+        )?;
+        // */
+
+        Ok(tree)
+    }
+
+    /// Returns the height of the curve tree.
+    pub fn height(&self) -> NodeLevel {
+        self.height
+    }
+
+    pub fn append_leaf(
+        &mut self,
+        new_leaf_value: LeafValue<C::P0>,
+        params: &CurveTreeParameters<C>,
+        current_root: &mut CompressedCurveTreeRoot<L, M>,
+    ) -> Result<(), Error> {
+        let leaf_index = self.next_leaf_index;
+        self.next_leaf_index += 1;
+
+        self.update_leaf(new_leaf_value, leaf_index, params, current_root)
+    }
+
+    fn update_leaf(
+        &mut self,
+        new_leaf_value: LeafValue<C::P0>,
+        leaf_index: LeafIndex,
+        params: &CurveTreeParameters<C>,
+        current_root: &mut CompressedCurveTreeRoot<L, M>,
+    ) -> Result<(), Error> {
+        let height = self.height();
+        // Store the leaf as the even commitment.
+        let mut even_old_child = None;
+        let mut even_new_child = ChildCommitments::leaf(new_leaf_value);
+        // Use zeroes to initialize the odd commitments.
+        let mut odd_old_child = None;
+        let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+
+        if let Some(old_leaf) = self.leaves.insert(leaf_index, new_leaf_value) {
+            even_old_child = Some(ChildCommitments::leaf(old_leaf));
+        }
+
+        // Start at the leaf's location.
+        let mut position = NodePosition::leaf(leaf_index);
+
+        // Keep going until we reach the root of the tree.
+        while !position.is_root(height) {
+            // Move to the parent location and get the child index of the current node.
+            let (parent_possition, child_index) = position.parent::<L>();
+            position = parent_possition;
+            let is_root = position.is_root(height);
+
+            if position.is_even() {
+                if let Some(commitments) = self.even_nodes.get_mut(&position) {
+                    // We save the old commitment value for updating the parent node.
+                    even_old_child = Some(ChildCommitments::inner(*commitments));
+
+                    // Update the node.  We pass both the old and new child commitments.
+                    let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
+                        commitments,
+                        child_index,
+                        odd_old_child,
+                        odd_new_child,
+                        &params.odd_parameters.delta,
+                        &params.even_parameters,
+                    )?;
+
+                    // Update the root if needed.
+                    if is_root {
+                        current_root.update::<C::P0, C::P1>(
+                            commitments,
+                            &new_x_coords,
+                            child_index,
+                        )?;
+                    }
+
+                    // Save the new commitment value for updating the parent.
+                    even_new_child = ChildCommitments::inner(*commitments);
+                } else {
+                    // If this node does not exist, we need to create it.
+                    let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P1, C::P0>(
+                        odd_new_child,
+                        &params.odd_parameters.delta,
+                        &params.even_parameters,
+                    )?;
+                    self.even_nodes.insert(position, commitments.clone());
+
+                    // Update the root if needed.
+                    if is_root {
+                        current_root.update::<C::P0, C::P1>(
+                            &commitments,
+                            &new_x_coords,
+                            child_index,
+                        )?;
+                    }
+
+                    // Save the new commitment value for updating the parent.
+                    even_old_child = None;
+                    even_new_child = ChildCommitments::inner(commitments);
+                }
+            } else {
+                if let Some(commitments) = self.odd_nodes.get_mut(&position) {
+                    // We save the old commitment value for updating the parent node.
+                    odd_old_child = Some(ChildCommitments::inner(*commitments));
+
+                    // Update the node.  We pass both the old and new child commitments.
+                    let new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+                        commitments,
+                        child_index,
+                        even_old_child,
+                        even_new_child,
+                        &params.even_parameters.delta,
+                        &params.odd_parameters,
+                    )?;
+
+                    // Update the root if needed.
+                    if is_root {
+                        current_root.update::<C::P1, C::P0>(
+                            commitments,
+                            &new_x_coords,
+                            child_index,
+                        )?;
+                    }
+
+                    // Save the new commitment value for updating the parent.
+                    odd_new_child = ChildCommitments::inner(*commitments);
+                } else {
+                    // If this node does not exist, we need to create it.
+                    let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P0, C::P1>(
+                        even_new_child,
+                        &params.even_parameters.delta,
+                        &params.odd_parameters,
+                    )?;
+                    self.odd_nodes.insert(position, commitments.clone());
+
+                    // Update the root if needed.
+                    if is_root {
+                        current_root.update::<C::P1, C::P0>(
+                            &commitments,
+                            &new_x_coords,
+                            child_index,
+                        )?;
+                    }
+
+                    // Save the new commitment value for updating the parent.
+                    odd_old_child = None;
+                    odd_new_child = ChildCommitments::inner(commitments);
+                }
+            }
+        }
+
+        // Check if the tree has grown to accommodate the new leaf.
+        // if the root's level is higher than the current height, we need to update the height.
+        let level = position.level;
+        if level > height {
+            log::warn!("Tree height increased from {} to {}", height, level);
+            self.height = level;
+        }
+        Ok(())
     }
 }

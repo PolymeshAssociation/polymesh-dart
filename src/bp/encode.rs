@@ -180,9 +180,9 @@ macro_rules! impl_scale_and_type_info {
     };
 }
 
-pub const ARK_EC_POINT_SIZE: usize = 33;
+pub const ARK_EC_BASE_FIELD_SIZE: usize = 32;
 
-pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
+pub type BaseField = [u8; ARK_EC_BASE_FIELD_SIZE];
 
 #[derive(
     Copy,
@@ -190,14 +190,58 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     MaxEncodedLen,
     Encode,
     Decode,
+    Default,
     TypeInfo,
-    CanonicalSerialize,
-    CanonicalDeserialize,
     PartialEq,
     Eq,
     Hash,
     PartialOrd,
     Ord,
+)]
+pub struct CompressedBaseField(BaseField);
+
+impl core::fmt::Debug for CompressedBaseField {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0[..]))
+    }
+}
+
+impl CompressedBaseField {
+    /// Creates a `CompressedBaseField` from a hex string.
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        let offset = if s.starts_with("0x") { 2 } else { 0 };
+        let mut field = [0u8; ARK_EC_BASE_FIELD_SIZE];
+        hex::decode_to_slice(&s[offset..], &mut field[..]).map_err(|_| Error::HexDecodeError)?;
+        Ok(Self(field))
+    }
+
+    /// Returns the underlying byte array.
+    pub fn as_bytes(&self) -> &[u8; ARK_EC_BASE_FIELD_SIZE] {
+        &self.0
+    }
+
+    /// Returns the size of the compressed base field.
+    pub fn size_hint() -> usize {
+        ARK_EC_BASE_FIELD_SIZE
+    }
+
+    pub fn from_base_field<F: CanonicalSerialize>(field: &F) -> Result<Self, Error> {
+        let mut buf = [0u8; ARK_EC_BASE_FIELD_SIZE];
+        field.serialize_compressed(&mut buf[..])?;
+        Ok(Self(buf))
+    }
+
+    pub fn to_base_field<F: CanonicalDeserialize>(&self) -> Result<F, Error> {
+        Ok(F::deserialize_compressed(&self.0[..])?)
+    }
+}
+
+pub const ARK_EC_POINT_SIZE: usize = 33;
+
+pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
+
+#[derive(
+    Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash, PartialOrd, Ord,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]

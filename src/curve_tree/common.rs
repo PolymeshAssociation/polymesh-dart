@@ -10,21 +10,74 @@ use scale_info::TypeInfo;
 use super::*;
 use crate::error::*;
 
+/// Node position.
+#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodePosition {
+    /// Level of the node in the tree.
+    #[codec(compact)]
+    pub level: NodeLevel,
+    /// Index of the node at that level.
+    #[codec(compact)]
+    pub index: NodeIndex,
+}
+
+impl NodePosition {
+    pub fn leaf(leaf_index: LeafIndex) -> Self {
+        NodePosition {
+            level: 0,
+            index: leaf_index,
+        }
+    }
+
+    pub fn root(height: NodeLevel) -> Self {
+        NodePosition {
+            level: height,
+            index: 0,
+        }
+    }
+
+    pub fn is_even(&self) -> bool {
+        self.level % 2 == 0
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.level == 0
+    }
+
+    pub fn is_root(&self, height: NodeLevel) -> bool {
+        self.level >= height && self.index == 0
+    }
+
+    pub fn parent<const L: usize>(&self) -> (NodePosition, ChildIndex) {
+        (
+            NodePosition {
+                level: self.level.saturating_add(1),
+                index: self.index.saturating_div(L as NodeIndex),
+            },
+            self.index % L as NodeIndex,
+        )
+    }
+
+    pub fn child<const L: usize>(&self, child_index: ChildIndex) -> Result<NodePosition, Error> {
+        if child_index >= L as NodeIndex {
+            return Err(Error::CurveTreeInvalidChildIndex(child_index));
+        }
+        if self.level == 0 {
+            return Err(Error::CurveTreeLeafCannotHaveChildren);
+        }
+        Ok(NodePosition {
+            level: self.level.saturating_sub(1),
+            index: self.index.saturating_mul(L as NodeIndex) + child_index,
+        })
+    }
+}
+
+/// Location of a node in the tree.
 #[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeLocation<const L: usize> {
     Leaf(#[codec(compact)] LeafIndex), // Leaf nodes are identified by their index
-    Odd {
-        #[codec(compact)]
-        level: NodeLevel, // Level of the node in the tree
-        #[codec(compact)]
-        index: NodeIndex, // Index of the node at that level
-    },
-    Even {
-        #[codec(compact)]
-        level: NodeLevel, // Level of the node in the tree
-        #[codec(compact)]
-        index: NodeIndex, // Index of the node at that level
-    },
+    Odd(NodePosition),
+    Even(NodePosition),
 }
 
 impl<const L: usize> NodeLocation<L> {
@@ -38,16 +91,16 @@ impl<const L: usize> NodeLocation<L> {
         // Root nodes are at the highest level, which is `height`, and their index is 0
         if height % 2 == 0 {
             // Even height, root is an even node
-            Self::Even {
+            Self::Even(NodePosition {
                 level: height,
                 index: 0,
-            }
+            })
         } else {
             // Odd height, root is an odd node
-            Self::Odd {
+            Self::Odd(NodePosition {
                 level: height,
                 index: 0,
-            }
+            })
         }
     }
 
@@ -71,9 +124,9 @@ impl<const L: usize> NodeLocation<L> {
     pub fn is_root(&self, height: NodeLevel) -> bool {
         match *self {
             Self::Leaf(_) => false,
-            Self::Odd { level, index } | Self::Even { level, index } => {
+            Self::Odd(pos) | Self::Even(pos) => {
                 // A node is a root if it is at the highest level and has index 0
-                level >= height && index == 0
+                pos.is_root(height)
             }
         }
     }
@@ -84,7 +137,7 @@ impl<const L: usize> NodeLocation<L> {
     pub fn level(&self) -> NodeLevel {
         match *self {
             Self::Leaf(_) => 0,
-            Self::Odd { level, .. } | Self::Even { level, .. } => level,
+            Self::Odd(pos) | Self::Even(pos) => pos.level,
         }
     }
 
@@ -92,7 +145,7 @@ impl<const L: usize> NodeLocation<L> {
     pub fn index(&self) -> NodeIndex {
         match *self {
             Self::Leaf(leaf_index) => leaf_index,
-            Self::Odd { index, .. } | Self::Even { index, .. } => index,
+            Self::Odd(pos) | Self::Even(pos) => pos.index,
         }
     }
 
@@ -102,26 +155,20 @@ impl<const L: usize> NodeLocation<L> {
     pub fn parent(self) -> (Self, ChildIndex) {
         match self {
             Self::Leaf(leaf_index) => (
-                Self::Odd {
+                Self::Odd(NodePosition {
                     level: 1,
                     index: leaf_index.saturating_div(L as LeafIndex),
-                },
+                }),
                 leaf_index % L as LeafIndex,
             ),
-            Self::Odd { level, index } => (
-                Self::Even {
-                    level: level.saturating_add(1),
-                    index: index.saturating_div(L as NodeIndex),
-                },
-                index % L as NodeIndex,
-            ),
-            Self::Even { level, index } => (
-                Self::Odd {
-                    level: level.saturating_add(1),
-                    index: index.saturating_div(L as NodeIndex),
-                },
-                index % L as NodeIndex,
-            ),
+            Self::Odd(pos) => {
+                let (pos, child_index) = pos.parent::<L>();
+                (Self::Even(pos), child_index)
+            }
+            Self::Even(pos) => {
+                let (pos, child_index) = pos.parent::<L>();
+                (Self::Odd(pos), child_index)
+            }
         }
     }
 
@@ -138,20 +185,22 @@ impl<const L: usize> NodeLocation<L> {
                 // Leaf nodes cannot have children, so we return an error.
                 Err(Error::CurveTreeLeafCannotHaveChildren)
             }
-            Self::Odd { level: 1, index } => Ok(Self::Leaf(index * L as LeafIndex + child_index)),
-            Self::Odd { level, index } => Ok(Self::Even {
+            Self::Odd(NodePosition { level: 1, index }) => {
+                Ok(Self::Leaf(index * L as LeafIndex + child_index))
+            }
+            Self::Odd(NodePosition { level, index }) => Ok(Self::Even(NodePosition {
                 level: level.saturating_sub(1),
                 index: index * L as NodeIndex + child_index,
-            }),
-            Self::Even { level, index } => Ok(Self::Odd {
+            })),
+            Self::Even(NodePosition { level, index }) => Ok(Self::Odd(NodePosition {
                 level: level.saturating_sub(1),
                 index: index * L as NodeIndex + child_index,
-            }),
+            })),
         }
     }
 }
 
-fn init_empty_inner_node<
+pub(crate) fn init_empty_inner_node<
     const L: usize,
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
@@ -160,10 +209,11 @@ fn init_empty_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) -> Result<[Affine<P1>; M], Error> {
+) -> Result<([Affine<P1>; M], [P0::BaseField; M]), Error> {
     let mut commitments = [Affine::<P1>::zero(); M];
-    for tree_index in 0..M {
-        let new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
+    let mut new_x_coords = [P0::BaseField::zero(); M];
+    for (tree_index, new_x_coord) in new_x_coords.iter_mut().enumerate() {
+        *new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
             .into_affine()
             .x;
         let mut gen_iter = parameters
@@ -173,12 +223,12 @@ fn init_empty_inner_node<
             .skip(L * tree_index);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] =
-            (commitments[tree_index].into_group() + *g * new_x_coord).into_affine();
+            (commitments[tree_index].into_group() + *g * *new_x_coord).into_affine();
     }
-    Ok(commitments)
+    Ok((commitments, new_x_coords))
 }
 
-fn update_inner_node<
+pub(crate) fn update_inner_node<
     const L: usize,
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
@@ -190,8 +240,9 @@ fn update_inner_node<
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
     parameters: &SingleLayerParameters<P1>,
-) -> Result<(), Error> {
-    for tree_index in 0..M {
+) -> Result<[P0::BaseField; M], Error> {
+    let mut new_x_coords = [P0::BaseField::zero(); M];
+    for (tree_index, new_x_coord) in new_x_coords.iter_mut().enumerate() {
         let old_x_coord = if let Some(old_comm) = old_child {
             (old_comm.commitment(tree_index as TreeIndex) + delta)
                 .into_affine()
@@ -199,7 +250,7 @@ fn update_inner_node<
         } else {
             P0::BaseField::zero()
         };
-        let new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
+        *new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
             .into_affine()
             .x;
         let mut gen_iter = parameters
@@ -208,10 +259,11 @@ fn update_inner_node<
             .G(L * (tree_index as usize + 1))
             .skip(L * tree_index as usize + local_index as usize);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
-        commitments[tree_index] =
-            (commitments[tree_index].into_group() + *g * (new_x_coord - old_x_coord)).into_affine();
+        commitments[tree_index] = (commitments[tree_index].into_group()
+            + *g * (*new_x_coord - old_x_coord))
+            .into_affine();
     }
-    Ok(())
+    Ok(new_x_coords)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -316,9 +368,10 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
         delta: &Affine<C::P1>,
         parameters: &SingleLayerParameters<C::P0>,
     ) -> Result<Self, Error> {
-        Ok(Self::Even(init_empty_inner_node::<L, M, C::P1, C::P0>(
+        let (commitments, _) = init_empty_inner_node::<L, M, C::P1, C::P0>(
             new_child, delta, parameters,
-        )?))
+        )?;
+        Ok(Self::Even(commitments))
     }
 
     pub(crate) fn init_empty_odd<const L: usize>(
@@ -326,9 +379,10 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
         delta: &Affine<C::P0>,
         parameters: &SingleLayerParameters<C::P1>,
     ) -> Result<Self, Error> {
-        Ok(Self::Odd(init_empty_inner_node::<L, M, C::P0, C::P1>(
+        let (commitments, _) = init_empty_inner_node::<L, M, C::P0, C::P1>(
             new_child, delta, parameters,
-        )?))
+        )?;
+        Ok(Self::Odd(commitments))
     }
 
     pub(crate) fn update_even_node<const L: usize>(
@@ -346,7 +400,8 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
             new_child,
             delta,
             parameters,
-        )
+        )?;
+        Ok(())
     }
 
     pub(crate) fn update_odd_node<const L: usize>(
@@ -364,7 +419,8 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
             new_child,
             delta,
             parameters,
-        )
+        )?;
+        Ok(())
     }
 }
 

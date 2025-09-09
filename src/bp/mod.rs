@@ -385,8 +385,6 @@ impl AccountLookupMap {
     Default,
     TypeInfo,
     Debug,
-    CanonicalSerialize,
-    CanonicalDeserialize,
     PartialEq,
     Eq,
     Hash,
