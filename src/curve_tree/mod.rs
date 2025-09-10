@@ -705,7 +705,6 @@ impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
 pub struct LeanCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
     even_nodes: BTreeMap<NodePosition, [Affine<C::P0>; M]>,
     odd_nodes: BTreeMap<NodePosition, [Affine<C::P1>; M]>,
-    leaves: BTreeMap<LeafIndex, LeafValue<C::P0>>,
     height: NodeLevel,
     next_leaf_index: LeafIndex,
 }
@@ -716,7 +715,6 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
         Self {
             even_nodes: BTreeMap::new(),
             odd_nodes: BTreeMap::new(),
-            leaves: BTreeMap::new(),
             height,
             next_leaf_index: 0,
         }
@@ -729,8 +727,80 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
         root: &mut CompressedCurveTreeRoot<L, M>,
     ) -> Result<Self, Error> {
         let mut tree = Self::new_no_init(height);
-        tree.update_leaf(LeafValue::default(), 0, params, root)?;
+        tree.init(params, root)?;
         Ok(tree)
+    }
+
+    fn init(
+        &mut self,
+        params: &CurveTreeParameters<C>,
+        current_root: &mut CompressedCurveTreeRoot<L, M>,
+    ) -> Result<(), Error> {
+        let height = self.height();
+        // Start at the first leaf's location.
+        let mut position = NodePosition::leaf(0);
+        // Move to the first inner node location above the leaves.
+        let (parent_possition, _) = position.parent::<L>();
+        position = parent_possition;
+        let commitments = [Affine::<C::P1>::zero(); M];
+        self.odd_nodes.insert(position, commitments.clone());
+
+        // Store the leaf as the even commitment.
+        let mut even_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
+        // Use zeroes to initialize the odd commitments.
+        let mut odd_new_child = ChildCommitments::inner(commitments);
+
+        // Keep going until we reach the root of the tree.
+        while !position.is_root(height) {
+            // Move to the parent location and get the child index of the current node.
+            let (parent_possition, child_index) = position.parent::<L>();
+            position = parent_possition;
+            let is_root = position.is_root(height);
+
+            if position.is_even() {
+                // If this node does not exist, we need to create it.
+                let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P1, C::P0>(
+                    odd_new_child,
+                    &params.odd_parameters.delta,
+                    &params.even_parameters,
+                )?;
+                self.even_nodes.insert(position, commitments.clone());
+
+                // Update the root if needed.
+                if is_root {
+                    current_root.update::<C::P0, C::P1>(
+                        &commitments,
+                        &new_x_coords,
+                        child_index,
+                    )?;
+                }
+
+                // Save the new commitment value for updating the parent.
+                even_new_child = ChildCommitments::inner(commitments);
+            } else {
+                // If this node does not exist, we need to create it.
+                let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P0, C::P1>(
+                    even_new_child,
+                    &params.even_parameters.delta,
+                    &params.odd_parameters,
+                )?;
+                self.odd_nodes.insert(position, commitments.clone());
+
+                // Update the root if needed.
+                if is_root {
+                    current_root.update::<C::P1, C::P0>(
+                        &commitments,
+                        &new_x_coords,
+                        child_index,
+                    )?;
+                }
+
+                // Save the new commitment value for updating the parent.
+                odd_new_child = ChildCommitments::inner(commitments);
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the height of the curve tree.
@@ -764,10 +834,6 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
         // Use zeroes to initialize the odd commitments.
         let mut odd_old_child = None;
         let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
-
-        if let Some(old_leaf) = self.leaves.insert(leaf_index, new_leaf_value) {
-            even_old_child = Some(ChildCommitments::leaf(old_leaf));
-        }
 
         // Start at the leaf's location.
         let mut position = NodePosition::leaf(leaf_index);
