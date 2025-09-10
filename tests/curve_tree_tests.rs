@@ -4,10 +4,10 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
-    AccountTreeConfig, CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
+    AssetTreeConfig, CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
-use polymesh_dart::{PallasA, PallasParameters, VestaParameters};
+use polymesh_dart::{PallasParameters, VestaA, VestaParameters};
 
 const L: usize = 16;
 const HEIGHT: NodeLevel = 4;
@@ -15,11 +15,11 @@ const GENS_LENGTH: usize = 32;
 
 /// A Full Curve Tree that support both insertion and updates.
 pub struct CurveTreeOld<const L: usize> {
-    tree: CurveTree<L, 1, PallasParameters, VestaParameters>,
+    tree: CurveTree<L, 1, VestaParameters, PallasParameters>,
     height: usize,
-    leaves: Vec<PallasA>,
+    leaves: Vec<VestaA>,
     length: usize,
-    params: CurveTreeParameters<AccountTreeConfig>,
+    params: CurveTreeParameters<AssetTreeConfig>,
 }
 
 impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
@@ -38,7 +38,7 @@ impl<const L: usize> CurveTreeOld<L> {
     pub fn new_with_capacity(height: usize, gens_length: usize) -> Result<Self, Error> {
         let params = SelRerandParameters::new(gens_length, gens_length)?;
         Ok(Self {
-            tree: CurveTree::from_leaves(&[PallasA::zero()], &params, Some(height)),
+            tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)),
             leaves: vec![],
             length: 0,
             height,
@@ -51,7 +51,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<PallasParameters>) -> Result<usize, Error> {
+    pub fn insert(&mut self, leaf: LeafValue<VestaParameters>) -> Result<usize, Error> {
         let leaf_index = self.length;
         self.update(leaf, leaf_index)?;
 
@@ -63,7 +63,7 @@ impl<const L: usize> CurveTreeOld<L> {
     /// Updates an existing leaf in the curve tree.
     pub fn update(
         &mut self,
-        leaf: LeafValue<PallasParameters>,
+        leaf: LeafValue<VestaParameters>,
         leaf_index: usize,
     ) -> Result<(), Error> {
         let leaf = *leaf;
@@ -90,7 +90,7 @@ impl<const L: usize> CurveTreeOld<L> {
             return;
         }
         let new_cap = last_leaf_index + 1;
-        self.leaves.resize(new_cap, PallasA::zero());
+        self.leaves.resize(new_cap, VestaA::zero());
         let new_tree = CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height));
         self.tree = new_tree;
     }
@@ -99,43 +99,48 @@ impl<const L: usize> CurveTreeOld<L> {
     pub fn get_path_to_leaf_index(
         &self,
         leaf_index: usize,
-    ) -> Result<CurveTreePath<L, AccountTreeConfig>, Error> {
+    ) -> Result<CurveTreePath<L, AssetTreeConfig>, Error> {
         Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
     }
 
     /// Returns the parameters of the curve tree.
-    pub fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
+    pub fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
         &self.params
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> CurveTreeRoot<L, 1, AccountTreeConfig> {
+    pub fn root_node(&self) -> CurveTreeRoot<L, 1, AssetTreeConfig> {
         CurveTreeRoot::new(&self.tree.root_node()).expect("Failed to get root node")
     }
 }
 
-fn create_test_leaf(value: usize) -> LeafValue<PallasParameters> {
+fn create_test_leaf(value: usize) -> LeafValue<VestaParameters> {
     use ark_ec::{AffineRepr, CurveGroup};
-    use ark_pallas::Fr as PallasScalar;
+    use ark_vesta::Fr as VestaScalar;
 
     // Create a deterministic leaf value for testing
-    let scalar = PallasScalar::from(value as u64);
-    (PallasA::generator() * scalar).into_affine().into()
+    let scalar = VestaScalar::from(value as u64);
+    (VestaA::generator() * scalar).into_affine().into()
 }
 
 fn setup_trees() -> (
     CurveTreeOld<L>,
-    FullCurveTree<L, 1, AccountTreeConfig>,
-    SelRerandParameters<PallasParameters, VestaParameters>,
+    FullCurveTree<L, 1, AssetTreeConfig>,
+    SelRerandParameters<VestaParameters, PallasParameters>,
 ) {
-    let full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH)
+    let mut full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH)
         .expect("Failed to create full tree");
     assert!(full_tree.height() == HEIGHT as usize);
     let params = full_tree.params().clone();
-    let storage_tree =
-        FullCurveTree::<L, 1, AccountTreeConfig>::new_with_capacity(HEIGHT, GENS_LENGTH)
+    let mut storage_tree =
+        FullCurveTree::<L, 1, AssetTreeConfig>::new_with_capacity(HEIGHT, GENS_LENGTH)
             .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
+
+    // Insert a leaf into both trees to avoid empty tree edge cases
+    let leaf = create_test_leaf(0);
+    full_tree.insert(leaf).unwrap();
+    storage_tree.insert(leaf).unwrap();
 
     // Compare roots
     let full_root = full_tree.root_node();
@@ -150,8 +155,8 @@ fn setup_trees() -> (
 
 /// Compare two roots, printing debug info on mismatch since Root doesn't implement Debug
 fn assert_roots_equal(
-    full_root: &CurveTreeRoot<L, 1, AccountTreeConfig>,
-    storage_root: &CurveTreeRoot<L, 1, AccountTreeConfig>,
+    full_root: &CurveTreeRoot<L, 1, AssetTreeConfig>,
+    storage_root: &CurveTreeRoot<L, 1, AssetTreeConfig>,
     context: &str,
 ) {
     let full_root = full_root.decode().expect("Failed to decode full root");
@@ -187,13 +192,13 @@ fn assert_roots_equal(
 fn assert_paths_equal(
     full_path: &curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath<
         L,
-        PallasParameters,
         VestaParameters,
+        PallasParameters,
     >,
     storage_path: &curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath<
         L,
-        PallasParameters,
         VestaParameters,
+        PallasParameters,
     >,
     context: &str,
 ) {

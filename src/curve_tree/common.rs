@@ -565,11 +565,71 @@ macro_rules! impl_curve_tree_with_backend {
                 // Check if the root node has already been initialized.
                 let root = self.root_node()$($await)*;
                 if root.is_err() {
-                    // No root node exists, so we initialize it.
-                    self.update_leaf(
-                        0,
-                        LeafValue::<C::P0>::default(),
-                    )$($await)*?;
+                    // No root node exists, so we need to initialize the tree.
+                    self.init_inner_nodes()$($await)*?;
+                }
+                Ok(())
+            }
+
+            $($async_fn)* fn init_inner_nodes(
+                &mut self,
+            ) -> Result<(), Error> {
+                let height = self.height()$($await)*;
+
+                // Start at the first leaf's location.
+                let mut location = NodeLocation::<L>::leaf(0);
+                // Move to the first inner node location above the leaves.
+                let (parent_location, _) = location.parent();
+                location = parent_location;
+                // Initialize the first inner node as an odd node with zero commitments.
+                let commitments = [Affine::<C::P1>::zero(); M];
+                let node = Inner::Odd(commitments.clone());
+                self.backend.set_inner_node(location, node)$($await)*?;
+
+                // Store the leaf as the even commitment.
+                let mut even_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
+                // Use zeroes to initialize the odd commitments.
+                let mut odd_new_child = ChildCommitments::inner(commitments);
+
+                // Keep going until we reach the root of the tree.
+                while !location.is_root(height) {
+                    // Move to the parent location and get the child index of the current node.
+                    let (parent_location, _) = location.parent();
+                    location = parent_location;
+
+                    // Get the parameters for the tree.
+                    let params = self.backend.parameters()$($await)*;
+
+                    // If thsi node does not exist, we need to create it.
+                    let node = if location.is_even() {
+                        // If the location is even, we create an even node.
+                        Inner::init_empty_even::<L>(
+                            odd_new_child,
+                            &params.odd_parameters.delta,
+                            &params.even_parameters,
+                        )?
+                    } else {
+                        // If the location is odd, we create an odd node.
+                        Inner::init_empty_odd::<L>(
+                            even_new_child,
+                            &params.even_parameters.delta,
+                            &params.odd_parameters,
+                        )?
+                    };
+
+                    // Save the new commitment value for updating the parent.
+                    // Since this node is new, there isn't an old commitment value for it.
+                    match node {
+                        Inner::Even(commitments) => {
+                            even_new_child = ChildCommitments::inner(commitments);
+                        }
+                        Inner::Odd(commitments) => {
+                            odd_new_child = ChildCommitments::inner(commitments);
+                        }
+                    }
+
+                    // Save the updated node back to the backend.
+                    self.backend.set_inner_node(location, node)$($await)*?;
                 }
                 Ok(())
             }
@@ -807,6 +867,11 @@ macro_rules! impl_curve_tree_with_backend {
                 let height = self.height()$($await)*;
                 // Update the leaf to the new value and get the old value.
                 let old_leaf_value = self.backend.set_leaf(leaf_index, new_leaf_value)$($await)*?;
+                if C::APPEND_ONLY {
+                    if old_leaf_value.is_some() {
+                        return Err(crate::Error::CurveTreeCannotUpdateLeafInAppendOnlyTree.into());
+                    }
+                }
 
                 // Store the leaf as the even commitment.
                 let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);

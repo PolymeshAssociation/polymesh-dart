@@ -117,6 +117,7 @@ pub trait CurveTreeConfig:
     const M: usize;
     const EVEN_GEN_LENGTH: usize;
     const ODD_GEN_LENGTH: usize;
+    const APPEND_ONLY: bool;
 
     type F0: PrimeField + core::fmt::Debug;
     type F1: PrimeField + core::fmt::Debug;
@@ -138,6 +139,7 @@ impl CurveTreeConfig for AssetTreeConfig {
     const M: usize = ASSET_TREE_M;
     const EVEN_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
     const ODD_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
+    const APPEND_ONLY: bool = false;
 
     type F0 = <VestaParameters as CurveConfig>::ScalarField;
     type F1 = <PallasParameters as CurveConfig>::ScalarField;
@@ -156,6 +158,7 @@ impl CurveTreeConfig for AccountTreeConfig {
     const M: usize = ACCOUNT_TREE_M;
     const EVEN_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
     const ODD_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
+    const APPEND_ONLY: bool = true;
 
     type F0 = <PallasParameters as CurveConfig>::ScalarField;
     type F1 = <VestaParameters as CurveConfig>::ScalarField;

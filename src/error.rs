@@ -64,6 +64,10 @@ pub enum Error {
     #[error("Curve tree generator not found.")]
     CurveTreeGeneratorNotFound,
 
+    /// Curve tree cannot update a leaf in an append-only tree.
+    #[error("Curve tree cannot update a leaf in an append-only tree.")]
+    CurveTreeCannotUpdateLeafInAppendOnlyTree,
+
     /// Asset state not found.
     #[error("Asset state not found: {0:?}")]
     AssetStateNotFound(AssetId),
