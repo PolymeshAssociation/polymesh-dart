@@ -7,7 +7,7 @@ use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierst
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
-use ark_std::{Zero, vec::Vec};
+use ark_std::{Zero, vec, vec::Vec};
 use blake2::Blake2b512;
 
 pub use curve_tree_relations::{
