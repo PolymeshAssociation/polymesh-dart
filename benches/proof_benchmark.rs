@@ -1,4 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use std::hint::black_box;
 
 use polymesh_dart::{curve_tree::*, *};
@@ -238,6 +240,95 @@ fn proof_benchmark(c: &mut Criterion) {
             proof
                 .verify(&leg_enc, black_box(&account_root), &mut rng)
                 .expect("Failed to verify sender affirmation proof");
+        })
+    });
+
+    // Generate multiple sender affirmation proofs to benchmark batch verification.
+    const NUM_PROOFS: usize = 100;
+    #[cfg(feature = "parallel")]
+    let proofs = (0..NUM_PROOFS)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::thread_rng();
+            let mut account_state = account_state.clone();
+            SenderAffirmationProof::new(
+                &mut rng,
+                &issuer_keys.acct,
+                &leg_ref,
+                leg_amount,
+                &leg_enc,
+                &leg_enc_rand,
+                &mut account_state,
+                &account_tree,
+            )
+            .expect("Failed to generate sender affirmation proof")
+        })
+        .collect::<Vec<_>>();
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        let mut proofs = Vec::new();
+        for _ in 0..NUM_PROOFS {
+            proofs.push(
+                SenderAffirmationProof::new(
+                    &mut rng,
+                    &issuer_keys.acct,
+                    &leg_ref,
+                    leg_amount,
+                    &leg_enc,
+                    &leg_enc_rand,
+                    &mut account_state,
+                    &account_tree,
+                )
+                .expect("Failed to generate sender affirmation proof"),
+            );
+        }
+        proofs
+    }
+
+    // Benchmark: Batched verification of sender affirmation proofs.
+    c.bench_function("BatchedSenderAffirmationProof verify 10", |b| {
+        b.iter(|| {
+            #[cfg(feature = "parallel")]
+            {
+                proofs[0..10].par_iter().for_each(|proof| {
+                    let mut rng = rand::thread_rng();
+                    proof
+                        .verify(&leg_enc, black_box(&account_root), &mut rng)
+                        .expect("Failed to verify sender affirmation proof");
+                });
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                proofs[0..10].iter().for_each(|proof| {
+                    proof
+                        .verify(&leg_enc, black_box(&account_root), &mut rng)
+                        .expect("Failed to verify sender affirmation proof");
+                });
+            }
+        })
+    });
+
+    // Benchmark: Batched verification of sender affirmation proofs.
+    c.bench_function("BatchedSenderAffirmationProof verify 100", |b| {
+        b.iter(|| {
+            #[cfg(feature = "parallel")]
+            {
+                proofs.par_iter().for_each(|proof| {
+                    let mut rng = rand::thread_rng();
+                    proof
+                        .verify(&leg_enc, black_box(&account_root), &mut rng)
+                        .expect("Failed to verify sender affirmation proof");
+                });
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                proofs.iter().for_each(|proof| {
+                    proof
+                        .verify(&leg_enc, black_box(&account_root), &mut rng)
+                        .expect("Failed to verify sender affirmation proof");
+                });
+            }
         })
     });
 

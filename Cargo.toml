@@ -210,4 +210,7 @@ std = [
 ]
 
 asm = ["polymesh-dart-bp?/asm"]
-parallel = ["polymesh-dart-bp?/parallel"]
+parallel = [
+    "rayon",
+    "polymesh-dart-bp?/parallel",
+]
