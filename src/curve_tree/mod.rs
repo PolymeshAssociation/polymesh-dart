@@ -712,23 +712,24 @@ pub struct LeanCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> {
     /// Creates a new instance of `LeanCurveTree` with the given height.
-    pub fn new(height: NodeLevel, params: &CurveTreeParameters<C>, root: &mut CompressedCurveTreeRoot<L, M>) -> Result<Self, Error> {
-        let mut tree = Self {
+    pub fn new_no_init(height: NodeLevel) -> Self {
+        Self {
             even_nodes: BTreeMap::new(),
             odd_nodes: BTreeMap::new(),
             leaves: BTreeMap::new(),
             height,
             next_leaf_index: 0,
-        };
-        //*
-        tree.update_leaf(
-            LeafValue::default(),
-            0,
-            params,
-            root,
-        )?;
-        // */
+        }
+    }
 
+    /// Creates a new instance of `LeanCurveTree` with the given height.
+    pub fn new(
+        height: NodeLevel,
+        params: &CurveTreeParameters<C>,
+        root: &mut CompressedCurveTreeRoot<L, M>,
+    ) -> Result<Self, Error> {
+        let mut tree = Self::new_no_init(height);
+        tree.update_leaf(LeafValue::default(), 0, params, root)?;
         Ok(tree)
     }
 

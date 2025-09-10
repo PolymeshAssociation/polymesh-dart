@@ -368,9 +368,8 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
         delta: &Affine<C::P1>,
         parameters: &SingleLayerParameters<C::P0>,
     ) -> Result<Self, Error> {
-        let (commitments, _) = init_empty_inner_node::<L, M, C::P1, C::P0>(
-            new_child, delta, parameters,
-        )?;
+        let (commitments, _) =
+            init_empty_inner_node::<L, M, C::P1, C::P0>(new_child, delta, parameters)?;
         Ok(Self::Even(commitments))
     }
 
@@ -379,9 +378,8 @@ impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
         delta: &Affine<C::P0>,
         parameters: &SingleLayerParameters<C::P1>,
     ) -> Result<Self, Error> {
-        let (commitments, _) = init_empty_inner_node::<L, M, C::P0, C::P1>(
-            new_child, delta, parameters,
-        )?;
+        let (commitments, _) =
+            init_empty_inner_node::<L, M, C::P0, C::P1>(new_child, delta, parameters)?;
         Ok(Self::Odd(commitments))
     }
 
