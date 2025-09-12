@@ -243,7 +243,7 @@ fn proof_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Generate multiple sender affirmation proofs to benchmark batch verification.
+    // Generate multiple sender affirmation proofs to benchmark parallel verification.
     const NUM_PROOFS: usize = 100;
     #[cfg(feature = "parallel")]
     let proofs = (0..NUM_PROOFS)
@@ -286,8 +286,8 @@ fn proof_benchmark(c: &mut Criterion) {
         proofs
     }
 
-    // Benchmark: Batched verification of sender affirmation proofs.
-    c.bench_function("BatchedSenderAffirmationProof verify 10", |b| {
+    // Benchmark: Parallel verification of sender affirmation proofs.
+    c.bench_function("Parallel SenderAffirmationProof verify 10", |b| {
         b.iter(|| {
             #[cfg(feature = "parallel")]
             {
@@ -309,8 +309,8 @@ fn proof_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Benchmark: Batched verification of sender affirmation proofs.
-    c.bench_function("BatchedSenderAffirmationProof verify 100", |b| {
+    // Benchmark: Parallel verification of sender affirmation proofs.
+    c.bench_function("Parallel SenderAffirmationProof verify 100", |b| {
         b.iter(|| {
             #[cfg(feature = "parallel")]
             {
