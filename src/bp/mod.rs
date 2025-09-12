@@ -895,11 +895,11 @@ impl<T: DartLimits> AssetState<T> {
 
     pub fn keys(&self) -> Vec<(bool, PallasA)> {
         let mut keys = Vec::with_capacity(self.auditors.len() + self.mediators.len());
-        for auditor in &self.auditors {
-            keys.push((true, auditor.get_affine().unwrap()));
-        }
         for mediator in &self.mediators {
             keys.push((false, mediator.get_affine().unwrap()));
+        }
+        for auditor in &self.auditors {
+            keys.push((true, auditor.get_affine().unwrap()));
         }
         keys
     }
