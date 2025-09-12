@@ -138,7 +138,7 @@ fn setup_trees() -> (
     assert!(storage_tree.height() == HEIGHT);
 
     // Insert a leaf into both trees to avoid empty tree edge cases
-    let leaf = create_test_leaf(0);
+    let leaf = create_test_leaf(u32::MAX as usize);
     full_tree.insert(leaf).unwrap();
     storage_tree.insert(leaf).unwrap();
 
@@ -494,6 +494,58 @@ fn test_large_tree_growth() {
     }
 }
 
+/// Test batched insertions using delayed committing of leaves
+#[test]
+fn test_batched_leaf_inserts() {
+    let (mut full_tree, mut storage_tree, _params) = setup_trees();
+
+    // Insert a larger number of leaves to test scalability
+    let num_leaves = L * 4; // 16 leaves when L=4
+
+    // Insert leaves in a batched manner
+
+    for i in 1..=num_leaves {
+        let leaf = create_test_leaf(i);
+
+        full_tree.insert(leaf).unwrap();
+        storage_tree.insert_delayed_update(leaf).unwrap();
+
+        // Check roots every few insertions to catch issues early
+        if i % L == 0 {
+            storage_tree.commit_leaves_to_tree().unwrap();
+            let full_root = full_tree.root_node();
+            let storage_root = storage_tree
+                .root_node()
+                .expect("Failed to get storage root");
+            assert_roots_equal(&full_root, &storage_root, &format!("after {} leaves", i));
+        }
+    }
+
+    // Final root check
+    let full_root = full_tree.root_node();
+    let storage_root = storage_tree
+        .root_node()
+        .expect("Failed to get storage root");
+    assert_roots_equal(
+        &full_root,
+        &storage_root,
+        &format!("final with {} leaves", num_leaves),
+    );
+
+    // Check a few random paths
+    for &leaf_index in [0, L - 1, L, L + 1, num_leaves - 1].iter() {
+        let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
+        let storage_path = storage_tree
+            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .unwrap();
+
+        assert_paths_equal(
+            &full_path,
+            &storage_path,
+            &format!("for leaf {} in large tree", leaf_index),
+        );
+    }
+}
 /// Test sequential updates to the same leaf
 #[test]
 fn test_sequential_leaf_updates() {

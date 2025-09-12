@@ -145,6 +145,14 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn allocate_leaf_index(&mut self) -> LeafIndex;
 
+    fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
+        Ok(None)
+    }
+
+    fn set_committed_leaf_index(&mut self, _leaf_index: LeafIndex) -> Result<(), Self::Error> {
+        Err(Error::CurveTreeBackendReadOnly.into())
+    }
+
     fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Self::Error>;
 
     fn set_leaf(
@@ -212,6 +220,14 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
 
+    fn last_committed_leaf_index(&self) -> impl Future<Output = Result<Option<LeafIndex>, Self::Error>> + Send {
+        async move { Ok(None) }
+    }
+
+    fn set_committed_leaf_index(&mut self, _leaf_index: LeafIndex) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move { Err(Error::CurveTreeBackendReadOnly.into()) }
+    }
+
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
@@ -245,6 +261,7 @@ pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeCo
     height: NodeLevel,
     leafs: Vec<LeafValue<C::P0>>,
     next_leaf_index: LeafIndex,
+    committed_leaf_index: LeafIndex,
     nodes: BTreeMap<NodeLocation<L>, Inner<M, C>>,
     block_number: BlockNumber,
     roots: BTreeMap<BlockNumber, Root<L, M, C::P0, C::P1>>,
@@ -259,6 +276,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> core::fmt::Debug
             .field("height", &self.height)
             .field("leafs", &self.leafs)
             .field("next_leaf_index", &self.next_leaf_index)
+            .field("committed_leaf_index", &self.committed_leaf_index)
             .field("nodes", &self.nodes)
             .field("block_number", &self.block_number)
             .finish()
@@ -271,6 +289,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeMemoryBackend<
             height,
             leafs: Vec::new(),
             next_leaf_index: 0,
+            committed_leaf_index: 0,
             nodes: BTreeMap::new(),
             block_number: 0,
             roots: BTreeMap::new(),
@@ -336,6 +355,15 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         let leaf_index = self.next_leaf_index;
         self.next_leaf_index += 1;
         leaf_index
+    }
+
+    fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
+        Ok(Some(self.committed_leaf_index))
+    }
+
+    fn set_committed_leaf_index(&mut self, leaf_index: LeafIndex) -> Result<(), Self::Error> {
+        self.committed_leaf_index = leaf_index;
+        Ok(())
     }
 
     fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
@@ -436,6 +464,14 @@ where
 
     async fn allocate_leaf_index(&mut self) -> LeafIndex {
         CurveTreeBackend::allocate_leaf_index(self)
+    }
+
+    async fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
+        CurveTreeBackend::last_committed_leaf_index(self)
+    }
+
+    async fn set_committed_leaf_index(&mut self, leaf_index: LeafIndex) -> Result<(), Self::Error> {
+        CurveTreeBackend::set_committed_leaf_index(self, leaf_index)
     }
 
     async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {

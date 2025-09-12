@@ -646,8 +646,26 @@ macro_rules! impl_curve_tree_with_backend {
                 &mut self,
                 leaf_value: LeafValue<C::P0>,
             ) -> Result<LeafIndex, Error> {
+                // Make sure there are no uncommitted leaves.
+                self.commit_leaves_to_tree()$($await)*?;
+
+                // Insert the leaf.
+                let leaf_index = self.insert_leaf_delayed_update(leaf_value)$($await)*?;
+
+                // Now update the tree with the new leaf.
+                self.update_tree(leaf_index, None, leaf_value)$($await)*?;
+
+                // Mark this leaf as committed.
+                self.backend.set_committed_leaf_index(leaf_index + 1)$($await)*?;
+                Ok(leaf_index)
+            }
+
+            pub $($async_fn)* fn insert_leaf_delayed_update(
+                &mut self,
+                leaf_value: LeafValue<C::P0>,
+            ) -> Result<LeafIndex, Error> {
                 let leaf_index = self.backend.allocate_leaf_index()$($await)*;
-                self.update_leaf(leaf_index, leaf_value)$($await)*?;
+                self.backend.set_leaf(leaf_index, leaf_value)$($await)*?;
                 Ok(leaf_index)
             }
 
@@ -864,7 +882,9 @@ macro_rules! impl_curve_tree_with_backend {
                 leaf_index: LeafIndex,
                 new_leaf_value: LeafValue<C::P0>,
             ) -> Result<(), Error> {
-                let height = self.height()$($await)*;
+                // Make sure there are no uncommitted leaves.
+                self.commit_leaves_to_tree()$($await)*?;
+
                 // Update the leaf to the new value and get the old value.
                 let old_leaf_value = self.backend.set_leaf(leaf_index, new_leaf_value)$($await)*?;
                 if C::APPEND_ONLY {
@@ -872,6 +892,172 @@ macro_rules! impl_curve_tree_with_backend {
                         return Err(crate::Error::CurveTreeCannotUpdateLeafInAppendOnlyTree.into());
                     }
                 }
+
+                self.update_tree(leaf_index, old_leaf_value, new_leaf_value)$($await)*
+            }
+
+            pub $($async_fn)* fn commit_leaves_to_tree(
+                &mut self,
+            ) -> Result<bool, Error> {
+                let mut leaf_index = match self.backend.last_committed_leaf_index()$($await)*? {
+                    Some(index) => index,
+                    None => {
+                        // This tree doesn't support delayed commiting.
+                        return Ok(false);
+                    }
+                };
+                let leaf_count = self.backend.leaf_count()$($await)*;
+                let pending_leaves = leaf_count.saturating_sub(leaf_index);
+                if pending_leaves == 0 {
+                    // No new leaves to commit.
+                    return Ok(false);
+                }
+
+                let mut height = self.height()$($await)*;
+
+                while leaf_index < leaf_count {
+                    let leaf_value = self
+                        .backend
+                        .get_leaf(leaf_index)
+                        $($await)*?
+                        .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
+
+                    // Store the leaf as the even commitment.
+                    let mut even_old_child = None;
+                    let mut even_new_child = ChildCommitments::leaf(leaf_value);
+                    // Use zeroes to initialize the odd commitments.
+                    let mut odd_old_child = None;
+                    let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+
+                    // Start at the leaf's location.
+                    let mut location = NodeLocation::<L>::leaf(leaf_index);
+                    let mut child_is_leaf = true;
+
+                    leaf_index += 1;
+                    // Keep going until we reach the root of the tree.
+                    while !location.is_root(height) {
+                        // Move to the parent location and get the child index of the current node.
+                        let (parent_location, mut child_index) = location.parent();
+                        location = parent_location;
+
+                        // Get or initialize the node at this location.
+                        let mut node = if let Some(node) = self.backend.get_inner_node(location)$($await)*? {
+                            match &node {
+                                Inner::Even(commitments) => {
+                                    // We save the old commitment value for updating the parent node.
+                                    even_old_child = Some(ChildCommitments::inner(*commitments));
+                                },
+                                Inner::Odd(commitments) => {
+                                    // We save the old commitment value for updating the parent node.
+                                    odd_old_child = Some(ChildCommitments::inner(*commitments));
+                                },
+                            }
+                            node
+                        } else {
+                            if location.is_even() {
+                                // Since it is a new node, there is no old commitment value for it.
+                                even_old_child = None;
+                                // Create a new even node with zero commitments.
+                                Inner::Even([Affine::<C::P0>::zero(); M])
+                            } else {
+                                // Since it is a new node, there is no old commitment value for it.
+                                odd_old_child = None;
+                                // Create a new odd node with zero commitments.
+                                Inner::Odd([Affine::<C::P1>::zero(); M])
+                            }
+                        };
+
+                        match &mut node {
+                            Inner::Even(commitments) => {
+                                // Get the parameters for the tree.
+                                let params = self.backend.parameters()$($await)*;
+
+                                // Update the node.  We pass both the old and new child commitments.
+                                Inner::<M, C>::update_even_node::<L>(
+                                    commitments,
+                                    child_index,
+                                    odd_old_child,
+                                    odd_new_child,
+                                    &params.odd_parameters.delta,
+                                    &params.even_parameters,
+                                )?;
+
+                                // Save the new commitment value for updating the parent.
+                                even_new_child = ChildCommitments::inner(*commitments);
+                            }
+                            Inner::Odd(commitments) => {
+                                // Get the parameters for the tree.
+                                let params = self.backend.parameters()$($await)*;
+
+                                // Update the node.  We pass both the old and new child commitments.
+                                Inner::<M, C>::update_odd_node::<L>(
+                                    commitments,
+                                    child_index,
+                                    even_old_child,
+                                    even_new_child,
+                                    &params.even_parameters.delta,
+                                    &params.odd_parameters,
+                                )?;
+
+                                // If the child was a leaf, we may need to commit multiple leaves to this node.
+                                if child_is_leaf {
+                                    // Try to commit as many leaves as possible to this node.
+                                    while child_index < L as ChildIndex - 1 && leaf_index < leaf_count {
+                                        // Commit the next child leaf.
+                                        child_index += 1;
+                                        // Get the next uncommitted leaf.
+                                        let leaf_value = self
+                                            .backend
+                                            .get_leaf(leaf_index)
+                                            $($await)*?
+                                            .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
+                                        even_new_child = ChildCommitments::leaf(leaf_value);
+                                        leaf_index += 1;
+
+                                        // Update the node.
+                                        Inner::<M, C>::update_odd_node::<L>(
+                                            commitments,
+                                            child_index,
+                                            None,
+                                            even_new_child,
+                                            &params.even_parameters.delta,
+                                            &params.odd_parameters,
+                                        )?;
+                                    }
+                                }
+
+                                // Save the new commitment value for updating the parent.
+                                child_is_leaf = false;
+                                odd_new_child = ChildCommitments::inner(*commitments);
+                            }
+                        }
+
+                        // Save the updated node back to the backend.
+                        self.backend.set_inner_node(location, node)$($await)*?;
+                    }
+
+                    // Check if the tree has grown to accommodate the new leaf.
+                    // if the root's level is higher than the current height, we need to update the height.
+                    let level = location.level();
+                    if level > height {
+                        log::warn!("Tree height increased from {} to {}", height, level);
+                        self.backend.set_height(level)$($await)*?;
+                        height = level;
+                    }
+                }
+                // Update the last committed leaf index in the backend.
+                self.backend.set_committed_leaf_index(leaf_index)$($await)*?;
+
+                Ok(true)
+            }
+
+            $($async_fn)* fn update_tree(
+                &mut self,
+                leaf_index: LeafIndex,
+                old_leaf_value: Option<LeafValue<C::P0>>,
+                new_leaf_value: LeafValue<C::P0>,
+            ) -> Result<(), Error> {
+                let height = self.height()$($await)*;
 
                 // Store the leaf as the even commitment.
                 let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);

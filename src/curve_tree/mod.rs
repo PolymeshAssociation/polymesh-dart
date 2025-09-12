@@ -345,6 +345,19 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
         self.tree.insert_leaf(leaf)
     }
 
+    /// Insert a new leaf into the curve tree without committing it immediately.
+    pub fn insert_delayed_update(
+        &mut self,
+        leaf: LeafValue<C::P0>,
+    ) -> Result<LeafIndex, Error> {
+        self.tree.insert_leaf_delayed_update(leaf)
+    }
+
+    /// Commits all uncommitted leaves to the curve tree.
+    pub fn commit_leaves_to_tree(&mut self) -> Result<bool, Error> {
+        self.tree.commit_leaves_to_tree()
+    }
+
     /// Updates an existing leaf in the curve tree.
     pub fn update(&mut self, leaf: LeafValue<C::P0>, leaf_index: LeafIndex) -> Result<(), Error> {
         self.tree.update_leaf(leaf_index, leaf)
