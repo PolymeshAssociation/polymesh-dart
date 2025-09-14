@@ -1,0 +1,37 @@
+[package]
+name = "dart-halo2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+polymesh-dart-common = { workspace = true, default-features = false }
+ff = { version = "0.13.1", default-features = false, features = ["bits"] }
+group = { version = "0.13", default-features = false }
+multiexp = { version = "0.4.2", default-features = false }
+pasta_curves = { version = "0.5.1", default-features = false, features = ["bits"] }
+merlin = { version = "3.0", default-features = false }
+digest = "0.10"
+zeroize = "1.8"
+rand_core = "0.6"
+subtle = "2.5"
+ark-std = { version = "^0.4.0", default-features = false}
+rayon = {version = "1.10", optional = true}
+thiserror = { workspace = true, default-features = false }
+zkcrypto_utils = {path = "../../common-crypto/zkcrypto_utils"}
+sigma_protocols = {path = "../../common-crypto/sigma_protocols"}
+blake2 = "0.10"
+halo2_proofs = {path = "../../../halo2/halo2_proofs"}
+halo2_gadgets = {path = "../../../halo2/halo2_gadgets"}
+halo2_poseidon = {path = "../../../halo2/halo2_poseidon"}
+ct_halo2 = {path = "../../ct-halo2", default-features = false}
+
+[dev-dependencies]
+rand_chacha = "0.3"
+blake2 = "0.10"
+rand = "0.8"
+lazy_static = "1.5.0"
+
+[features]
+default = ["parallel"]
+std = ["ark-std/std", "ff/std", "group/alloc", "pasta_curves/alloc", "multiexp/std"]
+parallel = ["std", "zkcrypto_utils/parallel", "sigma_protocols/parallel", "ct_halo2/parallel"]

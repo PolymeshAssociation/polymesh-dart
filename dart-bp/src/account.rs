@@ -616,7 +616,7 @@ impl<
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
-            self.re_randomized_path.clone(),
+            &self.re_randomized_path,
             root,
             account_tree_params,
         );
@@ -669,7 +669,7 @@ impl<
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
-        let y = self.re_randomized_path.re_randomized_leaf - asset_id_comm;
+        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm;
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
@@ -1243,7 +1243,7 @@ impl<
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
-            proof.re_randomized_path.clone(),
+            &proof.re_randomized_path,
             root,
             account_tree_params,
         );
@@ -3284,8 +3284,8 @@ pub mod tests {
 
         let verifier_time = clock.elapsed();
 
-        log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
+        println!("total proof size = {}", proof.compressed_size());
+        println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time,
             verifier_time
@@ -3305,9 +3305,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3409,9 +3409,9 @@ pub mod tests {
 
         // All parties generate their keys
         let (
-            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3515,8 +3515,8 @@ pub mod tests {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
-            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -3596,8 +3596,8 @@ pub mod tests {
 
         let verifier_time = clock.elapsed();
 
-        log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
+        println!("total proof size = {}", proof.compressed_size());
+        println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time,
             verifier_time
@@ -3887,8 +3887,7 @@ pub mod tests {
             let (leg_enc, leg_enc_rand) = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                let leg =
-                    Leg::new(pk_other.0, pk.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
+                let leg = Leg::new(pk_other.0, pk.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e_other.0, pk_e.0, enc_key_gen, enc_gen)
                     .unwrap();
@@ -3896,8 +3895,7 @@ pub mod tests {
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                let leg =
-                    Leg::new(pk.0, pk_other.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
+                let leg = Leg::new(pk.0, pk_other.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
                 let (leg_enc, leg_enc_rand) = leg
                     .encrypt::<_, Blake2b512>(&mut rng, pk_e.0, pk_e_other.0, enc_key_gen, enc_gen)
                     .unwrap();

@@ -7,7 +7,7 @@ authors = ["Polymesh Association"]
 license-file = "LICENSE.pdf"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common"]
+members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-halo2"]
 
 [patch.crates-io]
 # Curve tree dependencies
