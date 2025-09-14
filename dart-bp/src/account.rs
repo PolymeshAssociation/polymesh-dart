@@ -616,7 +616,7 @@ impl<
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
-            self.re_randomized_path.clone(),
+            &self.re_randomized_path,
             root,
             account_tree_params,
         );
@@ -669,7 +669,7 @@ impl<
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
-        let y = self.re_randomized_path.re_randomized_leaf - asset_id_comm;
+        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm;
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
@@ -1243,7 +1243,7 @@ impl<
         let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
             TXN_EVEN_LABEL,
             TXN_ODD_LABEL,
-            proof.re_randomized_path.clone(),
+            &proof.re_randomized_path,
             root,
             account_tree_params,
         );

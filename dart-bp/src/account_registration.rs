@@ -636,7 +636,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
                 if enc_rand.resp_comm_s_chunks_bp.0[i + 1] != enc_rand.resp_encrypted[i].response2 {
                     return Err(Error::ProofVerificationError(
-                        "Mismatch in commitment randomness chunk".to_string(),
+                        format!("Mismatch in {i}-th commitment randomness chunk")
                     ));
                 }
             }
@@ -1617,5 +1617,56 @@ pub mod tests {
             }
             assert_eq!(reconstructed, val);
         }
+    }
+
+    fn prove_verify_rho_gen_constraints(pc_gens: &PedersenGens<PallasA>, bp_gens: &BulletproofGens<PallasA>, sk: Fr, rho: Fr, current_rho: Fr, asset_id: AssetId, counter: NullifierSkGenCounter, poseidon_params: &Poseidon2Params<Fr>) -> bool {
+        let values = vec![sk, rho, current_rho];
+
+        let prover_transcript = MerlinTranscript::new(b"test");
+        let mut prover = Prover::new(pc_gens, prover_transcript);
+        let (comm, vars) = prover.commit_vec(&values, Fr::from(200u64), bp_gens);
+
+        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(&mut prover, asset_id, counter, vars, &poseidon_params).is_err() {
+            return false;
+        }
+
+        let proof = match prover.prove(bp_gens) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        let verifier_transcript = MerlinTranscript::new(b"test");
+        let mut verifier = Verifier::new(verifier_transcript);
+        let vars = verifier.commit_vec(3, comm);
+
+        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(&mut verifier, asset_id, counter, vars, &poseidon_params).is_err() {
+            return false;
+        }
+
+        verifier.verify(&proof, pc_gens, bp_gens).is_ok()
+    }
+
+    #[test]
+    fn test_rho_gen_constraints() {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(256, 1);
+        let mut rng = rand::thread_rng();
+
+        let sk = Fr::rand(&mut rng);
+        let asset_id = 2;
+        let counter = 1;
+
+        let poseidon_params = test_params_for_poseidon2::<_, Fr>(&mut rng);
+        let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, counter);
+        let rho = Poseidon_hash_2_simple::<Fr>(sk, combined, poseidon_params.clone()).unwrap();
+        let current_rho = rho.square();
+
+        assert!(prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, rho, current_rho, asset_id, counter, &poseidon_params));
+
+        let wrong_rho = Fr::rand(&mut rng);
+        assert!(!prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, wrong_rho, current_rho, asset_id, counter, &poseidon_params));
+
+        let wrong_current_rho = Fr::rand(&mut rng);
+        assert!(!prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, rho, wrong_current_rho, asset_id, counter, &poseidon_params));
     }
 }

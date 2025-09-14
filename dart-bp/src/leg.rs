@@ -120,6 +120,8 @@ impl<
         })
     }
 
+    /// Return 1 point per key and role combined. The idea is to have 1 point per auditor/mediator and the
+    /// point should encapsulate all info about that auditor/mediator
     fn points(
         asset_id: AssetId,
         keys: &[(bool, Affine<G0>)],
@@ -924,7 +926,7 @@ impl<
         let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
             SETTLE_TXN_EVEN_LABEL,
             SETTLE_TXN_ODD_LABEL,
-            self.re_randomized_path.clone(),
+            &self.re_randomized_path,
             tree_root,
             tree_parameters,
         );
