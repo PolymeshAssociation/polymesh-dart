@@ -688,8 +688,11 @@ macro_rules! impl_curve_tree_with_backend {
                 // Now update the tree with the new leaf.
                 self.update_tree(leaf_index, None, leaf_value)$($await)*?;
 
-                // Mark this leaf as committed.
-                self.backend.set_committed_leaf_index(leaf_index + 1)$($await)*?;
+                // If the backend supports batch inserts, we need to mark this leaf as committed.
+                if self.backend.batch_inserts_supported() {
+                    // Mark this leaf as committed.
+                    self.backend.set_committed_leaf_index(leaf_index + 1)$($await)*?;
+                }
                 Ok(leaf_index)
             }
 
@@ -932,13 +935,11 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn commit_leaves_to_tree(
                 &mut self,
             ) -> Result<bool, Error> {
-                let mut leaf_index = match self.backend.last_committed_leaf_index()$($await)*? {
-                    Some(index) => index,
-                    None => {
-                        // This tree doesn't support delayed commiting.
-                        return Ok(false);
-                    }
-                };
+                if !self.backend.batch_inserts_supported() {
+                    // This tree doesn't support delayed commiting.
+                    return Ok(false);
+                }
+                let mut leaf_index = self.backend.last_committed_leaf_index()$($await)*?;
                 let leaf_count = self.backend.leaf_count()$($await)*;
                 let pending_leaves = leaf_count.saturating_sub(leaf_index);
                 if pending_leaves == 0 {

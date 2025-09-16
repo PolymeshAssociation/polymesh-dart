@@ -145,8 +145,12 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn allocate_leaf_index(&mut self) -> LeafIndex;
 
-    fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
-        Ok(None)
+    fn batch_inserts_supported(&self) -> bool {
+        false
+    }
+
+    fn last_committed_leaf_index(&self) -> Result<LeafIndex, Self::Error> {
+        Ok(0)
     }
 
     fn set_committed_leaf_index(&mut self, _leaf_index: LeafIndex) -> Result<(), Self::Error> {
@@ -220,10 +224,14 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
 
+    fn batch_inserts_supported(&self) -> bool {
+        false
+    }
+
     fn last_committed_leaf_index(
         &self,
-    ) -> impl Future<Output = Result<Option<LeafIndex>, Self::Error>> + Send {
-        async move { Ok(None) }
+    ) -> impl Future<Output = Result<LeafIndex, Self::Error>> + Send {
+        async move { Ok(0) }
     }
 
     fn set_committed_leaf_index(
@@ -362,8 +370,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         leaf_index
     }
 
-    fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
-        Ok(Some(self.committed_leaf_index))
+    fn batch_inserts_supported(&self) -> bool {
+        true
+    }
+
+    fn last_committed_leaf_index(&self) -> Result<LeafIndex, Self::Error> {
+        Ok(self.committed_leaf_index)
     }
 
     fn set_committed_leaf_index(&mut self, leaf_index: LeafIndex) -> Result<(), Self::Error> {
@@ -471,7 +483,7 @@ where
         CurveTreeBackend::allocate_leaf_index(self)
     }
 
-    async fn last_committed_leaf_index(&self) -> Result<Option<LeafIndex>, Self::Error> {
+    async fn last_committed_leaf_index(&self) -> Result<LeafIndex, Self::Error> {
         CurveTreeBackend::last_committed_leaf_index(self)
     }
 
