@@ -220,11 +220,16 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn allocate_leaf_index(&mut self) -> impl Future<Output = LeafIndex> + Send;
 
-    fn last_committed_leaf_index(&self) -> impl Future<Output = Result<Option<LeafIndex>, Self::Error>> + Send {
+    fn last_committed_leaf_index(
+        &self,
+    ) -> impl Future<Output = Result<Option<LeafIndex>, Self::Error>> + Send {
         async move { Ok(None) }
     }
 
-    fn set_committed_leaf_index(&mut self, _leaf_index: LeafIndex) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn set_committed_leaf_index(
+        &mut self,
+        _leaf_index: LeafIndex,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 

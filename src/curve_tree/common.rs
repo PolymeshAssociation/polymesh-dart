@@ -172,6 +172,39 @@ impl<const L: usize> NodeLocation<L> {
         }
     }
 
+    /// Get the position of the node to our left at the same level, if it exists.
+    /// If this node is the leftmost node at its level, return None.
+    /// Leaf nodes do not have siblings, so return None for them.
+    ///
+    /// This is used to help prune the left-side of a lean curve tree as we update it.
+    /// When we insert a new node, we know that the left sibling (if it exists) will not change,
+    /// so we can prune it from storage.
+    pub fn left_sibling(self) -> Option<Self> {
+        match self {
+            Self::Leaf(_) => None, // Leaf nodes do not have siblings
+            Self::Odd(pos) => {
+                if pos.index == 0 {
+                    None // Leftmost node, no left sibling
+                } else {
+                    Some(Self::Odd(NodePosition {
+                        level: pos.level,
+                        index: pos.index - 1,
+                    }))
+                }
+            }
+            Self::Even(pos) => {
+                if pos.index == 0 {
+                    None // Leftmost node, no left sibling
+                } else {
+                    Some(Self::Even(NodePosition {
+                        level: pos.level,
+                        index: pos.index - 1,
+                    }))
+                }
+            }
+        }
+    }
+
     /// Returns the child node location of this node at the given child index.
     ///
     /// The child index must be less than L, and the child node is at one level down.
