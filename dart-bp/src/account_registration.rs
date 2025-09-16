@@ -10,8 +10,8 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
+use ark_std::{format, string::ToString};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier,
 };
