@@ -30,10 +30,12 @@ use polymesh_dart_bp::{
 };
 use polymesh_dart_common::{
     LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MEMO_MAX_LENGTH, MediatorId,
-    SETTLEMENT_MAX_LEGS, SettlementId,
+    NullifierSkGenCounter, SETTLEMENT_MAX_LEGS, SettlementId,
 };
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
+
+pub const DEFAULT_DID: u32 = 0u32;
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx_impl;
@@ -182,6 +184,8 @@ pub struct AccountCommitmentKey {
     pub current_rho_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     pub randomness_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub identity_gen: PallasA,
 }
 
 impl AccountCommitmentKey {
@@ -205,11 +209,15 @@ impl AccountCommitmentKey {
         ]);
         let current_rho_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
             label,
-            b" : rho_gen"
+            b" : current_rho_gen"
         ]);
         let randomness_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
             label,
             b" : randomness_gen"
+        ]);
+        let identity_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+            label,
+            b" : identity_gen"
         ]);
 
         Self {
@@ -220,6 +228,7 @@ impl AccountCommitmentKey {
             rho_gen,
             current_rho_gen,
             randomness_gen,
+            identity_gen,
         }
     }
 }
@@ -251,6 +260,10 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
 
     fn randomness_gen(&self) -> PallasA {
         self.randomness_gen
+    }
+
+    fn id_gen(&self) -> PallasA {
+        self.identity_gen
     }
 }
 
@@ -525,7 +538,7 @@ impl AccountKeyPair {
         &self,
         rng: &mut R,
         asset_id: AssetId,
-        counter: u16,
+        counter: NullifierSkGenCounter,
     ) -> Result<AccountAssetState, Error> {
         AccountAssetState::new(rng, &self, asset_id, counter)
     }
@@ -534,11 +547,12 @@ impl AccountKeyPair {
         &self,
         rng: &mut R,
         asset_id: AssetId,
-        counter: u16,
+        counter: NullifierSkGenCounter,
     ) -> Result<AccountState, Error> {
         let params = poseidon_params();
         let state = BPAccountState::new(
             rng,
+            DEFAULT_DID.into(),
             self.secret.0.0,
             asset_id,
             counter,
@@ -582,7 +596,7 @@ impl AccountKeys {
         &self,
         rng: &mut R,
         asset_id: AssetId,
-        counter: u16,
+        counter: NullifierSkGenCounter,
     ) -> Result<AccountAssetState, Error> {
         self.acct.init_asset_state(rng, asset_id, counter)
     }
@@ -615,6 +629,7 @@ impl AccountState {
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         let state = BPAccountState {
             sk: account.secret.0.0,
+            id: DEFAULT_DID.into(),
             balance: self.balance,
             counter: self.counter,
             asset_id: self.asset_id,
@@ -730,7 +745,7 @@ impl AccountAssetState {
         rng: &mut R,
         account: &AccountKeyPair,
         asset_id: AssetId,
-        counter: u16,
+        counter: NullifierSkGenCounter,
     ) -> Result<Self, Error> {
         let current_state = account.account_state(rng, asset_id, counter)?;
         Ok(Self {
@@ -1021,7 +1036,7 @@ pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub account_state_commitment: AccountStateCommitment,
     pub asset_id: AssetId,
-    pub counter: u16,
+    pub counter: NullifierSkGenCounter,
 
     proof: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
@@ -1032,7 +1047,7 @@ impl AccountAssetRegistrationProof {
         rng: &mut R,
         account: &AccountKeyPair,
         asset_id: AssetId,
-        counter: u16,
+        counter: NullifierSkGenCounter,
         ctx: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
@@ -1077,6 +1092,7 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         proof.verify(
             rng,
+            DEFAULT_DID.into(),
             &self.account.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
