@@ -136,9 +136,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        // D = pk + g_k * asset_id
+        // D = pk + g_k * asset_id + g_l * id
         let D = pk.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id));
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
+            + (account_comm_key.id_gen() * account.id);
 
         let sk_blinding = G::ScalarField::rand(rng);
         let rho_blinding = G::ScalarField::rand(rng);
@@ -416,6 +417,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
+        id: G::ScalarField,
         pk: &G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
@@ -459,9 +461,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         verifier_transcript
             .append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        // D = pk + g_k * asset_id
-        let D =
-            pk.into_group() + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
+        // D = pk + g_k * asset_id + g_l * id
+        let D = pk.into_group()
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
+            + (account_comm_key.id_gen() * id);
 
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
@@ -635,9 +638,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 }
 
                 if enc_rand.resp_comm_s_chunks_bp.0[i + 1] != enc_rand.resp_encrypted[i].response2 {
-                    return Err(Error::ProofVerificationError(
-                        format!("Mismatch in {i}-th commitment randomness chunk")
-                    ));
+                    return Err(Error::ProofVerificationError(format!(
+                        "Mismatch in {i}-th commitment randomness chunk"
+                    )));
                 }
             }
 
@@ -845,9 +848,10 @@ impl<
         let sk_blinding = F0::rand(rng);
         let comm_bp_blinding = F0::rand(rng);
 
-        // D = pk + g_k * asset_id
+        // D = pk + g_k * asset_id + g_l * id
         let D = pk.into_group()
-            + (account_comm_key.asset_id_gen() * G0::ScalarField::from(account.asset_id));
+            + (account_comm_key.asset_id_gen() * G0::ScalarField::from(account.asset_id))
+            + (account_comm_key.id_gen() * account.id);
 
         // For proving Comm - D - initial_nullifier = g_i * rho^2 + g_j * s
         let comm_protocol = PokPedersenCommitmentProtocol::init(
@@ -955,6 +959,7 @@ impl<
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
+        id: G0::ScalarField,
         pk: &Affine<G0>,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<Affine<G0>>,
@@ -979,8 +984,10 @@ impl<
 
         transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
 
-        // D = pk + g_k * asset_id
-        let D = pk.into_group() + (account_comm_key.asset_id_gen() * F0::from(asset_id));
+        // D = pk + g_k * asset_id + g_l * id
+        let D = pk.into_group()
+            + (account_comm_key.asset_id_gen() * F0::from(asset_id))
+            + (account_comm_key.id_gen() * id);
 
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
@@ -1292,6 +1299,7 @@ pub mod tests {
         rng: &mut R,
         asset_id: AssetId,
         sk: SigKey<G>,
+        id: G::ScalarField,
     ) -> (
         AccountState<G>,
         NullifierSkGenCounter,
@@ -1299,7 +1307,7 @@ pub mod tests {
     ) {
         let params = test_params_for_poseidon2::<_, G::ScalarField>(rng);
         let counter = 1;
-        let account = AccountState::new(rng, sk.0, asset_id, counter, params.clone()).unwrap();
+        let account = AccountState::new(rng, id, sk.0, asset_id, counter, params.clone()).unwrap();
         (account, counter, params)
     }
 
@@ -1314,7 +1322,11 @@ pub mod tests {
         // Issuer creates keys
         let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let (account, c, poseidon_config) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+        // User hashes it id onto the field
+        let id = Fr::rand(&mut rng);
+
+        let (account, c, poseidon_config) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id);
+        assert_eq!(account.id, id);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
@@ -1345,10 +1357,11 @@ pub mod tests {
 
         // Investor creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
 
         let clock = Instant::now();
         let (account, nullifier_gen_counter, poseidon_params) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+            new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id.clone());
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
@@ -1374,6 +1387,7 @@ pub mod tests {
         reg_proof
             .verify(
                 &mut rng,
+                id,
                 &pk_i.0,
                 asset_id,
                 &account_comm,
@@ -1419,6 +1433,7 @@ pub mod tests {
 
         // Investor creates keys
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
 
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
@@ -1426,7 +1441,7 @@ pub mod tests {
 
         let clock = Instant::now();
         let (mut account, nullifier_gen_counter, poseidon_params) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk);
+            new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
         // Make randomness small to run test faster
         account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1454,6 +1469,7 @@ pub mod tests {
         reg_proof
             .verify(
                 &mut rng,
+                id,
                 &pk.0,
                 asset_id,
                 &account_comm,
@@ -1515,6 +1531,7 @@ pub mod tests {
 
         // Investor creates keys
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
 
         let enc_key_gen = VestaA::rand(&mut rng);
         let (sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
@@ -1522,7 +1539,7 @@ pub mod tests {
 
         let clock = Instant::now();
         let (account, r_1, r_2) =
-            AccountState::new_alt(&mut rng, sk.0, asset_id, enc_key_gen).unwrap();
+            AccountState::new_alt(&mut rng, id.clone(), sk.0, asset_id, enc_key_gen).unwrap();
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
@@ -1550,6 +1567,7 @@ pub mod tests {
         reg_proof
             .verify(
                 &mut rng,
+                id,
                 &pk.0,
                 asset_id,
                 &account_comm,
@@ -1619,14 +1637,31 @@ pub mod tests {
         }
     }
 
-    fn prove_verify_rho_gen_constraints(pc_gens: &PedersenGens<PallasA>, bp_gens: &BulletproofGens<PallasA>, sk: Fr, rho: Fr, current_rho: Fr, asset_id: AssetId, counter: NullifierSkGenCounter, poseidon_params: &Poseidon2Params<Fr>) -> bool {
+    fn prove_verify_rho_gen_constraints(
+        pc_gens: &PedersenGens<PallasA>,
+        bp_gens: &BulletproofGens<PallasA>,
+        sk: Fr,
+        rho: Fr,
+        current_rho: Fr,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        poseidon_params: &Poseidon2Params<Fr>,
+    ) -> bool {
         let values = vec![sk, rho, current_rho];
 
         let prover_transcript = MerlinTranscript::new(b"test");
         let mut prover = Prover::new(pc_gens, prover_transcript);
         let (comm, vars) = prover.commit_vec(&values, Fr::from(200u64), bp_gens);
 
-        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(&mut prover, asset_id, counter, vars, &poseidon_params).is_err() {
+        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(
+            &mut prover,
+            asset_id,
+            counter,
+            vars,
+            &poseidon_params,
+        )
+        .is_err()
+        {
             return false;
         }
 
@@ -1639,7 +1674,15 @@ pub mod tests {
         let mut verifier = Verifier::new(verifier_transcript);
         let vars = verifier.commit_vec(3, comm);
 
-        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(&mut verifier, asset_id, counter, vars, &poseidon_params).is_err() {
+        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(
+            &mut verifier,
+            asset_id,
+            counter,
+            vars,
+            &poseidon_params,
+        )
+        .is_err()
+        {
             return false;
         }
 
@@ -1661,12 +1704,39 @@ pub mod tests {
         let rho = Poseidon_hash_2_simple::<Fr>(sk, combined, poseidon_params.clone()).unwrap();
         let current_rho = rho.square();
 
-        assert!(prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, rho, current_rho, asset_id, counter, &poseidon_params));
+        assert!(prove_verify_rho_gen_constraints(
+            &pc_gens,
+            &bp_gens,
+            sk,
+            rho,
+            current_rho,
+            asset_id,
+            counter,
+            &poseidon_params
+        ));
 
         let wrong_rho = Fr::rand(&mut rng);
-        assert!(!prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, wrong_rho, current_rho, asset_id, counter, &poseidon_params));
+        assert!(!prove_verify_rho_gen_constraints(
+            &pc_gens,
+            &bp_gens,
+            sk,
+            wrong_rho,
+            current_rho,
+            asset_id,
+            counter,
+            &poseidon_params
+        ));
 
         let wrong_current_rho = Fr::rand(&mut rng);
-        assert!(!prove_verify_rho_gen_constraints(&pc_gens, &bp_gens, sk, rho, wrong_current_rho, asset_id, counter, &poseidon_params));
+        assert!(!prove_verify_rho_gen_constraints(
+            &pc_gens,
+            &bp_gens,
+            sk,
+            rho,
+            wrong_current_rho,
+            asset_id,
+            counter,
+            &poseidon_params
+        ));
     }
 }

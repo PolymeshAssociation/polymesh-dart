@@ -84,8 +84,13 @@ pub fn initialize_curve_tree_verifier<
     let odd_transcript = MerlinTranscript::new(odd_label);
     let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
-    let _ = re_randomized_path.select_and_rerandomize_verifier_gadget(tree_root, &mut even_verifier, &mut odd_verifier, &tree_parameters);
-    
+    let _ = re_randomized_path.select_and_rerandomize_verifier_gadget(
+        tree_root,
+        &mut even_verifier,
+        &mut odd_verifier,
+        &tree_parameters,
+    );
+
     (even_verifier, odd_verifier)
 }
 
@@ -328,6 +333,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     old_account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     is_sender: bool,
+    id_blinding: F0,
     sk_blinding: F0,
     old_balance_blinding: F0,
     new_balance_blinding: F0,
@@ -385,6 +391,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
             initial_rho_blinding,
             old_rho_blinding,
             old_randomness_blinding,
+            id_blinding,
             F0::rand(rng),
         ],
     );
@@ -400,6 +407,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
             initial_rho_blinding,
             new_rho_blinding,
             new_randomness_blinding,
+            id_blinding,
         ],
     );
 
@@ -574,6 +582,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.id,
             leaf_rerandomization,
         ],
         prover_challenge,
@@ -587,6 +596,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
             updated_account.rho,
             updated_account.current_rho,
             updated_account.randomness,
+            account.id,
         ],
         prover_challenge,
     )?;
@@ -761,7 +771,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         verifier_challenge,
     )?;
 
-    // Sk, asset id, initial rho in leaf match the ones in updated account commitment
+    // Sk, id, asset id, initial rho in leaf match the ones in updated account commitment
     if resp_leaf.0[0] != resp_acc_new.0[0] {
         return Err(Error::ProofVerificationError(
             "Secret key in leaf does not match the one in updated account commitment".to_string(),
@@ -772,10 +782,14 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
             "Asset ID in leaf does not match the one in updated account commitment".to_string(),
         ));
     }
-
     if resp_leaf.0[4] != resp_acc_new.0[4] {
         return Err(Error::ProofVerificationError(
             "Initial rho in leaf does not match the one in updated account commitment".to_string(),
+        ));
+    }
+    if resp_leaf.0[7] != resp_acc_new.0[7] {
+        return Err(Error::ProofVerificationError(
+            "ID in leaf does not match the one in updated account commitment".to_string(),
         ));
     }
 
@@ -930,37 +944,56 @@ pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
     bp_gens.share(0).G(size).copied()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_pallas::{Fr, Affine as PallasA};
+    use ark_pallas::{Affine as PallasA, Fr};
     use ark_std::UniformRand;
 
-    fn prove_verify_balance_change(pc_gens: &PedersenGens<PallasA>, bp_gens: &BulletproofGens<PallasA>, old_balance: u64, new_balance: u64, amount: u64, has_balance_decreased: bool) -> bool {
-        let values = vec![Fr::from(amount), Fr::from(old_balance), Fr::from(new_balance)];
+    fn prove_verify_balance_change(
+        pc_gens: &PedersenGens<PallasA>,
+        bp_gens: &BulletproofGens<PallasA>,
+        old_balance: u64,
+        new_balance: u64,
+        amount: u64,
+        has_balance_decreased: bool,
+    ) -> bool {
+        let values = vec![
+            Fr::from(amount),
+            Fr::from(old_balance),
+            Fr::from(new_balance),
+        ];
 
         let prover_transcript = MerlinTranscript::new(b"test");
         let mut prover = Prover::new(pc_gens, prover_transcript);
         let (comm, vars) = prover.commit_vec(&values, Fr::from(200u64), bp_gens);
 
-        if enforce_constraints_for_balance_change(&mut prover, vars, has_balance_decreased, Some(new_balance)).is_err() {
+        if enforce_constraints_for_balance_change(
+            &mut prover,
+            vars,
+            has_balance_decreased,
+            Some(new_balance),
+        )
+        .is_err()
+        {
             return false;
         }
-        
+
         let proof = match prover.prove(&bp_gens) {
             Ok(p) => p,
             Err(_) => return false,
         };
-        
+
         let verifier_transcript = MerlinTranscript::new(b"test");
         let mut verifier = Verifier::new(verifier_transcript);
         let vars = verifier.commit_vec(3, comm);
-        
-        if enforce_constraints_for_balance_change(&mut verifier, vars, has_balance_decreased, None).is_err() {
+
+        if enforce_constraints_for_balance_change(&mut verifier, vars, has_balance_decreased, None)
+            .is_err()
+        {
             return false;
         }
-        
+
         verifier.verify(&proof, &pc_gens, &bp_gens).is_ok()
     }
 
@@ -969,28 +1002,54 @@ mod tests {
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(128, 1);
 
-        assert!(prove_verify_balance_change(&pc_gens, &bp_gens, 100, 60, 40, true));
+        assert!(prove_verify_balance_change(
+            &pc_gens, &bp_gens, 100, 60, 40, true
+        ));
 
-        assert!(prove_verify_balance_change(&pc_gens, &bp_gens, 50, 100, 50, false));
+        assert!(prove_verify_balance_change(
+            &pc_gens, &bp_gens, 50, 100, 50, false
+        ));
 
-        assert!(prove_verify_balance_change(&pc_gens, &bp_gens, 50, 50, 0, false));
-        assert!(prove_verify_balance_change(&pc_gens, &bp_gens, 50, 50, 0, true));
+        assert!(prove_verify_balance_change(
+            &pc_gens, &bp_gens, 50, 50, 0, false
+        ));
+        assert!(prove_verify_balance_change(
+            &pc_gens, &bp_gens, 50, 50, 0, true
+        ));
 
-        assert!(!prove_verify_balance_change(&pc_gens, &bp_gens, 100, 60, 20, true));
+        assert!(!prove_verify_balance_change(
+            &pc_gens, &bp_gens, 100, 60, 20, true
+        ));
 
-        assert!(!prove_verify_balance_change(&pc_gens, &bp_gens, 50, 100, 20, false));
+        assert!(!prove_verify_balance_change(
+            &pc_gens, &bp_gens, 50, 100, 20, false
+        ));
 
-        assert!(!prove_verify_balance_change(&pc_gens, &bp_gens, 100, 60, 40, false));
+        assert!(!prove_verify_balance_change(
+            &pc_gens, &bp_gens, 100, 60, 40, false
+        ));
 
-        assert!(!prove_verify_balance_change(&pc_gens, &bp_gens, 50, 100, 50, true));
+        assert!(!prove_verify_balance_change(
+            &pc_gens, &bp_gens, 50, 100, 50, true
+        ));
 
         // This should fail due to overflow
         let amount = 5;
         let old_bal = (1 << AMOUNT_BITS) - amount;
         let new_bal = 1 << AMOUNT_BITS;
-        assert!(!prove_verify_balance_change(&pc_gens, &bp_gens, old_bal, new_bal, amount, false));
+        assert!(!prove_verify_balance_change(
+            &pc_gens, &bp_gens, old_bal, new_bal, amount, false
+        ));
     }
-    fn prove_verify_randomness_relations(pc_gens: &PedersenGens<PallasA>, bp_gens: &BulletproofGens<PallasA>, rho: Fr, rho_i: Fr, rho_i_plus_1: Fr, s_i: Fr, s_i_plus_1: Fr) -> bool {
+    fn prove_verify_randomness_relations(
+        pc_gens: &PedersenGens<PallasA>,
+        bp_gens: &BulletproofGens<PallasA>,
+        rho: Fr,
+        rho_i: Fr,
+        rho_i_plus_1: Fr,
+        s_i: Fr,
+        s_i_plus_1: Fr,
+    ) -> bool {
         let values = vec![rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1];
 
         let prover_transcript = MerlinTranscript::new(b"test");
@@ -1024,28 +1083,59 @@ mod tests {
         let rho_i_plus_1 = rho_i * rho;
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i * s_i;
-        assert!(prove_verify_randomness_relations(&pc_gens, &bp_gens, rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1));
+        assert!(prove_verify_randomness_relations(
+            &pc_gens,
+            &bp_gens,
+            rho,
+            rho_i,
+            rho_i_plus_1,
+            s_i,
+            s_i_plus_1
+        ));
 
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i + Fr::ONE;
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i * s_i;
-        assert!(!prove_verify_randomness_relations(&pc_gens, &bp_gens, rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1));
+        assert!(!prove_verify_randomness_relations(
+            &pc_gens,
+            &bp_gens,
+            rho,
+            rho_i,
+            rho_i_plus_1,
+            s_i,
+            s_i_plus_1
+        ));
 
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i * rho;
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i + Fr::ONE;
-        assert!(!prove_verify_randomness_relations(&pc_gens, &bp_gens, rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1));
+        assert!(!prove_verify_randomness_relations(
+            &pc_gens,
+            &bp_gens,
+            rho,
+            rho_i,
+            rho_i_plus_1,
+            s_i,
+            s_i_plus_1
+        ));
 
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i + Fr::ONE;
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i + Fr::ONE;
-        assert!(!prove_verify_randomness_relations(&pc_gens, &bp_gens, rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1));
+        assert!(!prove_verify_randomness_relations(
+            &pc_gens,
+            &bp_gens,
+            rho,
+            rho_i,
+            rho_i_plus_1,
+            s_i,
+            s_i_plus_1
+        ));
     }
-
 }

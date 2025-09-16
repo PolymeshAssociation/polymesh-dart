@@ -42,7 +42,7 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
-pub const NUM_GENERATORS: usize = 7;
+pub const NUM_GENERATORS: usize = 8;
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
@@ -68,6 +68,10 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
     /// Returns the generator for the randomness value.
     fn randomness_gen(&self) -> G;
 
+    /// Returns the generator for the user's identity. This is bound to the public key but the relation
+    /// between them is not proven in any of the proofs
+    fn id_gen(&self) -> G;
+
     fn as_gens(&self) -> [G; NUM_GENERATORS] {
         [
             self.sk_gen(),
@@ -77,6 +81,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.id_gen(),
         ]
     }
 
@@ -90,6 +95,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.id_gen(),
             blinding,
         ]
     }
@@ -123,10 +129,15 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     fn randomness_gen(&self) -> G {
         self[6]
     }
+
+    fn id_gen(&self) -> G {
+        self[7]
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountState<G: AffineRepr> {
+    pub id: G::ScalarField,
     // TODO: Remove this later.
     pub sk: G::ScalarField,
     pub balance: Balance,
@@ -146,6 +157,7 @@ where
 {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
+        id: G::ScalarField, // User can hash its string ID onto the field
         sk: G::ScalarField,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
@@ -160,6 +172,7 @@ where
 
         let randomness = G::ScalarField::rand(rng);
         Ok(Self {
+            id,
             sk,
             balance: 0,
             counter: 0,
@@ -176,6 +189,7 @@ where
         G2: SWCurveConfig<BaseField = G::ScalarField, ScalarField = G::BaseField>,
     >(
         rng: &mut R,
+        id: G::ScalarField,
         sk: G::ScalarField,
         asset_id: AssetId,
         pk_T_gen: Affine<G2>,
@@ -200,6 +214,7 @@ where
 
         Ok((
             Self {
+                id,
                 sk,
                 balance: 0,
                 counter: 0,
@@ -227,6 +242,7 @@ where
                 self.rho,
                 self.current_rho,
                 self.randomness,
+                self.id,
             ],
         )
         .map_err(Error::size_mismatch)?;
@@ -345,6 +361,8 @@ pub const TXN_POB_LABEL: &[u8; 20] = b"proof-of-balance-txn";
 
 // NOTE: Commitments generated when committing Bulletproofs (using `commit` or `commit_vec`) are already added to the transcript
 
+// Question: This enforces that issuer's secret key (for `issuer_pk`) is the same as the one in the account but does it need to be?
+// The issuer should be able to have a separate key for managing issuance txn and account commitment
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MintTxnProof<
     const L: usize,
@@ -428,12 +446,13 @@ impl<
         // (total minted value) and ensures that it is bounded, i.e.<= MAX_AMOUNT
 
         // Need to prove that:
-        // 1. sk, and counter are same in both old and new account commitment
+        // 1. sk, id and counter are same in both old and new account commitment
         // 2. nullifier and commitment randomness are correctly formed
         // 3. sk in account commitment is the same as in the issuer's public key
         // 4. New balance = old balance + increase_bal_by
 
         let sk_blinding = F0::rand(rng);
+        let id_blinding = F0::rand(rng);
         let counter_blinding = F0::rand(rng);
         let new_balance_blinding = F0::rand(rng);
         let initial_rho_blinding = F0::rand(rng);
@@ -456,6 +475,7 @@ impl<
                 initial_rho_blinding,
                 old_rho_blinding,
                 old_s_blinding,
+                id_blinding,
                 F0::rand(rng),
             ],
         );
@@ -470,6 +490,7 @@ impl<
                 initial_rho_blinding,
                 new_rho_blinding,
                 new_s_blinding,
+                id_blinding,
             ],
         );
 
@@ -530,6 +551,7 @@ impl<
                 account.rho,
                 account.current_rho,
                 account.randomness,
+                account.id,
                 rerandomization,
             ],
             &prover_challenge,
@@ -542,6 +564,7 @@ impl<
                 updated_account.rho,
                 updated_account.current_rho,
                 updated_account.randomness,
+                updated_account.id,
             ],
             &prover_challenge,
         )?;
@@ -595,15 +618,15 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
-        if self.resp_leaf.len() != 7 {
+        if self.resp_leaf.len() != NUM_GENERATORS {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                7,
+                NUM_GENERATORS,
                 self.resp_leaf.len(),
             ));
         }
-        if self.resp_acc_new.len() != 6 {
+        if self.resp_acc_new.len() != (NUM_GENERATORS - 1) {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                6,
+                NUM_GENERATORS - 1,
                 self.resp_acc_new.len(),
             ));
         }
@@ -709,7 +732,7 @@ impl<
             &verifier_challenge,
         )?;
 
-        // Sk, counter, rho in leaf match the ones in updated account commitment
+        // Sk, counter, rho, id in leaf match the ones in updated account commitment
         if self.resp_leaf.0[0] != self.resp_acc_new.0[0] {
             return Err(Error::ProofVerificationError(
                 "Secret key mismatch between leaf and new account".to_string(),
@@ -723,6 +746,11 @@ impl<
         if self.resp_leaf.0[3] != self.resp_acc_new.0[3] {
             return Err(Error::ProofVerificationError(
                 "Initial rho mismatch between leaf and new account".to_string(),
+            ));
+        }
+        if self.resp_leaf.0[6] != self.resp_acc_new.0[6] {
+            return Err(Error::ProofVerificationError(
+                "ID mismatch between leaf and new account".to_string(),
             ));
         }
         // Balance in leaf is less than the one in the new account commitment by `increase_bal_by`
@@ -791,7 +819,7 @@ impl<
     fn leaf_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         account_tree_params: &SelRerandParameters<G0, G1>,
-    ) -> [Affine<G0>; 7] {
+    ) -> [Affine<G0>; NUM_GENERATORS] {
         [
             account_comm_key.sk_gen(),
             account_comm_key.balance_gen(),
@@ -799,13 +827,14 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.id_gen(),
             account_tree_params.even_parameters.pc_gens.B_blinding,
         ]
     }
 
     fn acc_new_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    ) -> [Affine<G0>; 6] {
+    ) -> [Affine<G0>; NUM_GENERATORS - 1] {
         [
             account_comm_key.sk_gen(),
             account_comm_key.balance_gen(),
@@ -813,6 +842,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.id_gen(),
         ]
     }
 
@@ -999,6 +1029,7 @@ impl<
         let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = leg_enc_rand;
         let r_pk = if is_sender { r_1 } else { r_2 };
 
+        let id_blinding = F0::rand(rng);
         let sk_blinding = F0::rand(rng);
         let new_counter_blinding = F0::rand(rng);
         let asset_id_blinding = F0::rand(rng);
@@ -1032,6 +1063,7 @@ impl<
             account,
             updated_account,
             is_sender,
+            id_blinding,
             sk_blinding,
             old_balance_blinding,
             new_balance_blinding,
@@ -1222,15 +1254,15 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
-        if proof.resp_leaf.len() != 8 {
+        if proof.resp_leaf.len() != (NUM_GENERATORS + 1) {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                8,
+                NUM_GENERATORS + 1,
                 proof.resp_leaf.len(),
             ));
         }
-        if proof.resp_acc_new.len() != 7 {
+        if proof.resp_acc_new.len() != NUM_GENERATORS {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                7,
+                NUM_GENERATORS,
                 proof.resp_acc_new.len(),
             ));
         }
@@ -2333,7 +2365,7 @@ impl<
     }
 }
 
-/// This is the proof for doing proof of balance with an auditor.
+/// This is the proof for doing proof of balance with an auditor. This reveals the ID for proof efficiency as the public key is already revealed.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAuditorProof<G: AffineRepr> {
     pub nullifier: G,
@@ -2363,6 +2395,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance)?;
         account_commitment.serialize_compressed(&mut extra_instance)?;
+        account.id.serialize_compressed(&mut extra_instance)?;
         pk.serialize_compressed(&mut extra_instance)?;
         account_comm_key.serialize_compressed(&mut extra_instance)?;
 
@@ -2376,7 +2409,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let sk_blinding = G::ScalarField::rand(rng);
         let current_rho_blinding = G::ScalarField::rand(rng);
 
-        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness = C - (pk + g_a * v + g_b * at + g_c * cnt)
+        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
         // where C is the account commitment and rho, current_rho and randomness are the witness, rest are instance
         let t_acc = SchnorrCommitment::new(
             &[
@@ -2422,6 +2455,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         asset_id: AssetId,
         balance: Balance,
         counter: PendingTxnCounter,
+        id: G::ScalarField,
         pk: &G,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
@@ -2432,6 +2466,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance)?;
         account_commitment.serialize_compressed(&mut extra_instance)?;
+        id.serialize_compressed(&mut extra_instance)?;
         pk.serialize_compressed(&mut extra_instance)?;
         account_comm_key.serialize_compressed(&mut extra_instance)?;
 
@@ -2457,7 +2492,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             - (pk.into_group()
                 + account_comm_key.balance_gen() * G::ScalarField::from(balance)
                 + account_comm_key.counter_gen() * G::ScalarField::from(counter)
-                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
+                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
+                + account_comm_key.id_gen() * id);
         self.resp_acc.is_valid(
             &[
                 account_comm_key.rho_gen(),
@@ -2493,6 +2529,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 }
 
 /// This is the proof for doing proof of balance with an arbitrary party. Report section 5.1.11, fig 10
+/// This reveals the ID for proof efficiency as the public key is already revealed.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub nullifier: G,
@@ -2564,6 +2601,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         for l in &legs {
             l.0.serialize_compressed(&mut extra_instance)?;
         }
+        account.id.serialize_compressed(&mut extra_instance)?;
         pk.serialize_compressed(&mut extra_instance)?;
         account_comm_key.serialize_compressed(&mut extra_instance)?;
         enc_key_gen.serialize_compressed(&mut extra_instance)?;
@@ -2754,6 +2792,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         asset_id: AssetId,
         balance: Balance,
         counter: PendingTxnCounter,
+        id: G::ScalarField,
         pk: &G,
         account_commitment: AccountStateCommitment<G>,
         legs: Vec<LegEncryption<G>>,
@@ -2801,6 +2840,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         for l in &legs {
             l.serialize_compressed(&mut extra_instance)?;
         }
+        id.serialize_compressed(&mut extra_instance)?;
         pk.serialize_compressed(&mut extra_instance)?;
         account_comm_key.serialize_compressed(&mut extra_instance)?;
         enc_key_gen.serialize_compressed(&mut extra_instance)?;
@@ -2882,7 +2922,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             - (pk.into_group()
                 + account_comm_key.balance_gen() * G::ScalarField::from(balance)
                 + account_comm_key.counter_gen() * G::ScalarField::from(counter)
-                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
+                + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
+                + account_comm_key.id_gen() * id);
         self.resp_acc.is_valid(
             &[
                 account_comm_key.rho_gen(),
@@ -2990,6 +3031,11 @@ fn ensure_same_accounts<G: AffineRepr>(
     old_state: &AccountState<G>,
     new_state: &AccountState<G>,
 ) -> Result<()> {
+    if old_state.id != new_state.id {
+        return Err(Error::ProofGenerationError(
+            "Identity mismatch between old and new account states".to_string(),
+        ));
+    }
     if old_state.sk != new_state.sk {
         return Err(Error::ProofGenerationError(
             "Secret key mismatch between old and new account states".to_string(),
@@ -3114,7 +3160,8 @@ pub mod tests {
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let (account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i);
+        let id = Fr::rand(&mut rng);
+        let (account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id);
 
         let account_tree = get_tree_with_account_comm::<L>(
             &account,
@@ -3221,7 +3268,8 @@ pub mod tests {
         );
 
         // Sender account
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -3327,7 +3375,8 @@ pub mod tests {
         );
 
         // Receiver account
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree = get_tree_with_account_comm::<L>(
@@ -3431,7 +3480,8 @@ pub mod tests {
         );
 
         // Receiver account
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3536,8 +3586,8 @@ pub mod tests {
         );
 
         // Sender account with non-zero counter
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
-
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
         account.balance = 50;
         account.counter = 1;
 
@@ -3637,7 +3687,8 @@ pub mod tests {
         );
 
         // Sender account
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -3742,8 +3793,8 @@ pub mod tests {
         );
 
         // Receiver account with non-zero counter
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r);
-
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
         account.balance = 50;
         account.counter = 1;
 
@@ -3820,7 +3871,8 @@ pub mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         // Account exists with some balance and pending txns
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -3842,6 +3894,7 @@ pub mod tests {
                 asset_id,
                 account.balance,
                 account.counter,
+                id,
                 &pk.0,
                 account_comm,
                 nonce,
@@ -3869,7 +3922,8 @@ pub mod tests {
         let num_pending_txns = 20;
 
         // Account exists with some balance and pending txns
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk);
+        let id = Fr::rand(&mut rng);
+        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -3936,6 +3990,7 @@ pub mod tests {
                 asset_id,
                 account.balance,
                 account.counter,
+                id,
                 &pk.0,
                 account_comm,
                 legs.into_iter().map(|l| l.0).collect(),
