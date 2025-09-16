@@ -2,6 +2,10 @@ use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::HashMap;
 
+use ark_ff::{
+    PrimeField,
+    field_hashers::{DefaultFieldHasher, HashToField},
+};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -34,8 +38,6 @@ use polymesh_dart_common::{
 };
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
-
-pub const DEFAULT_DID: u32 = 0u32;
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx_impl;
@@ -96,6 +98,13 @@ type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
 
 pub type AssetCommitmentData =
     bp_leg::AssetData<PallasScalar, VestaScalar, PallasParameters, VestaParameters>;
+
+pub const ACCOUNT_IDENTITY_LABEL: &[u8; 16] = b"account-identity";
+fn hash_identity<F: PrimeField>(did: &[u8]) -> F {
+    let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<F>>::new(ACCOUNT_IDENTITY_LABEL);
+    let r = hasher.hash_to_field(&did, 1);
+    r[0]
+}
 
 /// Constants that are hashed to generate the generators for the Dart BP protocol.
 pub const DART_GEN_DOMAIN: &'static [u8] = b"polymesh-dart-generators";
@@ -539,8 +548,9 @@ impl AccountKeyPair {
         rng: &mut R,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
+        identity: &[u8],
     ) -> Result<AccountAssetState, Error> {
-        AccountAssetState::new(rng, &self, asset_id, counter)
+        AccountAssetState::new(rng, &self, asset_id, counter, identity)
     }
 
     pub fn account_state<R: RngCore + CryptoRng>(
@@ -548,11 +558,13 @@ impl AccountKeyPair {
         rng: &mut R,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
+        identity: &[u8],
     ) -> Result<AccountState, Error> {
         let params = poseidon_params();
+        let id = hash_identity::<PallasScalar>(identity);
         let state = BPAccountState::new(
             rng,
-            DEFAULT_DID.into(),
+            id,
             self.secret.0.0,
             asset_id,
             counter,
@@ -597,8 +609,9 @@ impl AccountKeys {
         rng: &mut R,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
+        identity: &[u8],
     ) -> Result<AccountAssetState, Error> {
-        self.acct.init_asset_state(rng, asset_id, counter)
+        self.acct.init_asset_state(rng, asset_id, counter, identity)
     }
 
     /// Returns the public keys for the account.
@@ -616,6 +629,7 @@ impl AccountKeys {
 pub struct AccountState {
     pub balance: Balance,
     pub counter: PendingTxnCounter,
+    pub identity: WrappedCanonical<PallasScalar>,
     pub asset_id: AssetId,
     pub rho: WrappedCanonical<PallasScalar>,
     pub current_rho: WrappedCanonical<PallasScalar>,
@@ -629,7 +643,7 @@ impl AccountState {
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         let state = BPAccountState {
             sk: account.secret.0.0,
-            id: DEFAULT_DID.into(),
+            id: self.identity.decode()?,
             balance: self.balance,
             counter: self.counter,
             asset_id: self.asset_id,
@@ -662,6 +676,7 @@ impl TryFrom<BPAccountState> for AccountState {
             balance: state.balance,
             counter: state.counter,
             asset_id: state.asset_id,
+            identity: WrappedCanonical::wrap(&state.id)?,
             rho: WrappedCanonical::wrap(&state.rho)?,
             current_rho: WrappedCanonical::wrap(&state.current_rho)?,
             randomness: WrappedCanonical::wrap(&state.randomness)?,
@@ -746,8 +761,9 @@ impl AccountAssetState {
         account: &AccountKeyPair,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
+        identity: &[u8],
     ) -> Result<Self, Error> {
-        let current_state = account.account_state(rng, asset_id, counter)?;
+        let current_state = account.account_state(rng, asset_id, counter, identity)?;
         Ok(Self {
             current_state,
             pending_state: None,
@@ -1048,11 +1064,11 @@ impl AccountAssetRegistrationProof {
         account: &AccountKeyPair,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-        ctx: &[u8],
+        identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
         let pk = account.public;
-        let account_state = account.init_asset_state(rng, asset_id, counter)?;
+        let account_state = account.init_asset_state(rng, asset_id, counter, identity)?;
         let (bp_state, commitment) = account_state.bp_current_state(account)?;
         let params = poseidon_params();
         let gens = dart_gens();
@@ -1062,7 +1078,7 @@ impl AccountAssetRegistrationProof {
             &bp_state,
             commitment,
             counter,
-            ctx,
+            identity,
             gens.account_comm_key(),
             &tree_params.even_parameters.pc_gens,
             &tree_params.even_parameters.bp_gens,
@@ -1084,20 +1100,21 @@ impl AccountAssetRegistrationProof {
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
-        ctx: &[u8],
+        identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<(), Error> {
         let proof = self.proof.decode()?;
         let params = poseidon_params();
+        let id = hash_identity::<PallasScalar>(identity);
         proof.verify(
             rng,
-            DEFAULT_DID.into(),
+            id,
             &self.account.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,
-            ctx,
+            identity,
             dart_gens().account_comm_key(),
             &tree_params.even_parameters.pc_gens,
             &tree_params.even_parameters.bp_gens,

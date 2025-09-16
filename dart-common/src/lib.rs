@@ -1,7 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub type DartIdentity = [u8; 32];
-
 pub type AssetId = u32;
 pub type Balance = u64;
 pub type PendingTxnCounter = u64;
