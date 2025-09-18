@@ -1,20 +1,28 @@
-use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
+use crate::account::{
+    AccountCommitmentKeyTrait, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_INSTANCE_LABEL,
+    TXN_ODD_LABEL,
+};
+use crate::error::*;
+use crate::util::{
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
+};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use polymesh_dart_common::{AssetId, Balance, FEE_AMOUNT_BITS, MAX_FEE_AMOUNT};
-use crate::account::{AccountCommitmentKeyTrait, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_INSTANCE_LABEL, TXN_ODD_LABEL};
-use crate::error::*;
+use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, R1CSProof};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
-use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use polymesh_dart_common::{AssetId, Balance, FEE_AMOUNT_BITS, MAX_FEE_AMOUNT};
 use rand_core::CryptoRngCore;
-use crate::util::{initialize_curve_tree_prover, prove_with_rng, verify_with_rng, initialize_curve_tree_verifier};
+use schnorr_pok::discrete_log::{
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
+use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 /// To commit, use the same commitment key as non-fee asset account commitment.
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -55,7 +63,6 @@ impl<G: AffineRepr> FeeAccountState<G> {
         &self,
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
     ) -> Result<FeeAccountStateCommitment<G>> {
-        
         let comm = G::Group::msm(
             &[
                 account_comm_key.sk_gen(),
@@ -86,7 +93,11 @@ impl<G: AffineRepr> FeeAccountState<G> {
         Ok(new_state)
     }
 
-    pub fn get_state_for_payment<R: CryptoRngCore>(&self, rng: &mut R, fee_amount: u64) -> Result<Self> {
+    pub fn get_state_for_payment<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        fee_amount: u64,
+    ) -> Result<Self> {
         if fee_amount > self.balance {
             return Err(Error::AmountTooLarge(fee_amount));
         }
@@ -160,7 +171,8 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &mut transcript,
         )?;
 
-        let pk_protocol = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+        let pk_protocol =
+            PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
         pk_protocol.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
         let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
@@ -208,20 +220,29 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &mut transcript,
         )?;
 
-        self.resp_pk.challenge_contribution(
-            &account_comm_key.sk_gen(),
-            pk,
-            &mut transcript,
-        )?;
+        self.resp_pk
+            .challenge_contribution(&account_comm_key.sk_gen(), pk, &mut transcript)?;
 
         let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        if !self.resp_acc_comm.verify(&reduced_acc_comm, &account_comm_key.rho_gen(), &account_comm_key.randomness_gen(), &verifier_challenge) {
-            return Err(Error::ProofVerificationError("Account commitment proof verification failed".to_string()));
+        if !self.resp_acc_comm.verify(
+            &reduced_acc_comm,
+            &account_comm_key.rho_gen(),
+            &account_comm_key.randomness_gen(),
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "Account commitment proof verification failed".to_string(),
+            ));
         }
-        
-        if !self.resp_pk.verify(pk, &account_comm_key.sk_gen(), &verifier_challenge) {
-            return Err(Error::ProofVerificationError("Public key proof verification failed".to_string()));
+
+        if !self
+            .resp_pk
+            .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Public key proof verification failed".to_string(),
+            ));
         }
 
         Ok(())
@@ -260,7 +281,8 @@ impl<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> FeeAccountTopupTxnProof<L, F0, F1, G0, G1> {
+> FeeAccountTopupTxnProof<L, F0, F1, G0, G1>
+{
     /// `issuer_pk` is the public key of the investor who is topping up his fee account
     /// and has the same secret key as the one in `account`
     pub fn new<R: CryptoRngCore>(
@@ -278,13 +300,19 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         // Ensure accounts are consistent (same sk, asset_id)
         if account.sk != updated_account.sk {
-            return Err(Error::ProofGenerationError("Secret key mismatch between old and new account states".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Secret key mismatch between old and new account states".to_string(),
+            ));
         }
         if account.asset_id != updated_account.asset_id {
-            return Err(Error::ProofGenerationError("Asset ID mismatch between old and new account states".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account states".to_string(),
+            ));
         }
         if updated_account.balance != account.balance + increase_bal_by {
-            return Err(Error::ProofGenerationError("Balance increase incorrect".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Balance increase incorrect".to_string(),
+            ));
         }
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
@@ -343,16 +371,11 @@ impl<
         // Schnorr commitment for proving correctness of new account state which will become new leaf
         let t_acc_new = SchnorrCommitment::new(
             &Self::acc_new_gens(account_comm_key),
-            vec![
-                new_balance_blinding,
-                new_rho_blinding,
-                new_s_blinding,
-            ],
+            vec![new_balance_blinding, new_rho_blinding, new_s_blinding],
         );
 
         // Schnorr commitment for proving correctness of nullifier
-        let t_null =
-            PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &nullifier_gen);
+        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &nullifier_gen);
 
         // Schnorr commitment for knowledge of secret key in public key
         let t_pk = PokDiscreteLogProtocol::init(account.sk, F0::rand(rng), &pk_gen);
@@ -590,7 +613,8 @@ impl<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> FeePaymentProof<L, F0, F1, G0, G1> {
+> FeePaymentProof<L, F0, F1, G0, G1>
+{
     /// `nonce` is used to tie this fee payment proof to the corresponding txn and the eventual payee (relayer, etc) identity, eg. it can
     /// be constructed as b"<txn id>||<payee id>" and the verifier can ensure that the appropriate `nonce` is used
     pub fn new<R: CryptoRngCore>(
@@ -607,13 +631,19 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         // Ensure accounts are consistent (same sk, asset_id)
         if account.sk != updated_account.sk {
-            return Err(Error::ProofGenerationError("Secret key mismatch between old and new account states".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Secret key mismatch between old and new account states".to_string(),
+            ));
         }
         if account.asset_id != updated_account.asset_id {
-            return Err(Error::ProofGenerationError("Asset ID mismatch between old and new account states".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account states".to_string(),
+            ));
         }
         if updated_account.balance != account.balance - fee_amount {
-            return Err(Error::ProofGenerationError("Balance decrease incorrect".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Balance decrease incorrect".to_string(),
+            ));
         }
 
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
@@ -640,7 +670,7 @@ impl<
 
         // Need to prove that:
         // 1. nullifier is correctly formed
-        // 2. sk is same in both old and new account commitment  
+        // 2. sk is same in both old and new account commitment
         // 3. Old balance = new balance + fee_amount
         // 4. Range proof on new balance
 
@@ -685,8 +715,7 @@ impl<
         );
 
         // Schnorr commitment for proving correctness of nullifier
-        let t_null =
-            PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &nullifier_gen);
+        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &nullifier_gen);
 
         t_r_leaf.challenge_contribution(&mut transcript)?;
         t_acc_new.challenge_contribution(&mut transcript)?;
@@ -702,7 +731,7 @@ impl<
             &mut even_prover,
             new_bal_var.into(),
             Some(updated_account.balance),
-            FEE_AMOUNT_BITS.into()
+            FEE_AMOUNT_BITS.into(),
         )?;
 
         let t_bp = PokPedersenCommitmentProtocol::init(
@@ -764,7 +793,7 @@ impl<
                 resp_acc_new,
                 resp_null,
                 comm_new_bal,
-                resp_bp
+                resp_bp,
             },
             nullifier,
         ))
@@ -833,8 +862,13 @@ impl<
         let _ = verifier_transcript;
 
         let new_bal_var = even_verifier.commit(self.comm_new_bal);
-        
-        range_proof(&mut even_verifier, new_bal_var.into(), None, FEE_AMOUNT_BITS.into())?;
+
+        range_proof(
+            &mut even_verifier,
+            new_bal_var.into(),
+            None,
+            FEE_AMOUNT_BITS.into(),
+        )?;
 
         let mut verifier_transcript = even_verifier.transcript();
 
@@ -873,7 +907,8 @@ impl<
         // Sk and asset id in leaf match the ones in updated account commitment
         if self.resp_leaf.0[0] != self.resp_acc_new.0[0] {
             return Err(Error::ProofVerificationError(
-                "Secret key in leaf does not match the one in updated account commitment".to_string(),
+                "Secret key in leaf does not match the one in updated account commitment"
+                    .to_string(),
             ));
         }
         if self.resp_leaf.0[1] != self.resp_acc_new.0[1] {
@@ -890,7 +925,8 @@ impl<
         }
 
         // Balance in leaf is greater than the one in the new account commitment by `fee_amount`
-        if self.resp_leaf.0[2] != self.resp_acc_new.0[2] + (verifier_challenge * F0::from(fee_amount))
+        if self.resp_leaf.0[2]
+            != self.resp_acc_new.0[2] + (verifier_challenge * F0::from(fee_amount))
         {
             return Err(Error::ProofVerificationError(
                 "Balance decrease verification failed".to_string(),
@@ -934,15 +970,14 @@ impl<
     }
 }
 
-
 #[cfg(test)]
 pub mod tests {
-    use std::time::Instant;
-    use curve_tree_relations::curve_tree::CurveTree;
-    use crate::account::tests::setup_gens;
     use super::*;
-    use crate::keys::{SigKey, keygen_sig};
+    use crate::account::tests::setup_gens;
     use crate::account_registration::tests::setup_comm_key;
+    use crate::keys::{SigKey, keygen_sig};
+    use curve_tree_relations::curve_tree::CurveTree;
+    use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -967,7 +1002,7 @@ pub mod tests {
         let balance = 1000;
 
         let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        
+
         let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i.clone(), balance);
         assert_eq!(fee_account.asset_id, asset_id);
         assert_eq!(fee_account.balance, balance);
@@ -1048,7 +1083,9 @@ pub mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_topup(&mut rng, increase_bal_by).unwrap();
+        let updated_account = account
+            .get_state_for_topup(&mut rng, increase_bal_by)
+            .unwrap();
         assert_eq!(updated_account.balance, account.balance + increase_bal_by);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -1069,7 +1106,7 @@ pub mod tests {
             &account_tree_params,
             account_comm_key.clone(),
         )
-            .unwrap();
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1099,35 +1136,39 @@ pub mod tests {
             verifier_time
         );
 
-        assert!(proof
-            .verify(
-                pk_i.0,
-                asset_id,
-                increase_bal_by + 10,
-                updated_account_comm,
-                nullifier,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                &mut rng,
-            )
-            .is_err());
+        assert!(
+            proof
+                .verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by + 10,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
 
-        assert!(proof
-            .verify(
-                pk_i.0,
-                asset_id,
-                increase_bal_by,
-                updated_account_comm,
-                PallasA::rand(&mut rng),
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                &mut rng,
-            )
-            .is_err());
+        assert!(
+            proof
+                .verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    PallasA::rand(&mut rng),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -1182,7 +1223,7 @@ pub mod tests {
             &account_tree_params,
             account_comm_key.clone(),
         )
-            .unwrap();
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1206,21 +1247,22 @@ pub mod tests {
         println!("total proof size = {}", proof.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+            prover_time, verifier_time
         );
 
-        assert!(proof
-            .verify(
-                fee_amount + 10,
-                updated_account_comm,
-                nullifier,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                &mut rng,
-            )
-            .is_err());
+        assert!(
+            proof
+                .verify(
+                    fee_amount + 10,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
     }
 }
