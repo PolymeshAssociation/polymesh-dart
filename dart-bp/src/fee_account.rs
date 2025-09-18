@@ -661,6 +661,7 @@ impl<
         root.serialize_compressed(&mut extra_instance)?;
         re_randomized_path.serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
+        account.asset_id.serialize_compressed(&mut extra_instance)?;
         fee_amount.serialize_compressed(&mut extra_instance)?;
         updated_account_commitment.serialize_compressed(&mut extra_instance)?;
         account_tree_params.serialize_compressed(&mut extra_instance)?;
@@ -675,7 +676,6 @@ impl<
         // 4. Range proof on new balance
 
         let sk_blinding = F0::rand(rng);
-        let asset_id_blinding = F0::rand(rng);
         let new_balance_blinding = F0::rand(rng);
         let old_rho_blinding = F0::rand(rng);
         let new_rho_blinding = F0::rand(rng);
@@ -687,14 +687,12 @@ impl<
         let nullifier = account.nullifier(&account_comm_key);
 
         let new_balance = F0::from(updated_account.balance);
-        let asset_id = F0::from(account.asset_id);
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             vec![
                 sk_blinding,
-                asset_id_blinding,
                 new_balance_blinding,
                 old_rho_blinding,
                 old_s_blinding,
@@ -707,7 +705,6 @@ impl<
             &Self::acc_new_gens(account_comm_key),
             vec![
                 sk_blinding,
-                asset_id_blinding,
                 new_balance_blinding,
                 new_rho_blinding,
                 new_s_blinding,
@@ -757,7 +754,6 @@ impl<
         let resp_leaf = t_r_leaf.response(
             &[
                 account.sk,
-                asset_id,
                 account.balance.into(),
                 account.rho,
                 account.randomness,
@@ -768,7 +764,6 @@ impl<
         let resp_acc_new = t_acc_new.response(
             &[
                 updated_account.sk,
-                asset_id,
                 new_balance,
                 updated_account.rho,
                 updated_account.randomness,
@@ -801,6 +796,7 @@ impl<
 
     pub fn verify<R: CryptoRngCore>(
         &self,
+        asset_id: AssetId,
         fee_amount: Balance,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -810,15 +806,15 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
-        if self.resp_leaf.len() != 6 {
+        if self.resp_leaf.len() != 5 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                6,
+                5,
                 self.resp_leaf.len(),
             ));
         }
-        if self.resp_acc_new.len() != 5 {
+        if self.resp_acc_new.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                5,
+                4,
                 self.resp_acc_new.len(),
             ));
         }
@@ -838,6 +834,7 @@ impl<
         self.re_randomized_path
             .serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
+        asset_id.serialize_compressed(&mut extra_instance)?;
         fee_amount.serialize_compressed(&mut extra_instance)?;
         updated_account_commitment.serialize_compressed(&mut extra_instance)?;
         account_tree_params.serialize_compressed(&mut extra_instance)?;
@@ -881,16 +878,20 @@ impl<
 
         let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
+        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
+
+        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm;
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-            &self.re_randomized_path.get_rerandomized_leaf(),
+            &y.into_affine(),
             &self.t_r_leaf,
             &verifier_challenge,
         )?;
 
+        let y = updated_account_commitment.0 - asset_id_comm;
         self.resp_acc_new.is_valid(
             &Self::acc_new_gens(account_comm_key),
-            &updated_account_commitment.0,
+            &y.into_affine(),
             &self.t_acc_new,
             &verifier_challenge,
         )?;
@@ -904,29 +905,24 @@ impl<
             ));
         }
 
-        // Sk and asset id in leaf match the ones in updated account commitment
+        // Sk  in leaf match the one in updated account commitment
         if self.resp_leaf.0[0] != self.resp_acc_new.0[0] {
             return Err(Error::ProofVerificationError(
                 "Secret key in leaf does not match the one in updated account commitment"
                     .to_string(),
             ));
         }
-        if self.resp_leaf.0[1] != self.resp_acc_new.0[1] {
-            return Err(Error::ProofVerificationError(
-                "Asset ID in leaf does not match the one in updated account commitment".to_string(),
-            ));
-        }
 
         // rho matches the one in nullifier
-        if self.resp_leaf.0[3] != self.resp_null.response {
+        if self.resp_leaf.0[2] != self.resp_null.response {
             return Err(Error::ProofVerificationError(
                 "Rho mismatch between leaf and nullifier".to_string(),
             ));
         }
 
         // Balance in leaf is greater than the one in the new account commitment by `fee_amount`
-        if self.resp_leaf.0[2]
-            != self.resp_acc_new.0[2] + (verifier_challenge * F0::from(fee_amount))
+        if self.resp_leaf.0[1]
+            != self.resp_acc_new.0[1] + (verifier_challenge * F0::from(fee_amount))
         {
             return Err(Error::ProofVerificationError(
                 "Balance decrease verification failed".to_string(),
@@ -946,10 +942,9 @@ impl<
     fn leaf_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         account_tree_params: &SelRerandParameters<G0, G1>,
-    ) -> [Affine<G0>; 6] {
+    ) -> [Affine<G0>; 5] {
         [
             account_comm_key.sk_gen(),
-            account_comm_key.asset_id_gen(),
             account_comm_key.balance_gen(),
             account_comm_key.rho_gen(),
             account_comm_key.randomness_gen(),
@@ -959,10 +954,9 @@ impl<
 
     fn acc_new_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    ) -> [Affine<G0>; 5] {
+    ) -> [Affine<G0>; 4] {
         [
             account_comm_key.sk_gen(),
-            account_comm_key.asset_id_gen(),
             account_comm_key.balance_gen(),
             account_comm_key.rho_gen(),
             account_comm_key.randomness_gen(),
@@ -1230,6 +1224,7 @@ pub mod tests {
         let clock = Instant::now();
         proof
             .verify(
+                asset_id,
                 fee_amount,
                 updated_account_comm,
                 nullifier,
@@ -1253,7 +1248,40 @@ pub mod tests {
         assert!(
             proof
                 .verify(
+                    asset_id,
                     fee_amount + 10,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    PallasA::rand(&mut rng),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    asset_id + 1,
+                    fee_amount,
                     updated_account_comm,
                     nullifier,
                     &root,
