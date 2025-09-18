@@ -32,7 +32,7 @@ use schnorr_pok::discrete_log::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
-/// Proof of encrypted randomness
+/// Proof of encrypted randomness. The randomness is broken into `NUM_CHUNKS` chunks of `CHUNK_BITS` bits each
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
 // The problem is that response of all chunks is aggregated in one value so tying it with BP is not straightforward. So need to check if aggregating
 // those responses and comparing is safe

@@ -1065,7 +1065,7 @@ mod tests {
 
         let verifier_transcript = MerlinTranscript::new(b"test");
         let mut verifier = Verifier::new(verifier_transcript);
-        let vars = verifier.commit_vec(5, comm);
+        let vars = verifier.commit_vec(values.len(), comm);
 
         enforce_constraints_for_randomness_relations(&mut verifier, vars);
 

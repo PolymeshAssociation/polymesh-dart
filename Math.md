@@ -535,7 +535,14 @@ User posts $Y$ on chain with a proof that:
 Note that step 2 involves doing a scalar multiplication in circuit and doing the curve point membership (curve equation) check
 
 ---------------------------------------
+Fee payment
 
+Regular account = $g_0*sk.g_1^{at}.g_2^v.g_3^{cnt}.g_4^{rho}.g_5^{rho^i}.g_6^s.g_7^{id}$
+
+Fee account = $g_0*sk.g_1^{at}.g_2^v.g_4^{rho}.g_6^s$. Lets keep at = 0 for first fee account
+
+
+--------------------------------------------------------
 
 $$ g * v_0 + g_1 * v_1  $$
 

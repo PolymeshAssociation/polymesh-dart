@@ -12,8 +12,11 @@ pub type MediatorId = u8;
 pub type NullifierSkGenCounter = u16;
 
 pub const AMOUNT_BITS: u16 = 48;
-
 pub const MAX_AMOUNT: u64 = (1 << AMOUNT_BITS) - 1;
+
+// 1 billion+ seems like a fair maximum for fee asset. We can increase it a little more but AMOUNT_BITS (48) bits certainly seems high
+pub const FEE_AMOUNT_BITS: u16 = 30;
+pub const MAX_FEE_AMOUNT: u64 = (1 << FEE_AMOUNT_BITS) - 1;
 
 pub const ASSET_ID_BITS: u32 = 32;
 pub const MAX_ASSET_ID: u32 = ((1_u64 << ASSET_ID_BITS) - 1) as u32;

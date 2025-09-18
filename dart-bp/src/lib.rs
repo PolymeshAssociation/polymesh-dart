@@ -9,6 +9,7 @@ pub mod account_registration;
 mod error;
 pub mod leg;
 pub mod poseidon_impls;
+pub mod fee_account;
 
 pub use error::Error;
 

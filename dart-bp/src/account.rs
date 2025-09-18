@@ -403,6 +403,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > MintTxnProof<L, F0, F1, G0, G1>
 {
+    /// `issuer_pk` has the same secret key as the one in `account`
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         issuer_pk: Affine<G0>,
@@ -417,7 +418,9 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account)?;
-
+        if updated_account.balance != account.balance + increase_bal_by {
+            return Err(Error::ProofGenerationError("Balance increase incorrect".to_string()));
+        }
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
                 rng,
@@ -446,12 +449,11 @@ impl<
         // (total minted value) and ensures that it is bounded, i.e.<= MAX_AMOUNT
 
         // Need to prove that:
-        // 1. sk, id and counter are same in both old and new account commitment
+        // 1. id and counter are same in both old and new account commitment
         // 2. nullifier and commitment randomness are correctly formed
         // 3. sk in account commitment is the same as in the issuer's public key
         // 4. New balance = old balance + increase_bal_by
 
-        let sk_blinding = F0::rand(rng);
         let id_blinding = F0::rand(rng);
         let counter_blinding = F0::rand(rng);
         let new_balance_blinding = F0::rand(rng);
@@ -469,7 +471,6 @@ impl<
         let t_r_leaf = SchnorrCommitment::new(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             vec![
-                sk_blinding,
                 new_balance_blinding,
                 counter_blinding,
                 initial_rho_blinding,
@@ -484,7 +485,6 @@ impl<
         let t_acc_new = SchnorrCommitment::new(
             &Self::acc_new_gens(account_comm_key),
             vec![
-                sk_blinding,
                 new_balance_blinding,
                 counter_blinding,
                 initial_rho_blinding,
@@ -499,7 +499,7 @@ impl<
             PokDiscreteLogProtocol::init(account.current_rho, old_rho_blinding, &nullifier_gen);
 
         // Schnorr commitment for knowledge of secret key in public key
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &pk_gen);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, F0::rand(rng), &pk_gen);
 
         t_r_leaf.challenge_contribution(&mut transcript)?;
         t_acc_new.challenge_contribution(&mut transcript)?;
@@ -545,7 +545,6 @@ impl<
         // TODO: Eliminate duplicate responses
         let resp_leaf = t_r_leaf.response(
             &[
-                account.sk,
                 account.balance.into(),
                 account.counter.into(),
                 account.rho,
@@ -558,7 +557,6 @@ impl<
         )?;
         let resp_acc_new = t_acc_new.response(
             &[
-                updated_account.sk,
                 updated_account.balance.into(),
                 updated_account.counter.into(),
                 updated_account.rho,
@@ -618,15 +616,15 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
-        if self.resp_leaf.len() != NUM_GENERATORS {
+        if self.resp_leaf.len() != NUM_GENERATORS - 1 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                NUM_GENERATORS,
+                NUM_GENERATORS - 1,
                 self.resp_leaf.len(),
             ));
         }
-        if self.resp_acc_new.len() != (NUM_GENERATORS - 1) {
+        if self.resp_acc_new.len() != (NUM_GENERATORS - 2) {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                NUM_GENERATORS - 1,
+                NUM_GENERATORS - 2,
                 self.resp_acc_new.len(),
             ));
         }
@@ -692,7 +690,8 @@ impl<
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
-        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm;
+        let issuer_pk_proj = issuer_pk.into_group();
+        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm - issuer_pk_proj;
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
@@ -700,7 +699,7 @@ impl<
             &verifier_challenge,
         )?;
 
-        let y = updated_account_commitment.0 - asset_id_comm;
+        let y = updated_account_commitment.0 - asset_id_comm - issuer_pk_proj;
         self.resp_acc_new.is_valid(
             &Self::acc_new_gens(account_comm_key),
             &y.into_affine(),
@@ -732,30 +731,25 @@ impl<
             &verifier_challenge,
         )?;
 
-        // Sk, counter, rho, id in leaf match the ones in updated account commitment
-        if self.resp_leaf.0[0] != self.resp_acc_new.0[0] {
-            return Err(Error::ProofVerificationError(
-                "Secret key mismatch between leaf and new account".to_string(),
-            ));
-        }
-        if self.resp_leaf.0[2] != self.resp_acc_new.0[2] {
+        // counter, rho, id in leaf match the ones in updated account commitment
+        if self.resp_leaf.0[1] != self.resp_acc_new.0[1] {
             return Err(Error::ProofVerificationError(
                 "Counter mismatch between leaf and new account".to_string(),
             ));
         }
-        if self.resp_leaf.0[3] != self.resp_acc_new.0[3] {
+        if self.resp_leaf.0[2] != self.resp_acc_new.0[2] {
             return Err(Error::ProofVerificationError(
                 "Initial rho mismatch between leaf and new account".to_string(),
             ));
         }
-        if self.resp_leaf.0[6] != self.resp_acc_new.0[6] {
+        if self.resp_leaf.0[5] != self.resp_acc_new.0[5] {
             return Err(Error::ProofVerificationError(
                 "ID mismatch between leaf and new account".to_string(),
             ));
         }
         // Balance in leaf is less than the one in the new account commitment by `increase_bal_by`
-        if self.resp_leaf.0[1] + (verifier_challenge * F0::from(increase_bal_by))
-            != self.resp_acc_new.0[1]
+        if self.resp_leaf.0[0] + (verifier_challenge * F0::from(increase_bal_by))
+            != self.resp_acc_new.0[0]
         {
             return Err(Error::ProofVerificationError(
                 "Balance increase verification failed".to_string(),
@@ -763,19 +757,13 @@ impl<
         }
 
         // rho matches the one in nullifier
-        if self.resp_leaf.0[4] != self.resp_null.response {
+        if self.resp_leaf.0[3] != self.resp_null.response {
             return Err(Error::ProofVerificationError(
                 "Rho mismatch between leaf and nullifier".to_string(),
             ));
         }
-        // Sk in leaf matches the one in public key
-        if self.resp_leaf.0[0] != self.resp_pk.response {
-            return Err(Error::ProofVerificationError(
-                "Secret key mismatch between leaf and public key".to_string(),
-            ));
-        }
 
-        if self.resp_bp.0[1] != self.resp_leaf.0[3] {
+        if self.resp_bp.0[1] != self.resp_leaf.0[2] {
             return Err(Error::ProofVerificationError(
                 "Initial rho mismatch between the leaf and the one in BP commitment".to_string(),
             ));
@@ -787,20 +775,20 @@ impl<
             ));
         }
 
-        if self.resp_bp.0[3] != self.resp_acc_new.0[4] {
+        if self.resp_bp.0[3] != self.resp_acc_new.0[3] {
             return Err(Error::ProofVerificationError(
                 "New rho mismatch between the new account commitment and the one in BP commitment"
                     .to_string(),
             ));
         }
 
-        if self.resp_bp.0[4] != self.resp_leaf.0[5] {
+        if self.resp_bp.0[4] != self.resp_leaf.0[4] {
             return Err(Error::ProofVerificationError(
                 "Old randomness mismatch between the leaf and the one in BP commitment".to_string(),
             ));
         }
 
-        if self.resp_bp.0[5] != self.resp_acc_new.0[5] {
+        if self.resp_bp.0[5] != self.resp_acc_new.0[4] {
             return Err(Error::ProofVerificationError(
                 "New randomness mismatch between the account commitment and the one in BP commitment".to_string(),
             ));
@@ -819,9 +807,8 @@ impl<
     fn leaf_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         account_tree_params: &SelRerandParameters<G0, G1>,
-    ) -> [Affine<G0>; NUM_GENERATORS] {
+    ) -> [Affine<G0>; NUM_GENERATORS - 1] {
         [
-            account_comm_key.sk_gen(),
             account_comm_key.balance_gen(),
             account_comm_key.counter_gen(),
             account_comm_key.rho_gen(),
@@ -834,9 +821,8 @@ impl<
 
     fn acc_new_gens(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    ) -> [Affine<G0>; NUM_GENERATORS - 1] {
+    ) -> [Affine<G0>; NUM_GENERATORS - 2] {
         [
-            account_comm_key.sk_gen(),
             account_comm_key.balance_gen(),
             account_comm_key.counter_gen(),
             account_comm_key.rho_gen(),
@@ -3128,7 +3114,7 @@ pub mod tests {
         )
     }
 
-    fn setup_gens<R: CryptoRngCore, const NUM_GENS: usize, const L: usize>(
+    pub fn setup_gens<R: CryptoRngCore, const NUM_GENS: usize, const L: usize>(
         rng: &mut R,
     ) -> (
         SelRerandParameters<PallasParameters, VestaParameters>,
@@ -3177,6 +3163,7 @@ pub mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
+        assert_eq!(updated_account.balance, account.balance + increase_bal_by);
         assert_eq!(updated_account.rho, account.rho);
         assert_eq!(
             updated_account.current_rho,
@@ -3187,7 +3174,6 @@ pub mod tests {
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
-        // Verifier gets the root of the tree
         let root = account_tree.root_node();
 
         let (proof, nullifier) = MintTxnProof::new(
@@ -3232,6 +3218,36 @@ pub mod tests {
             prover_time,
             verifier_time
         );
+
+        assert!(proof
+            .verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by + 10, // wrong amount
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+            )
+            .is_err());
+
+        assert!(proof
+            .verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by,
+                updated_account_comm,
+                PallasA::rand(&mut rng),    // wrong nullifier
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+            )
+            .is_err());
     }
 
     #[test]
