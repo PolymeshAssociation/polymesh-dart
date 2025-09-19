@@ -16,8 +16,9 @@ use crate::util::{
 };
 use crate::util::{
     enforce_balance_change_prover, enforce_balance_change_verifier,
-    generate_schnorr_responses_for_balance_change, initialize_curve_tree_prover,
-    initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
+    generate_schnorr_responses_for_balance_change, get_verification_tuples_with_rng,
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng,
+    verify_given_verification_tuples, verify_with_rng,
 };
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -28,7 +29,7 @@ use ark_std::UniformRand;
 use ark_std::format;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
+use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -419,7 +420,9 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account)?;
         if updated_account.balance != account.balance + increase_bal_by {
-            return Err(Error::ProofGenerationError("Balance increase incorrect".to_string()));
+            return Err(Error::ProofGenerationError(
+                "Balance increase incorrect".to_string(),
+            ));
         }
         let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
             initialize_curve_tree_prover(
@@ -1355,6 +1358,38 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            common_state_change_proof,
+            balance_change_proof,
+            challenge,
+            leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        self,
+        common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
+        balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
+        challenge: &F0,
+        leg_enc: &LegEncryption<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         let bp_gens = &account_tree_params.even_parameters.bp_gens;
 
@@ -1436,16 +1471,13 @@ impl<
             }
         }
 
-        verify_with_rng(
+        get_verification_tuples_with_rng(
             self.even_verifier,
             self.odd_verifier,
             &common_state_change_proof.even_proof,
             &common_state_change_proof.odd_proof,
-            &account_tree_params,
             rng,
-        )?;
-
-        Ok(())
+        )
     }
 }
 
@@ -1573,6 +1605,36 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
         let mut verifier = StateChangeVerifier::init(
@@ -1603,8 +1665,7 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify(
-            rng,
+        verifier.verify_except_bp(
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
@@ -1615,6 +1676,7 @@ impl<
             &account_comm_key,
             enc_key_gen,
             enc_gen,
+            rng,
         )
     }
 }
@@ -1712,6 +1774,36 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
@@ -1733,8 +1825,7 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify(
-            rng,
+        verifier.verify_except_bp(
             &self.common_proof,
             None,
             &challenge,
@@ -1745,6 +1836,7 @@ impl<
             &account_comm_key,
             enc_key_gen,
             enc_gen,
+            rng,
         )
     }
 }
@@ -3056,8 +3148,9 @@ pub mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::keygen_sig;
-    use crate::leg::Leg;
+    use crate::leg::{AssetCommitmentParams, AssetData, Leg, SettlementTxnProof};
     use crate::leg::tests::setup_keys;
+    use crate::util::batch_verify_bp;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -3219,35 +3312,39 @@ pub mod tests {
             verifier_time
         );
 
-        assert!(proof
-            .verify(
-                pk_i.0,
-                asset_id,
-                increase_bal_by + 10, // wrong amount
-                updated_account_comm,
-                nullifier,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                &mut rng,
-            )
-            .is_err());
+        assert!(
+            proof
+                .verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by + 10, // wrong amount
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
 
-        assert!(proof
-            .verify(
-                pk_i.0,
-                asset_id,
-                increase_bal_by,
-                updated_account_comm,
-                PallasA::rand(&mut rng),    // wrong nullifier
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                &mut rng,
-            )
-            .is_err());
+        assert!(
+            proof
+                .verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    PallasA::rand(&mut rng), // wrong nullifier
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -4030,5 +4127,539 @@ pub mod tests {
             prover_time,
             verifier_time
         );
+    }
+
+    #[test]
+    fn batch_send_txn_proofs() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 1024;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+        let asset_id = 1;
+        let amount = 100;
+        let batch_size = 5;
+
+        let mut accounts = Vec::with_capacity(batch_size);
+        let mut updated_accounts = Vec::with_capacity(batch_size);
+        let mut updated_account_comms = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+
+        // Generate keys for all parties
+        let all_keys: Vec<_> = (0..batch_size)
+            .map(|_| setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen))
+            .collect();
+
+        // Create accounts and legs
+        let mut account_comms = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let ((sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
+            let ((_sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
+            let ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)) = &all_keys[i].2;
+
+            let (leg, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+
+            // Create sender account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) =
+                new_account::<_, PallasA>(&mut rng, asset_id, sk_s.clone(), id);
+            account.balance = 200; // Ensure sufficient balance
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            accounts.push(account);
+            account_comms.push(account_comm);
+        }
+
+        let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(3),
+        );
+
+        for i in 0..batch_size {
+            let updated_account = accounts[i].get_state_for_send(amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+
+            updated_accounts.push(updated_account);
+            updated_account_comms.push(updated_account_comm);
+            paths.push(path);
+        }
+
+        let root = account_tree.root_node();
+
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("batch_send_nonce_{}", i).into_bytes())
+            .collect();
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        let mut nullifiers = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new(
+                &mut rng,
+                amount,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            proofs.push(proof);
+            nullifiers.push(nullifier);
+        }
+
+        let clock = Instant::now();
+
+        for i in 0..batch_size {
+            proofs[i]
+                .verify(
+                    &mut rng,
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+        }
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+
+        let batch_verifier_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} send txn proofs,, verifier time = {:?}, batch verifier time {:?}",
+            verifier_time, batch_verifier_time
+        );
+    }
+
+    #[test]
+    fn batch_receive_txn_proofs() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 1024;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+        let asset_id = 1;
+        let amount = 100;
+        let batch_size = 5;
+
+        let mut accounts = Vec::with_capacity(batch_size);
+        let mut updated_accounts = Vec::with_capacity(batch_size);
+        let mut updated_account_comms = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+
+        // Generate keys for all parties
+        let all_keys: Vec<_> = (0..batch_size)
+            .map(|_| setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen))
+            .collect();
+
+        // Create accounts and legs
+        let mut account_comms = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let ((_sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
+            let ((sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
+            let ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)) = &all_keys[i].2;
+
+            let (leg, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+
+            // Create receiver account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) =
+                new_account::<_, PallasA>(&mut rng, asset_id, sk_r.clone(), id);
+            account.balance = 200; // Ensure some initial balance
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            accounts.push(account);
+            account_comms.push(account_comm);
+        }
+
+        let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(3),
+        );
+
+        for i in 0..batch_size {
+            let updated_account = accounts[i].get_state_for_receive();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+
+            updated_accounts.push(updated_account);
+            updated_account_comms.push(updated_account_comm);
+            paths.push(path);
+        }
+
+        let root = account_tree.root_node();
+
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("batch_receive_nonce_{}", i).into_bytes())
+            .collect();
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        let mut nullifiers = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
+                &mut rng,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+                .unwrap();
+
+            proofs.push(proof);
+            nullifiers.push(nullifier);
+        }
+
+        let clock = Instant::now();
+
+        for i in 0..batch_size {
+            proofs[i]
+                .verify(
+                    &mut rng,
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+        }
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+
+        let batch_verifier_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} receive txn proofs, verifier time = {:?}, batch verifier time {:?}",
+            verifier_time, batch_verifier_time
+        );
+    }
+
+    #[test]
+    fn single_shot_settlement() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 1024;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+        let (
+            ((sk_s, pk_s), (_, pk_s_e)),
+            ((sk_r, pk_r), (_, pk_r_e)),
+            (_, (_, pk_a_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let amount = 100;
+
+        let asset_tree_params =
+            SelRerandParameters::<
+                ark_vesta::VestaConfig,
+                ark_pallas::PallasConfig,
+            >::new(NUM_GENS, NUM_GENS)
+            .unwrap();
+
+        // Create asset commitment parameters
+        let asset_comm_params = AssetCommitmentParams::new::<Blake2b512>(
+            b"asset-comm-params-for-single-settlement",
+            2, // 1 auditor + 1 mediator
+            &asset_tree_params.even_parameters.bp_gens,
+        );
+
+        // Create AssetData - use auditor key as the sole key
+        let keys = vec![(true, pk_a_e.0)]; // Single auditor key
+        let asset_data = AssetData::new(
+            asset_id,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.delta,
+        )
+        .unwrap();
+
+        // Create asset tree with the asset commitment
+        let set = vec![asset_data.commitment];
+        let asset_tree = curve_tree_relations::curve_tree::CurveTree::<
+            L,
+            1,
+            ark_vesta::VestaConfig,
+            ark_pallas::PallasConfig,
+        >::from_leaves(&set, &asset_tree_params, Some(1));
+
+        // Get asset tree path
+        let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0);
+        let asset_tree_root = asset_tree.root_node();
+
+        // Create a single leg
+        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, asset_id).unwrap();
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+
+        // Create sender account
+        let sender_id = Fr::rand(&mut rng);
+        let (mut sender_account, _, _) =
+            new_account::<_, PallasA>(&mut rng, asset_id, sk_s, sender_id);
+        sender_account.balance = 200; // Ensure sufficient balance
+        let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+
+        // Create receiver account
+        let receiver_id = Fr::rand(&mut rng);
+        let (mut receiver_account, _, _) =
+            new_account::<_, PallasA>(&mut rng, asset_id, sk_r, receiver_id);
+        receiver_account.balance = 150; // Some initial balance
+        let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
+
+        // Create the account tree with both accounts
+        let account_comms = vec![sender_account_comm.0, receiver_account_comm.0];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(2),
+        );
+
+        let account_tree_root = account_tree.root_node();
+
+        // Prepare updated account states
+        let updated_sender_account = sender_account.get_state_for_send(amount).unwrap();
+        let updated_sender_account_comm = updated_sender_account
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let sender_path = account_tree.get_path_to_leaf_for_proof(0, 0);
+
+        let updated_receiver_account = receiver_account.get_state_for_receive();
+        let updated_receiver_account_comm = updated_receiver_account
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let receiver_path = account_tree.get_path_to_leaf_for_proof(1, 0);
+
+        let nonce = b"single_shot_settlement_nonce_txn_id_1";
+
+        // Create all three proofs
+        let settlement_proof = SettlementTxnProof::new(
+            &mut rng,
+            leg.clone(),
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            asset_path.clone(),
+            asset_data,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        let (sender_proof, sender_nullifier) = AffirmAsSenderTxnProof::new(
+            &mut rng,
+            amount,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &sender_account,
+            &updated_sender_account,
+            updated_sender_account_comm,
+            sender_path.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        let (receiver_proof, receiver_nullifier) = AffirmAsReceiverTxnProof::new(
+            &mut rng,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &receiver_account,
+            &updated_receiver_account,
+            updated_receiver_account_comm,
+            receiver_path.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        // All 3 can be verified in parallel
+        let (settlement_even, settlement_odd) = settlement_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+            )
+            .unwrap();
+
+        let (sender_even, sender_odd) = sender_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &account_tree_root,
+                updated_sender_account_comm,
+                sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+            )
+            .unwrap();
+
+        let (receiver_even, receiver_odd) = receiver_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &account_tree_root,
+                updated_receiver_account_comm,
+                receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+            )
+            .unwrap();
+
+        // Asset tree uses opposite curves than account tree so merging accordingly
+        let even_tuples = vec![settlement_odd, sender_even, receiver_even];
+        let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
+
+        batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
     }
 }

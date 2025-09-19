@@ -8,7 +8,9 @@ use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Variable, Verifier};
+use bulletproofs::r1cs::{
+    ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier, batch_verify,
+};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
@@ -312,6 +314,135 @@ pub fn verify_with_rng<
             &tree_params.odd_parameters.pc_gens,
             &tree_params.odd_parameters.bp_gens,
             rng,
+        ),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+#[allow(unused_variables)]
+pub fn get_verification_tuples_with_rng<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    even_proof: &R1CSProof<Affine<G0>>,
+    odd_proof: &R1CSProof<Affine<G1>>,
+    rng: &mut R,
+) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || even_verifier.verification_scalars_and_points(even_proof),
+        || odd_verifier.verification_scalars_and_points(odd_proof),
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        even_verifier.verification_scalars_and_points_with_rng(even_proof, rng),
+        odd_verifier.verification_scalars_and_points_with_rng(odd_proof, rng),
+    );
+
+    let even = even_res?;
+    let odd = odd_res?;
+
+    Ok((even, odd))
+}
+
+#[allow(unused_variables)]
+pub fn verify_given_verification_tuples<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuple: VerificationTuple<Affine<G0>>,
+    odd_tuple: VerificationTuple<Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            Verifier::<MerlinTranscript, Affine<G0>>::verify_given_verification_tuple(
+                even_tuple,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+            )
+        },
+        || {
+            Verifier::<MerlinTranscript, Affine<G1>>::verify_given_verification_tuple(
+                odd_tuple,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        Verifier::<MerlinTranscript, Affine<G0>>::verify_given_verification_tuple(
+            even_tuple,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+        ),
+        Verifier::<MerlinTranscript, Affine<G1>>::verify_given_verification_tuple(
+            odd_tuple,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
+        ),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+pub fn batch_verify_bp<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuples: Vec<VerificationTuple<Affine<G0>>>,
+    odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            batch_verify(
+                even_tuples,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+            )
+        },
+        || {
+            batch_verify(
+                odd_tuples,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        batch_verify(
+            even_tuples,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+        ),
+        batch_verify(
+            odd_tuples,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
         ),
     );
 

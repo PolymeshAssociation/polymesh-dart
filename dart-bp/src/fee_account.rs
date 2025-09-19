@@ -4,7 +4,7 @@ use crate::account::{
 };
 use crate::error::*;
 use crate::util::{
-    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, get_verification_tuples_with_rng, verify_given_verification_tuples,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -12,7 +12,7 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, R1CSProof};
+use bulletproofs::r1cs::{ConstraintSystem, R1CSProof, VerificationTuple};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
@@ -186,9 +186,8 @@ impl<G: AffineRepr> RegTxnProof<G> {
         })
     }
 
-    pub fn verify<R: CryptoRngCore>(
+    pub fn verify(
         &self,
-        _rng: &mut R,
         pk: &G,
         balance: Balance,
         asset_id: AssetId,
@@ -283,11 +282,11 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > FeeAccountTopupTxnProof<L, F0, F1, G0, G1>
 {
-    /// `issuer_pk` is the public key of the investor who is topping up his fee account
+    /// `pk` is the public key of the investor who is topping up his fee account
     /// and has the same secret key as the one in `account`
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        issuer_pk: Affine<G0>,
+        pk: Affine<G0>,
         increase_bal_by: Balance,
         account: &FeeAccountState<Affine<G0>>,
         updated_account: &FeeAccountState<Affine<G0>>,
@@ -330,7 +329,7 @@ impl<
         root.serialize_compressed(&mut extra_instance)?;
         re_randomized_path.serialize_compressed(&mut extra_instance)?;
         nonce.serialize_compressed(&mut extra_instance)?;
-        issuer_pk.serialize_compressed(&mut extra_instance)?;
+        pk.serialize_compressed(&mut extra_instance)?;
         account.asset_id.serialize_compressed(&mut extra_instance)?;
         increase_bal_by.serialize_compressed(&mut extra_instance)?;
         updated_account_commitment.serialize_compressed(&mut extra_instance)?;
@@ -383,7 +382,7 @@ impl<
         t_r_leaf.challenge_contribution(&mut transcript)?;
         t_acc_new.challenge_contribution(&mut transcript)?;
         t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
-        t_pk.challenge_contribution(&pk_gen, &issuer_pk, &mut transcript)?;
+        t_pk.challenge_contribution(&pk_gen, &pk, &mut transcript)?;
 
         let prover_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
@@ -440,6 +439,36 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            issuer_pk,
+            asset_id,
+            increase_bal_by,
+            updated_account_commitment,
+            nullifier,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        issuer_pk: Affine<G0>,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         if self.resp_leaf.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 4,
@@ -547,14 +576,13 @@ impl<
             ));
         }
 
-        Ok(verify_with_rng(
+        get_verification_tuples_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
-            &account_tree_params,
             rng,
-        )?)
+        )
     }
 
     fn leaf_gens(
@@ -806,6 +834,34 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            asset_id,
+            fee_amount,
+            updated_account_commitment,
+            nullifier,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+    }
+
+    /// Verifies the proof except for Bulletproof final verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        asset_id: AssetId,
+        fee_amount: Balance,
+        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         if self.resp_leaf.len() != 5 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 5,
@@ -929,14 +985,13 @@ impl<
             ));
         }
 
-        Ok(verify_with_rng(
+        get_verification_tuples_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
-            &account_tree_params,
             rng,
-        )?)
+        )
     }
 
     fn leaf_gens(
@@ -972,6 +1027,12 @@ pub mod tests {
     use crate::keys::{SigKey, keygen_sig};
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
+    use ark_std::{cfg_into_iter};
+    use crate::util::batch_verify_bp;
+
+    #[cfg(feature = "parallel")]
+    use rayon::prelude::*;
+
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1033,7 +1094,6 @@ pub mod tests {
 
         reg_proof
             .verify(
-                &mut rng,
                 &pk_i.0,
                 balance,
                 asset_id,
@@ -1292,5 +1352,175 @@ pub mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn batch_fee_payment_proofs() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 512;
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+        let asset_id = 1;
+
+        let batch_size = 5;
+
+        let mut accounts = Vec::with_capacity(batch_size);
+        let mut account_comms = Vec::with_capacity(batch_size);
+        let mut updated_accounts = Vec::with_capacity(batch_size);
+        let mut updated_account_comms = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
+            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let balance = 1000;
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk, balance);
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            accounts.push(account);
+            account_comms.push(account_comm);
+        }
+
+        let fee_amount = 10;
+
+        let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(4),
+        );
+
+        for i in 0..batch_size {
+            let updated_account = accounts[i].get_state_for_payment(&mut rng, fee_amount).unwrap();
+            assert_eq!(updated_account.balance, accounts[i].balance - fee_amount);
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+            updated_accounts.push(updated_account);
+            updated_account_comms.push(updated_account_comm);
+            paths.push(path);
+        }
+
+        let root = account_tree.root_node();
+
+        // Create unique nonces for each proof
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("test_nonce_{}", i).into_bytes())
+            .collect();
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        let mut nullifiers = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let (proof, nullifier) = FeePaymentProof::new(
+                &mut rng,
+                fee_amount,
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+            proofs.push(proof);
+            nullifiers.push(nullifier);
+        }
+
+        // NOTE: Rather than creating fresh thread rngs, use seeded ChaCha rngs from the original rng
+
+        let clock = Instant::now();
+
+        let res = cfg_into_iter!(0..batch_size).map(|i| {
+            let mut rng_ = rand::thread_rng();
+            proofs[i]
+                .verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng_,
+                )
+        }).map(|r| r).collect::<Vec<_>>();
+
+        for r in res {
+            r.unwrap();
+        }
+        // for i in 0..batch_size {
+        //     proofs[i]
+        //         .verify(
+        //             asset_id,
+        //             fee_amount,
+        //             updated_account_comms[i],
+        //             nullifiers[i],
+        //             &root,
+        //             &nonces[i],
+        //             &account_tree_params,
+        //             account_comm_key.clone(),
+        //             &mut rng,
+        //         )
+        //         .unwrap();
+        // }
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        let res = cfg_into_iter!(0..batch_size).map(|i| {
+            let mut rng_ = rand::thread_rng();
+            proofs[i]
+                .verify_except_bp(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng_,
+                )
+        }).collect::<Vec<_>>();
+        for res in res {
+            let (even, odd) = res.unwrap();
+                even_tuples.push(even);
+                odd_tuples.push(odd);
+        }
+
+        // These can also be done in parallel
+        // for i in 0..batch_size {
+        //     let (even, odd) = proofs[i]
+        //         .verify_except_bp(
+        //             asset_id,
+        //             fee_amount,
+        //             updated_account_comms[i],
+        //             nullifiers[i],
+        //             &root,
+        //             &nonces[i],
+        //             &account_tree_params,
+        //             account_comm_key.clone(),
+        //             &mut rng,
+        //         )
+        //         .unwrap();
+        //     even_tuples.push(even);
+        //     odd_tuples.push(odd);
+        // }
+
+        let pre_msm_check = clock.elapsed();
+
+        let clock = Instant::now();
+        batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+
+        let batch_verifier_time = pre_msm_check + clock.elapsed();
+
+        println!("For {batch_size} fee payment proofs, verifier time = {:?}, pre_msm_check time {:?}, total batch verifier time {:?}", verifier_time, pre_msm_check, batch_verifier_time);
     }
 }

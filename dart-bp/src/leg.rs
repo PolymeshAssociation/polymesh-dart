@@ -1,6 +1,6 @@
 use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
-    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, verify_with_rng,
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, get_verification_tuples_with_rng, verify_given_verification_tuples,
 };
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -14,7 +14,7 @@ use ark_std::iter;
 use ark_std::ops::Neg;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::BulletproofGens;
-use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSProof, Variable};
+use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSProof, Variable, VerificationTuple};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::ped_comm_group_elems::{prove_naive, verify_naive};
@@ -904,6 +904,32 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_except_bp(
+            leg_enc,
+            tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            rng,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters)
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        tree_root: &Root<L, 1, G1, G0>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(
                 asset_comm_params.comm_key.len(),
@@ -1148,15 +1174,13 @@ impl<
             }
         }
 
-        verify_with_rng(
+        get_verification_tuples_with_rng(
             even_verifier,
             odd_verifier,
             &self.even_proof,
             &self.odd_proof,
-            &tree_parameters,
             rng,
-        )?;
-        Ok(())
+        )
     }
 
     pub(crate) fn enforce_constraints<CS: ConstraintSystem<F0>>(
@@ -1331,6 +1355,7 @@ pub mod tests {
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
+    use crate::util::batch_verify_bp;
     use ark_ec::VariableBaseMSM;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -1668,5 +1693,179 @@ pub mod tests {
             Error::MediatorNotFoundAtIndex(i) => assert_eq!(i, 0),
             _ => panic!("Didn't error but should have"),
         }
+    }
+
+    #[test]
+    fn batch_leg_verification() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 64;
+
+        // Create public params (generators, etc)
+        let asset_tree_params =
+            SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS, NUM_GENS)
+                .unwrap();
+
+        let sig_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen = PallasA::rand(&mut rng);
+
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let num_auditors = 2;
+        let num_mediators = 3;
+
+        let batch_size = 5;
+
+        let asset_comm_params =
+            AssetCommitmentParams::<PallasParameters, VestaParameters>::new::<Blake2b512>(
+                b"asset-comm-params",
+                num_auditors + num_mediators,
+                &asset_tree_params.even_parameters.bp_gens,
+            );
+
+        // Account signing (affirmation) keys
+        let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+        let (_sk_r, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+
+        // Encryption keys
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+
+        let mut keys = Vec::with_capacity(num_auditors + num_mediators);
+        keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
+        keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
+
+        // Create multiple assets instead with same accounts
+        let mut asset_data_vec = Vec::with_capacity(batch_size);
+        let mut asset_trees = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let asset_id = (i + 1) as u32;
+            let asset_data = AssetData::new(
+                asset_id,
+                keys.clone(),
+                &asset_comm_params,
+                asset_tree_params.odd_parameters.delta,
+            )
+                .unwrap();
+
+            let set = vec![asset_data.commitment];
+            let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(2),
+            );
+
+            asset_data_vec.push(asset_data);
+            asset_trees.push(asset_tree);
+        }
+
+        let amount = 100;
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("batch_leg_nonce_{}", i).into_bytes())
+            .collect();
+
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+
+        // Create legs for each asset
+        for i in 0..batch_size {
+            let asset_id = (i + 1) as u32;
+            let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, asset_id).unwrap();
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+                .unwrap();
+
+            let path = asset_trees[i].get_path_to_leaf_for_proof(0, 0);
+
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+            paths.push(path);
+        }
+
+        let mut proofs = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let proof = SettlementTxnProof::new(
+                &mut rng,
+                legs[i].clone(),
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                paths[i].clone(),
+                asset_data_vec[i].clone(),
+                &nonces[i],
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+                .unwrap();
+
+            proofs.push(proof);
+        }
+
+        let clock = Instant::now();
+
+        for i in 0..batch_size {
+            let root = asset_trees[i].root_node();
+            proofs[i]
+                .verify(
+                    &mut rng,
+                    leg_encs[i].clone(),
+                    &root,
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+        }
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            let root = asset_trees[i].root_node();
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp(even_tuples, odd_tuples, &asset_tree_params).unwrap();
+
+        let batch_verifier_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} leg verification proofs, verifier time = {:?}, batch verifier time {:?}",
+            verifier_time, batch_verifier_time
+        );
     }
 }
