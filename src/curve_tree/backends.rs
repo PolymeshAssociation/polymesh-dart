@@ -11,6 +11,7 @@ use crate::{
     BlockNumber, CompressedAffine, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
         CurveTreeConfig, CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot,
+        CurveTreeUpdater, DefaultCurveTreeUpdater,
     },
     error::*,
 };
@@ -117,10 +118,15 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
 
 pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: Sized {
     type Error: From<crate::Error>;
+    type Updater: CurveTreeUpdater<L, M, C>;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error>;
 
     fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
+
+    fn updater() -> Self::Updater {
+        Self::Updater::new()
+    }
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error>;
 
@@ -184,6 +190,7 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 #[cfg(feature = "async_tree")]
 pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: Sized {
     type Error: From<crate::Error>;
+    type Updater: CurveTreeUpdater<L, M, C>;
 
     fn new(
         height: NodeLevel,
@@ -191,6 +198,10 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     fn parameters(&self) -> impl Future<Output = &SelRerandParameters<C::P0, C::P1>> + Send;
+
+    fn updater() -> Self::Updater {
+        Self::Updater::new()
+    }
 
     fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
@@ -315,6 +326,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
     for CurveTreeMemoryBackend<L, M, C>
 {
     type Error = Error;
+    type Updater = DefaultCurveTreeUpdater<L, M, C>;
 
     fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)
@@ -428,6 +440,7 @@ where
     Self: CurveTreeBackend<L, M, C, Error = Error>,
 {
     type Error = Error;
+    type Updater = DefaultCurveTreeUpdater<L, M, C>;
 
     async fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Self::Error> {
         Ok(CurveTreeMemoryBackend::new(height, gens_length)?)

@@ -8,8 +8,8 @@ use polymesh_dart::{
     curve_tree::{
         get_account_curve_tree_parameters, get_asset_curve_tree_parameters, AccountTreeConfig,
         AssetTreeConfig, CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
-        CurveTreeRoot, CurveTreeWithBackend, Inner, LeafValue, NodeLocation, Root,
-        ValidateCurveTreeRoot,
+        CurveTreeRoot, CurveTreeWithBackend, DefaultCurveTreeUpdater, Inner, LeafValue,
+        NodeLocation, Root, ValidateCurveTreeRoot,
     },
     BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
@@ -30,6 +30,7 @@ impl AssetCurveTreeSqliteStorage {
 
 impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurveTreeSqliteStorage {
     type Error = anyhow::Error;
+    type Updater = DefaultCurveTreeUpdater<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>;
 
     fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(
@@ -253,6 +254,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     for AccountCurveTreeSqliteStorage
 {
     type Error = anyhow::Error;
+    type Updater = DefaultCurveTreeUpdater<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>;
 
     fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(

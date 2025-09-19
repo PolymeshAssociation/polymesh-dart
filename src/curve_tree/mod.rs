@@ -715,38 +715,39 @@ impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
 
 /// A lean curve tree that only stores the inner nodes that are necessary to update the tree root.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo)]
-pub struct LeanCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
+pub struct LeanCurveTree<
+    const L: usize,
+    const M: usize,
+    C: CurveTreeConfig,
+    U: CurveTreeUpdater<L, M, C> = DefaultCurveTreeUpdater<L, M, C>,
+> {
     nodes: BTreeMap<NodeLocation<L>, Inner<M, C>>,
     height: NodeLevel,
     next_leaf_index: LeafIndex,
+    _updater: core::marker::PhantomData<U>,
 }
 
-impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> {
+impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, M, C>>
+    LeanCurveTree<L, M, C, U>
+{
     /// Creates a new instance of `LeanCurveTree` with the given height.
     pub fn new_no_init(height: NodeLevel) -> Self {
         Self {
             nodes: BTreeMap::new(),
             height,
             next_leaf_index: 0,
+            _updater: core::marker::PhantomData,
         }
     }
 
     /// Creates a new instance of `LeanCurveTree` with the given height.
-    pub fn new(
-        height: NodeLevel,
-        params: &CurveTreeParameters<C>,
-        root: &mut CompressedCurveTreeRoot<L, M>,
-    ) -> Result<Self, Error> {
+    pub fn new(height: NodeLevel, root: &mut CompressedCurveTreeRoot<L, M>) -> Result<Self, Error> {
         let mut tree = Self::new_no_init(height);
-        tree.init(params, root)?;
+        tree.init(root)?;
         Ok(tree)
     }
 
-    fn init(
-        &mut self,
-        params: &CurveTreeParameters<C>,
-        current_root: &mut CompressedCurveTreeRoot<L, M>,
-    ) -> Result<(), Error> {
+    fn init(&mut self, current_root: &mut CompressedCurveTreeRoot<L, M>) -> Result<(), Error> {
         let height = self.height();
         // Start at the first leaf's location.
         let mut location = NodeLocation::leaf(0);
@@ -757,10 +758,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
         let commitments = [Affine::<C::P1>::zero(); M];
         self.nodes.insert(location, Inner::Odd(commitments));
 
-        // Store the leaf as the even commitment.
-        let mut even_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
-        // Use zeroes to initialize the odd commitments.
-        let mut odd_new_child = ChildCommitments::inner(commitments);
+        let mut updater = U::new();
 
         // Keep going until we reach the root of the tree.
         while !is_root {
@@ -770,45 +768,23 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
             is_root = location.is_root(height);
 
             if location.is_even() {
-                // If this node does not exist, we need to create it.
-                let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P1, C::P0>(
-                    odd_new_child,
-                    &params.odd_parameters.delta,
-                    &params.even_parameters,
+                let mut commitments = [Affine::<C::P0>::zero(); M];
+                updater.update_even_node(
+                    &mut commitments,
+                    child_index,
+                    None,
+                    if is_root { Some(current_root) } else { None },
                 )?;
                 self.nodes.insert(location, Inner::Even(commitments));
-
-                // Update the root if needed.
-                if is_root {
-                    current_root.update::<C::P0, C::P1>(
-                        &commitments,
-                        &new_x_coords,
-                        child_index,
-                    )?;
-                }
-
-                // Save the new commitment value for updating the parent.
-                even_new_child = ChildCommitments::inner(commitments);
             } else {
-                // If this node does not exist, we need to create it.
-                let (commitments, new_x_coords) = init_empty_inner_node::<L, M, C::P0, C::P1>(
-                    even_new_child,
-                    &params.even_parameters.delta,
-                    &params.odd_parameters,
+                let mut commitments = [Affine::<C::P1>::zero(); M];
+                updater.update_odd_node(
+                    &mut commitments,
+                    child_index,
+                    None,
+                    if is_root { Some(current_root) } else { None },
                 )?;
                 self.nodes.insert(location, Inner::Odd(commitments));
-
-                // Update the root if needed.
-                if is_root {
-                    current_root.update::<C::P1, C::P0>(
-                        &commitments,
-                        &new_x_coords,
-                        child_index,
-                    )?;
-                }
-
-                // Save the new commitment value for updating the parent.
-                odd_new_child = ChildCommitments::inner(commitments);
             }
         }
 
@@ -823,16 +799,14 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
     pub fn append_leaf(
         &mut self,
         new_leaf_value: LeafValue<C::P0>,
-        params: &CurveTreeParameters<C>,
         current_root: &mut CompressedCurveTreeRoot<L, M>,
     ) -> Result<(), Error> {
-        self.batch_append_leaves(&[new_leaf_value], params, current_root, None)
+        self.batch_append_leaves(&[new_leaf_value], current_root, None)
     }
 
     pub fn batch_append_leaves(
         &mut self,
         leaves: &[LeafValue<C::P0>],
-        params: &CurveTreeParameters<C>,
         current_root: &mut CompressedCurveTreeRoot<L, M>,
         mut updated_nodes: Option<&mut BTreeMap<NodeLocation<L>, Inner<M, C>>>,
     ) -> Result<(), Error> {
@@ -841,15 +815,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
         let leaf_count = leaves.len() as LeafIndex;
         self.next_leaf_index += leaf_count;
 
+        let mut updater = U::new();
+
         while leaf_idx < leaf_count {
             let leaf_value = leaves[leaf_idx as usize];
 
-            // Store the leaf as the even commitment.
-            let mut even_old_child = None;
-            let mut even_new_child = ChildCommitments::leaf(leaf_value);
-            // Use zeroes to initialize the odd commitments.
-            let mut odd_old_child = None;
-            let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+            updater.next_leaf(None, leaf_value);
 
             // Start at the leaf's location.
             let mut location = NodeLocation::<L>::leaf(leaf_index_base + leaf_idx);
@@ -866,69 +837,32 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
 
                 // Get or initialize the node at this location.
                 let mut is_new_node = false;
-                let node = self
-                    .nodes
-                    .entry(location)
-                    .and_modify(|node| {
-                        match node {
-                            Inner::Even(commitments) => {
-                                // We save the old commitment value for updating the parent node.
-                                even_old_child = Some(ChildCommitments::inner(*commitments));
-                            }
-                            Inner::Odd(commitments) => {
-                                // We save the old commitment value for updating the parent node.
-                                odd_old_child = Some(ChildCommitments::inner(*commitments));
-                            }
-                        }
-                    })
-                    .or_insert_with(|| {
-                        is_new_node = true;
-                        if location.is_even() {
-                            // Since it is a new node, there is no old commitment value for it.
-                            even_old_child = None;
-                            // Create a new even node with zero commitments.
-                            Inner::Even([Affine::<C::P0>::zero(); M])
-                        } else {
-                            // Since it is a new node, there is no old commitment value for it.
-                            odd_old_child = None;
-                            // Create a new odd node with zero commitments.
-                            Inner::Odd([Affine::<C::P1>::zero(); M])
-                        }
-                    });
+                let node = self.nodes.entry(location).or_insert_with(|| {
+                    is_new_node = true;
+                    if location.is_even() {
+                        // Create a new even node with zero commitments.
+                        Inner::Even([Affine::<C::P0>::zero(); M])
+                    } else {
+                        // Create a new odd node with zero commitments.
+                        Inner::Odd([Affine::<C::P1>::zero(); M])
+                    }
+                });
 
                 match node {
                     Inner::Even(commitments) => {
-                        // Update the node.  We pass both the old and new child commitments.
-                        let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
+                        updater.update_even_node(
                             commitments,
                             child_index,
-                            odd_old_child,
-                            odd_new_child,
-                            &params.odd_parameters.delta,
-                            &params.even_parameters,
+                            Some(is_new_node),
+                            if is_root { Some(current_root) } else { None },
                         )?;
-
-                        // Update the root if needed.
-                        if is_root {
-                            current_root.update::<C::P0, C::P1>(
-                                commitments,
-                                &new_x_coords,
-                                child_index,
-                            )?;
-                        }
-
-                        // Save the new commitment value for updating the parent.
-                        even_new_child = ChildCommitments::inner(*commitments);
                     }
                     Inner::Odd(commitments) => {
-                        // Update the node.  We pass both the old and new child commitments.
-                        let mut new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+                        updater.update_odd_node(
                             commitments,
                             child_index,
-                            even_old_child,
-                            even_new_child,
-                            &params.even_parameters.delta,
-                            &params.odd_parameters,
+                            Some(is_new_node),
+                            if is_root { Some(current_root) } else { None },
                         )?;
 
                         // If the child was a leaf, we may need to commit multiple leaves to this node.
@@ -939,33 +873,20 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
                                 child_index += 1;
                                 // Get the next uncommitted leaf.
                                 let leaf_value = leaves[leaf_idx as usize];
-                                even_new_child = ChildCommitments::leaf(leaf_value);
+                                updater.next_leaf(None, leaf_value);
                                 leaf_idx += 1;
 
-                                // Update the node.
-                                new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+                                updater.update_odd_node(
                                     commitments,
                                     child_index,
                                     None,
-                                    even_new_child,
-                                    &params.even_parameters.delta,
-                                    &params.odd_parameters,
+                                    if is_root { Some(current_root) } else { None },
                                 )?;
                             }
                         }
 
-                        // Update the root if needed.
-                        if is_root {
-                            current_root.update::<C::P1, C::P0>(
-                                &commitments,
-                                &new_x_coords,
-                                child_index,
-                            )?;
-                        }
-
                         // Save the new commitment value for updating the parent.
                         child_is_leaf = false;
-                        odd_new_child = ChildCommitments::inner(*commitments);
                     }
                 }
 
@@ -990,6 +911,138 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> LeanCurveTree<L, M, C> 
                 self.height = level;
             }
         }
+
+        Ok(())
+    }
+}
+
+/// Curve Tree updater trait.
+///
+/// This allows using different implementations of the update logic (e.g. using native host functions in Substrate runtimes).
+pub trait CurveTreeUpdater<const L: usize, const M: usize, C: CurveTreeConfig> {
+    fn new() -> Self;
+
+    fn next_leaf(&mut self, old_leaf: Option<LeafValue<C::P0>>, new_leaf: LeafValue<C::P0>);
+
+    fn update_even_node(
+        &mut self,
+        commitments: &mut [Affine<C::P0>; M],
+        child_index: ChildIndex,
+        update_old: Option<bool>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+    ) -> Result<(), Error>;
+
+    fn update_odd_node(
+        &mut self,
+        commitments: &mut [Affine<C::P1>; M],
+        child_index: ChildIndex,
+        update_old: Option<bool>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+    ) -> Result<(), Error>;
+}
+
+/// Curve tree updater that helps updating the tree root when a leaf is added or updated.
+#[derive(Clone, Encode, Decode)]
+pub struct DefaultCurveTreeUpdater<const L: usize, const M: usize, C: CurveTreeConfig> {
+    even_old_child: Option<ChildCommitments<M, C::P0>>,
+    even_new_child: ChildCommitments<M, C::P0>,
+    odd_old_child: Option<ChildCommitments<M, C::P1>>,
+    odd_new_child: ChildCommitments<M, C::P1>,
+}
+
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, C>
+    for DefaultCurveTreeUpdater<L, M, C>
+{
+    fn new() -> Self {
+        Self {
+            even_old_child: None,
+            even_new_child: ChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero())),
+            odd_old_child: None,
+            odd_new_child: ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero())),
+        }
+    }
+
+    fn next_leaf(&mut self, old_leaf: Option<LeafValue<C::P0>>, new_leaf: LeafValue<C::P0>) {
+        self.even_old_child = old_leaf.map(ChildCommitments::leaf);
+        self.even_new_child = ChildCommitments::leaf(new_leaf);
+    }
+
+    fn update_even_node(
+        &mut self,
+        commitments: &mut [Affine<C::P0>; M],
+        child_index: ChildIndex,
+        update_old: Option<bool>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+    ) -> Result<(), Error> {
+        let params = C::parameters();
+
+        if let Some(is_new_node) = update_old {
+            if is_new_node {
+                // We save the old commitment value for updating the parent node.
+                self.even_old_child = None;
+            } else {
+                // We save the old commitment value for updating the parent node.
+                self.even_old_child = Some(ChildCommitments::inner(*commitments));
+            }
+        }
+
+        // Update the node.  We pass both the old and new child commitments.
+        let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
+            commitments,
+            child_index,
+            self.odd_old_child,
+            self.odd_new_child,
+            &params.odd_parameters.delta,
+            &params.even_parameters,
+        )?;
+
+        // Update the root if needed.
+        if let Some(current_root) = current_root {
+            current_root.update::<C::P0, C::P1>(commitments, &new_x_coords, child_index)?;
+        }
+
+        // Save the new commitment value for updating the parent.
+        self.even_new_child = ChildCommitments::inner(*commitments);
+
+        Ok(())
+    }
+
+    fn update_odd_node(
+        &mut self,
+        commitments: &mut [Affine<C::P1>; M],
+        child_index: ChildIndex,
+        update_old: Option<bool>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+    ) -> Result<(), Error> {
+        let params = C::parameters();
+
+        if let Some(is_new_node) = update_old {
+            if is_new_node {
+                // We save the old commitment value for updating the parent node.
+                self.odd_old_child = None;
+            } else {
+                // We save the old commitment value for updating the parent node.
+                self.odd_old_child = Some(ChildCommitments::inner(*commitments));
+            }
+        }
+
+        // Update the node.  We pass both the old and new child commitments.
+        let new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+            commitments,
+            child_index,
+            self.even_old_child,
+            self.even_new_child,
+            &params.even_parameters.delta,
+            &params.odd_parameters,
+        )?;
+
+        // Update the root if needed.
+        if let Some(current_root) = current_root {
+            current_root.update::<C::P1, C::P0>(commitments, &new_x_coords, child_index)?;
+        }
+
+        // Save the new commitment value for updating the parent.
+        self.odd_new_child = ChildCommitments::inner(*commitments);
 
         Ok(())
     }

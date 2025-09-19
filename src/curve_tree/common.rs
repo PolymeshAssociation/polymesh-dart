@@ -233,34 +233,6 @@ impl<const L: usize> NodeLocation<L> {
     }
 }
 
-pub(crate) fn init_empty_inner_node<
-    const L: usize,
-    const M: usize,
-    P0: SWCurveConfig + Copy + Send,
-    P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
->(
-    new_child: ChildCommitments<M, P0>,
-    delta: &Affine<P0>,
-    parameters: &SingleLayerParameters<P1>,
-) -> Result<([Affine<P1>; M], [P0::BaseField; M]), Error> {
-    let mut commitments = [Affine::<P1>::zero(); M];
-    let mut new_x_coords = [P0::BaseField::zero(); M];
-    for (tree_index, new_x_coord) in new_x_coords.iter_mut().enumerate() {
-        *new_x_coord = (new_child.commitment(tree_index as TreeIndex) + delta)
-            .into_affine()
-            .x;
-        let mut gen_iter = parameters
-            .bp_gens
-            .share(0)
-            .G(L * (tree_index + 1))
-            .skip(L * tree_index);
-        let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
-        commitments[tree_index] =
-            (commitments[tree_index].into_group() + *g * *new_x_coord).into_affine();
-    }
-    Ok((commitments, new_x_coords))
-}
-
 pub(crate) fn update_inner_node<
     const L: usize,
     const M: usize,
@@ -392,66 +364,6 @@ impl<const M: usize, C: CurveTreeConfig> core::fmt::Debug for Inner<M, C> {
             Inner::Even(commitment) => write!(f, "Even({:?})", commitment),
             Inner::Odd(commitment) => write!(f, "Odd({:?})", commitment),
         }
-    }
-}
-
-impl<const M: usize, C: CurveTreeConfig> Inner<M, C> {
-    pub(crate) fn init_empty_even<const L: usize>(
-        new_child: ChildCommitments<M, C::P1>,
-        delta: &Affine<C::P1>,
-        parameters: &SingleLayerParameters<C::P0>,
-    ) -> Result<Self, Error> {
-        let (commitments, _) =
-            init_empty_inner_node::<L, M, C::P1, C::P0>(new_child, delta, parameters)?;
-        Ok(Self::Even(commitments))
-    }
-
-    pub(crate) fn init_empty_odd<const L: usize>(
-        new_child: ChildCommitments<M, C::P0>,
-        delta: &Affine<C::P0>,
-        parameters: &SingleLayerParameters<C::P1>,
-    ) -> Result<Self, Error> {
-        let (commitments, _) =
-            init_empty_inner_node::<L, M, C::P0, C::P1>(new_child, delta, parameters)?;
-        Ok(Self::Odd(commitments))
-    }
-
-    pub(crate) fn update_even_node<const L: usize>(
-        commitments: &mut [Affine<C::P0>; M],
-        local_index: ChildIndex,
-        old_child: Option<ChildCommitments<M, C::P1>>,
-        new_child: ChildCommitments<M, C::P1>,
-        delta: &Affine<C::P1>,
-        parameters: &SingleLayerParameters<C::P0>,
-    ) -> Result<(), Error> {
-        update_inner_node::<L, M, C::P1, C::P0>(
-            commitments,
-            local_index,
-            old_child,
-            new_child,
-            delta,
-            parameters,
-        )?;
-        Ok(())
-    }
-
-    pub(crate) fn update_odd_node<const L: usize>(
-        commitments: &mut [Affine<C::P1>; M],
-        local_index: ChildIndex,
-        old_child: Option<ChildCommitments<M, C::P0>>,
-        new_child: ChildCommitments<M, C::P0>,
-        delta: &Affine<C::P0>,
-        parameters: &SingleLayerParameters<C::P1>,
-    ) -> Result<(), Error> {
-        update_inner_node::<L, M, C::P0, C::P1>(
-            commitments,
-            local_index,
-            old_child,
-            new_child,
-            delta,
-            parameters,
-        )?;
-        Ok(())
     }
 }
 
@@ -619,47 +531,34 @@ macro_rules! impl_curve_tree_with_backend {
                 let node = Inner::Odd(commitments.clone());
                 self.backend.set_inner_node(location, node)$($await)*?;
 
-                // Store the leaf as the even commitment.
-                let mut even_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
-                // Use zeroes to initialize the odd commitments.
-                let mut odd_new_child = ChildCommitments::inner(commitments);
+                let mut updater = B::updater();
 
                 // Keep going until we reach the root of the tree.
                 while !location.is_root(height) {
                     // Move to the parent location and get the child index of the current node.
-                    let (parent_location, _) = location.parent();
+                    let (parent_location, child_index) = location.parent();
                     location = parent_location;
-
-                    // Get the parameters for the tree.
-                    let params = self.backend.parameters()$($await)*;
 
                     // If thsi node does not exist, we need to create it.
                     let node = if location.is_even() {
-                        // If the location is even, we create an even node.
-                        Inner::init_empty_even::<L>(
-                            odd_new_child,
-                            &params.odd_parameters.delta,
-                            &params.even_parameters,
-                        )?
+                        let mut commitments = [Affine::<C::P0>::zero(); M];
+                        updater.update_even_node(
+                            &mut commitments,
+                            child_index,
+                            None,
+                            None,
+                        )?;
+                        Inner::Even(commitments)
                     } else {
-                        // If the location is odd, we create an odd node.
-                        Inner::init_empty_odd::<L>(
-                            even_new_child,
-                            &params.even_parameters.delta,
-                            &params.odd_parameters,
-                        )?
+                        let mut commitments = [Affine::<C::P1>::zero(); M];
+                        updater.update_odd_node(
+                            &mut commitments,
+                            child_index,
+                            None,
+                            None,
+                        )?;
+                        Inner::Odd(commitments)
                     };
-
-                    // Save the new commitment value for updating the parent.
-                    // Since this node is new, there isn't an old commitment value for it.
-                    match node {
-                        Inner::Even(commitments) => {
-                            even_new_child = ChildCommitments::inner(commitments);
-                        }
-                        Inner::Odd(commitments) => {
-                            odd_new_child = ChildCommitments::inner(commitments);
-                        }
-                    }
 
                     // Save the updated node back to the backend.
                     self.backend.set_inner_node(location, node)$($await)*?;
@@ -949,6 +848,8 @@ macro_rules! impl_curve_tree_with_backend {
 
                 let mut height = self.height()$($await)*;
 
+                let mut updater = B::updater();
+
                 while leaf_index < leaf_count {
                     let leaf_value = self
                         .backend
@@ -956,12 +857,7 @@ macro_rules! impl_curve_tree_with_backend {
                         $($await)*?
                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
 
-                    // Store the leaf as the even commitment.
-                    let mut even_old_child = None;
-                    let mut even_new_child = ChildCommitments::leaf(leaf_value);
-                    // Use zeroes to initialize the odd commitments.
-                    let mut odd_old_child = None;
-                    let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+                    updater.next_leaf(None, leaf_value);
 
                     // Start at the leaf's location.
                     let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -975,62 +871,33 @@ macro_rules! impl_curve_tree_with_backend {
                         location = parent_location;
 
                         // Get or initialize the node at this location.
-                        let mut node = if let Some(node) = self.backend.get_inner_node(location)$($await)*? {
-                            match &node {
-                                Inner::Even(commitments) => {
-                                    // We save the old commitment value for updating the parent node.
-                                    even_old_child = Some(ChildCommitments::inner(*commitments));
-                                },
-                                Inner::Odd(commitments) => {
-                                    // We save the old commitment value for updating the parent node.
-                                    odd_old_child = Some(ChildCommitments::inner(*commitments));
-                                },
-                            }
-                            node
-                        } else {
+                        let mut is_new_node = false;
+                        let mut node = self.backend.get_inner_node(location)$($await)*?.unwrap_or_else(|| {
+                            is_new_node = true;
                             if location.is_even() {
-                                // Since it is a new node, there is no old commitment value for it.
-                                even_old_child = None;
                                 // Create a new even node with zero commitments.
                                 Inner::Even([Affine::<C::P0>::zero(); M])
                             } else {
-                                // Since it is a new node, there is no old commitment value for it.
-                                odd_old_child = None;
                                 // Create a new odd node with zero commitments.
                                 Inner::Odd([Affine::<C::P1>::zero(); M])
                             }
-                        };
+                        });
 
                         match &mut node {
                             Inner::Even(commitments) => {
-                                // Get the parameters for the tree.
-                                let params = self.backend.parameters()$($await)*;
-
-                                // Update the node.  We pass both the old and new child commitments.
-                                Inner::<M, C>::update_even_node::<L>(
+                                updater.update_even_node(
                                     commitments,
                                     child_index,
-                                    odd_old_child,
-                                    odd_new_child,
-                                    &params.odd_parameters.delta,
-                                    &params.even_parameters,
+                                    Some(is_new_node),
+                                    None,
                                 )?;
-
-                                // Save the new commitment value for updating the parent.
-                                even_new_child = ChildCommitments::inner(*commitments);
                             }
                             Inner::Odd(commitments) => {
-                                // Get the parameters for the tree.
-                                let params = self.backend.parameters()$($await)*;
-
-                                // Update the node.  We pass both the old and new child commitments.
-                                Inner::<M, C>::update_odd_node::<L>(
+                                updater.update_odd_node(
                                     commitments,
                                     child_index,
-                                    even_old_child,
-                                    even_new_child,
-                                    &params.even_parameters.delta,
-                                    &params.odd_parameters,
+                                    Some(is_new_node),
+                                    None,
                                 )?;
 
                                 // If the child was a leaf, we may need to commit multiple leaves to this node.
@@ -1045,24 +912,20 @@ macro_rules! impl_curve_tree_with_backend {
                                             .get_leaf(leaf_index)
                                             $($await)*?
                                             .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
-                                        even_new_child = ChildCommitments::leaf(leaf_value);
+                                        updater.next_leaf(None, leaf_value);
                                         leaf_index += 1;
 
-                                        // Update the node.
-                                        Inner::<M, C>::update_odd_node::<L>(
+                                        updater.update_odd_node(
                                             commitments,
                                             child_index,
                                             None,
-                                            even_new_child,
-                                            &params.even_parameters.delta,
-                                            &params.odd_parameters,
+                                            None,
                                         )?;
                                     }
                                 }
 
                                 // Save the new commitment value for updating the parent.
                                 child_is_leaf = false;
-                                odd_new_child = ChildCommitments::inner(*commitments);
                             }
                         }
 
@@ -1093,12 +956,8 @@ macro_rules! impl_curve_tree_with_backend {
             ) -> Result<(), Error> {
                 let height = self.height()$($await)*;
 
-                // Store the leaf as the even commitment.
-                let mut even_old_child = old_leaf_value.map(ChildCommitments::leaf);
-                let mut even_new_child = ChildCommitments::leaf(new_leaf_value);
-                // Use zeroes to initialize the odd commitments.
-                let mut odd_old_child = None;
-                let mut odd_new_child = ChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+                let mut updater = B::updater();
+                updater.next_leaf(old_leaf_value, new_leaf_value);
 
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -1109,88 +968,35 @@ macro_rules! impl_curve_tree_with_backend {
                     let (parent_location, child_index) = location.parent();
                     location = parent_location;
 
-                    let node = match self.backend.get_inner_node(location)$($await)*? {
-                        Some(mut node) => {
-                            match &mut node {
-                                Inner::Even(commitments) => {
-                                    // We save the old commitment value for updating the parent node.
-                                    even_old_child = Some(ChildCommitments::inner(*commitments));
-
-                                    // Get the parameters for the tree.
-                                    let params = self.backend.parameters()$($await)*;
-
-                                    // Update the node.  We pass both the old and new child commitments.
-                                    Inner::<M, C>::update_even_node::<L>(
-                                        commitments,
-                                        child_index,
-                                        odd_old_child,
-                                        odd_new_child,
-                                        &params.odd_parameters.delta,
-                                        &params.even_parameters,
-                                    )?;
-
-                                    // Save the new commitment value for updating the parent.
-                                    even_new_child = ChildCommitments::inner(*commitments);
-                                }
-                                Inner::Odd(commitments) => {
-                                    // We save the old commitment value for updating the parent node.
-                                    odd_old_child = Some(ChildCommitments::inner(*commitments));
-
-                                    // Get the parameters for the tree.
-                                    let params = self.backend.parameters()$($await)*;
-
-                                    // Update the node.  We pass both the old and new child commitments.
-                                    Inner::<M, C>::update_odd_node::<L>(
-                                        commitments,
-                                        child_index,
-                                        even_old_child,
-                                        even_new_child,
-                                        &params.even_parameters.delta,
-                                        &params.odd_parameters,
-                                    )?;
-
-                                    // Save the new commitment value for updating the parent.
-                                    odd_new_child = ChildCommitments::inner(*commitments);
-                                }
-                            }
-                            node
+                    let mut is_new_node = false;
+                    let mut node = self.backend.get_inner_node(location)$($await)*?.unwrap_or_else(|| {
+                        is_new_node = true;
+                        if location.is_even() {
+                            // Create a new even node with zero commitments.
+                            Inner::Even([Affine::<C::P0>::zero(); M])
+                        } else {
+                            // Create a new odd node with zero commitments.
+                            Inner::Odd([Affine::<C::P1>::zero(); M])
                         }
-                        None => {
-                            // Get the parameters for the tree.
-                            let params = self.backend.parameters()$($await)*;
-
-                            // If thsi node does not exist, we need to create it.
-                            let node = if location.is_even() {
-                                // If the location is even, we create an even node.
-                                Inner::init_empty_even::<L>(
-                                    odd_new_child,
-                                    &params.odd_parameters.delta,
-                                    &params.even_parameters,
-                                )?
-                            } else {
-                                // If the location is odd, we create an odd node.
-                                Inner::init_empty_odd::<L>(
-                                    even_new_child,
-                                    &params.even_parameters.delta,
-                                    &params.odd_parameters,
-                                )?
-                            };
-
-                            // Save the new commitment value for updating the parent.
-                            // Since this node is new, there isn't an old commitment value for it.
-                            match node {
-                                Inner::Even(commitments) => {
-                                    even_old_child = None;
-                                    even_new_child = ChildCommitments::inner(commitments);
-                                }
-                                Inner::Odd(commitments) => {
-                                    odd_old_child = None;
-                                    odd_new_child = ChildCommitments::inner(commitments);
-                                }
-                            }
-                            node
+                    });
+                    match &mut node {
+                        Inner::Even(commitments) => {
+                            updater.update_even_node(
+                                commitments,
+                                child_index,
+                                Some(is_new_node),
+                                None,
+                            )?;
                         }
-                    };
+                        Inner::Odd(commitments) => {
+                            updater.update_odd_node(
+                                commitments,
+                                child_index,
+                                Some(is_new_node),
+                                None,
+                            )?;
+                        }
+                    }
 
                     // Save the updated node back to the backend.
                     self.backend.set_inner_node(location, node)$($await)*?;
