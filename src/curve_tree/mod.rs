@@ -13,6 +13,7 @@ use blake2::Blake2b512;
 pub use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
     curve_tree_prover::{CurveTreeWitnessPath, WitnessNode},
+    single_level_select_and_rerandomize::SingleLayerParameters,
 };
 
 use polymesh_dart_bp::leg as bp_leg;

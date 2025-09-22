@@ -233,7 +233,7 @@ impl<const L: usize> NodeLocation<L> {
     }
 }
 
-pub(crate) fn update_inner_node<
+pub fn update_inner_node<
     const L: usize,
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
@@ -271,8 +271,51 @@ pub(crate) fn update_inner_node<
     Ok(new_x_coords)
 }
 
+#[derive(Clone, Encode, Decode)]
+pub enum CompressedChildCommitments<const M: usize> {
+    Leaf(CompressedAffine),
+    Inner([CompressedAffine; M]),
+}
+
+impl<const M: usize> CompressedChildCommitments<M> {
+    pub fn decompress<P0: SWCurveConfig + Copy + Send>(
+        &self,
+    ) -> Result<ChildCommitments<M, P0>, Error> {
+        match self {
+            CompressedChildCommitments::Leaf(ca) => {
+                Ok(ChildCommitments::Leaf(LeafValue(ca.try_into()?)))
+            }
+            CompressedChildCommitments::Inner(cas) => {
+                let mut as_ = [Affine::<P0>::zero(); M];
+                for (i, ca) in cas.iter().enumerate() {
+                    as_[i] = ca.try_into()?;
+                }
+                Ok(ChildCommitments::Inner(as_))
+            }
+        }
+    }
+
+    pub fn compress<P0: SWCurveConfig + Copy + Send>(
+        child: ChildCommitments<M, P0>,
+    ) -> Result<CompressedChildCommitments<M>, Error> {
+        match child {
+            ChildCommitments::Leaf(leaf) => {
+                let ca = leaf.0.try_into()?;
+                Ok(CompressedChildCommitments::Leaf(ca))
+            }
+            ChildCommitments::Inner(commitments) => {
+                let mut cas = [CompressedAffine::default(); M];
+                for (i, comm) in commitments.into_iter().enumerate() {
+                    cas[i] = comm.try_into()?;
+                }
+                Ok(CompressedChildCommitments::Inner(cas))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
+pub enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
     Leaf(LeafValue<P0>),
     Inner([Affine<P0>; M]),
 }
