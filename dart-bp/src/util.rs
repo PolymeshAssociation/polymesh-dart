@@ -9,8 +9,10 @@ use ark_serialize::CanonicalSerialize;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{
-    ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier, batch_verify,
+    ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
 };
+#[cfg(feature = "std")]
+use bulletproofs::r1cs::batch_verify;
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
@@ -404,6 +406,7 @@ pub fn verify_given_verification_tuples<
     Ok(())
 }
 
+#[cfg(feature = "std")]
 pub fn batch_verify_bp<
     F0: PrimeField,
     F1: PrimeField,
