@@ -1017,7 +1017,7 @@ impl AssetCurveTree {
 
     pub fn root_node(
         &self,
-    ) -> Result<CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
+    ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
         self.tree.root_node()
     }
 
@@ -1037,7 +1037,7 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
     fn get_block_root(
         &self,
         block_number: BlockNumber,
-    ) -> Option<CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
+    ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
         self.tree.fetch_root(block_number).ok()
     }
 
@@ -1188,7 +1188,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
             rng,
@@ -1227,7 +1227,7 @@ impl<
                 log::error!("Invalid root for asset minting proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
         let proof = self.proof.decode()?;
         proof.verify(
             self.pk.get_affine()?,
@@ -1574,7 +1574,7 @@ impl<
                 log::error!("Invalid root for settlement proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
         let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
@@ -2089,7 +2089,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
@@ -2132,7 +2132,7 @@ impl<
                 log::error!("Invalid root for sender affirmation proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -2220,7 +2220,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
@@ -2262,7 +2262,7 @@ impl<
                 log::error!("Invalid root for receiver affirmation proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -2351,7 +2351,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
@@ -2394,7 +2394,7 @@ impl<
                 log::error!("Invalid root for receiver claim proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -2482,7 +2482,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
@@ -2524,7 +2524,7 @@ impl<
                 log::error!("Invalid root for sender counter update proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;
@@ -2613,7 +2613,7 @@ impl<
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root_node()?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = leg_ref.context();
         let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
@@ -2656,7 +2656,7 @@ impl<
                 log::error!("Invalid root for sender reversal proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.decode()?;
+        let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
         let proof = self.proof.decode()?;

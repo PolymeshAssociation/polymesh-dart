@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use ark_std::{collections::BTreeMap, vec::Vec};
-use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
+use curve_tree_relations::curve_tree::SelRerandParameters;
 
 use codec::{Decode, Encode};
 
@@ -10,8 +10,8 @@ use super::common::*;
 use crate::{
     BlockNumber, CompressedAffine, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
-        CurveTreeConfig, CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeRoot,
-        CurveTreeUpdater, DefaultCurveTreeUpdater,
+        CompressedCurveTreeRoot, CurveTreeConfig, CurveTreeLookup, CurveTreeParameters,
+        CurveTreePath, CurveTreeUpdater, DefaultCurveTreeUpdater,
     },
     error::*,
 };
@@ -58,7 +58,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         C::parameters()
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
+    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
         self.first().expect("No paths available").root_node()
     }
 
@@ -74,7 +74,7 @@ pub struct LeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub leaf_index: LeafIndex,
     pub path: WrappedCanonical<CurveTreePath<L, C>>,
     pub block_number: BlockNumber,
-    pub root: CurveTreeRoot<L, M, C>,
+    pub root: Vec<u8>,
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> LeafPathAndRoot<L, M, C> {
@@ -107,8 +107,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         C::parameters()
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(self.root.clone())
+    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        // Decode the root from bytes
+        let root = CompressedCurveTreeRoot::<L, M, C>::decode(&mut self.root.as_slice())
+            .map_err(|_| Error::CurveTreeRootNotFound)?;
+        Ok(root)
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {
@@ -134,14 +137,17 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
-    fn store_root(&mut self, _root: Root<L, M, C::P0, C::P1>) -> Result<BlockNumber, Self::Error> {
+    fn store_root(
+        &mut self,
+        _root: CompressedCurveTreeRoot<L, M, C>,
+    ) -> Result<BlockNumber, Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
     fn fetch_root(
         &self,
         block_number: BlockNumber,
-    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error>;
+    ) -> Result<CompressedCurveTreeRoot<L, M, C>, Self::Error>;
 
     fn height(&self) -> NodeLevel;
 
@@ -214,7 +220,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn store_root(
         &mut self,
-        _root: Root<L, M, C::P0, C::P1>,
+        _root: CompressedCurveTreeRoot<L, M, C>,
     ) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
@@ -222,7 +228,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn fetch_root(
         &self,
         block_number: BlockNumber,
-    ) -> impl Future<Output = Result<Root<L, M, C::P0, C::P1>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<CompressedCurveTreeRoot<L, M, C>, Self::Error>> + Send;
 
     fn height(&self) -> impl Future<Output = NodeLevel> + Send;
 
@@ -288,7 +294,7 @@ pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeCo
     committed_leaf_index: LeafIndex,
     nodes: BTreeMap<NodeLocation<L>, Inner<M, C>>,
     block_number: BlockNumber,
-    roots: BTreeMap<BlockNumber, Root<L, M, C::P0, C::P1>>,
+    roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
     parameters: SelRerandParameters<C::P0, C::P1>,
 }
 
@@ -347,7 +353,10 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         Ok(())
     }
 
-    fn store_root(&mut self, root: Root<L, M, C::P0, C::P1>) -> Result<BlockNumber, Self::Error> {
+    fn store_root(
+        &mut self,
+        root: CompressedCurveTreeRoot<L, M, C>,
+    ) -> Result<BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
         self.roots.insert(block_number, root);
@@ -357,7 +366,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
     fn fetch_root(
         &self,
         block_number: BlockNumber,
-    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
+    ) -> Result<CompressedCurveTreeRoot<L, M, C>, Self::Error> {
         let block_number: BlockNumber = block_number
             .try_into()
             .expect("Block number conversion failed");
@@ -463,7 +472,7 @@ where
 
     async fn store_root(
         &mut self,
-        root: Root<L, M, C::P0, C::P1>,
+        root: CompressedCurveTreeRoot<L, M, C>,
     ) -> Result<BlockNumber, Self::Error> {
         let block_number = self.block_number + 1;
         self.block_number = block_number;
@@ -474,7 +483,7 @@ where
     async fn fetch_root(
         &self,
         block_number: BlockNumber,
-    ) -> Result<Root<L, M, C::P0, C::P1>, Self::Error> {
+    ) -> Result<CompressedCurveTreeRoot<L, M, C>, Self::Error> {
         let block_number: BlockNumber = block_number
             .try_into()
             .expect("Block number conversion failed");

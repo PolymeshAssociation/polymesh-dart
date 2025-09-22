@@ -7,9 +7,9 @@ use std::sync::Arc;
 use polymesh_dart::{
     curve_tree::{
         get_account_curve_tree_parameters, get_asset_curve_tree_parameters, AccountTreeConfig,
-        AssetTreeConfig, CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
-        CurveTreeRoot, CurveTreeWithBackend, DefaultCurveTreeUpdater, Inner, LeafValue,
-        NodeLocation, Root, ValidateCurveTreeRoot,
+        AssetTreeConfig, CompressedCurveTreeRoot, CurveTreeBackend, CurveTreeLookup,
+        CurveTreeParameters, CurveTreePath, CurveTreeWithBackend, DefaultCurveTreeUpdater, Inner,
+        LeafValue, NodeLocation, ValidateCurveTreeRoot,
     },
     BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
@@ -52,11 +52,9 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
 
     fn store_root(
         &mut self,
-        root: Root<ASSET_TREE_L, ASSET_TREE_M, VestaParameters, PallasParameters>,
+        root: CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     ) -> std::result::Result<BlockNumber, Self::Error> {
         let block_number = self.get_block_number()? + 1;
-        let root = CurveTreeRoot::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(&root)
-            .map_err(|_| anyhow::anyhow!("Failed to create CurveTreeRoot from root data"))?;
         let root_bytes = root.encode();
         let mut stmt = self
             .db
@@ -69,17 +67,15 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         &self,
         block_number: BlockNumber,
     ) -> std::result::Result<
-        Root<ASSET_TREE_L, ASSET_TREE_M, VestaParameters, PallasParameters>,
+        CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
         Self::Error,
     > {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")?;
         let root_data: Vec<u8> = stmt.query_row([block_number as i64], |row| row.get(0))?;
-        // The root was encoded as CurveTreeRoot, so decode it directly
-        let root: CurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> =
-            Decode::decode(&mut root_data.as_slice())?;
-        Ok(root.decode()?)
+        // The root was encoded as a CompressedCurveTreeRoot, so decode it directly.
+        Ok(Decode::decode(&mut root_data.as_slice())?)
     }
 
     fn height(&self) -> NodeLevel {
@@ -276,11 +272,9 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
 
     fn store_root(
         &mut self,
-        root: Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
+        root: CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     ) -> std::result::Result<BlockNumber, Self::Error> {
         let block_number = self.get_block_number()? + 1;
-        let root = CurveTreeRoot::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(&root)
-            .map_err(|_| anyhow::anyhow!("Failed to create CurveTreeRoot from root data"))?;
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
             "INSERT INTO account_root_history (block_number, root_data) VALUES (?1, ?2)",
@@ -293,17 +287,15 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
         &self,
         block_number: BlockNumber,
     ) -> std::result::Result<
-        Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
+        CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         Self::Error,
     > {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")?;
         let root_data: Vec<u8> = stmt.query_row([block_number as i64], |row| row.get(0))?;
-        // The root was encoded as CurveTreeRoot, so decode it directly
-        let root: CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> =
-            Decode::decode(&mut root_data.as_slice())?;
-        Ok(root.decode()?)
+        // The root was encoded as a CompressedCurveTreeRoot, so decode it directly.
+        Ok(Decode::decode(&mut root_data.as_slice())?)
     }
 
     fn height(&self) -> NodeLevel {
@@ -481,12 +473,12 @@ impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &Acc
 
     fn root_node(
         &self,
-    ) -> Result<CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>, DartError> {
-        let root = self
+    ) -> Result<CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>, DartError>
+    {
+        Ok(self
             .0
-            .root_node()
-            .map_err(|_| DartError::CurveTreeRootNotFound)?;
-        Ok(CurveTreeRoot::new(&root)?)
+            .compressed_root()
+            .map_err(|_| DartError::CurveTreeRootNotFound)?)
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, DartError> {
@@ -510,7 +502,7 @@ impl AssetRootHistory {
     pub fn add_root(
         &mut self,
         block: BlockNumber,
-        root: &CurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>,
+        root: &CompressedCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>,
     ) -> Result<()> {
         let root_bytes = root.encode();
         let mut stmt = self
@@ -525,13 +517,13 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig> for &A
     fn get_block_root(
         &self,
         block: BlockNumber,
-    ) -> Option<CurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>> {
+    ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>> {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")
             .ok()?;
         let root_data: Vec<u8> = stmt.query_row([block as i64], |row| row.get(0)).ok()?;
-        // The root was encoded as CurveTreeRoot, so decode it directly
+        // The root was encoded as a CompressedCurveTreeRoot, so decode it directly
         Decode::decode(&mut root_data.as_slice()).ok()
     }
 
@@ -554,7 +546,7 @@ impl AccountRootHistory {
     pub fn add_root(
         &mut self,
         block: BlockNumber,
-        root: &CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        root: &CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     ) -> Result<()> {
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
@@ -571,13 +563,13 @@ impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_block_root(
         &self,
         block: BlockNumber,
-    ) -> Option<CurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>> {
+    ) -> Option<CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>> {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")
             .ok()?;
         let root_data: Vec<u8> = stmt.query_row([block as i64], |row| row.get(0)).ok()?;
-        // The root was encoded as CurveTreeRoot, so decode it directly
+        // The root was encoded as a CompressedCurveTreeRoot, so decode it directly
         Decode::decode(&mut root_data.as_slice()).ok()
     }
 

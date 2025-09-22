@@ -1,5 +1,4 @@
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
+use core::marker::PhantomData;
 
 use ark_ec::AffineRepr;
 pub use ark_ec::CurveConfig;
@@ -112,7 +111,17 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 }
 
 pub trait CurveTreeConfig:
-    Clone + Sized + PartialEq + Eq + core::fmt::Debug + Encode + Decode + TypeInfo + 'static
+    Clone
+    + Sized
+    + PartialEq
+    + Eq
+    + core::fmt::Debug
+    + Encode
+    + Decode
+    + TypeInfo
+    + Send
+    + Sync
+    + 'static
 {
     const L: usize;
     const M: usize;
@@ -193,33 +202,6 @@ pub type CurveTreeParameters<C> =
 pub type CurveTreePath<const L: usize, C> =
     CurveTreeWitnessPath<L, <C as CurveTreeConfig>::P0, <C as CurveTreeConfig>::P1>;
 
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(L, M, C))]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct CurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig>(
-    pub WrappedCanonical<Root<L, M, C::P0, C::P1>>,
-);
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> core::fmt::Debug
-    for CurveTreeRoot<L, M, C>
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("CurveTreeRoot").field(&self.0).finish()
-    }
-}
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeRoot<L, M, C> {
-    pub fn new(root: &Root<L, M, C::P0, C::P1>) -> Result<Self, Error> {
-        Ok(Self(WrappedCanonical::wrap(root)?))
-    }
-
-    /// Decodes the wrapped value back into its original type `T`.
-    pub fn decode(&self) -> Result<Root<L, M, C::P0, C::P1>, Error> {
-        self.0.decode()
-    }
-}
-
 #[cfg(feature = "async_tree")]
 impl_curve_tree_with_backend!(Async, AsyncCurveTreeWithBackend, AsyncCurveTreeBackend);
 impl_curve_tree_with_backend!(Sync, CurveTreeWithBackend, CurveTreeBackend);
@@ -236,7 +218,7 @@ pub trait CurveTreeLookup<const L: usize, const M: usize, C: CurveTreeConfig> {
     fn params(&self) -> &CurveTreeParameters<C>;
 
     /// Returns the root node of the curve tree.
-    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error>;
+    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error>;
 
     /// Returns the block number associated with the current state of the tree.
     fn get_block_number(&self) -> Result<BlockNumber, Error>;
@@ -247,16 +229,19 @@ pub trait CurveTreeLookup<const L: usize, const M: usize, C: CurveTreeConfig> {
 /// This allows verifying proofs against older tree roots.
 pub trait ValidateCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     /// Returns the root of the curve tree for a given block number.
-    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>>;
+    fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>>;
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters<C>;
 }
 
 impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig>
-    for &CurveTreeRoot<L, M, AssetTreeConfig>
+    for &CompressedCurveTreeRoot<L, M, AssetTreeConfig>
 {
-    fn get_block_root(&self, _block: BlockNumber) -> Option<CurveTreeRoot<L, M, AssetTreeConfig>> {
+    fn get_block_root(
+        &self,
+        _block: BlockNumber,
+    ) -> Option<CompressedCurveTreeRoot<L, M, AssetTreeConfig>> {
         Some((*self).clone())
     }
 
@@ -266,12 +251,12 @@ impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig
 }
 
 impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AccountTreeConfig>
-    for &CurveTreeRoot<L, M, AccountTreeConfig>
+    for &CompressedCurveTreeRoot<L, M, AccountTreeConfig>
 {
     fn get_block_root(
         &self,
         _block: BlockNumber,
-    ) -> Option<CurveTreeRoot<L, M, AccountTreeConfig>> {
+    ) -> Option<CompressedCurveTreeRoot<L, M, AccountTreeConfig>> {
         Some((*self).clone())
     }
 
@@ -281,7 +266,7 @@ impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AccountTreeConf
 }
 
 pub struct RootHistory<const L: usize, const M: usize, C: CurveTreeConfig> {
-    block_roots: BTreeMap<BlockNumber, CurveTreeRoot<L, M, C>>,
+    block_roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
     next_block_number: BlockNumber,
     history_length: usize,
     params: CurveTreeParameters<C>,
@@ -299,7 +284,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
     }
 
     /// Adds a new root to the history.
-    pub fn add_root(&mut self, root: CurveTreeRoot<L, M, C>) -> BlockNumber {
+    pub fn add_root(&mut self, root: CompressedCurveTreeRoot<L, M, C>) -> BlockNumber {
         let block_number = self.next_block_number;
         self.next_block_number += 1;
 
@@ -315,7 +300,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
 impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
     for &RootHistory<L, M, C>
 {
-    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
+    fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
         let block: BlockNumber = block.try_into().ok()?;
         self.block_roots.get(&block).cloned()
     }
@@ -375,8 +360,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(CurveTreeRoot::<L, M, C>::new(&self.tree.root_node()?)?)
+    pub fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        let root = self.tree.root_node()?;
+        Ok(CompressedCurveTreeRoot::from_root_node(
+            self.tree.height(),
+            root,
+        )?)
     }
 
     pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
@@ -389,10 +378,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
         Ok(())
     }
 
-    pub fn fetch_root(&self, block: BlockNumber) -> Result<CurveTreeRoot<L, M, C>, Error> {
+    pub fn fetch_root(
+        &self,
+        block: BlockNumber,
+    ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
         let block = block.into();
-        let root = self.tree.fetch_root(block)?;
-        Ok(CurveTreeRoot::<L, M, C>::new(&root)?)
+        self.tree.fetch_root(block)
     }
 }
 
@@ -411,8 +402,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         self.tree.parameters()
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
+    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        let root = self.tree.root_node()?;
+        Ok(CompressedCurveTreeRoot::from_root_node(
+            self.tree.height(),
+            root,
+        )?)
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {
@@ -448,8 +443,12 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> VerifierCurveTree<L, M,
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(CurveTreeRoot::new(&self.tree.root_node()?)?)
+    pub fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        let root = self.tree.root_node()?;
+        Ok(CompressedCurveTreeRoot::from_root_node(
+            self.tree.height(),
+            root,
+        )?)
     }
 
     pub fn get_block_number(&self) -> Result<BlockNumber, Error> {
@@ -470,10 +469,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> VerifierCurveTree<L, M,
 impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
     for &VerifierCurveTree<L, M, C>
 {
-    fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
-        self.tree.fetch_root(block).ok().map(|root| {
-            CurveTreeRoot::new(&root).expect("Failed to create CurveTreeRoot from block root")
-        })
+    fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
+        self.tree.fetch_root(block).ok()
     }
 
     fn params(&self) -> &CurveTreeParameters<C> {
@@ -599,10 +596,10 @@ impl<
         self.tree.parameters()
     }
 
-    fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        Ok(CurveTreeRoot::new(
-            &self
-                .tree
+    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        Ok(CompressedCurveTreeRoot::from_root_node(
+            self.tree.height(),
+            self.tree
                 .root_node()
                 .map_err(|_| Error::CurveTreeRootNotFound)?,
         )?)
@@ -617,37 +614,182 @@ impl<
 }
 
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct CompressedCurveTreeRoot<const L: usize, const M: usize> {
+pub struct CompressedCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub commitments: [CompressedAffine; M],
     pub x_coord_children: Vec<[CompressedBaseField; M]>,
     pub height: NodeLevel,
+    _marker: PhantomData<C>,
 }
 
-impl<const L: usize, const M: usize> Default for CompressedCurveTreeRoot<L, M> {
+impl<const L: usize, const M: usize, C: CurveTreeConfig> Default
+    for CompressedCurveTreeRoot<L, M, C>
+{
     fn default() -> Self {
         Self {
             commitments: [CompressedAffine::default(); M],
-            x_coord_children: vec![[CompressedBaseField::default(); M]; L],
+            x_coord_children: vec![],
             height: 0,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
-    pub fn new<
+impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot<L, M, C> {
+    pub fn new(height: NodeLevel) -> Self {
+        Self {
+            commitments: [CompressedAffine::default(); M],
+            x_coord_children: vec![],
+            height,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn from_root_node(
+        height: NodeLevel,
+        root: Root<L, M, C::P0, C::P1>,
+    ) -> Result<Self, Error> {
+        let mut compressed = match root {
+            Root::Even(r) => Self::compress::<C::P0, C::P1>(&r)?,
+            Root::Odd(r) => Self::compress::<C::P1, C::P0>(&r)?,
+        };
+        compressed.height = height;
+        Ok(compressed)
+    }
+
+    pub fn compress<
         P0: SWCurveConfig + Copy + Send,
         P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-    >() -> Self {
-        let mut root = Self::default();
-        let commitments = [Affine::<P0>::zero(); M];
-        for (tree_index, com) in commitments.iter().enumerate() {
-            root.commitments[tree_index] = CompressedAffine::from(com);
+    >(
+        root: &RootNode<L, M, P0, P1>,
+    ) -> Result<Self, Error> {
+        let mut commitments = [CompressedAffine::default(); M];
+        for (tree_index, com) in root.commitments.iter().enumerate() {
+            commitments[tree_index] = CompressedAffine::from(com);
         }
-        root
+        let mut x_coord_children = Vec::with_capacity(L);
+        let mut last_non_zero_child = -1;
+        for child_index in 0..L {
+            let mut x_coords = [CompressedBaseField::default(); M];
+            let mut is_zero = true;
+            for tree_index in 0..M {
+                let x_coord = root.x_coord_children[tree_index][child_index];
+                if x_coord != P1::BaseField::zero() {
+                    is_zero = false;
+                    x_coords[tree_index] = CompressedBaseField::from_base_field(&x_coord)?;
+                }
+            }
+            if !is_zero {
+                last_non_zero_child = child_index as isize;
+            }
+            x_coord_children.push(x_coords);
+        }
+        // Trim the trailing zero children to save space.
+        if last_non_zero_child < L as isize {
+            x_coord_children.truncate((last_non_zero_child + 1) as usize);
+        }
+        Ok(Self {
+            commitments,
+            x_coord_children,
+            height: 0,
+            _marker: PhantomData,
+        })
+    }
+
+    fn decompress<
+        P0: SWCurveConfig + Copy + Send,
+        P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    >(
+        &self,
+    ) -> Result<RootNode<L, M, P0, P1>, Error> {
+        let mut commitments = [Affine::<P0>::zero(); M];
+        for (self_com, commitment) in self.commitments.iter().zip(commitments.iter_mut()) {
+            *commitment = self_com.try_into()?;
+        }
+        let mut x_coord_children = Vec::with_capacity(M);
+        for tree_index in 0..M {
+            let mut x_coords = [<P1 as CurveConfig>::BaseField::zero(); L];
+            for (child_index, self_x_coord) in self.x_coord_children.iter().enumerate() {
+                x_coords[child_index] = self_x_coord[tree_index].to_base_field()?;
+            }
+            x_coord_children.push(x_coords);
+        }
+        Ok(RootNode {
+            commitments,
+            x_coord_children,
+        })
+    }
+
+    pub fn root_node(&self) -> Result<Root<L, M, C::P0, C::P1>, Error> {
+        Ok(if self.is_even() {
+            Root::Even(self.decompress::<C::P0, C::P1>()?)
+        } else {
+            Root::Odd(self.decompress::<C::P1, C::P0>()?)
+        })
     }
 
     pub fn is_even(&self) -> bool {
         self.height % 2 == 0
+    }
+
+    pub fn height(&self) -> NodeLevel {
+        self.height
+    }
+
+    pub fn increase_height(
+        &mut self,
+        params: &SelRerandParameters<C::P0, C::P1>,
+    ) -> Result<(), Error> {
+        self.height += 1;
+        // Clear the children x-coordinates since they are no longer valid.
+        self.x_coord_children = vec![[CompressedBaseField::default(); M]; L];
+        // Save the old commitments.
+        let commitments = self.commitments;
+        // Reset the commitments.
+        self.commitments = [CompressedAffine::default(); M];
+
+        if self.is_even() {
+            let mut old_commitments = [Affine::<C::P1>::zero(); M];
+            // Decompress the old commitments as they are the commitments of the first child of the new root node.
+            for (compressed_com, commitment) in commitments.iter().zip(old_commitments.iter_mut()) {
+                *commitment = compressed_com.try_into()?;
+            }
+
+            let mut new_commitments = [Affine::<C::P0>::zero(); M];
+            // The new root node is Odd.
+            let odd_new_child = ChildCommitments::inner(old_commitments);
+            let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
+                &mut new_commitments,
+                0, // The old root is the first child of the new root.
+                None,
+                odd_new_child,
+                &params.odd_parameters.delta,
+                &params.even_parameters,
+            )?;
+            // Save the new root commitments and child x-coordinates.
+            self.update::<C::P0, C::P1>(&new_commitments, &new_x_coords, 0)?;
+        } else {
+            // The new root node is Even.
+            let mut old_commitments = [Affine::<C::P0>::zero(); M];
+            // Decompress the old commitments as they are the commitments of the first child of the new root node.
+            for (compressed_com, commitment) in commitments.iter().zip(old_commitments.iter_mut()) {
+                *commitment = compressed_com.try_into()?;
+            }
+
+            let mut new_commitments = [Affine::<C::P1>::zero(); M];
+            let even_new_child = ChildCommitments::inner(old_commitments);
+            let new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+                &mut new_commitments,
+                0, // The old root is the first child of the new root.
+                None,
+                even_new_child,
+                &params.even_parameters.delta,
+                &params.odd_parameters,
+            )?;
+            // Save the new root commitments and child x-coordinates.
+            self.update::<C::P1, C::P0>(&new_commitments, &new_x_coords, 0)?;
+        }
+
+        Ok(())
     }
 
     pub fn compressed_update(
@@ -696,40 +838,6 @@ impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
         }
         self.compressed_update(commitments, x_coords, child_index)
     }
-
-    fn decompress<
-        P0: SWCurveConfig + Copy + Send,
-        P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
-    >(
-        &self,
-    ) -> Result<RootNode<L, M, P0, P1>, Error> {
-        let mut commitments = [Affine::<P0>::zero(); M];
-        for (self_com, commitment) in self.commitments.iter().zip(commitments.iter_mut()) {
-            *commitment = self_com.try_into()?;
-        }
-        let mut x_coord_children = Vec::with_capacity(M);
-        for tree_index in 0..M {
-            let mut x_coords = [<P1 as CurveConfig>::BaseField::zero(); L];
-            for (self_x_coord, x_coord) in self.x_coord_children.iter().zip(x_coords.iter_mut()) {
-                *x_coord = self_x_coord[tree_index].to_base_field()?;
-            }
-            x_coord_children.push(x_coords);
-        }
-        Ok(RootNode {
-            commitments,
-            x_coord_children,
-        })
-    }
-
-    pub fn root_node<C: CurveTreeConfig>(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
-        let root = if self.is_even() {
-            Root::Even(self.decompress::<C::P0, C::P1>()?)
-        } else {
-            Root::Odd(self.decompress::<C::P1, C::P0>()?)
-        };
-
-        Ok(CurveTreeRoot::new(&root)?)
-    }
 }
 
 /// A lean curve tree that only stores the inner nodes that are necessary to update the tree root.
@@ -760,13 +868,16 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
     }
 
     /// Creates a new instance of `LeanCurveTree` with the given height.
-    pub fn new(height: NodeLevel, root: &mut CompressedCurveTreeRoot<L, M>) -> Result<Self, Error> {
+    pub fn new(
+        height: NodeLevel,
+        root: &mut CompressedCurveTreeRoot<L, M, C>,
+    ) -> Result<Self, Error> {
         let mut tree = Self::new_no_init(height);
         tree.init(root)?;
         Ok(tree)
     }
 
-    fn init(&mut self, current_root: &mut CompressedCurveTreeRoot<L, M>) -> Result<(), Error> {
+    fn init(&mut self, current_root: &mut CompressedCurveTreeRoot<L, M, C>) -> Result<(), Error> {
         let height = self.height();
         // Start at the first leaf's location.
         let mut location = NodeLocation::leaf(0);
@@ -818,7 +929,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
     pub fn append_leaf(
         &mut self,
         new_leaf_value: LeafValue<C::P0>,
-        current_root: &mut CompressedCurveTreeRoot<L, M>,
+        current_root: &mut CompressedCurveTreeRoot<L, M, C>,
     ) -> Result<(), Error> {
         self.batch_append_leaves(&[new_leaf_value], current_root, None)
     }
@@ -826,7 +937,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
     pub fn batch_append_leaves(
         &mut self,
         leaves: &[LeafValue<C::P0>],
-        current_root: &mut CompressedCurveTreeRoot<L, M>,
+        current_root: &mut CompressedCurveTreeRoot<L, M, C>,
         mut updated_nodes: Option<&mut BTreeMap<NodeLocation<L>, Inner<M, C>>>,
     ) -> Result<(), Error> {
         let leaf_index_base = self.next_leaf_index;
@@ -948,7 +1059,7 @@ pub trait CurveTreeUpdater<const L: usize, const M: usize, C: CurveTreeConfig> {
         commitments: &mut [Affine<C::P0>; M],
         child_index: ChildIndex,
         update_old: Option<bool>,
-        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M, C>>,
     ) -> Result<(), Error>;
 
     fn update_odd_node(
@@ -956,7 +1067,7 @@ pub trait CurveTreeUpdater<const L: usize, const M: usize, C: CurveTreeConfig> {
         commitments: &mut [Affine<C::P1>; M],
         child_index: ChildIndex,
         update_old: Option<bool>,
-        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M, C>>,
     ) -> Result<(), Error>;
 }
 
@@ -991,7 +1102,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, 
         commitments: &mut [Affine<C::P0>; M],
         child_index: ChildIndex,
         update_old: Option<bool>,
-        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M, C>>,
     ) -> Result<(), Error> {
         let params = C::parameters();
 
@@ -1031,7 +1142,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, 
         commitments: &mut [Affine<C::P1>; M],
         child_index: ChildIndex,
         update_old: Option<bool>,
-        current_root: Option<&mut CompressedCurveTreeRoot<L, M>>,
+        current_root: Option<&mut CompressedCurveTreeRoot<L, M, C>>,
     ) -> Result<(), Error> {
         let params = C::parameters();
 

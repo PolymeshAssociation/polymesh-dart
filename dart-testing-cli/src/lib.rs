@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use polymesh_dart::curve_tree::{get_account_curve_tree_parameters, CurveTreeRoot};
+use polymesh_dart::curve_tree::get_account_curve_tree_parameters;
 use polymesh_dart::*;
 
 mod sqlite_curve_tree;
@@ -730,8 +730,8 @@ impl DartTestingDb {
             .execute("DELETE FROM pending_account_commitments", [])?;
 
         // Get current tree roots
-        let asset_root = CurveTreeRoot::new(&self.asset_tree.root_node()?)?;
-        let account_root = CurveTreeRoot::new(&self.account_tree.root_node()?)?;
+        let asset_root = self.asset_tree.compressed_root()?;
+        let account_root = self.account_tree.compressed_root()?;
 
         // Store roots in database
         let block_number = self.get_next_block_number()?;

@@ -450,9 +450,8 @@ macro_rules! impl_curve_tree_with_backend {
                 self.parameters()
             }
 
-            fn root_node(&self) -> Result<CurveTreeRoot<L, M, C>, error::Error> {
-                let root = $curve_tree_ty::root_node(self).map_err(|_| error::Error::CurveTreeRootNotFound)?;
-                Ok(CurveTreeRoot::new(&root)?)
+            fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, error::Error> {
+                Ok(self.compressed_root().map_err(|_| error::Error::CurveTreeRootNotFound)?)
             }
 
             fn get_block_number(&self) -> Result<BlockNumber, error::Error> {
@@ -468,9 +467,8 @@ macro_rules! impl_curve_tree_with_backend {
             Error: From<crate::Error>,
         > ValidateCurveTreeRoot<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
         {
-            fn get_block_root(&self, block: BlockNumber) -> Option<CurveTreeRoot<L, M, C>> {
-                let root = self.fetch_root(block).ok()?;
-                CurveTreeRoot::new(&root).ok()
+            fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
+                self.fetch_root(block).ok()
             }
 
             fn params(&self) -> &CurveTreeParameters<C> {
@@ -740,6 +738,14 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(x_coord_children)
             }
 
+            pub $($async_fn)* fn compressed_root(
+                &self,
+            ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+                let height = self.height()$($await)*;
+                let root = self.root_node()$($await)*?;
+                Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
+            }
+
             pub $($async_fn)* fn root_node(
                 &self,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
@@ -773,12 +779,14 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             pub $($async_fn)* fn store_root(&mut self) -> Result<BlockNumber, Error> {
-                let root = self.root_node()$($await)*?;
+                let height = self.height()$($await)*;
+                let root_node = self.root_node()$($await)*?;
+                let root = CompressedCurveTreeRoot::from_root_node(height, root_node)?;
                 let block_number = self.backend.store_root(root)$($await)*?;
                 Ok(block_number)
             }
 
-            pub $($async_fn)* fn fetch_root(&self, block_number: BlockNumber) -> Result<Root<L, M, C::P0, C::P1>, Error> {
+            pub $($async_fn)* fn fetch_root(&self, block_number: BlockNumber) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
                 self.backend.fetch_root(block_number)$($await)*.map_err(|_| crate::Error::CurveTreeRootNotFound.into())
             }
 
@@ -1076,13 +1084,13 @@ macro_rules! impl_curve_tree_with_backend {
                     .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
                 let path = self.get_path_to_leaf(leaf_index, 0)$($await)*?;
                 let block_number = self.get_block_number()$($await)*?;
-                let root = self.root_node()$($await)*?;
+                let root = self.compressed_root()$($await)*?;
                 Ok(LeafPathAndRoot {
                     leaf: leaf.0.try_into()?,
                     leaf_index,
                     path: WrappedCanonical::wrap(&path)?,
                     block_number,
-                    root: CurveTreeRoot::new(&root)?,
+                    root: root.encode(),
                 })
             }
         }

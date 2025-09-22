@@ -4,7 +4,8 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
-    AssetTreeConfig, CurveTreeParameters, CurveTreePath, CurveTreeRoot, FullCurveTree, LeafValue,
+    AssetTreeConfig, CompressedCurveTreeRoot, CurveTreeParameters, CurveTreePath, FullCurveTree,
+    LeafValue,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasParameters, VestaA, VestaParameters};
@@ -109,8 +110,10 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> CurveTreeRoot<L, 1, AssetTreeConfig> {
-        CurveTreeRoot::new(&self.tree.root_node()).expect("Failed to get root node")
+    pub fn root_node(&self) -> CompressedCurveTreeRoot<L, 1, AssetTreeConfig> {
+        let root = self.tree.root_node();
+        CompressedCurveTreeRoot::from_root_node(self.height as _, root)
+            .expect("Failed to compress root")
     }
 }
 
@@ -155,13 +158,13 @@ fn setup_trees() -> (
 
 /// Compare two roots, printing debug info on mismatch since Root doesn't implement Debug
 fn assert_roots_equal(
-    full_root: &CurveTreeRoot<L, 1, AssetTreeConfig>,
-    storage_root: &CurveTreeRoot<L, 1, AssetTreeConfig>,
+    full_root: &CompressedCurveTreeRoot<L, 1, AssetTreeConfig>,
+    storage_root: &CompressedCurveTreeRoot<L, 1, AssetTreeConfig>,
     context: &str,
 ) {
-    let full_root = full_root.decode().expect("Failed to decode full root");
+    let full_root = full_root.root_node().expect("Failed to decode full root");
     let storage_root = storage_root
-        .decode()
+        .root_node()
         .expect("Failed to decode storage root");
     let roots_match = match (&full_root, &storage_root) {
         (
