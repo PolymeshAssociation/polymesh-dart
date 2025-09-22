@@ -238,7 +238,7 @@ pub fn update_inner_node<
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
 >(
     commitments: &mut [Affine<P1>; M],
-    local_index: ChildIndex,
+    child_index: ChildIndex,
     old_child: Option<ChildCommitments<M, P0>>,
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
@@ -260,7 +260,7 @@ pub fn update_inner_node<
             .bp_gens
             .share(0)
             .G(L * (tree_index as usize + 1))
-            .skip(L * tree_index as usize + local_index as usize);
+            .skip(L * tree_index as usize + child_index as usize);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] = (commitments[tree_index].into_group()
             + *g * (*new_x_coord - old_x_coord))
@@ -269,13 +269,36 @@ pub fn update_inner_node<
     Ok(new_x_coords)
 }
 
-#[derive(Clone, Encode, Decode)]
+#[derive(Copy, Clone, Encode, Decode)]
 pub enum CompressedChildCommitments<const M: usize> {
     Leaf(CompressedAffine),
     Inner([CompressedAffine; M]),
 }
 
 impl<const M: usize> CompressedChildCommitments<M> {
+    pub fn leaf<P0: SWCurveConfig + Copy + Send>(leaf: LeafValue<P0>) -> Self {
+        Self::Leaf(
+            leaf.as_compressed_affline()
+                .expect("LeafValue should be compressible"),
+        )
+    }
+
+    pub fn inner<P0: SWCurveConfig + Copy + Send>(commitments: [Affine<P0>; M]) -> Self {
+        let mut cas = [CompressedAffine::default(); M];
+        for (i, comm) in commitments.into_iter().enumerate() {
+            cas[i] = comm.try_into().expect("Commitment should be compressible");
+        }
+        Self::Inner(cas)
+    }
+
+    pub fn commitment<P0: SWCurveConfig + Copy + Send>(&self, tree_index: TreeIndex) -> Affine<P0> {
+        match *self {
+            Self::Leaf(leaf) => leaf,
+            Self::Inner(commitments) => commitments[tree_index as usize],
+        }
+        .into()
+    }
+
     pub fn decompress<P0: SWCurveConfig + Copy + Send>(
         &self,
     ) -> Result<ChildCommitments<M, P0>, Error> {
@@ -332,6 +355,37 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
             ChildCommitments::Leaf(leaf) => leaf.0,
             ChildCommitments::Inner(commitments) => commitments[tree_index as usize],
         }
+    }
+}
+
+#[derive(Clone, Encode, Decode, TypeInfo, Debug)]
+pub struct CompressedXCoords<const M: usize> {
+    pub x_coords: [CompressedBaseField; M],
+}
+
+impl<const M: usize> CompressedXCoords<M> {
+    pub fn default() -> Self {
+        Self {
+            x_coords: [CompressedBaseField::default(); M],
+        }
+    }
+
+    pub fn decompress<P0: SWCurveConfig + Copy + Send>(&self) -> Result<[P0::BaseField; M], Error> {
+        let mut x_coords = [P0::BaseField::zero(); M];
+        for (i, cbf) in self.x_coords.iter().enumerate() {
+            x_coords[i] = cbf.to_base_field()?;
+        }
+        Ok(x_coords)
+    }
+
+    pub fn compress<P0: SWCurveConfig + Copy + Send>(
+        x_coords: &[P0::BaseField; M],
+    ) -> Result<Self, Error> {
+        let mut cbfs = [CompressedBaseField::default(); M];
+        for (i, x) in x_coords.iter().enumerate() {
+            cbfs[i] = CompressedBaseField::from_base_field(x)?;
+        }
+        Ok(Self { x_coords: cbfs })
     }
 }
 
@@ -581,7 +635,8 @@ macro_rules! impl_curve_tree_with_backend {
                 let node = CompressedInner::default_odd();
                 self.backend.set_inner_node(location, node)$($await)*?;
 
-                let mut updater = B::updater();
+                let mut even_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
+                let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
 
                 // Keep going until we reach the root of the tree.
                 while !location.is_root(height) {
@@ -591,27 +646,30 @@ macro_rules! impl_curve_tree_with_backend {
 
                     // If thsi node does not exist, we need to create it.
                     let node = if location.is_even() {
-                        let mut commitments = [Affine::<C::P0>::zero(); M];
-                        updater.update_even_node(
-                            &mut commitments,
+                        let mut inner = CompressedInner::default_even();
+                        B::Updater::update_node(
+                            &mut inner,
                             child_index,
                             None,
-                            None,
+                            odd_new_child,
                         )?;
-                        Inner::Even(commitments)
+
+                        even_new_child = CompressedChildCommitments::Inner(inner.commitments);
+                        inner
                     } else {
-                        let mut commitments = [Affine::<C::P1>::zero(); M];
-                        updater.update_odd_node(
-                            &mut commitments,
+                        let mut inner = CompressedInner::default_odd();
+                        B::Updater::update_node(
+                            &mut inner,
                             child_index,
                             None,
-                            None,
+                            even_new_child,
                         )?;
-                        Inner::Odd(commitments)
+
+                        odd_new_child = CompressedChildCommitments::Inner(inner.commitments);
+                        inner
                     };
 
                     // Save the updated node back to the backend.
-                    let node = CompressedInner::compress(&node)?;
                     self.backend.set_inner_node(location, node)$($await)*?;
                 }
                 Ok(())
@@ -913,8 +971,6 @@ macro_rules! impl_curve_tree_with_backend {
 
                 let mut height = self.height()$($await)*;
 
-                let mut updater = B::updater();
-
                 while leaf_index < leaf_count {
                     let leaf_value = self
                         .backend
@@ -922,7 +978,10 @@ macro_rules! impl_curve_tree_with_backend {
                         $($await)*?
                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
 
-                    updater.next_leaf(None, leaf_value);
+                    let mut even_old_child = None;
+                    let mut even_new_child = CompressedChildCommitments::leaf(leaf_value);
+                    let mut odd_old_child = None;
+                    let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
 
                     // Start at the leaf's location.
                     let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -936,68 +995,80 @@ macro_rules! impl_curve_tree_with_backend {
                         location = parent_location;
 
                         // Get or initialize the node at this location.
-                        let mut is_new_node = false;
-                        let mut node = self.backend.get_inner_node(location)$($await)*?
-                        .and_then(|n| n.decompress().ok())
-                        .unwrap_or_else(|| {
-                            is_new_node = true;
-                            if location.is_even() {
-                                // Create a new even node with zero commitments.
-                                Inner::Even([Affine::<C::P0>::zero(); M])
-                            } else {
-                                // Create a new odd node with zero commitments.
-                                Inner::Odd([Affine::<C::P1>::zero(); M])
-                            }
-                        });
-
-                        match &mut node {
-                            Inner::Even(commitments) => {
-                                updater.update_even_node(
-                                    commitments,
-                                    child_index,
-                                    Some(is_new_node),
-                                    None,
-                                )?;
-                            }
-                            Inner::Odd(commitments) => {
-                                updater.update_odd_node(
-                                    commitments,
-                                    child_index,
-                                    Some(is_new_node),
-                                    None,
-                                )?;
-
-                                // If the child was a leaf, we may need to commit multiple leaves to this node.
-                                if child_is_leaf {
-                                    // Try to commit as many leaves as possible to this node.
-                                    while child_index < L as ChildIndex - 1 && leaf_index < leaf_count {
-                                        // Commit the next child leaf.
-                                        child_index += 1;
-                                        // Get the next uncommitted leaf.
-                                        let leaf_value = self
-                                            .backend
-                                            .get_leaf(leaf_index)
-                                            $($await)*?
-                                            .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
-                                        updater.next_leaf(None, leaf_value);
-                                        leaf_index += 1;
-
-                                        updater.update_odd_node(
-                                            commitments,
-                                            child_index,
-                                            None,
-                                            None,
-                                        )?;
-                                    }
+                        let mut node = match self.backend.get_inner_node(location)$($await)*? {
+                            Some(node) => {
+                                // Save the old commitments for the next level up.
+                                if node.is_even {
+                                    even_old_child = Some(CompressedChildCommitments::Inner(node.commitments));
+                                } else {
+                                    odd_old_child = Some(CompressedChildCommitments::Inner(node.commitments));
                                 }
+                                node
+                            },
+                            None => {
+                                if location.is_even() {
+                                    even_old_child = None;
+                                    // Create a new even node with zero commitments.
+                                    CompressedInner::default_even()
+                                } else {
+                                    odd_old_child = None;
+                                    // Create a new odd node with zero commitments.
+                                    CompressedInner::default_odd()
+                                }
+                            }
+                        };
 
-                                // Save the new commitment value for updating the parent.
+                        if node.is_even {
+                            B::Updater::update_node(
+                                &mut node,
+                                child_index,
+                                odd_old_child,
+                                odd_new_child,
+                            )?;
+
+                            // Save the new commitments for the next level up.
+                            even_new_child = CompressedChildCommitments::Inner(node.commitments);
+                        } else {
+                            B::Updater::update_node(
+                                &mut node,
+                                child_index,
+                                even_old_child,
+                                even_new_child,
+                            )?;
+
+                            // If the child was a leaf, we may need to commit multiple leaves to this node.
+                            if child_is_leaf {
+                                // Try to commit as many leaves as possible to this node.
+                                while child_index < L as ChildIndex - 1 && leaf_index < leaf_count {
+                                    // Commit the next child leaf.
+                                    child_index += 1;
+                                    // Get the next uncommitted leaf.
+                                    let leaf_value = self
+                                        .backend
+                                        .get_leaf(leaf_index)
+                                        $($await)*?
+                                        .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
+                                    even_old_child = None;
+                                    even_new_child = CompressedChildCommitments::leaf(leaf_value);
+                                    leaf_index += 1;
+
+                                    B::Updater::update_node(
+                                        &mut node,
+                                        child_index,
+                                        even_old_child,
+                                        even_new_child,
+                                    )?;
+                                }
+                                // We have committed all possible leaves to this node.
+                                // Clear this flag before updating the parent.
                                 child_is_leaf = false;
                             }
+
+                            // Save the new commitments for the next level up.
+                            odd_new_child = CompressedChildCommitments::Inner(node.commitments);
                         }
 
                         // Save the updated node back to the backend.
-                        let node = CompressedInner::compress(&node)?;
                         self.backend.set_inner_node(location, node)$($await)*?;
                     }
 
@@ -1024,8 +1095,10 @@ macro_rules! impl_curve_tree_with_backend {
             ) -> Result<(), Error> {
                 let height = self.height()$($await)*;
 
-                let mut updater = B::updater();
-                updater.next_leaf(old_leaf_value, new_leaf_value);
+                let mut even_old_child = old_leaf_value.map(CompressedChildCommitments::leaf);
+                let mut even_new_child = CompressedChildCommitments::leaf(new_leaf_value);
+                let mut odd_old_child = None;
+                let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
 
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -1036,40 +1109,51 @@ macro_rules! impl_curve_tree_with_backend {
                     let (parent_location, child_index) = location.parent();
                     location = parent_location;
 
-                    let mut is_new_node = false;
-                    let mut node = self.backend.get_inner_node(location)$($await)*?
-                    .and_then(|n| n.decompress().ok())
-                    .unwrap_or_else(|| {
-                        is_new_node = true;
-                        if location.is_even() {
-                            // Create a new even node with zero commitments.
-                            Inner::Even([Affine::<C::P0>::zero(); M])
-                        } else {
-                            // Create a new odd node with zero commitments.
-                            Inner::Odd([Affine::<C::P1>::zero(); M])
+                    let mut node = match self.backend.get_inner_node(location)$($await)*? {
+                        Some(node) => {
+                            // Save the old commitments for the next level up.
+                            if node.is_even {
+                                even_old_child = Some(CompressedChildCommitments::Inner(node.commitments));
+                            } else {
+                                odd_old_child = Some(CompressedChildCommitments::Inner(node.commitments));
+                            }
+                            node
+                        },
+                        None => {
+                            if location.is_even() {
+                                even_old_child = None;
+                                // Create a new even node with zero commitments.
+                                CompressedInner::default_even()
+                            } else {
+                                odd_old_child = None;
+                                // Create a new odd node with zero commitments.
+                                CompressedInner::default_odd()
+                            }
                         }
-                    });
-                    match &mut node {
-                        Inner::Even(commitments) => {
-                            updater.update_even_node(
-                                commitments,
-                                child_index,
-                                Some(is_new_node),
-                                None,
-                            )?;
-                        }
-                        Inner::Odd(commitments) => {
-                            updater.update_odd_node(
-                                commitments,
-                                child_index,
-                                Some(is_new_node),
-                                None,
-                            )?;
-                        }
+                    };
+                    if node.is_even {
+                        B::Updater::update_node(
+                            &mut node,
+                            child_index,
+                            odd_old_child,
+                            odd_new_child,
+                        )?;
+
+                        // Save the new commitments for the next level up.
+                        even_new_child = CompressedChildCommitments::Inner(node.commitments);
+                    } else {
+                        B::Updater::update_node(
+                            &mut node,
+                            child_index,
+                            even_old_child,
+                            even_new_child,
+                        )?;
+
+                        // Save the new commitments for the next level up.
+                        odd_new_child = CompressedChildCommitments::Inner(node.commitments);
                     }
 
                     // Save the updated node back to the backend.
-                    let node = CompressedInner::compress(&node)?;
                     self.backend.set_inner_node(location, node)$($await)*?;
                 }
 

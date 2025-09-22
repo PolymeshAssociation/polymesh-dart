@@ -127,10 +127,6 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
 
-    fn updater() -> Self::Updater {
-        Self::Updater::new()
-    }
-
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error>;
 
     fn set_block_number(&mut self, _block_number: BlockNumber) -> Result<(), Self::Error> {
@@ -206,10 +202,6 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     fn parameters(&self) -> impl Future<Output = &SelRerandParameters<C::P0, C::P1>> + Send;
-
-    fn updater() -> Self::Updater {
-        Self::Updater::new()
-    }
 
     fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
