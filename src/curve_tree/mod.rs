@@ -619,7 +619,7 @@ impl<
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct CompressedCurveTreeRoot<const L: usize, const M: usize> {
     pub commitments: [CompressedAffine; M],
-    pub x_coord_children: Vec<[CompressedBaseField; L]>,
+    pub x_coord_children: Vec<[CompressedBaseField; M]>,
     pub height: NodeLevel,
 }
 
@@ -627,7 +627,7 @@ impl<const L: usize, const M: usize> Default for CompressedCurveTreeRoot<L, M> {
     fn default() -> Self {
         Self {
             commitments: [CompressedAffine::default(); M],
-            x_coord_children: vec![[CompressedBaseField::default(); L]; M],
+            x_coord_children: vec![[CompressedBaseField::default(); M]; L],
             height: 0,
         }
     }
@@ -650,64 +650,82 @@ impl<const L: usize, const M: usize> CompressedCurveTreeRoot<L, M> {
         self.height % 2 == 0
     }
 
+    pub fn compressed_update(
+        &mut self,
+        commitments: [CompressedAffine; M],
+        new_x_coords: [CompressedBaseField; M],
+        child_index: ChildIndex,
+    ) -> Result<(), Error> {
+        // Update the commitments.
+        self.commitments = commitments;
+
+        // If `child_index` jumps ahead too far (i.e. isn't the next index), we need to
+        // resize the vector to accommodate the new index.
+        if child_index > self.x_coord_children.len() as ChildIndex {
+            self.x_coord_children.resize(
+                (child_index + 1) as usize,
+                [CompressedBaseField::default(); M],
+            );
+        }
+        if let Some(old_x_coords) = self.x_coord_children.get_mut(child_index as usize) {
+            // Update an existing child's x-coordinates.
+            *old_x_coords = new_x_coords;
+        } else {
+            // Push the new child's x-coordinates.
+            self.x_coord_children.push(new_x_coords);
+        }
+        Ok(())
+    }
+
     pub fn update<
         P0: SWCurveConfig + Copy + Send,
         P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
     >(
         &mut self,
-        commitments: &[Affine<P0>; M],
-        x_coords: &[P1::BaseField; M],
+        new_commitments: &[Affine<P0>; M],
+        new_x_coords: &[P1::BaseField; M],
         child_index: ChildIndex,
     ) -> Result<(), Error> {
-        for (tree_index, (com, x_coord)) in commitments.iter().zip(x_coords.iter()).enumerate() {
-            self.commitments[tree_index] = CompressedAffine::from(com);
-            self.x_coord_children[tree_index][child_index as usize] =
-                CompressedBaseField::from_base_field(x_coord)?;
+        let mut commitments = [CompressedAffine::default(); M];
+        for (tree_index, com) in new_commitments.iter().enumerate() {
+            commitments[tree_index] = CompressedAffine::from(com);
         }
-        Ok(())
+        let mut x_coords = [CompressedBaseField::default(); M];
+        for (tree_index, new_x_coord) in new_x_coords.iter().enumerate() {
+            x_coords[tree_index] = CompressedBaseField::from_base_field(new_x_coord)?;
+        }
+        self.compressed_update(commitments, x_coords, child_index)
+    }
+
+    fn decompress<
+        P0: SWCurveConfig + Copy + Send,
+        P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    >(
+        &self,
+    ) -> Result<RootNode<L, M, P0, P1>, Error> {
+        let mut commitments = [Affine::<P0>::zero(); M];
+        for (self_com, commitment) in self.commitments.iter().zip(commitments.iter_mut()) {
+            *commitment = self_com.try_into()?;
+        }
+        let mut x_coord_children = Vec::with_capacity(M);
+        for tree_index in 0..M {
+            let mut x_coords = [<P1 as CurveConfig>::BaseField::zero(); L];
+            for (self_x_coord, x_coord) in self.x_coord_children.iter().zip(x_coords.iter_mut()) {
+                *x_coord = self_x_coord[tree_index].to_base_field()?;
+            }
+            x_coord_children.push(x_coords);
+        }
+        Ok(RootNode {
+            commitments,
+            x_coord_children,
+        })
     }
 
     pub fn root_node<C: CurveTreeConfig>(&self) -> Result<CurveTreeRoot<L, M, C>, Error> {
         let root = if self.is_even() {
-            let mut commitments = [Affine::<C::P0>::zero(); M];
-            let mut x_coord_children = Vec::with_capacity(M);
-            for ((self_com, self_x_coords), commitment) in self
-                .commitments
-                .iter()
-                .zip(self.x_coord_children.iter())
-                .zip(commitments.iter_mut())
-            {
-                *commitment = self_com.try_into()?;
-                let mut x_coords = [C::F0::zero(); L];
-                for (self_x_coord, x_coord) in self_x_coords.iter().zip(x_coords.iter_mut()) {
-                    *x_coord = self_x_coord.to_base_field()?;
-                }
-                x_coord_children.push(x_coords);
-            }
-            Root::Even(RootNode {
-                commitments,
-                x_coord_children,
-            })
+            Root::Even(self.decompress::<C::P0, C::P1>()?)
         } else {
-            let mut commitments = [Affine::<C::P1>::zero(); M];
-            let mut x_coord_children = Vec::with_capacity(M);
-            for ((self_com, self_x_coords), commitment) in self
-                .commitments
-                .iter()
-                .zip(self.x_coord_children.iter())
-                .zip(commitments.iter_mut())
-            {
-                *commitment = self_com.try_into()?;
-                let mut x_coords = [C::F1::zero(); L];
-                for (self_x_coord, x_coord) in self_x_coords.iter().zip(x_coords.iter_mut()) {
-                    *x_coord = self_x_coord.to_base_field()?;
-                }
-                x_coord_children.push(x_coords);
-            }
-            Root::Odd(RootNode {
-                commitments,
-                x_coord_children,
-            })
+            Root::Odd(self.decompress::<C::P1, C::P0>()?)
         };
 
         Ok(CurveTreeRoot::new(&root)?)
