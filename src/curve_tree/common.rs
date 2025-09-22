@@ -1,7 +1,5 @@
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
-use ark_serialize::{Compress, Read, SerializationError, Valid, Validate, Write};
-use ark_std::Zero;
 use codec::{Decode, Encode};
 use core::hash::Hasher;
 use curve_tree_relations::single_level_select_and_rerandomize::*;
@@ -337,68 +335,80 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
     }
 }
 
+#[derive(Clone, Encode, Decode, TypeInfo, Debug)]
+#[scale_info(skip_type_params(C))]
+pub struct CompressedInner<const M: usize, C: CurveTreeConfig> {
+    pub is_even: bool,
+    pub commitments: [CompressedAffine; M],
+    #[codec(skip)]
+    _marker: PhantomData<C>,
+}
+
+impl<const M: usize, C: CurveTreeConfig> CompressedInner<M, C> {
+    pub fn default_odd() -> Self {
+        Self {
+            is_even: false,
+            commitments: [CompressedAffine::zero::<C::P1>(); M],
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn default_even() -> Self {
+        Self {
+            is_even: true,
+            commitments: [CompressedAffine::zero::<C::P0>(); M],
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn compress(inner: &Inner<M, C>) -> Result<Self, Error> {
+        match inner {
+            Inner::Even(commitments) => {
+                let mut cas = [CompressedAffine::default(); M];
+                for (i, comm) in commitments.iter().enumerate() {
+                    cas[i] = (*comm).try_into()?;
+                }
+                Ok(CompressedInner {
+                    is_even: true,
+                    commitments: cas,
+                    _marker: PhantomData,
+                })
+            }
+            Inner::Odd(commitments) => {
+                let mut cas = [CompressedAffine::default(); M];
+                for (i, comm) in commitments.iter().enumerate() {
+                    cas[i] = (*comm).try_into()?;
+                }
+                Ok(CompressedInner {
+                    is_even: false,
+                    commitments: cas,
+                    _marker: PhantomData,
+                })
+            }
+        }
+    }
+
+    pub fn decompress(&self) -> Result<Inner<M, C>, Error> {
+        if self.is_even {
+            let mut as_ = [Affine::<C::P0>::zero(); M];
+            for (i, ca) in self.commitments.iter().enumerate() {
+                as_[i] = ca.try_into()?;
+            }
+            Ok(Inner::Even(as_))
+        } else {
+            let mut as_ = [Affine::<C::P1>::zero(); M];
+            for (i, ca) in self.commitments.iter().enumerate() {
+                as_[i] = ca.try_into()?;
+            }
+            Ok(Inner::Odd(as_))
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum Inner<const M: usize, C: CurveTreeConfig> {
     Even([Affine<C::P0>; M]),
     Odd([Affine<C::P1>; M]),
-}
-
-impl<const M: usize, C: CurveTreeConfig> CanonicalSerialize for Inner<M, C> {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        mut writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        match self {
-            Inner::Even(commitments) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                commitments.serialize_with_mode(writer, compress)
-            }
-            Inner::Odd(commitments) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-                commitments.serialize_with_mode(writer, compress)
-            }
-        }
-    }
-
-    fn serialized_size(&self, compress: Compress) -> usize {
-        match self {
-            Inner::Even(commitments) => 1 + commitments.serialized_size(compress),
-            Inner::Odd(commitments) => 1 + commitments.serialized_size(compress),
-        }
-    }
-}
-
-impl<const M: usize, C: CurveTreeConfig> Valid for Inner<M, C> {
-    fn check(&self) -> Result<(), SerializationError> {
-        match self {
-            Inner::Even(commitments) => commitments.check(),
-            Inner::Odd(commitments) => commitments.check(),
-        }
-    }
-}
-
-impl<const M: usize, C: CurveTreeConfig> CanonicalDeserialize for Inner<M, C> {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let t: u8 = CanonicalDeserialize::deserialize_with_mode(&mut reader, compress, validate)?;
-        match t {
-            0 => {
-                let commitments =
-                    <[Affine<C::P0>; M]>::deserialize_with_mode(reader, compress, validate)?;
-                Ok(Inner::Even(commitments))
-            }
-            1 => {
-                let commitments =
-                    <[Affine<C::P1>; M]>::deserialize_with_mode(reader, compress, validate)?;
-                Ok(Inner::Odd(commitments))
-            }
-            _ => Err(SerializationError::InvalidData),
-        }
-    }
 }
 
 impl<const M: usize, C: CurveTreeConfig> core::fmt::Debug for Inner<M, C> {
@@ -568,8 +578,7 @@ macro_rules! impl_curve_tree_with_backend {
                 let (parent_location, _) = location.parent();
                 location = parent_location;
                 // Initialize the first inner node as an odd node with zero commitments.
-                let commitments = [Affine::<C::P1>::zero(); M];
-                let node = Inner::Odd(commitments.clone());
+                let node = CompressedInner::default_odd();
                 self.backend.set_inner_node(location, node)$($await)*?;
 
                 let mut updater = B::updater();
@@ -602,6 +611,7 @@ macro_rules! impl_curve_tree_with_backend {
                     };
 
                     // Save the updated node back to the backend.
+                    let node = CompressedInner::compress(&node)?;
                     self.backend.set_inner_node(location, node)$($await)*?;
                 }
                 Ok(())
@@ -674,14 +684,16 @@ macro_rules! impl_curve_tree_with_backend {
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
                     let x_coord = match self.backend.get_inner_node(child)$($await)*? {
-                        Some(Inner::Odd(commitments)) => {
-                            Some((commitments[tree_index as usize] + delta).into_affine().x)
-                        }
-                        Some(Inner::Even(_)) => {
-                            return Err(crate::Error::CurveTreeInvalidChildNode {
-                                level: child.level(),
-                                index: child.index(),
-                            }.into());
+                        Some(node) => match node.decompress()? {
+                            Inner::Odd(commitments) => {
+                                Some((commitments[tree_index as usize] + delta).into_affine().x)
+                            }
+                            Inner::Even(_) => {
+                                return Err(crate::Error::CurveTreeInvalidChildNode {
+                                    level: child.level(),
+                                    index: child.index(),
+                                }.into());
+                            }
                         }
                         None => None,
                     };
@@ -720,13 +732,15 @@ macro_rules! impl_curve_tree_with_backend {
                         self.backend.get_leaf(leaf_index)$($await)*?.map(|leaf| leaf.0)
                     } else {
                         match self.backend.get_inner_node(child)$($await)*? {
-                            Some(Inner::Even(commitments)) => Some(commitments[tree_index as usize]),
-                            Some(Inner::Odd(_)) => {
-                                log::error!("An Odd node cannot have an odd child");
-                                return Err(crate::Error::CurveTreeInvalidChildNode {
-                                    level: child.level(),
-                                    index: child.index(),
-                                }.into());
+                            Some(node) => match node.decompress()? {
+                                Inner::Even(commitments) => Some(commitments[tree_index as usize]),
+                                Inner::Odd(_) => {
+                                    log::error!("An Odd node cannot have an odd child");
+                                    return Err(crate::Error::CurveTreeInvalidChildNode {
+                                        level: child.level(),
+                                        index: child.index(),
+                                    }.into());
+                                }
                             }
                             None => None,
                         }
@@ -752,18 +766,20 @@ macro_rules! impl_curve_tree_with_backend {
                 let params = self.parameters()$($await)*;
                 let root = NodeLocation::<L>::root(self.height()$($await)*);
                 match self.backend.get_inner_node(root)$($await)*? {
-                    Some(Inner::Even(commitments)) => Ok(Root::Even(RootNode {
-                        commitments: commitments.clone(),
-                        x_coord_children: self
-                            ._get_odd_x_coord_children_batch(root, &params.odd_parameters.delta)
-                            $($await)*?,
-                    })),
-                    Some(Inner::Odd(commitments)) => Ok(Root::Odd(RootNode {
-                        commitments: commitments.clone(),
-                        x_coord_children: self
-                            ._get_even_x_coord_children_batch(root, &params.even_parameters.delta)
-                            $($await)*?,
-                    })),
+                    Some(node) => match node.decompress()? {
+                        Inner::Even(commitments) => Ok(Root::Even(RootNode {
+                            commitments: commitments.clone(),
+                            x_coord_children: self
+                                ._get_odd_x_coord_children_batch(root, &params.odd_parameters.delta)
+                                $($await)*?,
+                        })),
+                        Inner::Odd(commitments) => Ok(Root::Odd(RootNode {
+                            commitments: commitments.clone(),
+                            x_coord_children: self
+                                ._get_even_x_coord_children_batch(root, &params.even_parameters.delta)
+                                $($await)*?,
+                        })),
+                    }
                     None => Err(crate::Error::CurveTreeRootNotFound.into()),
                 }
             }
@@ -779,9 +795,7 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             pub $($async_fn)* fn store_root(&mut self) -> Result<BlockNumber, Error> {
-                let height = self.height()$($await)*;
-                let root_node = self.root_node()$($await)*?;
-                let root = CompressedCurveTreeRoot::from_root_node(height, root_node)?;
+                let root = self.compressed_root()$($await)*?;
                 let block_number = self.backend.store_root(root)$($await)*?;
                 Ok(block_number)
             }
@@ -824,7 +838,7 @@ macro_rules! impl_curve_tree_with_backend {
                             index: parent_location.index(),
                         }.into())?;
 
-                    match node {
+                    match node.decompress()? {
                         Inner::Even(commitments) => {
                             even_child = commitments[tree_index as usize];
                             even_internal_nodes.push(WitnessNode {
@@ -923,7 +937,9 @@ macro_rules! impl_curve_tree_with_backend {
 
                         // Get or initialize the node at this location.
                         let mut is_new_node = false;
-                        let mut node = self.backend.get_inner_node(location)$($await)*?.unwrap_or_else(|| {
+                        let mut node = self.backend.get_inner_node(location)$($await)*?
+                        .and_then(|n| n.decompress().ok())
+                        .unwrap_or_else(|| {
                             is_new_node = true;
                             if location.is_even() {
                                 // Create a new even node with zero commitments.
@@ -981,6 +997,7 @@ macro_rules! impl_curve_tree_with_backend {
                         }
 
                         // Save the updated node back to the backend.
+                        let node = CompressedInner::compress(&node)?;
                         self.backend.set_inner_node(location, node)$($await)*?;
                     }
 
@@ -1020,7 +1037,9 @@ macro_rules! impl_curve_tree_with_backend {
                     location = parent_location;
 
                     let mut is_new_node = false;
-                    let mut node = self.backend.get_inner_node(location)$($await)*?.unwrap_or_else(|| {
+                    let mut node = self.backend.get_inner_node(location)$($await)*?
+                    .and_then(|n| n.decompress().ok())
+                    .unwrap_or_else(|| {
                         is_new_node = true;
                         if location.is_even() {
                             // Create a new even node with zero commitments.
@@ -1050,6 +1069,7 @@ macro_rules! impl_curve_tree_with_backend {
                     }
 
                     // Save the updated node back to the backend.
+                    let node = CompressedInner::compress(&node)?;
                     self.backend.set_inner_node(location, node)$($await)*?;
                 }
 

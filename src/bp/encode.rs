@@ -6,15 +6,12 @@ use scale_info::{Path, Type, TypeInfo, build::Fields};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use ark_ec::AffineRepr;
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
-use core::mem;
 
-use crate::{
-    curve_tree::{CurveTreeConfig, Inner, LeafValue},
-    *,
-};
+use crate::{curve_tree::LeafValue, *};
 
 macro_rules! impl_scale_and_type_info {
      ( $type:ident as $as_type:ident $( < $($trailing:tt)* )? ) => {
@@ -263,6 +260,11 @@ impl core::fmt::Debug for CompressedAffine {
 }
 
 impl CompressedAffine {
+    pub fn zero<P0: SWCurveConfig>() -> Self {
+        let affine = Affine::<P0>::zero();
+        Self::try_from(affine).expect("Failed to convert zero Affine to CompressedAffine")
+    }
+
     /// Creates a `CompressedAffine` from a hex string.
     pub fn from_str(s: &str) -> Result<Self, Error> {
         let offset = if s.starts_with("0x") { 2 } else { 0 };
@@ -359,9 +361,6 @@ impl_scale_and_type_info!(AccountSecretKey as Array32);
 
 // TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
-
-// TypeInfo, SCALE encoding and decoding for `Inner<C>`.
-impl_scale_and_type_info!(Inner as Vec<const M: usize, C: CurveTreeConfig>);
 
 // TypeInfo, SCALE encoding and decoding for `LeafValue<P0>`.
 impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);

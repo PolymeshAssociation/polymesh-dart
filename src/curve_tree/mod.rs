@@ -626,9 +626,9 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> Default
 {
     fn default() -> Self {
         Self {
-            commitments: [CompressedAffine::default(); M],
+            commitments: [CompressedAffine::zero::<C::P1>(); M],
             x_coord_children: vec![],
-            height: 0,
+            height: 1,
             _marker: PhantomData,
         }
     }
@@ -636,8 +636,13 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> Default
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot<L, M, C> {
     pub fn new(height: NodeLevel) -> Self {
+        let commitments = if height % 2 == 0 {
+            [CompressedAffine::zero::<C::P0>(); M]
+        } else {
+            [CompressedAffine::zero::<C::P1>(); M]
+        };
         Self {
-            commitments: [CompressedAffine::default(); M],
+            commitments,
             x_coord_children: vec![],
             height,
             _marker: PhantomData,
@@ -938,7 +943,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
         &mut self,
         leaves: &[LeafValue<C::P0>],
         current_root: &mut CompressedCurveTreeRoot<L, M, C>,
-        mut updated_nodes: Option<&mut BTreeMap<NodeLocation<L>, Inner<M, C>>>,
+        mut updated_nodes: Option<&mut BTreeMap<NodeLocation<L>, CompressedInner<M, C>>>,
     ) -> Result<(), Error> {
         let leaf_index_base = self.next_leaf_index;
         let mut leaf_idx = 0;
@@ -1022,7 +1027,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
 
                 // If we are tracking updated nodes, store the updated node.
                 if let Some(updated_nodes) = &mut updated_nodes {
-                    updated_nodes.insert(location, node.clone());
+                    let node = CompressedInner::compress(&node)?;
+                    updated_nodes.insert(location, node);
                 }
 
                 // If we created a new node, we can remove its left sibling if it exists.

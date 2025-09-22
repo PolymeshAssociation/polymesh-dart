@@ -7,9 +7,9 @@ use std::sync::Arc;
 use polymesh_dart::{
     curve_tree::{
         get_account_curve_tree_parameters, get_asset_curve_tree_parameters, AccountTreeConfig,
-        AssetTreeConfig, CompressedCurveTreeRoot, CurveTreeBackend, CurveTreeLookup,
-        CurveTreeParameters, CurveTreePath, CurveTreeWithBackend, DefaultCurveTreeUpdater, Inner,
-        LeafValue, NodeLocation, ValidateCurveTreeRoot,
+        AssetTreeConfig, CompressedCurveTreeRoot, CompressedInner, CurveTreeBackend,
+        CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeWithBackend,
+        DefaultCurveTreeUpdater, LeafValue, NodeLocation, ValidateCurveTreeRoot,
     },
     BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
@@ -150,7 +150,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_inner_node(
         &self,
         location: NodeLocation<ASSET_TREE_L>,
-    ) -> Result<Option<Inner<1, AssetTreeConfig>>, Self::Error> {
+    ) -> Result<Option<CompressedInner<1, AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT node_data FROM asset_inner_nodes WHERE location = ?1")?;
@@ -172,7 +172,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn set_inner_node(
         &mut self,
         location: NodeLocation<ASSET_TREE_L>,
-        new_node: Inner<1, AssetTreeConfig>,
+        new_node: CompressedInner<1, AssetTreeConfig>,
     ) -> Result<(), Self::Error> {
         // Encode the location and node data
         let location_bytes = location.encode();
@@ -370,7 +370,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_inner_node(
         &self,
         location: NodeLocation<ACCOUNT_TREE_L>,
-    ) -> Result<Option<Inner<1, AccountTreeConfig>>, Self::Error> {
+    ) -> Result<Option<CompressedInner<1, AccountTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT node_data FROM account_inner_nodes WHERE location = ?1")?;
@@ -392,7 +392,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn set_inner_node(
         &mut self,
         location: NodeLocation<ACCOUNT_TREE_L>,
-        new_node: Inner<1, AccountTreeConfig>,
+        new_node: CompressedInner<1, AccountTreeConfig>,
     ) -> Result<(), Self::Error> {
         // Encode the location and node data
         let location_bytes = location.encode();

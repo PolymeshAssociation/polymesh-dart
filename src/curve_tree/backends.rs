@@ -181,13 +181,15 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn leaf_count(&self) -> LeafIndex;
 
-    fn get_inner_node(&self, location: NodeLocation<L>)
-    -> Result<Option<Inner<M, C>>, Self::Error>;
+    fn get_inner_node(
+        &self,
+        location: NodeLocation<L>,
+    ) -> Result<Option<CompressedInner<M, C>>, Self::Error>;
 
     fn set_inner_node(
         &mut self,
         _location: NodeLocation<L>,
-        _new_node: Inner<M, C>,
+        _new_node: CompressedInner<M, C>,
     ) -> Result<(), Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
@@ -276,12 +278,12 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> impl Future<Output = Result<Option<Inner<M, C>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<CompressedInner<M, C>>, Self::Error>> + Send;
 
     fn set_inner_node(
         &mut self,
         _location: NodeLocation<L>,
-        _new_node: Inner<M, C>,
+        _new_node: CompressedInner<M, C>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
@@ -292,7 +294,7 @@ pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeCo
     leafs: Vec<LeafValue<C::P0>>,
     next_leaf_index: LeafIndex,
     committed_leaf_index: LeafIndex,
-    nodes: BTreeMap<NodeLocation<L>, Inner<M, C>>,
+    nodes: BTreeMap<NodeLocation<L>, CompressedInner<M, C>>,
     block_number: BlockNumber,
     roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
     parameters: SelRerandParameters<C::P0, C::P1>,
@@ -428,14 +430,17 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         self.leafs.len() as LeafIndex
     }
 
-    fn get_inner_node(&self, location: NodeLocation<L>) -> Result<Option<Inner<M, C>>, Error> {
+    fn get_inner_node(
+        &self,
+        location: NodeLocation<L>,
+    ) -> Result<Option<CompressedInner<M, C>>, Error> {
         Ok(self.nodes.get(&location).cloned())
     }
 
     fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
-        new_node: Inner<M, C>,
+        new_node: CompressedInner<M, C>,
     ) -> Result<(), Error> {
         self.nodes.insert(location, new_node);
         Ok(())
@@ -532,14 +537,14 @@ where
     async fn get_inner_node(
         &self,
         location: NodeLocation<L>,
-    ) -> Result<Option<Inner<M, C>>, Error> {
+    ) -> Result<Option<CompressedInner<M, C>>, Error> {
         CurveTreeBackend::get_inner_node(self, location)
     }
 
     async fn set_inner_node(
         &mut self,
         location: NodeLocation<L>,
-        new_node: Inner<M, C>,
+        new_node: CompressedInner<M, C>,
     ) -> Result<(), Error> {
         CurveTreeBackend::set_inner_node(self, location, new_node)
     }
