@@ -61,8 +61,6 @@ pub struct EncryptedRandomness<
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
     pub resp_acc_comm: PokPedersenCommitment<G>,
     pub resp_initial_nullifier: PokDiscreteLog<G>,
-    /// Called `N` in the report. This helps during account freezing to remove `g_i * rho` term from account state commitment.
-    pub initial_nullifier: G,
     /// Bulletproof vector commitment to `sk, initial_rho, current_rho`
     pub comm_rho_bp: G,
     pub t_comm_rho_bp: G,
@@ -89,6 +87,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     /// `T` are the public key `pk_T`, generator used when creating key `pk_T` and the generator used to encrypt randomness chunk.
     /// This is intentionally kept different from the generator for randomness in account commitment to prevent anyone from
     /// learning the next nullifier
+    /// The second returned value is the `initial_nullifier` and called `N` in the report.
+    /// This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
@@ -102,7 +102,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, G)> {
         let _ = Self::CHECK_CHUNK_BITS;
         if account.balance != 0 {
             return Err(Error::ProofOfBalanceError(
@@ -125,6 +125,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let mut transcript = MerlinTranscript::new(REG_TXN_LABEL);
 
+        // TODO: Add identity
         let mut extra_instance = vec![];
         nonce.serialize_compressed(&mut extra_instance)?;
         account.asset_id.serialize_compressed(&mut extra_instance)?;
@@ -401,17 +402,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
 
-        Ok(Self {
+        Ok((Self {
             resp_acc_comm: resp_comm,
             resp_initial_nullifier,
             t_comm_rho_bp: t_comm_rho_bp.t,
             resp_comm_rho_bp,
             resp_pk,
             comm_rho_bp,
-            initial_nullifier,
             encrypted_randomness,
             proof,
-        })
+        }, initial_nullifier))
     }
 
     pub fn verify<R: CryptoRngCore>(
@@ -422,6 +422,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
+        initial_nullifier: G,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         leaf_level_pc_gens: &PedersenGens<G>,
@@ -467,7 +468,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.id_gen() * id);
 
         let reduced_acc_comm =
-            (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
+            (account_commitment.0.into_group() - D - initial_nullifier.into_group())
                 .into_affine();
         self.resp_acc_comm.challenge_contribution(
             &account_comm_key.current_rho_gen(),
@@ -478,7 +479,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         self.resp_initial_nullifier.challenge_contribution(
             &account_comm_key.rho_gen(),
-            &self.initial_nullifier,
+            &initial_nullifier,
             &mut verifier_transcript,
         )?;
 
@@ -566,7 +567,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
 
         if !self.resp_initial_nullifier.verify(
-            &self.initial_nullifier,
+            &initial_nullifier,
             &account_comm_key.rho_gen(),
             &verifier_challenge,
         ) {
@@ -765,8 +766,6 @@ pub struct RegTxnProofAlt<
     pub resp_comm: PokPedersenCommitment<Affine<G0>>,
     pub resp_initial_nullifier: PokDiscreteLog<Affine<G0>>,
     pub comm_bp: Affine<G0>,
-    /// Called `N` in the report. This helps during account freezing to remove `g_i * rho` term from account state commitment.
-    pub initial_nullifier: Affine<G0>,
     pub t_comm_bp: Affine<G0>,
     pub resp_comm_bp: SchnorrResponse<Affine<G0>>,
     pub resp_pk: PokDiscreteLog<Affine<G0>>,
@@ -782,6 +781,8 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > RegTxnProofAlt<G0, G1>
 {
+    /// The second returned value is the `initial_nullifier` and called `N` in the report.
+    /// This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         pk: Affine<G0>,
@@ -796,7 +797,7 @@ impl<
         pk_T_gen_tables: &[Lookup3Bit<2, F0>],
         leaf_level_pc_gens: &PedersenGens<Affine<G0>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G0>>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Affine<G0>)> {
         if account.balance != 0 {
             return Err(Error::ProofOfBalanceError(
                 "Balance must be 0 for registration".to_string(),
@@ -940,7 +941,7 @@ impl<
 
         let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
 
-        Ok(Self {
+        Ok((Self {
             T_1,
             T_2,
             resp_comm,
@@ -949,11 +950,10 @@ impl<
             t_comm_bp: t_comm_bp.t,
             resp_comm_bp,
             resp_pk,
-            initial_nullifier,
             resp_T_1,
             resp_T_2,
             proof,
-        })
+        }, initial_nullifier))
     }
 
     pub fn verify<R: CryptoRngCore>(
@@ -963,6 +963,7 @@ impl<
         pk: &Affine<G0>,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<Affine<G0>>,
+        initial_nullifier: Affine<G0>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         pk_T: Affine<G1>,
@@ -990,7 +991,7 @@ impl<
             + (account_comm_key.id_gen() * id);
 
         let reduced_acc_comm =
-            (account_commitment.0.into_group() - D - self.initial_nullifier.into_group())
+            (account_commitment.0.into_group() - D - initial_nullifier.into_group())
                 .into_affine();
         self.resp_comm.challenge_contribution(
             &account_comm_key.current_rho_gen(),
@@ -1001,7 +1002,7 @@ impl<
 
         self.resp_initial_nullifier.challenge_contribution(
             &account_comm_key.rho_gen(),
-            &self.initial_nullifier,
+            &initial_nullifier,
             &mut transcript,
         )?;
 
@@ -1037,7 +1038,7 @@ impl<
         }
 
         if !self.resp_initial_nullifier.verify(
-            &self.initial_nullifier,
+            &initial_nullifier,
             &account_comm_key.rho_gen(),
             &verifier_challenge,
         ) {
@@ -1166,6 +1167,7 @@ pub fn digits<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: usize>(
     (chunks, chunks_as_u64)
 }
 
+// TODO: Check if "lazy_static" or equivalent no_std compatible
 /// Returns powers of 2 as field elements for use with digits decomposition.
 pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: usize>()
 -> [F; NUM_DIGITS] {
@@ -1366,7 +1368,7 @@ pub mod tests {
 
         let nonce = b"test-nonce-0";
 
-        let reg_proof = RegTxnProof::<_, 48, 6>::new(
+        let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
             &mut rng,
             pk_i.0,
             &account,
@@ -1392,6 +1394,7 @@ pub mod tests {
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
+                nullifier,
                 nonce,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
@@ -1448,7 +1451,7 @@ pub mod tests {
 
         let nonce = b"test-nonce-0";
 
-        let reg_proof = RegTxnProof::<_, 48, 6>::new(
+        let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
             &mut rng,
             pk.0,
             &account,
@@ -1474,6 +1477,7 @@ pub mod tests {
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
+                nullifier,
                 nonce,
                 account_comm_key,
                 &account_tree_params.even_parameters.pc_gens,
@@ -1544,7 +1548,7 @@ pub mod tests {
 
         let nonce = b"test-nonce-0";
 
-        let reg_proof = RegTxnProofAlt::new(
+        let (reg_proof, nullifier) = RegTxnProofAlt::new(
             &mut rng,
             pk.0,
             &account,
@@ -1571,6 +1575,7 @@ pub mod tests {
                 &pk.0,
                 asset_id,
                 &account_comm,
+                nullifier,
                 nonce,
                 account_comm_key,
                 pk_T.0,
