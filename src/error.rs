@@ -84,6 +84,10 @@ pub enum Error {
     #[error("Curve tree backend is read-only.")]
     CurveTreeBackendReadOnly,
 
+    /// Curve tree update error.
+    #[error("Curve tree update error.")]
+    CurveTreeUpdateError,
+
     /// Leg decryption error.
     #[error("Leg decryption error: {0}")]
     LegDecryptionError(String),

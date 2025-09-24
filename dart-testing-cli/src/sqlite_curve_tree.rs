@@ -7,13 +7,12 @@ use std::sync::Arc;
 use polymesh_dart::{
     curve_tree::{
         get_account_curve_tree_parameters, get_asset_curve_tree_parameters, AccountTreeConfig,
-        AssetTreeConfig, CompressedCurveTreeRoot, CompressedInner, CurveTreeBackend,
-        CurveTreeLookup, CurveTreeParameters, CurveTreePath, CurveTreeWithBackend,
-        DefaultCurveTreeUpdater, LeafValue, NodeLocation, ValidateCurveTreeRoot,
+        AssetTreeConfig, CompressedCurveTreeRoot, CompressedInner, CompressedLeafValue,
+        CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
+        CurveTreeWithBackend, DefaultCurveTreeUpdater, NodeLocation, ValidateCurveTreeRoot,
     },
-    BlockNumber, Error as DartError, LeafIndex, NodeLevel, PallasParameters, VestaParameters,
-    ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L,
-    ASSET_TREE_M,
+    BlockNumber, Error as DartError, LeafIndex, NodeLevel, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L,
+    ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L, ASSET_TREE_M,
 };
 
 /// Asset Curve Tree SQLite Storage backend.
@@ -100,7 +99,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> Result<Option<LeafValue<VestaParameters>>, Self::Error> {
+    ) -> Result<Option<CompressedLeafValue<AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT leaf_data FROM asset_leaves WHERE leaf_index = ?1")?;
@@ -121,8 +120,8 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<VestaParameters>,
-    ) -> Result<Option<LeafValue<VestaParameters>>, Self::Error> {
+        new_leaf_value: CompressedLeafValue<AssetTreeConfig>,
+    ) -> Result<Option<CompressedLeafValue<AssetTreeConfig>>, Self::Error> {
         // Get the old leaf value if it exists
         let old_leaf = self.get_leaf(leaf_index)?;
 
@@ -231,7 +230,10 @@ impl AccountCurveTreeSqliteStorage {
         Self { db }
     }
 
-    pub fn find_leaf_index(&self, leaf: &LeafValue<PallasParameters>) -> Result<Option<LeafIndex>> {
+    pub fn find_leaf_index(
+        &self,
+        leaf: &CompressedLeafValue<AccountTreeConfig>,
+    ) -> Result<Option<LeafIndex>> {
         let mut stmt = self
             .db
             .prepare("SELECT leaf_index FROM account_leaves WHERE leaf_data = ?1")?;
@@ -320,7 +322,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> Result<Option<LeafValue<PallasParameters>>, Self::Error> {
+    ) -> Result<Option<CompressedLeafValue<AccountTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT leaf_data FROM account_leaves WHERE leaf_index = ?1")?;
@@ -341,8 +343,8 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<PallasParameters>,
-    ) -> Result<Option<LeafValue<PallasParameters>>, Self::Error> {
+        new_leaf_value: CompressedLeafValue<AccountTreeConfig>,
+    ) -> Result<Option<CompressedLeafValue<AccountTreeConfig>>, Self::Error> {
         // Get the old leaf value if it exists
         let old_leaf = self.get_leaf(leaf_index)?;
 
@@ -453,7 +455,7 @@ impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &Acc
 
     fn get_path_to_leaf(
         &self,
-        leaf: LeafValue<PallasParameters>,
+        leaf: CompressedLeafValue<AccountTreeConfig>,
     ) -> Result<CurveTreePath<ACCOUNT_TREE_L, AccountTreeConfig>, DartError> {
         let leaf_index = self.0.backend.find_leaf_index(&leaf).map_err(|er| {
             log::error!("Error finding leaf index: {:?}", er);

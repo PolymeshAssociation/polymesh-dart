@@ -4,8 +4,8 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
-    AssetTreeConfig, CompressedCurveTreeRoot, CurveTreeParameters, CurveTreePath, FullCurveTree,
-    LeafValue,
+    AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeParameters,
+    CurveTreePath, FullCurveTree,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasParameters, VestaA, VestaParameters};
@@ -52,7 +52,7 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<VestaParameters>) -> Result<usize, Error> {
+    pub fn insert(&mut self, leaf: CompressedLeafValue<AssetTreeConfig>) -> Result<usize, Error> {
         let leaf_index = self.length;
         self.update(leaf, leaf_index)?;
 
@@ -64,10 +64,10 @@ impl<const L: usize> CurveTreeOld<L> {
     /// Updates an existing leaf in the curve tree.
     pub fn update(
         &mut self,
-        leaf: LeafValue<VestaParameters>,
+        leaf: CompressedLeafValue<AssetTreeConfig>,
         leaf_index: usize,
     ) -> Result<(), Error> {
-        let leaf = *leaf;
+        let leaf = leaf.decompress()?;
         let cap = self.leaves.len();
         if leaf_index >= cap {
             self.grow(leaf_index);
@@ -117,13 +117,14 @@ impl<const L: usize> CurveTreeOld<L> {
     }
 }
 
-fn create_test_leaf(value: usize) -> LeafValue<VestaParameters> {
+fn create_test_leaf(value: usize) -> CompressedLeafValue<AssetTreeConfig> {
     use ark_ec::{AffineRepr, CurveGroup};
     use ark_vesta::Fr as VestaScalar;
 
     // Create a deterministic leaf value for testing
     let scalar = VestaScalar::from(value as u64);
-    (VestaA::generator() * scalar).into_affine().into()
+    CompressedLeafValue::from_affine((VestaA::generator() * scalar).into_affine())
+        .expect("Failed to create leaf")
 }
 
 fn setup_trees() -> (

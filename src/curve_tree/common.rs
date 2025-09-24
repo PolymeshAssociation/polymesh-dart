@@ -1,7 +1,9 @@
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use codec::{Decode, Encode};
-use core::hash::Hasher;
 use curve_tree_relations::single_level_select_and_rerandomize::*;
 use scale_info::TypeInfo;
 
@@ -276,36 +278,19 @@ pub enum CompressedChildCommitments<const M: usize> {
 }
 
 impl<const M: usize> CompressedChildCommitments<M> {
-    pub fn leaf<P0: SWCurveConfig + Copy + Send>(leaf: LeafValue<P0>) -> Self {
-        Self::Leaf(
-            leaf.as_compressed_affline()
-                .expect("LeafValue should be compressible"),
-        )
+    pub fn leaf<C: CurveTreeConfig>(leaf: CompressedLeafValue<C>) -> Self {
+        Self::Leaf(leaf.into())
     }
 
-    pub fn inner<P0: SWCurveConfig + Copy + Send>(commitments: [Affine<P0>; M]) -> Self {
-        let mut cas = [CompressedAffine::default(); M];
-        for (i, comm) in commitments.into_iter().enumerate() {
-            cas[i] = comm.try_into().expect("Commitment should be compressible");
-        }
-        Self::Inner(cas)
-    }
-
-    pub fn commitment<P0: SWCurveConfig + Copy + Send>(&self, tree_index: TreeIndex) -> Affine<P0> {
-        match *self {
-            Self::Leaf(leaf) => leaf,
-            Self::Inner(commitments) => commitments[tree_index as usize],
-        }
-        .into()
+    pub fn zero<P0: SWCurveConfig>() -> Self {
+        Self::Leaf(CompressedAffine::zero::<P0>())
     }
 
     pub fn decompress<P0: SWCurveConfig + Copy + Send>(
         &self,
     ) -> Result<ChildCommitments<M, P0>, Error> {
         match self {
-            CompressedChildCommitments::Leaf(ca) => {
-                Ok(ChildCommitments::Leaf(LeafValue(ca.try_into()?)))
-            }
+            CompressedChildCommitments::Leaf(ca) => Ok(ChildCommitments::Leaf(ca.try_into()?)),
             CompressedChildCommitments::Inner(cas) => {
                 let mut as_ = [Affine::<P0>::zero(); M];
                 for (i, ca) in cas.iter().enumerate() {
@@ -315,44 +300,18 @@ impl<const M: usize> CompressedChildCommitments<M> {
             }
         }
     }
-
-    pub fn compress<P0: SWCurveConfig + Copy + Send>(
-        child: ChildCommitments<M, P0>,
-    ) -> Result<CompressedChildCommitments<M>, Error> {
-        match child {
-            ChildCommitments::Leaf(leaf) => {
-                let ca = leaf.0.try_into()?;
-                Ok(CompressedChildCommitments::Leaf(ca))
-            }
-            ChildCommitments::Inner(commitments) => {
-                let mut cas = [CompressedAffine::default(); M];
-                for (i, comm) in commitments.into_iter().enumerate() {
-                    cas[i] = comm.try_into()?;
-                }
-                Ok(CompressedChildCommitments::Inner(cas))
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChildCommitments<const M: usize, P0: SWCurveConfig> {
-    Leaf(LeafValue<P0>),
+    Leaf(Affine<P0>),
     Inner([Affine<P0>; M]),
 }
 
 impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
-    pub fn leaf(leaf: LeafValue<P0>) -> Self {
-        ChildCommitments::Leaf(leaf)
-    }
-
-    pub fn inner(commitments: [Affine<P0>; M]) -> Self {
-        ChildCommitments::Inner(commitments)
-    }
-
     pub fn commitment(&self, tree_index: TreeIndex) -> Affine<P0> {
         match self {
-            ChildCommitments::Leaf(leaf) => leaf.0,
+            ChildCommitments::Leaf(leaf) => *leaf,
             ChildCommitments::Inner(commitments) => commitments[tree_index as usize],
         }
     }
@@ -361,6 +320,14 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
 #[derive(Clone, Encode, Decode, TypeInfo, Debug)]
 pub struct CompressedXCoords<const M: usize> {
     pub x_coords: [CompressedBaseField; M],
+}
+
+impl<const M: usize> Default for CompressedXCoords<M> {
+    fn default() -> Self {
+        Self {
+            x_coords: [CompressedBaseField::default(); M],
+        }
+    }
 }
 
 impl<const M: usize> CompressedXCoords<M> {
@@ -505,7 +472,7 @@ macro_rules! impl_curve_tree_with_backend {
 
             fn get_path_to_leaf(
                 &self,
-                _leaf: LeafValue<C::P0>,
+                _leaf: CompressedLeafValue<C>,
             ) -> Result<CurveTreePath<L, C>, error::Error> {
                 Err(error::Error::LeafNotFound)
             }
@@ -635,8 +602,8 @@ macro_rules! impl_curve_tree_with_backend {
                 let node = CompressedInner::default_odd();
                 self.backend.set_inner_node(location, node)$($await)*?;
 
-                let mut even_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
-                let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+                let mut even_new_child = CompressedChildCommitments::zero::<C::P0>();
+                let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
                 // Keep going until we reach the root of the tree.
                 while !location.is_root(height) {
@@ -685,7 +652,7 @@ macro_rules! impl_curve_tree_with_backend {
 
             pub $($async_fn)* fn insert_leaf(
                 &mut self,
-                leaf_value: LeafValue<C::P0>,
+                leaf_value: CompressedLeafValue<C>,
             ) -> Result<LeafIndex, Error> {
                 // Make sure there are no uncommitted leaves.
                 self.commit_leaves_to_tree()$($await)*?;
@@ -706,14 +673,14 @@ macro_rules! impl_curve_tree_with_backend {
 
             pub $($async_fn)* fn insert_leaf_delayed_update(
                 &mut self,
-                leaf_value: LeafValue<C::P0>,
+                leaf_value: CompressedLeafValue<C>,
             ) -> Result<LeafIndex, Error> {
                 let leaf_index = self.backend.allocate_leaf_index()$($await)*;
                 self.backend.set_leaf(leaf_index, leaf_value)$($await)*?;
                 Ok(leaf_index)
             }
 
-            pub $($async_fn)* fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
+            pub $($async_fn)* fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<CompressedLeafValue<C>>, Error> {
                 self.backend.get_leaf(leaf_index)$($await)*
             }
 
@@ -787,7 +754,7 @@ macro_rules! impl_curve_tree_with_backend {
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
                     let commitment = if let NodeLocation::Leaf(leaf_index) = child {
-                        self.backend.get_leaf(leaf_index)$($await)*?.map(|leaf| leaf.0)
+                        self.backend.get_leaf(leaf_index)$($await)*?.and_then(|leaf| leaf.decompress().ok())
                     } else {
                         match self.backend.get_inner_node(child)$($await)*? {
                             Some(node) => match node.decompress()? {
@@ -875,7 +842,7 @@ macro_rules! impl_curve_tree_with_backend {
                     .backend
                     .get_leaf(leaf_index)
                     $($await)*?
-                    .map(|leaf| leaf.0)
+                    .and_then(|leaf| leaf.decompress().ok())
                     .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
                 let mut odd_child = Affine::<C::P1>::zero();
 
@@ -938,7 +905,7 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn update_leaf(
                 &mut self,
                 leaf_index: LeafIndex,
-                new_leaf_value: LeafValue<C::P0>,
+                new_leaf_value: CompressedLeafValue<C>,
             ) -> Result<(), Error> {
                 // Make sure there are no uncommitted leaves.
                 self.commit_leaves_to_tree()$($await)*?;
@@ -979,9 +946,9 @@ macro_rules! impl_curve_tree_with_backend {
                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
 
                     let mut even_old_child = None;
-                    let mut even_new_child = CompressedChildCommitments::leaf(leaf_value);
+                    let mut even_new_child = CompressedChildCommitments::Leaf(leaf_value.into());
                     let mut odd_old_child = None;
-                    let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+                    let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
                     // Start at the leaf's location.
                     let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -1049,7 +1016,7 @@ macro_rules! impl_curve_tree_with_backend {
                                         $($await)*?
                                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
                                     even_old_child = None;
-                                    even_new_child = CompressedChildCommitments::leaf(leaf_value);
+                                    even_new_child = CompressedChildCommitments::Leaf(leaf_value.into());
                                     leaf_index += 1;
 
                                     B::Updater::update_node(
@@ -1090,15 +1057,15 @@ macro_rules! impl_curve_tree_with_backend {
             $($async_fn)* fn update_tree(
                 &mut self,
                 leaf_index: LeafIndex,
-                old_leaf_value: Option<LeafValue<C::P0>>,
-                new_leaf_value: LeafValue<C::P0>,
+                old_leaf_value: Option<CompressedLeafValue<C>>,
+                new_leaf_value: CompressedLeafValue<C>,
             ) -> Result<(), Error> {
                 let height = self.height()$($await)*;
 
                 let mut even_old_child = old_leaf_value.map(CompressedChildCommitments::leaf);
                 let mut even_new_child = CompressedChildCommitments::leaf(new_leaf_value);
                 let mut odd_old_child = None;
-                let mut odd_new_child = CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+                let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
@@ -1190,7 +1157,7 @@ macro_rules! impl_curve_tree_with_backend {
                 let block_number = self.get_block_number()$($await)*?;
                 let root = self.compressed_root()$($await)*?;
                 Ok(LeafPathAndRoot {
-                    leaf: leaf.0.try_into()?,
+                    leaf,
                     leaf_index,
                     path: WrappedCanonical::wrap(&path)?,
                     block_number,
@@ -1201,49 +1168,47 @@ macro_rules! impl_curve_tree_with_backend {
     };
 }
 
-#[derive(Clone, Copy, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq)]
-pub struct LeafValue<P0: SWCurveConfig>(pub(crate) Affine<P0>);
+#[derive(Clone, Copy, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct CompressedLeafValue<C: CurveTreeConfig> {
+    point: CompressedAffine,
+    #[codec(skip)]
+    _marker: core::marker::PhantomData<C>,
+}
 
-impl<P0: SWCurveConfig> LeafValue<P0> {
-    pub fn as_compressed_affline(&self) -> Result<CompressedAffine, Error> {
-        self.0.try_into()
+impl<C: CurveTreeConfig> CompressedLeafValue<C> {
+    pub fn new(point: CompressedAffine) -> Self {
+        Self {
+            point,
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    pub fn zero() -> Self {
+        let affine = Affine::<C::P0>::zero();
+        Self::from_affine(affine).expect("Failed to convert zero Affine to CompressedAffine")
+    }
+
+    pub fn from_affine(point: Affine<C::P0>) -> Result<Self, Error> {
+        let compressed: CompressedAffine = point.try_into()?;
+        Ok(Self::new(compressed))
+    }
+
+    pub fn decompress(&self) -> Result<Affine<C::P0>, Error> {
+        let point: Affine<C::P0> = (&self.point).try_into()?;
+        Ok(point)
     }
 }
 
-impl<P0: SWCurveConfig + Copy + Send> core::ops::Deref for LeafValue<P0> {
-    type Target = Affine<P0>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<C: CurveTreeConfig> From<CompressedAffine> for CompressedLeafValue<C> {
+    fn from(point: CompressedAffine) -> Self {
+        Self::new(point)
     }
 }
 
-impl<P0: SWCurveConfig + Copy + Send> core::hash::Hash for LeafValue<P0> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
-impl<P0: SWCurveConfig + Copy + Send> Default for LeafValue<P0> {
-    fn default() -> Self {
-        Self(Affine::<P0>::zero())
-    }
-}
-
-impl<P0: SWCurveConfig + Copy + Send> core::fmt::Debug for LeafValue<P0> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "LeafValue({:?})", self.0)
-    }
-}
-
-impl<P0: SWCurveConfig + Copy + Send> From<&Affine<P0>> for LeafValue<P0> {
-    fn from(value: &Affine<P0>) -> Self {
-        LeafValue(*value)
-    }
-}
-
-impl<P0: SWCurveConfig + Copy + Send> From<Affine<P0>> for LeafValue<P0> {
-    fn from(value: Affine<P0>) -> Self {
-        LeafValue(value)
+impl<C: CurveTreeConfig> From<CompressedLeafValue<C>> for CompressedAffine {
+    fn from(value: CompressedLeafValue<C>) -> Self {
+        value.point
     }
 }

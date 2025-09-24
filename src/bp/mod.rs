@@ -711,12 +711,30 @@ impl AccountStateCommitment {
         Ok(PallasA::try_from(&self.0)?)
     }
 
-    pub fn as_leaf_value(&self) -> Result<LeafValue<PallasParameters>, Error> {
-        Ok(LeafValue(self.get_affine()?))
+    pub fn as_leaf_value(&self) -> Result<CompressedLeafValue<AccountTreeConfig>, Error> {
+        Ok(self.0.into())
     }
 
     pub fn as_commitment(&self) -> Result<BPAccountStateCommitment, Error> {
         Ok(bp_account::AccountStateCommitment(self.get_affine()?))
+    }
+}
+
+impl From<CompressedLeafValue<AccountTreeConfig>> for AccountStateCommitment {
+    fn from(ca: CompressedLeafValue<AccountTreeConfig>) -> Self {
+        Self(ca.into())
+    }
+}
+
+impl From<CompressedAffine> for AccountStateCommitment {
+    fn from(ca: CompressedAffine) -> Self {
+        Self(ca)
+    }
+}
+
+impl From<AccountStateCommitment> for CompressedAffine {
+    fn from(asc: AccountStateCommitment) -> Self {
+        asc.0
     }
 }
 
@@ -744,7 +762,7 @@ impl AccountAssetStateChange {
         &self,
         tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<CurveTreePath<ACCOUNT_TREE_L, C>, Error> {
-        tree_lookup.get_path_to_leaf(self.current_commitment.0.into())
+        tree_lookup.get_path_to_leaf(CompressedLeafValue::from_affine(self.current_commitment.0)?)
     }
 }
 
@@ -947,9 +965,9 @@ impl<T: DartLimits> AssetState<T> {
         Ok(asset_data)
     }
 
-    pub fn commitment(&self) -> Result<LeafValue<VestaParameters>, Error> {
+    pub fn commitment(&self) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
         let asset_data = self.asset_data()?;
-        Ok(asset_data.commitment.into())
+        CompressedLeafValue::from_affine(asset_data.commitment)
     }
 }
 
@@ -980,7 +998,7 @@ impl AssetCurveTree {
         let asset_id = state.asset_id;
         // Get the new asset state commitment.
         let asset_data = state.asset_data()?;
-        let leaf = asset_data.commitment;
+        let leaf = CompressedLeafValue::from_affine(asset_data.commitment)?;
 
         // Update or insert the asset state.
         use std::collections::hash_map::Entry;
@@ -990,12 +1008,12 @@ impl AssetCurveTree {
                 *existing_state = state;
                 let index = *index;
                 // Update the leaf in the curve tree.
-                self.tree.update(leaf.into(), index)?;
+                self.tree.update(leaf, index)?;
 
                 Ok(index)
             }
             Entry::Vacant(entry) => {
-                let index = self.tree.insert(leaf.into())?;
+                let index = self.tree.insert(leaf)?;
                 entry.insert((index, state));
 
                 Ok(index)

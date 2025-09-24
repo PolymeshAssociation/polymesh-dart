@@ -112,6 +112,7 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 pub trait CurveTreeConfig:
     Clone
+    + Copy
     + Sized
     + PartialEq
     + Eq
@@ -142,7 +143,7 @@ pub trait CurveTreeConfig:
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1>;
 }
 
-#[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct AssetTreeConfig;
 impl CurveTreeConfig for AssetTreeConfig {
     const L: usize = ASSET_TREE_L;
@@ -161,7 +162,7 @@ impl CurveTreeConfig for AssetTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct AccountTreeConfig;
 impl CurveTreeConfig for AccountTreeConfig {
     const L: usize = ACCOUNT_TREE_L;
@@ -212,7 +213,7 @@ pub trait CurveTreeLookup<const L: usize, const M: usize, C: CurveTreeConfig> {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error>;
 
     /// Returns the path to a leaf in the curve tree by its value.
-    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error>;
+    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error>;
 
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters<C>;
@@ -327,12 +328,15 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<C::P0>) -> Result<LeafIndex, Error> {
+    pub fn insert(&mut self, leaf: CompressedLeafValue<C>) -> Result<LeafIndex, Error> {
         self.tree.insert_leaf(leaf)
     }
 
     /// Insert a new leaf into the curve tree without committing it immediately.
-    pub fn insert_delayed_update(&mut self, leaf: LeafValue<C::P0>) -> Result<LeafIndex, Error> {
+    pub fn insert_delayed_update(
+        &mut self,
+        leaf: CompressedLeafValue<C>,
+    ) -> Result<LeafIndex, Error> {
         self.tree.insert_leaf_delayed_update(leaf)
     }
 
@@ -342,7 +346,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
     }
 
     /// Updates an existing leaf in the curve tree.
-    pub fn update(&mut self, leaf: LeafValue<C::P0>, leaf_index: LeafIndex) -> Result<(), Error> {
+    pub fn update(
+        &mut self,
+        leaf: CompressedLeafValue<C>,
+        leaf_index: LeafIndex,
+    ) -> Result<(), Error> {
         self.tree.update_leaf(leaf_index, leaf)
     }
 
@@ -394,7 +402,10 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
     }
 
-    fn get_path_to_leaf(&self, _leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
+    fn get_path_to_leaf(
+        &self,
+        _leaf: CompressedLeafValue<C>,
+    ) -> Result<CurveTreePath<L, C>, Error> {
         Err(Error::LeafNotFound)
     }
 
@@ -433,8 +444,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> VerifierCurveTree<L, M,
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<C::P0>) -> Result<LeafIndex, Error> {
-        self.tree.insert_leaf(leaf.into())
+    pub fn insert(&mut self, leaf: CompressedLeafValue<C>) -> Result<LeafIndex, Error> {
+        self.tree.insert_leaf(leaf)
     }
 
     /// Returns the parameters of the curve tree.
@@ -507,7 +518,7 @@ impl<
     }
 
     /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: LeafValue<C::P0>) -> Result<u64, E> {
+    pub fn insert(&mut self, leaf: CompressedLeafValue<C>) -> Result<u64, E> {
         let leaf_index = self.tree.insert_leaf(leaf)? as u64;
         let leaf_buf = leaf.encode();
         self.leaf_to_index.insert(leaf_buf, leaf_index);
@@ -524,9 +535,9 @@ impl<
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
-    pub fn apply_updates(&mut self, leaves: Vec<LeafValue<C::P0>>) -> Result<(), E> {
-        for leaf in &leaves {
-            self.tree.insert_leaf(*leaf)?;
+    pub fn apply_updates(&mut self, leaves: Vec<CompressedLeafValue<C>>) -> Result<(), E> {
+        for leaf in leaves {
+            self.tree.insert_leaf(leaf)?;
         }
         Ok(())
     }
@@ -547,7 +558,7 @@ impl<
 
     pub fn get_path_and_root(
         &self,
-        leaf: LeafValue<C::P0>,
+        leaf: CompressedLeafValue<C>,
     ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
         let leaf_buf = leaf.encode();
         if let Some(&leaf_index) = self.leaf_to_index.get(&leaf_buf) {
@@ -583,7 +594,7 @@ impl<
             .map_err(|_| Error::LeafIndexNotFound(leaf_index))?)
     }
 
-    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
+    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error> {
         let leaf_buf = leaf.encode();
         if let Some(&leaf_index) = self.leaf_to_index.get(&leaf_buf) {
             self.get_path_to_leaf_index(leaf_index)
@@ -740,58 +751,31 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         self.height
     }
 
-    pub fn increase_height(
-        &mut self,
-        params: &SelRerandParameters<C::P0, C::P1>,
-    ) -> Result<(), Error> {
+    pub fn increase_height<U: CurveTreeUpdater<L, M, C>>(&mut self) -> Result<(), Error> {
         self.height += 1;
-        // Clear the children x-coordinates since they are no longer valid.
-        self.x_coord_children = vec![[CompressedBaseField::default(); M]; L];
-        // Save the old commitments.
-        let commitments = self.commitments;
-        // Reset the commitments.
-        self.commitments = [CompressedAffine::default(); M];
 
         if self.is_even() {
-            let mut old_commitments = [Affine::<C::P1>::zero(); M];
-            // Decompress the old commitments as they are the commitments of the first child of the new root node.
-            for (compressed_com, commitment) in commitments.iter().zip(old_commitments.iter_mut()) {
-                *commitment = compressed_com.try_into()?;
-            }
-
-            let mut new_commitments = [Affine::<C::P0>::zero(); M];
-            // The new root node is Odd.
-            let odd_new_child = ChildCommitments::inner(old_commitments);
-            let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
-                &mut new_commitments,
-                0, // The old root is the first child of the new root.
-                None,
-                odd_new_child,
-                &params.odd_parameters.delta,
-                &params.even_parameters,
-            )?;
-            // Save the new root commitments and child x-coordinates.
-            self.update::<C::P0, C::P1>(&new_commitments, &new_x_coords, 0)?;
-        } else {
             // The new root node is Even.
-            let mut old_commitments = [Affine::<C::P0>::zero(); M];
-            // Decompress the old commitments as they are the commitments of the first child of the new root node.
-            for (compressed_com, commitment) in commitments.iter().zip(old_commitments.iter_mut()) {
-                *commitment = compressed_com.try_into()?;
-            }
+            let mut inner = CompressedInner::default_even();
+            // The old root is the first child of the new root node.
+            let odd_new_child = CompressedChildCommitments::Inner(self.commitments);
 
-            let mut new_commitments = [Affine::<C::P1>::zero(); M];
-            let even_new_child = ChildCommitments::inner(old_commitments);
-            let new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
-                &mut new_commitments,
-                0, // The old root is the first child of the new root.
-                None,
-                even_new_child,
-                &params.even_parameters.delta,
-                &params.odd_parameters,
-            )?;
+            let new_x_coords = U::update_node(&mut inner, 0, None, odd_new_child)?.x_coords;
+
             // Save the new root commitments and child x-coordinates.
-            self.update::<C::P1, C::P0>(&new_commitments, &new_x_coords, 0)?;
+            self.commitments = inner.commitments;
+            self.x_coord_children = vec![new_x_coords];
+        } else {
+            // The new root node is Odd.
+            let mut inner = CompressedInner::default_odd();
+            // The old root is the first child of the new root node.
+            let odd_new_child = CompressedChildCommitments::Inner(self.commitments);
+
+            let new_x_coords = U::update_node(&mut inner, 0, None, odd_new_child)?.x_coords;
+
+            // Save the new root commitments and child x-coordinates.
+            self.commitments = inner.commitments;
+            self.x_coord_children = vec![new_x_coords];
         }
 
         Ok(())
@@ -882,10 +866,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
     fn init(&mut self, current_root: &mut CompressedCurveTreeRoot<L, M, C>) -> Result<(), Error> {
         let height = self.height();
 
-        let mut even_new_child =
-            CompressedChildCommitments::leaf(LeafValue(Affine::<C::P0>::zero()));
-        let mut odd_new_child =
-            CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+        let mut even_new_child = CompressedChildCommitments::zero::<C::P0>();
+        let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
         // Start at the first leaf's location.
         let mut location = NodeLocation::leaf(0);
@@ -944,7 +926,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
 
     pub fn append_leaf(
         &mut self,
-        new_leaf_value: LeafValue<C::P0>,
+        new_leaf_value: CompressedLeafValue<C>,
         current_root: &mut CompressedCurveTreeRoot<L, M, C>,
     ) -> Result<(), Error> {
         self.batch_append_leaves(&[new_leaf_value], current_root, None)
@@ -952,7 +934,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
 
     pub fn batch_append_leaves(
         &mut self,
-        leaves: &[LeafValue<C::P0>],
+        leaves: &[CompressedLeafValue<C>],
         current_root: &mut CompressedCurveTreeRoot<L, M, C>,
         mut updated_nodes: Option<&mut BTreeMap<NodeLocation<L>, CompressedInner<M, C>>>,
     ) -> Result<(), Error> {
@@ -965,10 +947,9 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
             let leaf_value = leaves[leaf_idx as usize];
 
             let mut even_old_child = None;
-            let mut even_new_child = CompressedChildCommitments::leaf(leaf_value);
+            let mut even_new_child = CompressedChildCommitments::Leaf(leaf_value.into());
             let mut odd_old_child = None;
-            let mut odd_new_child =
-                CompressedChildCommitments::leaf(LeafValue(Affine::<C::P1>::zero()));
+            let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
             // Start at the leaf's location.
             let mut location = NodeLocation::<L>::leaf(leaf_index_base + leaf_idx);

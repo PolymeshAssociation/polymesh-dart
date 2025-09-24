@@ -1,22 +1,23 @@
 use test_log::test;
 
 use polymesh_dart::NodeLevel;
+use polymesh_dart::PallasA;
 use polymesh_dart::curve_tree::{
-    AccountTreeConfig, CompressedCurveTreeRoot, FullCurveTree, LeafValue, LeanCurveTree,
+    AccountTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, FullCurveTree, LeanCurveTree,
 };
-use polymesh_dart::{PallasA, PallasParameters};
 
 const L: usize = 16;
 const HEIGHT: NodeLevel = 4;
 const GENS_LENGTH: usize = 32;
 
-fn create_test_leaf(value: usize) -> LeafValue<PallasParameters> {
+fn create_test_leaf(value: usize) -> CompressedLeafValue<AccountTreeConfig> {
     use ark_ec::{AffineRepr, CurveGroup};
     use ark_pallas::Fr as PallasScalar;
 
     // Create a deterministic leaf value for testing
     let scalar = PallasScalar::from(value as u64);
-    (PallasA::generator() * scalar).into_affine().into()
+    CompressedLeafValue::from_affine((PallasA::generator() * scalar).into_affine())
+        .expect("Failed to create leaf")
 }
 
 fn setup_trees() -> (

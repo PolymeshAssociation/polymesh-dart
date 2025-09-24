@@ -8,7 +8,7 @@ use codec::{Decode, Encode};
 
 use super::common::*;
 use crate::{
-    BlockNumber, CompressedAffine, LeafIndex, NodeLevel, WrappedCanonical,
+    BlockNumber, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
         CompressedCurveTreeRoot, CurveTreeConfig, CurveTreeLookup, CurveTreeParameters,
         CurveTreePath, CurveTreeUpdater, DefaultCurveTreeUpdater,
@@ -44,8 +44,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         Err(Error::LeafIndexNotFound(leaf_index))
     }
 
-    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
-        let leaf = leaf.as_compressed_affline()?;
+    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error> {
         for leaf_path in &self.paths {
             if leaf_path.leaf == leaf {
                 return leaf_path.get_path();
@@ -70,7 +69,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
 #[derive(Clone, Encode, Decode)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
-    pub leaf: CompressedAffine,
+    pub leaf: CompressedLeafValue<C>,
     pub leaf_index: LeafIndex,
     pub path: WrappedCanonical<CurveTreePath<L, C>>,
     pub block_number: BlockNumber,
@@ -94,8 +93,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         }
     }
 
-    fn get_path_to_leaf(&self, leaf: LeafValue<C::P0>) -> Result<CurveTreePath<L, C>, Error> {
-        let leaf = leaf.as_compressed_affline()?;
+    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error> {
         if self.leaf == leaf {
             self.get_path()
         } else {
@@ -165,13 +163,16 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Self::Error>;
+    fn get_leaf(
+        &self,
+        leaf_index: LeafIndex,
+    ) -> Result<Option<CompressedLeafValue<C>>, Self::Error>;
 
     fn set_leaf(
         &mut self,
         _leaf_index: LeafIndex,
-        _new_leaf_value: LeafValue<C::P0>,
-    ) -> Result<Option<LeafValue<C::P0>>, Self::Error> {
+        _new_leaf_value: CompressedLeafValue<C>,
+    ) -> Result<Option<CompressedLeafValue<C>>, Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
     }
 
@@ -255,13 +256,13 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
-    ) -> impl Future<Output = Result<Option<LeafValue<C::P0>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<CompressedLeafValue<C>>, Self::Error>> + Send;
 
     fn set_leaf(
         &mut self,
         _leaf_index: LeafIndex,
-        _new_leaf_value: LeafValue<C::P0>,
-    ) -> impl Future<Output = Result<Option<LeafValue<C::P0>>, Self::Error>> + Send {
+        _new_leaf_value: CompressedLeafValue<C>,
+    ) -> impl Future<Output = Result<Option<CompressedLeafValue<C>>, Self::Error>> + Send {
         async move { Err(Error::CurveTreeBackendReadOnly.into()) }
     }
 
@@ -283,7 +284,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
 pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeConfig> {
     height: NodeLevel,
-    leafs: Vec<LeafValue<C::P0>>,
+    leafs: Vec<CompressedLeafValue<C>>,
     next_leaf_index: LeafIndex,
     committed_leaf_index: LeafIndex,
     nodes: BTreeMap<NodeLocation<L>, CompressedInner<M, C>>,
@@ -398,15 +399,15 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         Ok(())
     }
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
+    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<CompressedLeafValue<C>>, Error> {
         Ok(self.leafs.get(leaf_index as usize).copied())
     }
 
     fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<C::P0>,
-    ) -> Result<Option<LeafValue<C::P0>>, Error> {
+        new_leaf_value: CompressedLeafValue<C>,
+    ) -> Result<Option<CompressedLeafValue<C>>, Error> {
         let old_leaf_value = if let Some(leaf) = self.leafs.get_mut(leaf_index as usize) {
             let old = *leaf;
             *leaf = new_leaf_value;
@@ -510,15 +511,18 @@ where
         CurveTreeBackend::set_committed_leaf_index(self, leaf_index)
     }
 
-    async fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<LeafValue<C::P0>>, Error> {
+    async fn get_leaf(
+        &self,
+        leaf_index: LeafIndex,
+    ) -> Result<Option<CompressedLeafValue<C>>, Error> {
         CurveTreeBackend::get_leaf(self, leaf_index)
     }
 
     async fn set_leaf(
         &mut self,
         leaf_index: LeafIndex,
-        new_leaf_value: LeafValue<C::P0>,
-    ) -> Result<Option<LeafValue<C::P0>>, Error> {
+        new_leaf_value: CompressedLeafValue<C>,
+    ) -> Result<Option<CompressedLeafValue<C>>, Error> {
         CurveTreeBackend::set_leaf(self, leaf_index, new_leaf_value)
     }
 

@@ -667,10 +667,9 @@ impl DartTestingDb {
 
         // Update the asset tree
         let asset_state = self.create_asset_state(asset_id, mediators, auditors)?;
-        let asset_data = asset_state.asset_data()?;
+        let asset_leaf = asset_state.commitment()?;
         let leaf_index = asset_id as _;
-        self.asset_tree
-            .update_leaf(leaf_index, asset_data.commitment.into())?;
+        self.asset_tree.update_leaf(leaf_index, asset_leaf)?;
 
         Ok(AssetInfo {
             id,

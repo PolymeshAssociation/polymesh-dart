@@ -11,7 +11,7 @@ use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
 
-use crate::{curve_tree::LeafValue, *};
+use crate::*;
 
 macro_rules! impl_scale_and_type_info {
      ( $type:ident as $as_type:ident $( < $($trailing:tt)* )? ) => {
@@ -361,9 +361,6 @@ impl_scale_and_type_info!(AccountSecretKey as Array32);
 
 // TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
-
-// TypeInfo, SCALE encoding and decoding for `LeafValue<P0>`.
-impl_scale_and_type_info!(LeafValue as CompressedPoint<P0: SWCurveConfig>);
 
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
