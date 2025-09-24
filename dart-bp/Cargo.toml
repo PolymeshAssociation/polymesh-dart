@@ -75,3 +75,6 @@ parallel = [
 	"ark-crypto-primitives/parallel",
 	"ark-r1cs-std/parallel",
 ]
+
+# To ignore input sanitation checks run by prover. Useful when running certain tests for failure cases
+ignore_prover_input_sanitation = []

@@ -1,4 +1,5 @@
-use crate::account::{TXN_CHALLENGE_LABEL, TXN_INSTANCE_LABEL};
+use crate::{TXN_CHALLENGE_LABEL, add_to_transcript, NONCE_LABEL, T_SIG_KEY, T_ENC_KEY};
+use crate::util::add_slice_to_transcript;
 use crate::error::{Error, Result};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::One;
@@ -87,19 +88,24 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         enc_key_gen: G,
     ) -> Result<Self> {
         // Note: This proof can be reduced to half in size if both sig and enc keys use the same generator
+        let transcript = MerlinTranscript::new(INVESTOR_KEY_REG_TXN_LABEL);
+        Self::new_with_given_transcript(rng, keys, nonce, sig_key_gen, enc_key_gen, transcript)
+    }
 
-        let mut transcript = MerlinTranscript::new(INVESTOR_KEY_REG_TXN_LABEL);
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance)?;
-        sig_key_gen.serialize_compressed(&mut extra_instance)?;
-        enc_key_gen.serialize_compressed(&mut extra_instance)?;
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
+        nonce: &[u8],
+        sig_key_gen: G,
+        enc_key_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<Self> {
+        // Note: This proof can be reduced to half in size if both sig and enc keys use the same generator
 
-        transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
-        for ((s, _), (e, _)) in keys.iter() {
-            s.serialize_compressed(&mut transcript)?;
-            e.serialize_compressed(&mut transcript)?;
-        }
+        let key_pairs: Vec<_> = keys.iter().map(|((s, _), (e, _))| (*s, *e)).collect();
+        add_slice_to_transcript(&mut transcript, b"keys", &key_pairs)?;
 
         let r_sig = G::ScalarField::rand(rng);
         let r_enc = G::ScalarField::rand(rng);
@@ -107,8 +113,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         let t_sig = (sig_key_gen * r_sig).into_affine();
         let t_enc = (enc_key_gen * r_enc).into_affine();
 
-        t_sig.serialize_compressed(&mut extra_instance)?;
-        t_enc.serialize_compressed(&mut extra_instance)?;
+        add_to_transcript!(transcript, T_SIG_KEY, t_sig, T_ENC_KEY, t_enc);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -137,18 +142,23 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         sig_key_gen: G,
         enc_key_gen: G,
     ) -> Result<()> {
-        let mut transcript = MerlinTranscript::new(INVESTOR_KEY_REG_TXN_LABEL);
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance)?;
-        sig_key_gen.serialize_compressed(&mut extra_instance)?;
-        enc_key_gen.serialize_compressed(&mut extra_instance)?;
+        let transcript = MerlinTranscript::new(INVESTOR_KEY_REG_TXN_LABEL);
+        self.verify_with_given_transcript(pub_keys, nonce, sig_key_gen, enc_key_gen, transcript)
+    }
 
-        transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+    pub fn verify_with_given_transcript(
+        &self,
+        pub_keys: Vec<(G, G)>,
+        nonce: &[u8],
+        sig_key_gen: G,
+        enc_key_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<()> {
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
-        for (s, e) in pub_keys.iter() {
-            s.serialize_compressed(&mut transcript)?;
-            e.serialize_compressed(&mut transcript)?;
-        }
+        add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;
+
+        add_to_transcript!(transcript, T_SIG_KEY, self.sig.0, T_ENC_KEY, self.enc.0);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -202,21 +212,26 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         nonce: &[u8],
         enc_key_gen: G,
     ) -> Result<Self> {
-        let mut transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance)?;
-        enc_key_gen.serialize_compressed(&mut extra_instance)?;
+        let transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
+        Self::new_with_given_transcript(rng, keys, nonce, enc_key_gen, transcript)
+    }
 
-        transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        keys: Vec<(G, G::ScalarField)>,
+        nonce: &[u8],
+        enc_key_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<Self> {
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
-        for (e, _) in keys.iter() {
-            e.serialize_compressed(&mut transcript)?;
-        }
+        let enc_keys: Vec<_> = keys.iter().map(|(e, _)| *e).collect();
+        add_slice_to_transcript(&mut transcript, b"keys", &enc_keys)?;
 
         let r = G::ScalarField::rand(rng);
         let t = (enc_key_gen * r).into_affine();
 
-        t.serialize_compressed(&mut extra_instance)?;
+        add_to_transcript!(transcript, T_ENC_KEY, t);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -231,16 +246,22 @@ impl<G: AffineRepr> AudMedRegProof<G> {
     }
 
     pub fn verify(&self, pub_keys: Vec<G>, nonce: &[u8], enc_key_gen: G) -> Result<()> {
-        let mut transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
-        let mut extra_instance = vec![];
-        nonce.serialize_compressed(&mut extra_instance)?;
-        enc_key_gen.serialize_compressed(&mut extra_instance)?;
+        let transcript = MerlinTranscript::new(AUD_MED_KEY_REG_TXN_LABEL);
+        self.verify_with_given_transcript(pub_keys, nonce, enc_key_gen, transcript)
+    }
 
-        transcript.append_message_without_static_label(TXN_INSTANCE_LABEL, &extra_instance);
+    pub fn verify_with_given_transcript(
+        &self,
+        pub_keys: Vec<G>,
+        nonce: &[u8],
+        enc_key_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<()> {
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
-        for e in pub_keys.iter() {
-            e.serialize_compressed(&mut transcript)?;
-        }
+        add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;
+
+        add_to_transcript!(transcript, T_ENC_KEY, self.t);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 

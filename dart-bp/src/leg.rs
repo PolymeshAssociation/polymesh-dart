@@ -1,8 +1,13 @@
 use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
-    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng, get_verification_tuples_with_rng, verify_given_verification_tuples,
+    get_verification_tuples_with_rng, initialize_curve_tree_prover_with_given_transcripts,
+    initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
+    verify_given_verification_tuples,
 };
-use crate::{Error, error::Result};
+use crate::{
+    INDEX_IN_ASSET_DATA_LABEL, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
+};
+use crate::{Error, add_to_transcript, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
@@ -14,7 +19,9 @@ use ark_std::iter;
 use ark_std::ops::Neg;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::BulletproofGens;
-use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSProof, Variable, VerificationTuple};
+use bulletproofs::r1cs::{
+    ConstraintSystem, LinearCombination, R1CSProof, Variable, VerificationTuple,
+};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::ped_comm_group_elems::{prove_naive, verify_naive};
@@ -28,9 +35,13 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AMOUNT_BITS, AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+    PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
+use schnorr_pok::partial::{
+    Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use ark_std::collections::BTreeMap;
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
 pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
@@ -501,10 +512,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 /// and ensuring `pk` is the correct public key for the asset auditor/mediator
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RespEphemeralPublicKey<G: SWCurveConfig> {
-    pub r_1: (Affine<G>, SchnorrResponse<Affine<G>>),
-    pub r_2: PokDiscreteLog<Affine<G>>,
-    pub r_3: PokDiscreteLog<Affine<G>>,
-    pub r_4: PokDiscreteLog<Affine<G>>,
+    pub r_1: (Affine<G>, PartialSchnorrResponse<Affine<G>>),
+    pub r_2: PartialPokDiscreteLog<Affine<G>>,
+    pub r_3: PartialPokDiscreteLog<Affine<G>>,
+    pub r_4: PartialPokDiscreteLog<Affine<G>>,
 }
 
 /// This is the proof for settlement creation. Report section 5.1.5
@@ -521,10 +532,10 @@ pub struct SettlementTxnProof<
     pub re_randomized_path: SelectAndRerandomizePath<L, G1, G0>,
     /// Commitment to randomness and response for proving knowledge of amount in twisted Elgamal encryption of amount.
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_amount_enc: PokPedersenCommitment<Affine<G0>>,
+    pub resp_amount_enc: Partial1PokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving asset-id in twisted Elgamal encryption of asset-id.
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_asset_id_enc: PokPedersenCommitment<Affine<G0>>,
+    pub resp_asset_id_enc: Partial1PokPedersenCommitment<Affine<G0>>,
     pub resp_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub re_randomized_points: Vec<Affine<G0>>,
     /// Bulletproof vector commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
@@ -561,30 +572,62 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
+        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        Self::new_with_given_transcript(
+            rng,
+            leg,
+            leg_enc,
+            leg_enc_rand,
+            leaf_path,
+            asset_data,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            even_transcript,
+            odd_transcript,
+        )
+    }
+
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        leg: Leg<Affine<G0>>,
+        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        leaf_path: CurveTreeWitnessPath<L, G1, G0>,
+        asset_data: AssetData<F0, F1, G0, G1>,
+        nonce: &[u8],
+        // Rest are public parameters
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_transcript: MerlinTranscript,
+        odd_transcript: MerlinTranscript,
+    ) -> Result<Self> {
         if leg.asset_id != asset_data.id {
             return Err(Error::IncompatibleAssetId(leg.asset_id, asset_data.id));
         }
         let (mut even_prover, mut odd_prover, re_randomized_path, re_randomization_of_leaf) =
-            initialize_curve_tree_prover(
+            initialize_curve_tree_prover_with_given_transcripts(
                 rng,
-                SETTLE_TXN_EVEN_LABEL,
-                SETTLE_TXN_ODD_LABEL,
                 leaf_path,
                 tree_parameters,
+                even_transcript,
+                odd_transcript,
             );
 
-        let mut leg_instance = vec![];
-        leg_enc.serialize_compressed(&mut leg_instance)?;
-        nonce.serialize_compressed(&mut leg_instance)?;
-        re_randomized_path.serialize_compressed(&mut leg_instance)?;
-        tree_parameters.serialize_compressed(&mut leg_instance)?;
-        asset_comm_params.serialize_compressed(&mut leg_instance)?;
-        enc_key_gen.serialize_compressed(&mut leg_instance)?;
-        enc_gen.serialize_compressed(&mut leg_instance)?;
-
-        odd_prover
-            .transcript()
-            .append_message_without_static_label(SETTLE_TXN_INSTANCE_LABEL, &leg_instance);
+        add_to_transcript!(
+            odd_prover.transcript(),
+            LEG_ENC_LABEL,
+            leg_enc,
+            NONCE_LABEL,
+            nonce,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path
+        );
 
         let at = F0::from(leg.asset_id);
         let amount = F0::from(leg.amount);
@@ -848,20 +891,18 @@ impl<
             .zip(t_points_r4.into_iter())
             .enumerate()
         {
-            let role = asset_data.keys[i].0;
-
-            let mut wits1 = vec![r_1, r_1 * blindings_for_points[i + 1]];
-            if role {
-                wits1.push(r_1);
-            }
-            let resp_1 = t_points_r1[i].response(&wits1, &prover_challenge)?;
+            // Response for other witnesses will already be generated in sigma protocol for Bulletproof commitment
+            // TODO: Cant both bases with exponents r1 be combined
+            let mut wits1 = BTreeMap::new();
+            wits1.insert(1, r_1 * blindings_for_points[i + 1]);
+            let resp_1 = t_points_r1[i].partial_response(wits1, &prover_challenge)?;
 
             // TODO: Batch sigma can be used for these 3. And potentially these can be combined across keys. But then how to check the same response for r_2, r_3, r4?
-            let resp_2 = t_points_r2.gen_proof(&prover_challenge);
+            let resp_2 = t_points_r2.gen_partial_proof();
 
-            let resp_3 = t_points_r3.gen_proof(&prover_challenge);
+            let resp_3 = t_points_r3.gen_partial_proof();
 
-            let resp_4 = t_points_r4.gen_proof(&prover_challenge);
+            let resp_4 = t_points_r4.gen_partial_proof();
             resp_eph_pk_auds_meds.push(RespEphemeralPublicKey {
                 r_1: (t_points_r1[i].t, resp_1),
                 r_2: resp_2,
@@ -870,9 +911,13 @@ impl<
             });
         }
 
-        let resp_amount_enc = t_amount_enc.gen_proof(&prover_challenge);
-        let resp_asset_id_enc = t_asset_id_enc.gen_proof(&prover_challenge);
+        // Response for witness will already be generated in sigma protocol for Bulletproof
+        let resp_amount_enc = t_amount_enc.gen_partial1_proof(&prover_challenge);
+
         let resp_asset_id = t_asset_id.gen_proof(&prover_challenge);
+
+        // Response for witness will already be generated in sigma protocol for above relation of asset_id
+        let resp_asset_id_enc = t_asset_id_enc.gen_partial1_proof(&prover_challenge);
 
         let (even_proof, odd_proof) =
             prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
@@ -904,7 +949,10 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
-        let (even_tuple, odd_tuple) = self.verify_except_bp(
+        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+
+        let (even_tuple, odd_tuple) = self.verify_with_given_transcript(
             leg_enc,
             tree_root,
             nonce,
@@ -913,6 +961,8 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            &mut transcript_even,
+            &mut transcript_odd,
         )?;
 
         verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters)
@@ -929,6 +979,36 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+    ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
+        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+
+        self.verify_with_given_transcript(
+            leg_enc,
+            tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            &mut transcript_even,
+            &mut transcript_odd,
+        )
+    }
+
+    pub fn verify_with_given_transcript<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        tree_root: &Root<L, 1, G1, G0>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        transcript_even: &mut MerlinTranscript,
+        transcript_odd: &mut MerlinTranscript,
     ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(
@@ -949,27 +1029,24 @@ impl<
             ));
         }
 
-        let (mut even_verifier, mut odd_verifier) = initialize_curve_tree_verifier(
-            SETTLE_TXN_EVEN_LABEL,
-            SETTLE_TXN_ODD_LABEL,
-            &self.re_randomized_path,
-            tree_root,
-            tree_parameters,
+        let (mut even_verifier, mut odd_verifier) =
+            initialize_curve_tree_verifier_with_given_transcripts(
+                &self.re_randomized_path,
+                tree_root,
+                tree_parameters,
+                transcript_even.clone(),
+                transcript_odd.clone(),
+            );
+
+        add_to_transcript!(
+            odd_verifier.transcript(),
+            LEG_ENC_LABEL,
+            leg_enc,
+            NONCE_LABEL,
+            nonce,
+            RE_RANDOMIZED_PATH_LABEL,
+            self.re_randomized_path
         );
-
-        let mut leg_instance = vec![];
-        leg_enc.serialize_compressed(&mut leg_instance)?;
-        nonce.serialize_compressed(&mut leg_instance)?;
-        self.re_randomized_path
-            .serialize_compressed(&mut leg_instance)?;
-        tree_parameters.serialize_compressed(&mut leg_instance)?;
-        asset_comm_params.serialize_compressed(&mut leg_instance)?;
-        enc_key_gen.serialize_compressed(&mut leg_instance)?;
-        enc_gen.serialize_compressed(&mut leg_instance)?;
-
-        odd_verifier
-            .transcript()
-            .append_message_without_static_label(SETTLE_TXN_INSTANCE_LABEL, &leg_instance);
 
         let rerandomized_leaf = self.re_randomized_path.get_rerandomized_leaf();
 
@@ -1038,15 +1115,10 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &verifier_challenge,
+            &self.resp_comm_r_i_amount.0[8],
         ) {
             return Err(Error::ProofVerificationError(
                 "resp_amount_enc verification failed".into(),
-            ));
-        }
-
-        if self.resp_comm_r_i_amount.0[8] != self.resp_amount_enc.response2 {
-            return Err(Error::ProofVerificationError(
-                "Amount response mismatch".into(),
             ));
         }
 
@@ -1066,15 +1138,10 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &verifier_challenge,
+            &self.resp_asset_id.response1,
         ) {
             return Err(Error::ProofVerificationError(
                 "resp_asset_id_enc verification failed".into(),
-            ));
-        }
-
-        if self.resp_asset_id.response1 != self.resp_asset_id_enc.response2 {
-            return Err(Error::ProofVerificationError(
-                "Assed Id response mismatch".into(),
             ));
         }
 
@@ -1099,7 +1166,10 @@ impl<
             let role = leg_enc.eph_pk_auds_meds[i].0;
             let D_r1 = &leg_enc.eph_pk_auds_meds[i].1.0;
 
+            let mut missing_resps = BTreeMap::new();
+            missing_resps.insert(0, self.resp_comm_r_i_amount.0[1]);
             if role {
+                missing_resps.insert(2, self.resp_comm_r_i_amount.0[1]);
                 resp.r_1.1.is_valid(
                     &[
                         self.re_randomized_points[i + 1], // since first point commits to asset-id
@@ -1109,12 +1179,8 @@ impl<
                     D_r1,
                     &resp.r_1.0,
                     &verifier_challenge,
+                    missing_resps,
                 )?;
-                if resp.r_1.1.0[0] != resp.r_1.1.0[2] {
-                    return Err(Error::ProofVerificationError(
-                        "Mismatch in response for r_1".into(),
-                    ));
-                }
             } else {
                 resp.r_1.1.is_valid(
                     &[
@@ -1124,53 +1190,39 @@ impl<
                     D_r1,
                     &resp.r_1.0,
                     &verifier_challenge,
+                    missing_resps,
                 )?;
             }
 
-            if !resp
-                .r_2
-                .verify(&leg_enc.eph_pk_auds_meds[i].1.1, D_r1, &verifier_challenge)
-            {
+            if !resp.r_2.verify(
+                &leg_enc.eph_pk_auds_meds[i].1.1,
+                D_r1,
+                &verifier_challenge,
+                &self.resp_comm_r_i_amount.0[5],
+            ) {
                 return Err(Error::ProofVerificationError(format!(
                     "resp_leaf_points[{i}].r_2 verification mismatch"
                 )));
             }
-            if !resp
-                .r_3
-                .verify(&leg_enc.eph_pk_auds_meds[i].1.2, D_r1, &verifier_challenge)
-            {
+            if !resp.r_3.verify(
+                &leg_enc.eph_pk_auds_meds[i].1.2,
+                D_r1,
+                &verifier_challenge,
+                &self.resp_comm_r_i_amount.0[6],
+            ) {
                 return Err(Error::ProofVerificationError(format!(
                     "resp_leaf_points[{i}].r_3 verification mismatch"
                 )));
             }
-            if !resp
-                .r_4
-                .verify(&leg_enc.eph_pk_auds_meds[i].1.3, D_r1, &verifier_challenge)
-            {
+            if !resp.r_4.verify(
+                &leg_enc.eph_pk_auds_meds[i].1.3,
+                D_r1,
+                &verifier_challenge,
+                &self.resp_comm_r_i_amount.0[7],
+            ) {
                 return Err(Error::ProofVerificationError(format!(
                     "resp_leaf_points[{i}].r_4 verification mismatch"
                 )));
-            }
-
-            if resp.r_1.1.0[0] != self.resp_comm_r_i_amount.0[1] {
-                return Err(Error::ProofVerificationError(
-                    "Mismatch in response for r_1".into(),
-                ));
-            }
-            if resp.r_2.response != self.resp_comm_r_i_amount.0[5] {
-                return Err(Error::ProofVerificationError(
-                    "Mismatch in response for r_2/r_1".into(),
-                ));
-            }
-            if resp.r_3.response != self.resp_comm_r_i_amount.0[6] {
-                return Err(Error::ProofVerificationError(
-                    "Mismatch in response for r_3/r_1".into(),
-                ));
-            }
-            if resp.r_4.response != self.resp_comm_r_i_amount.0[7] {
-                return Err(Error::ProofVerificationError(
-                    "Mismatch in response for r_4/r_1".into(),
-                ));
             }
         }
 
@@ -1181,6 +1233,35 @@ impl<
             &self.odd_proof,
             rng,
         )
+    }
+
+    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        tree_root: &Root<L, 1, G1, G0>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        transcript_even: &mut MerlinTranscript,
+        transcript_odd: &mut MerlinTranscript,
+    ) -> Result<()> {
+        let (even_tuple, odd_tuple) = self.verify_with_given_transcript(
+            leg_enc,
+            tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            transcript_even,
+            transcript_odd,
+        )?;
+
+        verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters)
     }
 
     pub(crate) fn enforce_constraints<CS: ConstraintSystem<F0>>(
@@ -1245,6 +1326,31 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         nonce: &[u8],
         enc_gen: G,
     ) -> Result<Self> {
+        let transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+        Self::new_with_given_transcript(
+            rng,
+            leg_enc,
+            asset_id,
+            mediator_sk,
+            accept,
+            index_in_asset_data,
+            nonce,
+            enc_gen,
+            transcript,
+        )
+    }
+
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        leg_enc: LegEncryption<G>,
+        asset_id: AssetId,
+        mediator_sk: G::ScalarField,
+        accept: bool,
+        index_in_asset_data: usize,
+        nonce: &[u8],
+        enc_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<Self> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
             return Err(Error::InvalidKeyIndex(index_in_asset_data));
         }
@@ -1252,8 +1358,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         if leg_enc.eph_pk_auds_meds[index_in_asset_data].0 {
             return Err(Error::MediatorNotFoundAtIndex(index_in_asset_data));
         }
-
-        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
         // Hash the mediator's response
         if accept {
@@ -1275,14 +1379,15 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
         enc_pk.challenge_contribution(&leg_enc.ct_asset_id, &minus_h, &D, &mut transcript)?;
 
-        let mut extra_instance = vec![];
-        leg_enc.serialize_compressed(&mut extra_instance)?;
-        index_in_asset_data.serialize_compressed(&mut extra_instance)?;
-        nonce.serialize_compressed(&mut extra_instance)?;
-        enc_gen.serialize_compressed(&mut extra_instance)?;
-
-        transcript
-            .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
+        add_to_transcript!(
+            transcript,
+            LEG_ENC_LABEL,
+            leg_enc,
+            INDEX_IN_ASSET_DATA_LABEL,
+            index_in_asset_data,
+            NONCE_LABEL,
+            nonce
+        );
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
@@ -1298,6 +1403,26 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         nonce: &[u8],
         enc_gen: G,
     ) -> Result<()> {
+        let transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+        self.verify_with_given_transcript(
+            leg_enc,
+            accept,
+            index_in_asset_data,
+            nonce,
+            enc_gen,
+            transcript,
+        )
+    }
+
+    pub fn verify_with_given_transcript(
+        &self,
+        leg_enc: LegEncryption<G>,
+        accept: bool,
+        index_in_asset_data: usize,
+        nonce: &[u8],
+        enc_gen: G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<()> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
             return Err(Error::InvalidKeyIndex(index_in_asset_data));
         }
@@ -1305,8 +1430,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         if leg_enc.eph_pk_auds_meds[index_in_asset_data].0 {
             return Err(Error::MediatorNotFoundAtIndex(index_in_asset_data));
         }
-
-        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
 
         // Hash the mediator's response
         if accept {
@@ -1325,14 +1448,15 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             &mut transcript,
         )?;
 
-        let mut extra_instance = vec![];
-        leg_enc.serialize_compressed(&mut extra_instance)?;
-        index_in_asset_data.serialize_compressed(&mut extra_instance)?;
-        nonce.serialize_compressed(&mut extra_instance)?;
-        enc_gen.serialize_compressed(&mut extra_instance)?;
-
-        transcript
-            .append_message_without_static_label(MEDIATOR_TXN_INSTANCE_LABEL, &extra_instance);
+        add_to_transcript!(
+            transcript,
+            LEG_ENC_LABEL,
+            leg_enc,
+            INDEX_IN_ASSET_DATA_LABEL,
+            index_in_asset_data,
+            NONCE_LABEL,
+            nonce
+        );
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
@@ -1755,7 +1879,7 @@ pub mod tests {
                 &asset_comm_params,
                 asset_tree_params.odd_parameters.delta,
             )
-                .unwrap();
+            .unwrap();
 
             let set = vec![asset_data.commitment];
             let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
@@ -1810,7 +1934,7 @@ pub mod tests {
                 enc_key_gen,
                 enc_gen,
             )
-                .unwrap();
+            .unwrap();
 
             proofs.push(proof);
         }

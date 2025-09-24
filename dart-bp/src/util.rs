@@ -2,7 +2,7 @@ use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
 use crate::leg::LegEncryption;
 use crate::{AMOUNT_BITS, AssetId, Balance};
-use ark_ec::AffineRepr;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
@@ -15,15 +15,29 @@ use bulletproofs::r1cs::{
 use bulletproofs::r1cs::batch_verify;
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
+use ark_std::collections::BTreeMap;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
-use dock_crypto_utils::transcript::MerlinTranscript;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+    PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse};
+
+#[macro_export]
+macro_rules! add_to_transcript {
+    ($transcript:expr, $($label:expr, $value:expr),* $(,)?) => {
+        let mut buf = vec![];
+        $(
+            $value.serialize_compressed(&mut buf)?;
+            $transcript.append($label, &buf);
+        )*
+        buf.clear()
+    };
+}
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
 /// Also re-randomizes the path and enforces the corresponding constraints. Returns the even prover,
@@ -49,9 +63,39 @@ pub fn initialize_curve_tree_prover<
     F0,
 ) {
     let even_transcript = MerlinTranscript::new(even_label);
-    let mut even_prover = Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
-
     let odd_transcript = MerlinTranscript::new(odd_label);
+    initialize_curve_tree_prover_with_given_transcripts(
+        rng,
+        leaf_path,
+        tree_parameters,
+        even_transcript,
+        odd_transcript,
+    )
+}
+
+/// Same as `initialize_curve_tree_prover` but accepts the transcripts for
+/// even and odd levels rather than creating new
+pub fn initialize_curve_tree_prover_with_given_transcripts<
+    'g,
+    R: RngCore,
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    rng: &mut R,
+    leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+    tree_parameters: &'g SelRerandParameters<G0, G1>,
+    even_transcript: MerlinTranscript,
+    odd_transcript: MerlinTranscript,
+) -> (
+    Prover<'g, MerlinTranscript, Affine<G0>>,
+    Prover<'g, MerlinTranscript, Affine<G1>>,
+    SelectAndRerandomizePath<L, G0, G1>,
+    F0,
+) {
+    let mut even_prover = Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
     let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
 
     let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
@@ -84,8 +128,35 @@ pub fn initialize_curve_tree_verifier<
     Verifier<MerlinTranscript, Affine<G1>>,
 ) {
     let even_transcript = MerlinTranscript::new(even_label);
-    let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
     let odd_transcript = MerlinTranscript::new(odd_label);
+    initialize_curve_tree_verifier_with_given_transcripts(
+        re_randomized_path,
+        tree_root,
+        tree_parameters,
+        even_transcript,
+        odd_transcript,
+    )
+}
+
+/// Same as `initialize_curve_tree_verifier` but accepts the transcripts for
+/// even and odd levels rather than creating new
+pub fn initialize_curve_tree_verifier_with_given_transcripts<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    re_randomized_path: &SelectAndRerandomizePath<L, G0, G1>,
+    tree_root: &Root<L, 1, G0, G1>,
+    tree_parameters: &SelRerandParameters<G0, G1>,
+    even_transcript: MerlinTranscript,
+    odd_transcript: MerlinTranscript,
+) -> (
+    Verifier<MerlinTranscript, Affine<G0>>,
+    Verifier<MerlinTranscript, Affine<G1>>,
+) {
+    let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
     let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
     let _ = re_randomized_path.select_and_rerandomize_verifier_gadget(
@@ -178,27 +249,27 @@ pub fn generate_schnorr_responses_for_balance_change<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
-    old_balance: Balance,
-    new_balance: Balance,
     amount: Balance,
     comm_bp_bal_blinding: G0::ScalarField,
     t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
     t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
     prover_challenge: &F0,
 ) -> Result<(
-    SchnorrResponse<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
+    PartialSchnorrResponse<Affine<G0>>,
+    Partial1PokPedersenCommitment<Affine<G0>>,
 )> {
-    let resp_comm_bp_bal = t_comm_bp_bal.response(
-        &[
-            comm_bp_bal_blinding,
-            F0::from(amount),
-            F0::from(old_balance),
-            F0::from(new_balance),
-        ],
+    let mut wits = BTreeMap::new();
+    wits.insert(0, comm_bp_bal_blinding);
+    wits.insert(1, F0::from(amount));
+
+    // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
+    let resp_comm_bp_bal = t_comm_bp_bal.partial_response(
+        wits,
         prover_challenge,
     )?;
-    let resp_leg_amount = t_leg_amount.clone().gen_proof(prover_challenge);
+
+    // Response for witness will already be generated in sigma protocol for Bulletproof commitment
+    let resp_leg_amount = t_leg_amount.clone().gen_partial1_proof(prover_challenge);
     Ok((resp_comm_bp_bal, resp_leg_amount))
 }
 
@@ -471,7 +542,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     sk_blinding: F0,
     old_balance_blinding: F0,
     new_balance_blinding: F0,
-    new_counter_blinding: F0,
+    old_counter_blinding: F0,
     initial_rho_blinding: F0,
     old_rho_blinding: F0,
     new_rho_blinding: F0,
@@ -520,7 +591,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         vec![
             sk_blinding,
             old_balance_blinding,
-            new_counter_blinding,
+            old_counter_blinding,
             asset_id_blinding,
             initial_rho_blinding,
             old_rho_blinding,
@@ -536,7 +607,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         vec![
             sk_blinding,
             new_balance_blinding,
-            new_counter_blinding,
+            old_counter_blinding,
             asset_id_blinding,
             initial_rho_blinding,
             new_rho_blinding,
@@ -700,13 +771,12 @@ pub fn generate_schnorr_responses_for_common_state_change<
     prover_challenge: &F0,
 ) -> Result<(
     SchnorrResponse<Affine<G0>>,
-    SchnorrResponse<Affine<G0>>,
-    PokDiscreteLog<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
-    PokPedersenCommitment<Affine<G0>>,
-    SchnorrResponse<Affine<G0>>,
+    PartialSchnorrResponse<Affine<G0>>,
+    PartialPokDiscreteLog<Affine<G0>>,
+    Partial1PokPedersenCommitment<Affine<G0>>,
+    Partial1PokPedersenCommitment<Affine<G0>>,
+    PartialSchnorrResponse<Affine<G0>>,
 )> {
-    // TODO: Eliminate duplicate responses
     let resp_leaf = t_r_leaf.response(
         &[
             account.sk,
@@ -721,31 +791,29 @@ pub fn generate_schnorr_responses_for_common_state_change<
         ],
         prover_challenge,
     )?;
-    let resp_acc_new = t_acc_new.response(
-        &[
-            updated_account.sk,
-            updated_account.balance.into(),
-            updated_account.counter.into(),
-            updated_account.asset_id.into(),
-            updated_account.rho,
-            updated_account.current_rho,
-            updated_account.randomness,
-            account.id,
-        ],
+
+    // Response for other witnesses will already be generated in sigma protocol for leaf
+    let mut wits = BTreeMap::new();
+    if account.balance != updated_account.balance {
+        wits.insert(1, updated_account.balance.into());
+    }
+    wits.insert(5, updated_account.current_rho);
+    wits.insert(6, updated_account.randomness);
+    let resp_acc_new = t_acc_new.partial_response(
+        wits,
         prover_challenge,
     )?;
-    let resp_null = t_null.gen_proof(prover_challenge);
-    let resp_leg_asset_id = t_leg_asset_id.clone().gen_proof(prover_challenge);
-    let resp_leg_pk = t_leg_pk.clone().gen_proof(prover_challenge);
-    let resp_bp = t_bp_randomness_relations.response(
-        &[
-            comm_bp_blinding,
-            updated_account.rho,
-            account.current_rho,
-            updated_account.current_rho,
-            account.randomness,
-            updated_account.randomness,
-        ],
+
+    // Response for other witnesses will already be generated in sigma protocol for leaf
+    let resp_null = t_null.gen_partial_proof();
+    let resp_leg_asset_id = t_leg_asset_id.clone().gen_partial1_proof(prover_challenge);
+    let resp_leg_pk = t_leg_pk.clone().gen_partial1_proof(prover_challenge);
+
+    // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
+    let mut wits = BTreeMap::new();
+    wits.insert(0, comm_bp_blinding);
+    let resp_bp = t_bp_randomness_relations.partial_response(
+        wits,
         &prover_challenge,
     )?;
     Ok((
@@ -768,9 +836,9 @@ pub fn enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_co
     t_r_leaf: &Affine<G0>,
     t_acc_new: &Affine<G0>,
     t_randomness_relations: &Affine<G0>,
-    resp_null: &PokDiscreteLog<Affine<G0>>,
-    resp_leg_asset_id: &PokPedersenCommitment<Affine<G0>>,
-    resp_leg_pk: &PokPedersenCommitment<Affine<G0>>,
+    resp_null: &PartialPokDiscreteLog<Affine<G0>>,
+    resp_leg_asset_id: &Partial1PokPedersenCommitment<Affine<G0>>,
+    resp_leg_pk: &Partial1PokPedersenCommitment<Affine<G0>>,
     verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_key_gen: Affine<G0>,
@@ -814,7 +882,7 @@ pub fn enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_co
 pub fn take_challenge_contrib_of_schnorr_t_values_for_balance_change<G0: SWCurveConfig + Copy>(
     ct_amount: &Affine<G0>,
     t_comm_bp_bal: &Affine<G0>,
-    resp_leg_amount: &PokPedersenCommitment<Affine<G0>>,
+    resp_leg_amount: &Partial1PokPedersenCommitment<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
     mut verifier_transcript: &mut MerlinTranscript,
@@ -833,6 +901,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
     is_sender: bool,
     has_counter_decreased: bool,
+    has_balance_changed: bool,
     nullifier: &Affine<G0>,
     re_randomized_leaf: &Affine<G0>,
     updated_account_commitment: &Affine<G0>,
@@ -841,11 +910,11 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     t_acc_new: &Affine<G0>,
     t_bp: &Affine<G0>,
     resp_leaf: &SchnorrResponse<Affine<G0>>,
-    resp_acc_new: &SchnorrResponse<Affine<G0>>,
-    resp_null: &PokDiscreteLog<Affine<G0>>,
-    resp_leg_asset_id: &PokPedersenCommitment<Affine<G0>>,
-    resp_leg_pk: &PokPedersenCommitment<Affine<G0>>,
-    resp_bp: &SchnorrResponse<Affine<G0>>,
+    resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
+    resp_null: &PartialPokDiscreteLog<Affine<G0>>,
+    resp_leg_asset_id: &Partial1PokPedersenCommitment<Affine<G0>>,
+    resp_leg_pk: &Partial1PokPedersenCommitment<Affine<G0>>,
+    resp_bp: &PartialSchnorrResponse<Affine<G0>>,
     verifier_challenge: &G0::ScalarField,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     pc_gens: &PedersenGens<Affine<G0>>,
@@ -859,16 +928,34 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         t_r_leaf,
         verifier_challenge,
     )?;
+
+    let y = if has_counter_decreased {
+        updated_account_commitment.into_group() + account_comm_key.counter_gen()
+    } else {
+        updated_account_commitment.into_group() - account_comm_key.counter_gen()
+    };
+    let mut missing_resps = BTreeMap::new();
+    missing_resps.insert(0, resp_leaf.0[0]);
+    if !has_balance_changed {
+        missing_resps.insert(1, resp_leaf.0[1]);
+    }
+    missing_resps.insert(2, resp_leaf.0[2]);
+    missing_resps.insert(3, resp_leaf.0[3]);
+    missing_resps.insert(4, resp_leaf.0[4]);
+    missing_resps.insert(7, resp_leaf.0[7]);
     resp_acc_new.is_valid(
         &account_comm_key.as_gens(),
-        updated_account_commitment,
+        &y.into_affine(),
         t_acc_new,
         verifier_challenge,
+        missing_resps
     )?;
+
     if !resp_null.verify(
         nullifier,
         &account_comm_key.current_rho_gen(),
         verifier_challenge,
+        &resp_leaf.0[5]
     ) {
         return Err(Error::ProofVerificationError(
             "Nullifier verification failed".to_string(),
@@ -879,6 +966,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         &enc_key_gen,
         &enc_gen,
         verifier_challenge,
+        &resp_leaf.0[3]
     ) {
         return Err(Error::ProofVerificationError(
             "Leg asset ID verification failed".to_string(),
@@ -893,141 +981,68 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         &enc_key_gen,
         &account_comm_key.sk_gen(),
         verifier_challenge,
+        &resp_leaf.0[0]
     ) {
         return Err(Error::ProofVerificationError(
             "Leg public key verification failed".to_string(),
         ));
     }
+
+    let mut missing_resps = BTreeMap::new();
+    missing_resps.insert(1, resp_leaf.0[4]);
+    missing_resps.insert(2, resp_leaf.0[5]);
+    missing_resps.insert(3, resp_acc_new.responses[&5]);
+    missing_resps.insert(4, resp_leaf.0[6]);
+    missing_resps.insert(5, resp_acc_new.responses[&6]);
     resp_bp.is_valid(
         &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
         comm_bp,
         t_bp,
         verifier_challenge,
+        missing_resps
     )?;
-
-    // Sk, id, asset id, initial rho in leaf match the ones in updated account commitment
-    if resp_leaf.0[0] != resp_acc_new.0[0] {
-        return Err(Error::ProofVerificationError(
-            "Secret key in leaf does not match the one in updated account commitment".to_string(),
-        ));
-    }
-    if resp_leaf.0[3] != resp_acc_new.0[3] {
-        return Err(Error::ProofVerificationError(
-            "Asset ID in leaf does not match the one in updated account commitment".to_string(),
-        ));
-    }
-    if resp_leaf.0[4] != resp_acc_new.0[4] {
-        return Err(Error::ProofVerificationError(
-            "Initial rho in leaf does not match the one in updated account commitment".to_string(),
-        ));
-    }
-    if resp_leaf.0[7] != resp_acc_new.0[7] {
-        return Err(Error::ProofVerificationError(
-            "ID in leaf does not match the one in updated account commitment".to_string(),
-        ));
-    }
-
-    if has_counter_decreased {
-        // Counter in new account commitment is 1 less than the one in the leaf commitment
-        if resp_acc_new.0[2] + verifier_challenge != resp_leaf.0[2] {
-            return Err(Error::ProofVerificationError(
-                "Counter in new account does not match counter in leaf - 1".to_string(),
-            ));
-        }
-    } else {
-        // Counter in new account commitment is 1 more than the one in the leaf commitment
-        if resp_acc_new.0[2] != resp_leaf.0[2] + verifier_challenge {
-            return Err(Error::ProofVerificationError(
-                "Counter in new account does not match counter in leaf + 1".to_string(),
-            ));
-        }
-    }
-
-    // rho matches the one in nullifier
-    if resp_leaf.0[5] != resp_null.response {
-        return Err(Error::ProofVerificationError(
-            "Rho in leaf does not match the one in nullifier".to_string(),
-        ));
-    }
-
-    // Asset id in leg is same as in account commitment
-    if resp_leg_asset_id.response2 != resp_acc_new.0[3] {
-        return Err(Error::ProofVerificationError(
-            "Asset ID in leg does not match the one in account commitment".to_string(),
-        ));
-    }
-
-    // sk in account comm matches the one in pk
-    if resp_leg_pk.response2 != resp_leaf.0[0] {
-        return Err(Error::ProofVerificationError(
-            "Secret key in leg public key does not match the one in leaf".to_string(),
-        ));
-    }
-
-    if resp_bp.0[1] != resp_leaf.0[4] {
-        return Err(Error::ProofVerificationError(
-            "Initial rho mismatch between the leaf and the one in BP commitment".to_string(),
-        ));
-    }
-
-    if resp_bp.0[2] != resp_null.response {
-        return Err(Error::ProofVerificationError(
-            "Old rho mismatch between the nullifier and the one in BP commitment".to_string(),
-        ));
-    }
-
-    if resp_bp.0[3] != resp_acc_new.0[5] {
-        return Err(Error::ProofVerificationError(
-            "New rho mismatch between the new account commitment and the one in BP commitment"
-                .to_string(),
-        ));
-    }
-
-    if resp_bp.0[4] != resp_leaf.0[6] {
-        return Err(Error::ProofVerificationError(
-            "Old randomness mismatch between the leaf and the one in BP commitment".to_string(),
-        ));
-    }
-
-    if resp_bp.0[5] != resp_acc_new.0[6] {
-        return Err(Error::ProofVerificationError(
-            "New randomness mismatch between the account commitment and the one in BP commitment"
-                .to_string(),
-        ));
-    }
 
     Ok(())
 }
 
 pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
-    resp_leg_amount: &PokPedersenCommitment<Affine<G0>>,
+    resp_leg_amount: &Partial1PokPedersenCommitment<Affine<G0>>,
     comm_bp_bal: &Affine<G0>,
     t_comm_bp_bal: &Affine<G0>,
-    resp_comm_bp_bal: &SchnorrResponse<Affine<G0>>,
+    resp_comm_bp_bal: &PartialSchnorrResponse<Affine<G0>>,
     verifier_challenge: &G0::ScalarField,
+    resp_old_bal: G0::ScalarField,
+    resp_new_bal: G0::ScalarField,
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
 ) -> Result<()> {
     let mut gens = bp_gens_for_vec_commitment(3, bp_gens);
+    let mut missing_resps = BTreeMap::new();
+    missing_resps.insert(2, resp_old_bal);
+    missing_resps.insert(3, resp_new_bal);
     resp_comm_bp_bal.is_valid(
         &[
             pc_gens.B_blinding,
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
+
         ],
         comm_bp_bal,
         t_comm_bp_bal,
         verifier_challenge,
+        missing_resps
     )?;
+
     if !resp_leg_amount.verify(
         &leg_enc.ct_amount,
         &enc_key_gen,
         &enc_gen,
         verifier_challenge,
+        &resp_comm_bp_bal.responses[&1]
     ) {
         return Err(Error::ProofVerificationError(
             "Leg amount verification failed".to_string(),
@@ -1076,6 +1091,26 @@ pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
     bp_gens: &BulletproofGens<G>,
 ) -> Copied<impl Iterator<Item = &G>> {
     bp_gens.share(0).G(size).copied()
+}
+
+/// Add a slice to transcript by first writing the slice length (as index) and then each element
+pub fn add_slice_to_transcript<T: CanonicalSerialize>(
+    transcript: &mut MerlinTranscript,
+    label: &'static [u8],
+    slice: &[T],
+) -> Result<()> {
+    transcript.append(label, &slice.len().to_le_bytes());
+
+    let mut buf = vec![];
+    for (i, item) in slice.iter().enumerate() {
+        // Write the index and then the item
+        buf.extend_from_slice(&i.to_le_bytes());
+        item.serialize_compressed(&mut buf)?;
+        transcript.append(label, &buf);
+        buf.clear()
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
