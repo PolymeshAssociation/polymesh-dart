@@ -99,6 +99,10 @@ pub enum Error {
     /// Too many keys in registration proof.
     #[error("Too many keys in registration proof")]
     TooManyKeysInRegProof,
+
+    /// Too many account asset registration proofs in transaction.
+    #[error("Too many account asset registration proofs in transaction")]
+    TooManyAccountAssetRegProofs,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

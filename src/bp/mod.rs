@@ -33,8 +33,9 @@ use polymesh_dart_bp::{
     account as bp_account, account_registration, keys as bp_keys, leg as bp_leg,
 };
 use polymesh_dart_common::{
-    DART_MAX_ACCOUNTS_PER_REG_PROOF, LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS,
-    MEMO_MAX_LENGTH, MediatorId, NullifierSkGenCounter, SETTLEMENT_MAX_LEGS, SettlementId,
+    LegId, MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS,
+    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, MediatorId, NullifierSkGenCounter,
+    SETTLEMENT_MAX_LEGS, SettlementId,
 };
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
@@ -50,8 +51,11 @@ use crate::curve_tree::*;
 use crate::*;
 
 pub trait DartLimits: Clone + core::fmt::Debug {
-    /// The maximum number of accounts in an account registration proof.
-    type MaxAccountsPerRegProof: Get<u32> + Clone + core::fmt::Debug;
+    /// The maximum number of keys in an account registration proof.
+    type MaxKeysPerRegProof: Get<u32> + Clone + core::fmt::Debug;
+
+    /// The maximum number of account asset registration proofs in a single transaction.
+    type MaxAccountAssetRegProofs: Get<u32> + Clone + core::fmt::Debug;
 
     /// The maximum number of legs in a settlement.
     type MaxSettlementLegs: Get<u32> + Clone + core::fmt::Debug;
@@ -67,7 +71,8 @@ pub trait DartLimits: Clone + core::fmt::Debug {
 }
 
 impl DartLimits for () {
-    type MaxAccountsPerRegProof = ConstU32<DART_MAX_ACCOUNTS_PER_REG_PROOF>;
+    type MaxKeysPerRegProof = ConstU32<MAX_KEYS_PER_REG_PROOF>;
+    type MaxAccountAssetRegProofs = ConstU32<MAX_ACCOUNT_ASSET_REG_PROOFS>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
@@ -78,7 +83,8 @@ impl DartLimits for () {
 pub struct PolymeshPrivateLimits;
 
 impl DartLimits for PolymeshPrivateLimits {
-    type MaxAccountsPerRegProof = ConstU32<DART_MAX_ACCOUNTS_PER_REG_PROOF>;
+    type MaxKeysPerRegProof = ConstU32<MAX_KEYS_PER_REG_PROOF>;
+    type MaxAccountAssetRegProofs = ConstU32<MAX_ACCOUNT_ASSET_REG_PROOFS>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
@@ -483,7 +489,19 @@ impl EncryptionKeyPair {
 
 /// The account public key, which can be shared freely.
 #[derive(
-    Copy, Clone, MaxEncodedLen, Encode, Decode, Default, TypeInfo, Debug, PartialEq, Eq, Hash,
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    Default,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -1072,13 +1090,21 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
 /// DART account registration proof.
 ///
 /// This is used to prove knowledge of the secret keys (account and encryption keys) for 1 or more DART accounts.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
 #[scale_info(skip_type_params(T))]
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
-    pub accounts: BoundedVec<AccountPublicKeys, T::MaxAccountsPerRegProof>,
+    pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
     proof: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
 }
+
+impl<T: DartLimits> PartialEq for AccountRegistrationProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.accounts == other.accounts && self.proof == other.proof
+    }
+}
+
+impl<T: DartLimits> Eq for AccountRegistrationProof<T> {}
 
 impl<T: DartLimits> AccountRegistrationProof<T> {
     /// Generate a new account registration proof for the given accounts.
@@ -1134,15 +1160,28 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
         )?;
         Ok(())
     }
+
+    /// Get the number of accounts in the proof.
+    pub fn len(&self) -> usize {
+        self.accounts.len()
+    }
 }
 
 /// Encryption key registration proof for auditors and mediators.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
-    pub keys: BoundedVec<EncryptionPublicKey, T::MaxAccountsPerRegProof>,
+    pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 
     proof: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
 }
+
+impl<T: DartLimits> PartialEq for EncryptionKeyRegistrationProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.keys == other.keys && self.proof == other.proof
+    }
+}
+
+impl<T: DartLimits> Eq for EncryptionKeyRegistrationProof<T> {}
 
 impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
     /// Generate a new encryption key registration proof for the given keys.
@@ -1182,6 +1221,76 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
             .collect::<Result<_, _>>()?;
         proof.verify(pk_refs, identity, dart_gens().enc_key_gen())?;
         Ok(())
+    }
+
+    /// Get the number of keys in the proof.
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+}
+
+/// Batched account asset registration proof.
+///
+/// This is used to register multiple account/asset pairs in a single proof.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[scale_info(skip_type_params(T))]
+pub struct BatchedAccountAssetRegistrationProof<T: DartLimits = ()> {
+    pub proofs: BoundedVec<AccountAssetRegistrationProof, T::MaxAccountAssetRegProofs>,
+}
+
+impl<T: DartLimits> PartialEq for BatchedAccountAssetRegistrationProof<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.proofs == other.proofs
+    }
+}
+
+impl<T: DartLimits> Eq for BatchedAccountAssetRegistrationProof<T> {}
+
+impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
+    /// Generate a new batched account asset registration proof.
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        account_assets: &[(AccountKeyPair, AssetId, NullifierSkGenCounter)],
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+    ) -> Result<(Self, Vec<AccountAssetState>), Error> {
+        let mut proofs = BoundedVec::with_bounded_capacity(account_assets.len());
+        let mut states = Vec::with_capacity(account_assets.len());
+
+        for (account, asset_id, counter) in account_assets {
+            let (proof, state) = AccountAssetRegistrationProof::new(
+                rng,
+                account,
+                *asset_id,
+                *counter,
+                identity,
+                tree_params,
+            )?;
+            proofs
+                .try_push(proof)
+                .map_err(|_| Error::TooManyAccountAssetRegProofs)?;
+            states.push(state);
+        }
+
+        Ok((Self { proofs }, states))
+    }
+
+    /// Verify the batched account asset registration proof.
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        for proof in &self.proofs {
+            proof.verify(identity, tree_params, rng)?;
+        }
+        Ok(())
+    }
+
+    /// Get the number of proofs in the batch.
+    pub fn len(&self) -> usize {
+        self.proofs.len()
     }
 }
 
