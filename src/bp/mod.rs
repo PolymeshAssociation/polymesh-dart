@@ -1068,9 +1068,10 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
-    pub account_state_commitment: AccountStateCommitment,
     pub asset_id: AssetId,
     pub counter: NullifierSkGenCounter,
+    pub account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
 
     proof: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
@@ -1090,7 +1091,7 @@ impl AccountAssetRegistrationProof {
         let (bp_state, commitment) = account_state.bp_current_state(account)?;
         let params = poseidon_params();
         let gens = dart_gens();
-        let proof = account_registration::RegTxnProof::new(
+        let (proof, nullifier) = account_registration::RegTxnProof::new(
             rng,
             pk.get_affine()?,
             &bp_state,
@@ -1106,9 +1107,11 @@ impl AccountAssetRegistrationProof {
         Ok((
             Self {
                 account: pk,
-                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
                 asset_id,
                 counter,
+                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
+                nullifier: AccountStateNullifier::from_affine(nullifier)?,
+
                 proof: WrappedCanonical::wrap(&proof)?,
             },
             account_state,
@@ -1132,6 +1135,7 @@ impl AccountAssetRegistrationProof {
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,
+            self.nullifier.get_affine()?,
             identity,
             dart_gens().account_comm_key(),
             &tree_params.even_parameters.pc_gens,

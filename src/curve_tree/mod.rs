@@ -625,6 +625,7 @@ impl<
 }
 
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
 pub struct CompressedCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub commitments: [CompressedAffine; M],
     pub x_coord_children: Vec<[CompressedBaseField; M]>,
