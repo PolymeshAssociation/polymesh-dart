@@ -33,8 +33,8 @@ use polymesh_dart_bp::{
     account as bp_account, account_registration, keys as bp_keys, leg as bp_leg,
 };
 use polymesh_dart_common::{
-    LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MEMO_MAX_LENGTH, MediatorId,
-    NullifierSkGenCounter, SETTLEMENT_MAX_LEGS, SettlementId,
+    DART_MAX_ACCOUNTS_PER_REG_PROOF, LegId, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS,
+    MEMO_MAX_LENGTH, MediatorId, NullifierSkGenCounter, SETTLEMENT_MAX_LEGS, SettlementId,
 };
 
 use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
@@ -50,6 +50,9 @@ use crate::curve_tree::*;
 use crate::*;
 
 pub trait DartLimits: Clone + core::fmt::Debug {
+    /// The maximum number of accounts in an account registration proof.
+    type MaxAccountsPerRegProof: Get<u32> + Clone + core::fmt::Debug;
+
     /// The maximum number of legs in a settlement.
     type MaxSettlementLegs: Get<u32> + Clone + core::fmt::Debug;
 
@@ -64,6 +67,7 @@ pub trait DartLimits: Clone + core::fmt::Debug {
 }
 
 impl DartLimits for () {
+    type MaxAccountsPerRegProof = ConstU32<DART_MAX_ACCOUNTS_PER_REG_PROOF>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
@@ -74,6 +78,7 @@ impl DartLimits for () {
 pub struct PolymeshPrivateLimits;
 
 impl DartLimits for PolymeshPrivateLimits {
+    type MaxAccountsPerRegProof = ConstU32<DART_MAX_ACCOUNTS_PER_REG_PROOF>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
@@ -1061,6 +1066,122 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
 
     fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
         self.tree.params()
+    }
+}
+
+/// DART account registration proof.
+///
+/// This is used to prove knowledge of the secret keys (account and encryption keys) for 1 or more DART accounts.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T))]
+pub struct AccountRegistrationProof<T: DartLimits = ()> {
+    pub accounts: BoundedVec<AccountPublicKeys, T::MaxAccountsPerRegProof>,
+
+    proof: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
+}
+
+impl<T: DartLimits> AccountRegistrationProof<T> {
+    /// Generate a new account registration proof for the given accounts.
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        accounts: &[AccountKeys],
+        identity: &[u8],
+    ) -> Result<Self, Error> {
+        let mut bounded_accounts = BoundedVec::with_bounded_capacity(accounts.len());
+        let mut keys = Vec::with_capacity(accounts.len());
+
+        for account in accounts {
+            bounded_accounts
+                .try_push(account.public_keys())
+                .map_err(|_| Error::TooManyKeysInRegProof)?;
+
+            let acc_pub = account.acct.public.get_affine()?;
+            let acc_sec = account.acct.secret.0.0;
+            let enc_pub = account.enc.public.get_affine()?;
+            let enc_sec = account.enc.secret.0.0;
+            keys.push(((acc_pub, acc_sec), (enc_pub, enc_sec)));
+        }
+
+        let proof = bp_keys::InvestorKeyRegProof::new(
+            rng,
+            keys,
+            identity,
+            dart_gens().sig_key_gen(),
+            dart_gens().enc_key_gen(),
+        )?;
+
+        Ok(Self {
+            accounts: bounded_accounts,
+            proof: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
+    /// Verify the account registration proof.
+    pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
+        let proof = self.proof.decode()?;
+        let pk_refs: Vec<_> = self
+            .accounts
+            .iter()
+            .map(|keys| -> Result<_, Error> {
+                Ok((keys.acct.get_affine()?, keys.enc.get_affine()?))
+            })
+            .collect::<Result<_, _>>()?;
+        proof.verify(
+            pk_refs,
+            identity,
+            dart_gens().sig_key_gen(),
+            dart_gens().enc_key_gen(),
+        )?;
+        Ok(())
+    }
+}
+
+/// Encryption key registration proof for auditors and mediators.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
+    pub keys: BoundedVec<EncryptionPublicKey, T::MaxAccountsPerRegProof>,
+
+    proof: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
+}
+
+impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
+    /// Generate a new encryption key registration proof for the given keys.
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        keys: &[EncryptionKeyPair],
+        identity: &[u8],
+    ) -> Result<Self, Error> {
+        let mut bounded_keys = BoundedVec::with_bounded_capacity(keys.len());
+        let mut key_pairs = Vec::with_capacity(keys.len());
+
+        for key in keys {
+            bounded_keys
+                .try_push(key.public)
+                .map_err(|_| Error::TooManyKeysInRegProof)?;
+            let pub_key = key.public.get_affine()?;
+            let sec_key = key.secret.0.0;
+            key_pairs.push((pub_key, sec_key));
+        }
+
+        let proof =
+            bp_keys::AudMedRegProof::new(rng, key_pairs, identity, dart_gens().enc_key_gen())?;
+
+        Ok(Self {
+            keys: bounded_keys,
+            proof: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
+    /// Verify the encryption key registration proof.
+    pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
+        let proof = self.proof.decode()?;
+        let pk_refs: Vec<_> = self
+            .keys
+            .iter()
+            .map(|key| -> Result<_, Error> { Ok(key.get_affine()?) })
+            .collect::<Result<_, _>>()?;
+        proof.verify(pk_refs, identity, dart_gens().enc_key_gen())?;
+        Ok(())
     }
 }
 

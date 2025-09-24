@@ -95,6 +95,10 @@ pub enum Error {
     /// Hex decode error.
     #[error("Hex decode error")]
     HexDecodeError,
+
+    /// Too many keys in registration proof.
+    #[error("Too many keys in registration proof")]
+    TooManyKeysInRegProof,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

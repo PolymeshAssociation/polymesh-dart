@@ -70,6 +70,7 @@ const AUD_MED_KEY_REG_TXN_LABEL: &'static [u8; 33] = b"auditor/mediator-key-regi
 
 /// Register keys for 1 or more investors. For each investor, we have a signature and an encryption key.
 /// Uses Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf)
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct InvestorKeyRegProof<G: AffineRepr> {
     pub sig: (G, G::ScalarField),
     pub enc: (G, G::ScalarField),
@@ -187,6 +188,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 /// Register keys for 1 or more auditor/mediator. For each auditor/mediator key, we have an encryption key.
 /// Supporting registering multiple keys as an entity might use different keys for different assets and roles (like delegating in an org)
 /// Uses Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf)
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AudMedRegProof<G: AffineRepr> {
     pub t: G,
     pub s: G::ScalarField,

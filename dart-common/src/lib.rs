@@ -37,3 +37,5 @@ pub const ASSET_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
 
 pub const MEMO_MAX_LENGTH: u32 = 256;
 pub const SETTLEMENT_MAX_LEGS: u32 = 16;
+
+pub const DART_MAX_ACCOUNTS_PER_REG_PROOF: u32 = 100;
