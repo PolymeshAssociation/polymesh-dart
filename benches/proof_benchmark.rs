@@ -33,9 +33,7 @@ fn proof_benchmark(c: &mut Criterion) {
     asset_tree
         .set_asset_state(asset_state.clone())
         .expect("Failed to insert asset state into asset tree");
-    let asset_root = asset_tree
-        .root_node()
-        .expect("Failed to get asset tree root");
+    let asset_root = asset_tree.root().expect("Failed to get asset tree root");
 
     // Benchmark: Generate account asset registration proof.
     c.bench_function("AccountAssetRegistrationProof generate", |b| {
@@ -109,7 +107,7 @@ fn proof_benchmark(c: &mut Criterion) {
 
     // Update account tree roots.
     let account_root = (&account_tree)
-        .root_node()
+        .root()
         .expect("Failed to get account tree root");
 
     // Benchmark: Generate asset minting proof.
@@ -160,7 +158,7 @@ fn proof_benchmark(c: &mut Criterion) {
         )
         .expect("Failed to insert updated account state commitment into account tree");
     let account_root = (&account_tree)
-        .root_node()
+        .root()
         .expect("Failed to get account tree root");
 
     // Benchmark: Generate settlement creation proof.
@@ -382,7 +380,7 @@ fn proof_benchmark(c: &mut Criterion) {
         )
         .expect("Failed to insert updated account state commitment into account tree");
     let account_root = (&account_tree)
-        .root_node()
+        .root()
         .expect("Failed to get account tree root");
 
     // Benchmark: Generate mediator affirmation proof.

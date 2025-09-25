@@ -44,7 +44,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         let mut stmt = self
             .db
-            .prepare("SELECT MAX(block_number) FROM asset_root_history")?;
+            .prepare("SELECT COALESCE(MAX(block_number), 0) FROM asset_root_history")?;
         let block_number: i64 = stmt.query_row([], |row| row.get(0))?;
         Ok(block_number as BlockNumber)
     }
@@ -64,11 +64,15 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
 
     fn fetch_root(
         &self,
-        block_number: BlockNumber,
+        block_number: Option<BlockNumber>,
     ) -> std::result::Result<
         CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
         Self::Error,
     > {
+        let block_number = match block_number {
+            Some(bn) => bn,
+            None => self.get_block_number()?,
+        };
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")?;
@@ -267,7 +271,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
         let mut stmt = self
             .db
-            .prepare("SELECT MAX(block_number) FROM account_root_history")?;
+            .prepare("SELECT COALESCE(MAX(block_number), 0) FROM account_root_history")?;
         let block_number: i64 = stmt.query_row([], |row| row.get(0))?;
         Ok(block_number as BlockNumber)
     }
@@ -287,11 +291,15 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
 
     fn fetch_root(
         &self,
-        block_number: BlockNumber,
+        block_number: Option<BlockNumber>,
     ) -> std::result::Result<
         CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         Self::Error,
     > {
+        let block_number = match block_number {
+            Some(bn) => bn,
+            None => self.get_block_number()?,
+        };
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM account_root_history WHERE block_number = ?1")?;
@@ -473,13 +481,13 @@ impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &Acc
         get_account_curve_tree_parameters()
     }
 
-    fn root_node(
+    fn root(
         &self,
     ) -> Result<CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>, DartError>
     {
         Ok(self
             .0
-            .compressed_root()
+            .root()
             .map_err(|_| DartError::CurveTreeRootNotFound)?)
     }
 

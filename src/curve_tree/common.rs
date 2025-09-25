@@ -481,8 +481,8 @@ macro_rules! impl_curve_tree_with_backend {
                 self.parameters()
             }
 
-            fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, error::Error> {
-                Ok(self.compressed_root().map_err(|_| error::Error::CurveTreeRootNotFound)?)
+            fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, error::Error> {
+                $curve_tree_ty::<L, M, C, B, Error>::root(self).map_err(|_| error::Error::CurveTreeRootNotFound)
             }
 
             fn get_block_number(&self) -> Result<BlockNumber, error::Error> {
@@ -499,7 +499,7 @@ macro_rules! impl_curve_tree_with_backend {
         > ValidateCurveTreeRoot<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
         {
             fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
-                self.fetch_root(block).ok()
+                self.fetch_root(Some(block)).ok()
             }
 
             fn params(&self) -> &CurveTreeParameters<C> {
@@ -579,42 +579,61 @@ macro_rules! impl_curve_tree_with_backend {
         {
             /// Initializes the root of the tree by setting the first leaf to the default value.
             pub $($async_fn)* fn init_root(&mut self) -> Result<(), Error> {
-                // Check if the root node has already been initialized.
-                let root = self.root_node()$($await)*;
-                if root.is_err() {
-                    // No root node exists, so we need to initialize the tree.
-                    self.init_inner_nodes()$($await)*?;
-                }
+                self.get_or_init_root()$($await)*?;
                 Ok(())
+            }
+
+            /// Get or initialize the tree root.
+            $($async_fn)* fn get_or_init_root(&mut self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+                // Check if the root has already been initialized.
+                if let Ok(root) = self.backend.current_root()$($await)* {
+                    Ok(root)
+                } else {
+                    // No root node exists, so we need to initialize the tree.
+                    let root = self.init_inner_nodes()$($await)*?;
+
+                    // Store the root in the backend.
+                    self.backend.store_root(root.clone())$($await)*?;
+
+                    Ok(root)
+                }
             }
 
             $($async_fn)* fn init_inner_nodes(
                 &mut self,
-            ) -> Result<(), Error> {
+            ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
                 let height = self.height()$($await)*;
+                let mut current_root = CompressedCurveTreeRoot::new(height);
 
                 // Start at the first leaf's location.
                 let mut location = NodeLocation::<L>::leaf(0);
                 // Move to the first inner node location above the leaves.
                 let (parent_location, _) = location.parent();
                 location = parent_location;
+                let mut is_root = location.is_root(height);
+
                 // Initialize the first inner node as an odd node with zero commitments.
                 let node = CompressedInner::default_odd();
+                // Update the root
+                if is_root {
+                    current_root.compressed_update(node.commitments, CompressedXCoords::default(), 0)?;
+                }
                 self.backend.set_inner_node(location, node)$($await)*?;
 
                 let mut even_new_child = CompressedChildCommitments::zero::<C::P0>();
                 let mut odd_new_child = CompressedChildCommitments::zero::<C::P1>();
 
                 // Keep going until we reach the root of the tree.
-                while !location.is_root(height) {
+                while !is_root {
                     // Move to the parent location and get the child index of the current node.
                     let (parent_location, child_index) = location.parent();
                     location = parent_location;
+                    is_root = location.is_root(height);
 
                     // If thsi node does not exist, we need to create it.
-                    let node = if location.is_even() {
+                    let (node, new_x_coords) = if location.is_even() {
                         let mut inner = CompressedInner::default_even();
-                        B::Updater::update_node(
+                        let new_x_coords = B::Updater::update_node(
                             &mut inner,
                             child_index,
                             None,
@@ -622,10 +641,11 @@ macro_rules! impl_curve_tree_with_backend {
                         )?;
 
                         even_new_child = CompressedChildCommitments::Inner(inner.commitments);
-                        inner
+
+                        (inner, new_x_coords)
                     } else {
                         let mut inner = CompressedInner::default_odd();
-                        B::Updater::update_node(
+                        let new_x_coords = B::Updater::update_node(
                             &mut inner,
                             child_index,
                             None,
@@ -633,13 +653,19 @@ macro_rules! impl_curve_tree_with_backend {
                         )?;
 
                         odd_new_child = CompressedChildCommitments::Inner(inner.commitments);
-                        inner
+
+                        (inner, new_x_coords)
                     };
+
+                    // Update the root
+                    if is_root {
+                        current_root.compressed_update(node.commitments, new_x_coords, child_index)?;
+                    }
 
                     // Save the updated node back to the backend.
                     self.backend.set_inner_node(location, node)$($await)*?;
                 }
-                Ok(())
+                Ok(current_root)
             }
 
             pub $($async_fn)* fn height(&self) -> NodeLevel {
@@ -777,15 +803,27 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(x_coord_children)
             }
 
-            pub $($async_fn)* fn compressed_root(
+            pub $($async_fn)* fn root(
                 &self,
             ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-                let height = self.height()$($await)*;
-                let root = self.root_node()$($await)*?;
-                Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
+                if let Ok(root) = self.backend.current_root()$($await)* {
+                    Ok(root)
+                } else {
+                    // Fallback to slow build if not found in storage.
+                    let root = self.inner_slow_build_root()$($await)*?;
+
+                    let height = self.height()$($await)*;
+                    Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
+                }
             }
 
             pub $($async_fn)* fn root_node(
+                &self,
+            ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
+                self.inner_slow_build_root()$($await)*
+            }
+
+            $($async_fn)* fn inner_slow_build_root(
                 &self,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 let params = self.parameters()$($await)*;
@@ -820,12 +858,12 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             pub $($async_fn)* fn store_root(&mut self) -> Result<BlockNumber, Error> {
-                let root = self.compressed_root()$($await)*?;
+                let root = self.get_or_init_root()$($await)*?;
                 let block_number = self.backend.store_root(root)$($await)*?;
                 Ok(block_number)
             }
 
-            pub $($async_fn)* fn fetch_root(&self, block_number: BlockNumber) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+            pub $($async_fn)* fn fetch_root(&self, block_number: Option<BlockNumber>) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
                 self.backend.fetch_root(block_number)$($await)*.map_err(|_| crate::Error::CurveTreeRootNotFound.into())
             }
 
@@ -937,6 +975,7 @@ macro_rules! impl_curve_tree_with_backend {
                 }
 
                 let mut height = self.height()$($await)*;
+                let mut current_root = self.get_or_init_root()$($await)*?;
 
                 while leaf_index < leaf_count {
                     let leaf_value = self
@@ -952,14 +991,16 @@ macro_rules! impl_curve_tree_with_backend {
 
                     // Start at the leaf's location.
                     let mut location = NodeLocation::<L>::leaf(leaf_index);
+                    let mut is_root = location.is_root(height);
                     let mut child_is_leaf = true;
 
                     leaf_index += 1;
                     // Keep going until we reach the root of the tree.
-                    while !location.is_root(height) {
+                    while !is_root {
                         // Move to the parent location and get the child index of the current node.
                         let (parent_location, mut child_index) = location.parent();
                         location = parent_location;
+                        is_root = location.is_root(height);
 
                         // Get or initialize the node at this location.
                         let mut node = match self.backend.get_inner_node(location)$($await)*? {
@@ -986,22 +1027,40 @@ macro_rules! impl_curve_tree_with_backend {
                         };
 
                         if node.is_even {
-                            B::Updater::update_node(
+                            let new_x_coords = B::Updater::update_node(
                                 &mut node,
                                 child_index,
                                 odd_old_child,
                                 odd_new_child,
                             )?;
 
+                            // Update the root
+                            if is_root {
+                                current_root.compressed_update(
+                                    node.commitments,
+                                    new_x_coords,
+                                    child_index,
+                                )?;
+                            }
+
                             // Save the new commitments for the next level up.
                             even_new_child = CompressedChildCommitments::Inner(node.commitments);
                         } else {
-                            B::Updater::update_node(
+                            let new_x_coords = B::Updater::update_node(
                                 &mut node,
                                 child_index,
                                 even_old_child,
                                 even_new_child,
                             )?;
+
+                            // Update the root
+                            if is_root {
+                                current_root.compressed_update(
+                                    node.commitments,
+                                    new_x_coords,
+                                    child_index,
+                                )?;
+                            }
 
                             // If the child was a leaf, we may need to commit multiple leaves to this node.
                             if child_is_leaf {
@@ -1019,12 +1078,22 @@ macro_rules! impl_curve_tree_with_backend {
                                     even_new_child = CompressedChildCommitments::Leaf(leaf_value.into());
                                     leaf_index += 1;
 
-                                    B::Updater::update_node(
+                                    let new_x_coords = B::Updater::update_node(
                                         &mut node,
                                         child_index,
                                         even_old_child,
                                         even_new_child,
                                     )?;
+
+                                    // Update the root
+                                    if is_root {
+                                        current_root.compressed_update(
+                                            node.commitments,
+                                            new_x_coords,
+                                            child_index,
+                                        )?;
+                                    }
+
                                 }
                                 // We have committed all possible leaves to this node.
                                 // Clear this flag before updating the parent.
@@ -1051,6 +1120,9 @@ macro_rules! impl_curve_tree_with_backend {
                 // Update the last committed leaf index in the backend.
                 self.backend.set_committed_leaf_index(leaf_index)$($await)*?;
 
+                // Store the updated root.
+                self.backend.store_root(current_root)$($await)*?;
+
                 Ok(true)
             }
 
@@ -1061,6 +1133,7 @@ macro_rules! impl_curve_tree_with_backend {
                 new_leaf_value: CompressedLeafValue<C>,
             ) -> Result<(), Error> {
                 let height = self.height()$($await)*;
+                let mut current_root = self.get_or_init_root()$($await)*?;
 
                 let mut even_old_child = old_leaf_value.map(CompressedChildCommitments::leaf);
                 let mut even_new_child = CompressedChildCommitments::leaf(new_leaf_value);
@@ -1069,12 +1142,14 @@ macro_rules! impl_curve_tree_with_backend {
 
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
+                let mut is_root = location.is_root(height);
 
                 // Keep going until we reach the root of the tree.
-                while !location.is_root(height) {
+                while !is_root {
                     // Move to the parent location and get the child index of the current node.
                     let (parent_location, child_index) = location.parent();
                     location = parent_location;
+                    is_root = location.is_root(height);
 
                     let mut node = match self.backend.get_inner_node(location)$($await)*? {
                         Some(node) => {
@@ -1098,8 +1173,8 @@ macro_rules! impl_curve_tree_with_backend {
                             }
                         }
                     };
-                    if node.is_even {
-                        B::Updater::update_node(
+                    let new_x_coords = if node.is_even {
+                        let new_x_coords = B::Updater::update_node(
                             &mut node,
                             child_index,
                             odd_old_child,
@@ -1108,8 +1183,10 @@ macro_rules! impl_curve_tree_with_backend {
 
                         // Save the new commitments for the next level up.
                         even_new_child = CompressedChildCommitments::Inner(node.commitments);
+
+                        new_x_coords
                     } else {
-                        B::Updater::update_node(
+                        let new_x_coords = B::Updater::update_node(
                             &mut node,
                             child_index,
                             even_old_child,
@@ -1118,6 +1195,17 @@ macro_rules! impl_curve_tree_with_backend {
 
                         // Save the new commitments for the next level up.
                         odd_new_child = CompressedChildCommitments::Inner(node.commitments);
+
+                        new_x_coords
+                    };
+
+                    // Update the root
+                    if is_root {
+                        current_root.compressed_update(
+                            node.commitments,
+                            new_x_coords,
+                            child_index,
+                        )?;
                     }
 
                     // Save the updated node back to the backend.
@@ -1131,6 +1219,9 @@ macro_rules! impl_curve_tree_with_backend {
                     log::warn!("Tree height increased from {} to {}", height, level);
                     self.backend.set_height(level)$($await)*?;
                 }
+
+                // Store the updated root.
+                self.backend.store_root(current_root)$($await)*?;
                 Ok(())
             }
         }
@@ -1155,7 +1246,7 @@ macro_rules! impl_curve_tree_with_backend {
                     .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
                 let path = self.get_path_to_leaf(leaf_index, 0)$($await)*?;
                 let block_number = self.get_block_number()$($await)*?;
-                let root = self.compressed_root()$($await)*?;
+                let root = self.root()$($await)*?;
                 Ok(LeafPathAndRoot {
                     leaf,
                     leaf_index,

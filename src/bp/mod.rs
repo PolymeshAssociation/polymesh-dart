@@ -1056,10 +1056,10 @@ impl AssetCurveTree {
         self.tree.params()
     }
 
-    pub fn root_node(
+    pub fn root(
         &self,
     ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
-        self.tree.root_node()
+        self.tree.root()
     }
 
     pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
@@ -1439,7 +1439,7 @@ impl<
         let pk = account.public;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let (proof, nullifier) = bp_account::MintTxnProof::new(
@@ -2343,7 +2343,7 @@ impl<
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
@@ -2474,7 +2474,7 @@ impl<
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
@@ -2605,7 +2605,7 @@ impl<
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
@@ -2736,7 +2736,7 @@ impl<
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
@@ -2867,7 +2867,7 @@ impl<
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root_node()?;
+        let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();

@@ -1185,13 +1185,10 @@ impl DartProverAccountTree {
             "Applying {} new account leafs to the prover account tree",
             new_leafs.len()
         );
+        self.account_tree.set_block_number(block_number)?;
         for leaf in new_leafs {
             self.account_tree.insert(leaf.as_leaf_value()?)?;
             self.last_leaf_index += 1;
-        }
-        self.account_tree.set_block_number(block_number)?;
-        if let Err(err) = self.account_tree.store_root() {
-            log::error!("Failed to store prover account tree root: {}", err);
         }
         log::info!(
             "Prover account tree now has {} leaves",
@@ -1289,16 +1286,17 @@ impl DartChainState {
     }
 
     pub fn end_block(&mut self) -> Result<()> {
+        // Make sure the curve tree are using the same block number.
+        self.block_number += 1;
+        self.asset_tree.set_block_number(self.block_number)?;
+        self.account_tree.set_block_number(self.block_number)?;
+
         for commitment in self.pending_account_updates.drain(..) {
             // Add the commitment to the account tree.
             self.account_tree.insert(commitment.as_leaf_value()?)?;
             self.account_leafs.push(commitment);
         }
-        // Make sure the curve tree are using the same block number.
-        self.block_number += 1;
-        self.asset_tree.set_block_number(self.block_number)?;
-        self.account_tree.set_block_number(self.block_number)?;
-        // Push the current account tree root to the history.
+        // We need to store curve tree roots.
         self.asset_tree.store_root()?;
         self.account_tree.store_root()?;
 
@@ -1386,8 +1384,6 @@ impl DartChainState {
 
         self.asset_tree.set_asset_state(asset_state)?;
         self.asset_details.insert(asset_id, asset_details.clone());
-        // Push the current asset tree root to the history.
-        self.asset_tree.store_root()?;
 
         Ok(asset_details)
     }

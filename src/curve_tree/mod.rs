@@ -218,8 +218,8 @@ pub trait CurveTreeLookup<const L: usize, const M: usize, C: CurveTreeConfig> {
     /// Returns the parameters of the curve tree.
     fn params(&self) -> &CurveTreeParameters<C>;
 
-    /// Returns the root node of the curve tree.
-    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error>;
+    /// Returns the root of the curve tree.
+    fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error>;
 
     /// Returns the block number associated with the current state of the tree.
     fn get_block_number(&self) -> Result<BlockNumber, Error>;
@@ -368,12 +368,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        let root = self.tree.root_node()?;
-        Ok(CompressedCurveTreeRoot::from_root_node(
-            self.tree.height(),
-            root,
-        )?)
+    pub fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        self.tree.root()
     }
 
     pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
@@ -413,12 +409,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         self.tree.parameters()
     }
 
-    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        let root = self.tree.root_node()?;
-        Ok(CompressedCurveTreeRoot::from_root_node(
-            self.tree.height(),
-            root,
-        )?)
+    fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        self.tree.root()
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {
@@ -454,12 +446,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> VerifierCurveTree<L, M,
     }
 
     /// Get the root node of the curve tree.
-    pub fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        let root = self.tree.root_node()?;
-        Ok(CompressedCurveTreeRoot::from_root_node(
-            self.tree.height(),
-            root,
-        )?)
+    pub fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        self.tree.root()
     }
 
     pub fn get_block_number(&self) -> Result<BlockNumber, Error> {
@@ -481,7 +469,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L
     for &VerifierCurveTree<L, M, C>
 {
     fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
-        self.tree.fetch_root(block).ok()
+        self.tree.fetch_root(Some(block)).ok()
     }
 
     fn params(&self) -> &CurveTreeParameters<C> {
@@ -512,7 +500,7 @@ impl<
     /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
     pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, E> {
         Ok(Self {
-            tree: CurveTreeWithBackend::<L, M, C, B, E>::new_no_init(height, gens_length)?,
+            tree: CurveTreeWithBackend::<L, M, C, B, E>::new(height, gens_length)?,
             leaf_to_index: BTreeMap::new(),
         })
     }
@@ -532,6 +520,10 @@ impl<
 
     pub fn store_root(&mut self) -> Result<BlockNumber, E> {
         self.tree.store_root()
+    }
+
+    pub fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, E> {
+        self.tree.root()
     }
 
     /// Apply updates to the curve tree by inserting multiple untracked leaves.
@@ -607,13 +599,8 @@ impl<
         self.tree.parameters()
     }
 
-    fn root_node(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        Ok(CompressedCurveTreeRoot::from_root_node(
-            self.tree.height(),
-            self.tree
-                .root_node()
-                .map_err(|_| Error::CurveTreeRootNotFound)?,
-        )?)
+    fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        self.tree.root().map_err(|_| Error::CurveTreeRootNotFound)
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {

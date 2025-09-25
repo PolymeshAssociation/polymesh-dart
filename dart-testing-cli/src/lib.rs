@@ -729,8 +729,8 @@ impl DartTestingDb {
             .execute("DELETE FROM pending_account_commitments", [])?;
 
         // Get current tree roots
-        let asset_root = self.asset_tree.compressed_root()?;
-        let account_root = self.account_tree.compressed_root()?;
+        let asset_root = self.asset_tree.root()?;
+        let account_root = self.account_tree.root()?;
 
         // Store roots in database
         let block_number = self.get_next_block_number()?;
