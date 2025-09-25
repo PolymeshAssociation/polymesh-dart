@@ -1469,9 +1469,11 @@ impl<
 
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
+        identity: &[u8],
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let id = hash_identity::<PallasScalar>(identity);
         // Get the curve tree root.
         let root = tree_roots
             .get_block_root(self.root_block.into())
@@ -1483,6 +1485,7 @@ impl<
         let proof = self.proof.decode()?;
         proof.verify(
             self.pk.get_affine()?,
+            id,
             self.asset_id,
             self.amount,
             self.updated_account_state_commitment.as_commitment()?,

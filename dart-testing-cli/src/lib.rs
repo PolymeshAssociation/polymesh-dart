@@ -913,7 +913,7 @@ impl DartTestingDb {
             rng,
             |roots, rng| {
                 // Verify the minting proof
-                proof.verify(roots, rng)?;
+                proof.verify(issuer_signer_name.as_bytes(), roots, rng)?;
 
                 Ok(())
             },

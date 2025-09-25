@@ -1505,7 +1505,7 @@ impl DartChainState {
         let mut rng = rand::thread_rng();
         // Verify the minting proof.
         proof
-            .verify(&self.account_tree, &mut rng)
+            .verify(caller.ctx(), &self.account_tree, &mut rng)
             .context("Invalid minting proof")?;
 
         // Add the new account state commitment to the account tree.

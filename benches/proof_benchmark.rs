@@ -142,7 +142,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AssetMintingProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(&account_root), &mut rng)
+                .verify(ctx, black_box(&account_root), &mut rng)
                 .expect("Failed to verify proof");
         })
     });
