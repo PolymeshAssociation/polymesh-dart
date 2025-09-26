@@ -1,4 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use rand::SeedableRng;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::hint::black_box;
@@ -6,7 +7,7 @@ use std::hint::black_box;
 use polymesh_dart::{curve_tree::*, *};
 
 fn proof_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed([42; 32]);
     let mut asset_tree = AssetCurveTree::new().expect("Failed to create asset tree");
 
     // The account curve tree.
@@ -81,6 +82,41 @@ fn proof_benchmark(c: &mut Criterion) {
                 .expect("Failed to verify proof");
         })
     });
+
+    // Generate a batch of account asset registration proofs to benchmark batched verification.
+    for num_proofs in [1u32, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 100] {
+        let mut account_assets = Vec::with_capacity(NUM_PROOFS);
+        for idx in 0..num_proofs {
+            account_assets.push((issuer_keys.acct.clone(), idx as AssetId, 0));
+        }
+        let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &account_assets,
+            ctx,
+            &account_params,
+        )
+        .expect("Failed to generate batched proof");
+
+        // Benchmark: Verify batched account asset registration proof.
+        let name = format!("BatchedAccountAssetRegistrationProof verify {num_proofs}");
+        c.bench_function(&name, |b| {
+            b.iter(|| {
+                proof
+                    .verify(black_box(ctx), &account_params, &mut rng)
+                    .expect("Failed to verify proof");
+            })
+        });
+
+        // Benchmark: Batched_verify batched account asset registration proof.
+        let name = format!("BatchedAccountAssetRegistrationProof batched_verify {num_proofs}");
+        c.bench_function(&name, |b| {
+            b.iter(|| {
+                proof
+                    .batched_verify(black_box(ctx), &account_params, &mut rng)
+                    .expect("Failed to verify proof");
+            })
+        });
+    }
 
     // Register the investor's account state.
     let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::new(

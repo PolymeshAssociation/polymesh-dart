@@ -6,6 +6,8 @@ use ark_ff::{
     PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
 };
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -71,8 +73,8 @@ pub trait DartLimits: Clone + core::fmt::Debug {
 }
 
 impl DartLimits for () {
-    type MaxKeysPerRegProof = ConstU32<MAX_KEYS_PER_REG_PROOF>;
-    type MaxAccountAssetRegProofs = ConstU32<MAX_ACCOUNT_ASSET_REG_PROOFS>;
+    type MaxKeysPerRegProof = ConstU32<500>;
+    type MaxAccountAssetRegProofs = ConstU32<200>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
@@ -1248,6 +1250,45 @@ impl<T: DartLimits> Eq for BatchedAccountAssetRegistrationProof<T> {}
 
 impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     /// Generate a new batched account asset registration proof.
+    #[cfg(feature = "parallel")]
+    pub fn new<R: RngCore + CryptoRng + Sync + Send + Clone>(
+        rng: &mut R,
+        account_assets: &[(AccountKeyPair, AssetId, NullifierSkGenCounter)],
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+    ) -> Result<(Self, Vec<AccountAssetState>), Error> {
+        let proofs_and_states = account_assets
+            .par_iter()
+            .map_init(
+                || rng.clone(),
+                |rng, (account, asset_id, counter)| {
+                    AccountAssetRegistrationProof::new(
+                        rng,
+                        account,
+                        *asset_id,
+                        *counter,
+                        identity,
+                        tree_params,
+                    )
+                },
+            )
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let mut proofs = BoundedVec::with_bounded_capacity(account_assets.len());
+        let mut states = Vec::with_capacity(account_assets.len());
+
+        for (proof, state) in proofs_and_states {
+            proofs
+                .try_push(proof)
+                .map_err(|_| Error::TooManyAccountAssetRegProofs)?;
+            states.push(state);
+        }
+
+        Ok((Self { proofs }, states))
+    }
+
+    /// Generate a new batched account asset registration proof.
+    #[cfg(not(feature = "parallel"))]
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         account_assets: &[(AccountKeyPair, AssetId, NullifierSkGenCounter)],
@@ -1276,6 +1317,28 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     }
 
     /// Verify the batched account asset registration proof.
+    #[cfg(feature = "parallel")]
+    pub fn verify<R: RngCore + CryptoRng + Sync + Send + Clone>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        if self.proofs.len() == 0 {
+            return Ok(());
+        }
+        self.proofs
+            .par_iter()
+            .map_init(
+                || rng.clone(),
+                |rng, proof| proof.verify(identity, tree_params, rng),
+            )
+            .collect::<Result<(), Error>>()?;
+        Ok(())
+    }
+
+    /// Verify the batched account asset registration proof.
+    #[cfg(not(feature = "parallel"))]
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         identity: &[u8],
@@ -1285,6 +1348,65 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         for proof in &self.proofs {
             proof.verify(identity, tree_params, rng)?;
         }
+        Ok(())
+    }
+
+    /// Verify the batched account asset registration proof.
+    #[cfg(feature = "parallel")]
+    pub fn batched_verify<R: RngCore + CryptoRng + Sync + Send + Clone>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        if self.proofs.len() < 2 {
+            return self.verify(identity, tree_params, rng);
+        }
+
+        let tuples = self
+            .proofs
+            .par_iter()
+            .map_init(
+                || rng.clone(),
+                |rng, proof| proof.batched_verify(identity, tree_params, rng),
+            )
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        bulletproofs::r1cs::batch_verify_with_rng(
+            tuples,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            rng,
+        )?;
+
+        Ok(())
+    }
+
+    /// Verify the batched account asset registration proof.
+    #[cfg(not(feature = "parallel"))]
+    pub fn batched_verify<R: RngCore + CryptoRng + Sync + Send + Clone>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        if self.proofs.len() < 2 {
+            return self.verify(identity, tree_params, rng);
+        }
+        let mut tuples = Vec::with_capacity(self.proofs.len());
+
+        for proof in &self.proofs {
+            let tuple = proof.batched_verify(identity, tree_params, rng)?;
+            tuples.push(tuple);
+        }
+
+        bulletproofs::r1cs::batch_verify_with_rng(
+            tuples,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            rng,
+        )?;
+
         Ok(())
     }
 
@@ -1374,6 +1496,34 @@ impl AccountAssetRegistrationProof {
             None,
         )?;
         Ok(())
+    }
+
+    /// Verify this registration proof inside a batch of proofs.
+    pub fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<bulletproofs::r1cs::VerificationTuple<PallasA>, Error> {
+        let proof = self.proof.decode()?;
+        let params = poseidon_params();
+        let id = hash_identity::<PallasScalar>(identity);
+
+        Ok(proof.verify_except_bp(
+            id,
+            &self.account.get_affine()?,
+            self.asset_id,
+            &self.account_state_commitment.as_commitment()?,
+            self.counter,
+            self.nullifier.get_affine()?,
+            identity,
+            dart_gens().account_comm_key(),
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            &params.params,
+            None,
+            rng,
+        )?)
     }
 }
 
