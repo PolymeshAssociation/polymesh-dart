@@ -8,10 +8,6 @@ use polymesh_dart_bp::account::{
 };
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
-use polymesh_dart_bp::poseidon_impls::poseidon_2::params::{
-    Poseidon2Params,
-    pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3},
-};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 
 type PallasParameters = ark_pallas::PallasConfig;

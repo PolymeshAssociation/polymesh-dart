@@ -1346,9 +1346,8 @@ pub mod tests {
     use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
-    use crate::poseidon_impls::poseidon_2::params::{
-        Poseidon2Params,
-    };
+    use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
+    use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
     use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
     use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
     use ark_crypto_primitives::{
@@ -1367,7 +1366,6 @@ pub mod tests {
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
-    use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;

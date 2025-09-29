@@ -425,7 +425,7 @@ pub fn Poseidon_hash_2_gadget_simple<F: PrimeField, CS: ConstraintSystem<F>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poseidon_impls::poseidon_2::params::pallas::{get_poseidon2_params_for_2_1_hashing};
+    use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
     use ark_pallas::Affine as PallasA;
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
@@ -503,7 +503,6 @@ mod tests {
         partial_rounds: usize,
         transcript_label: &'static [u8],
     ) {
-
         let params = get_poseidon2_params_for_2_1_hashing().unwrap();
 
         let xl = Fr::rand(rng);

@@ -141,13 +141,8 @@ pub mod pallas {
 
     // Parameters taken from https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_pallas.rs
 
-    pub static MAT_DIAG3_M_1: LazyLock<Vec<PallasFr>> = LazyLock::new(|| {
-        vec![
-            PallasFr::one(),
-            PallasFr::one(),
-            PallasFr::from(2_u64),
-        ]
-    });
+    pub static MAT_DIAG3_M_1: LazyLock<Vec<PallasFr>> =
+        LazyLock::new(|| vec![PallasFr::one(), PallasFr::one(), PallasFr::from(2_u64)]);
 
     pub static MAT_INTERNAL3: LazyLock<Vec<Vec<PallasFr>>> = LazyLock::new(|| {
         vec![
