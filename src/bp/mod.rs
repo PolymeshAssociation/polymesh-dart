@@ -46,11 +46,11 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::Poseidon2Params;
 pub mod sqlx_impl;
 
 pub mod encode;
-pub use encode::{CompressedAffine, WrappedCanonical};
-use zeroize::{Zeroize, ZeroizeOnDrop};
-
 use crate::curve_tree::*;
 use crate::*;
+pub use encode::{CompressedAffine, WrappedCanonical};
+use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub trait DartLimits: Clone + core::fmt::Debug {
     /// The maximum number of keys in an account registration proof.
@@ -125,13 +125,11 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
-pub const DART_GEN_POSEIDON2: &'static [u8] = b"polymesh-dart-poseidon2";
-
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 
-    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new(DART_GEN_POSEIDON2).expect("Failed to create Poseidon parameters");
+    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new().expect("Failed to create Poseidon parameters");
 }
 
 #[cfg(feature = "std")]
@@ -166,10 +164,8 @@ static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 pub fn poseidon_params() -> &'static PoseidonParameters {
     unsafe {
         if POSEIDON_PARAMS.is_none() {
-            POSEIDON_PARAMS = Some(
-                PoseidonParameters::new(DART_GEN_POSEIDON2)
-                    .expect("Failed to create Poseidon parameters"),
-            );
+            POSEIDON_PARAMS =
+                Some(PoseidonParameters::new().expect("Failed to create Poseidon parameters"));
         }
         POSEIDON_PARAMS.as_ref().unwrap()
     }
@@ -180,12 +176,9 @@ pub struct PoseidonParameters {
 }
 
 impl PoseidonParameters {
-    pub fn new(label: &[u8]) -> Result<Self, Error> {
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(label).into());
-        let full_rounds = 8;
-        let partial_rounds = 56;
+    pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            params: Poseidon2Params::new_with_randoms(&mut rng, 3, 5, full_rounds, partial_rounds)?,
+            params: get_poseidon2_params_for_2_1_hashing()?,
         })
     }
 }
