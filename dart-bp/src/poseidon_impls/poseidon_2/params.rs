@@ -1,7 +1,6 @@
 use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use crate::{Error, error::Result};
 use ark_ff::PrimeField;
-use ark_std::sync::LazyLock;
 use ark_std::{vec, vec::Vec};
 use hex::FromHex;
 
@@ -121,23 +120,41 @@ pub mod pallas {
     use super::*;
     use ark_ff::{One, Zero};
     use ark_pallas::Fr as PallasFr;
+    use ark_std::sync::LazyLock;
+
+    pub fn get_poseidon2_params_for_2_1_hashing() -> Result<Poseidon2Params<PallasFr>> {
+        // NOTE: These numbers are for 2:1 compression and 256 bit group (Table 1 from Poseidon2 paper) and that is the only config we use.
+        // These should be changed if we decide to use something else.
+        let full_rounds = 8;
+        let partial_rounds = 56;
+        let degree = 5;
+        Poseidon2Params::<PallasFr>::new(
+            3,
+            degree,
+            full_rounds,
+            partial_rounds,
+            MAT_DIAG3_M_1.to_vec(),
+            MAT_INTERNAL3.to_vec(),
+            RC3.as_ref().unwrap().to_vec(),
+        )
+    }
 
     // Parameters taken from https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_pallas.rs
 
-    pub static MAT_DIAG3_M_1: LazyLock<Result<Vec<PallasFr>>> = LazyLock::new(|| {
-        Ok(vec![
+    pub static MAT_DIAG3_M_1: LazyLock<Vec<PallasFr>> = LazyLock::new(|| {
+        vec![
             PallasFr::one(),
             PallasFr::one(),
             PallasFr::from(2_u64),
-        ])
+        ]
     });
 
-    pub static MAT_INTERNAL3: LazyLock<Result<Vec<Vec<PallasFr>>>> = LazyLock::new(|| {
-        Ok(vec![
+    pub static MAT_INTERNAL3: LazyLock<Vec<Vec<PallasFr>>> = LazyLock::new(|| {
+        vec![
             vec![PallasFr::from(2_u64), PallasFr::one(), PallasFr::one()],
             vec![PallasFr::one(), PallasFr::from(2_u64), PallasFr::one()],
             vec![PallasFr::one(), PallasFr::one(), PallasFr::from(3_u64)],
-        ])
+        ]
     });
 
     pub static RC3: LazyLock<Result<Vec<Vec<PallasFr>>>> = LazyLock::new(|| {

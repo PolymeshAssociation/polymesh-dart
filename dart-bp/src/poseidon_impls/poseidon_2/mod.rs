@@ -425,7 +425,7 @@ pub fn Poseidon_hash_2_gadget_simple<F: PrimeField, CS: ConstraintSystem<F>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poseidon_impls::poseidon_2::params::pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3};
+    use crate::poseidon_impls::poseidon_2::params::pallas::{get_poseidon2_params_for_2_1_hashing};
     use ark_pallas::Affine as PallasA;
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
@@ -445,16 +445,7 @@ mod tests {
     ) {
         let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new(
-            width,
-            degree,
-            full_rounds,
-            partial_rounds,
-            MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
-            MAT_INTERNAL3.as_ref().unwrap().to_vec(),
-            RC3.as_ref().unwrap().to_vec(),
-        )
-        .unwrap();
+        let params = get_poseidon2_params_for_2_1_hashing().unwrap();
 
         let poseidon2 = Poseidon2::new(params.clone());
 
@@ -508,23 +499,12 @@ mod tests {
 
     fn poseidon2_hash_2_simple<R: CryptoRngCore>(
         rng: &mut R,
-        degree: usize,
         full_rounds: usize,
         partial_rounds: usize,
         transcript_label: &'static [u8],
     ) {
-        let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new(
-            width,
-            degree,
-            full_rounds,
-            partial_rounds,
-            MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
-            MAT_INTERNAL3.as_ref().unwrap().to_vec(),
-            RC3.as_ref().unwrap().to_vec(),
-        )
-        .unwrap();
+        let params = get_poseidon2_params_for_2_1_hashing().unwrap();
 
         let xl = Fr::rand(rng);
         let xr = Fr::rand(rng);
@@ -600,6 +580,6 @@ mod tests {
     #[test]
     fn test_poseidon2_hash_2_simple_quint_sbox() {
         let mut rng = rand::thread_rng();
-        poseidon2_hash_2_simple(&mut rng, 5, 8, 56, b"Poseidon_hash_2_quint");
+        poseidon2_hash_2_simple(&mut rng, 8, 56, b"Poseidon_hash_2_quint");
     }
 }

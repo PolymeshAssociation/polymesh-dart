@@ -12,6 +12,7 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::params::{
     Poseidon2Params,
     pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3},
 };
+use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -46,22 +47,6 @@ fn create_shared_setup<R: rand_core::CryptoRngCore>(
     let enc_gen = PallasA::rand(rng);
 
     (account_tree_params, account_comm_key, enc_key_gen, enc_gen)
-}
-
-fn create_poseidon_config() -> Poseidon2Params<Fr> {
-    let full_rounds = 8;
-    let partial_rounds = 56;
-    let degree = 5;
-    Poseidon2Params::<Fr>::new(
-        3,
-        degree,
-        full_rounds,
-        partial_rounds,
-        MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
-        MAT_INTERNAL3.as_ref().unwrap().to_vec(),
-        RC3.as_ref().unwrap().to_vec(),
-    )
-    .unwrap()
 }
 
 /// Generate all keys needed for benchmarks
@@ -124,7 +109,7 @@ fn create_account_and_tree<R: rand_core::CryptoRngCore>(
 ) {
     let asset_id = 1;
     let id = Fr::rand(rng);
-    let poseidon_config = create_poseidon_config();
+    let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
     let mut account = AccountState::new(rng, id, sk.0, asset_id, 0, poseidon_config).unwrap();
     account.balance = 200;
 

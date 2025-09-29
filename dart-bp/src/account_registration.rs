@@ -1348,7 +1348,6 @@ pub mod tests {
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use crate::poseidon_impls::poseidon_2::params::{
         Poseidon2Params,
-        pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3},
     };
     use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
     use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
@@ -1368,6 +1367,7 @@ pub mod tests {
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
+    use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1404,20 +1404,7 @@ pub mod tests {
     }
 
     pub fn test_params_for_poseidon2() -> Poseidon2Params<Fr> {
-        // NOTE: These numbers are for 2:1 compression and 256 bit group (Table 1 from Poseidon2 paper) and that is the only config we use. These should be changed if we decide to use something else.
-        let full_rounds = 8;
-        let partial_rounds = 56;
-        let degree = 5;
-        Poseidon2Params::<Fr>::new(
-            3,
-            degree,
-            full_rounds,
-            partial_rounds,
-            MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
-            MAT_INTERNAL3.as_ref().unwrap().to_vec(),
-            RC3.as_ref().unwrap().to_vec(),
-        )
-        .unwrap()
+        get_poseidon2_params_for_2_1_hashing().unwrap()
     }
 
     #[test]
