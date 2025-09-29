@@ -233,7 +233,7 @@ impl CompressedBaseField {
     }
 }
 
-pub const ARK_EC_POINT_SIZE: usize = 33;
+pub const ARK_EC_POINT_SIZE: usize = 32;
 
 pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 

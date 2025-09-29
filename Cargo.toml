@@ -24,6 +24,14 @@ dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
 schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
 #equality_across_groups = { git = "https://github.com/PolymeshAssociation/crypto" }
 
+# Polymesh changes.
+#ark-serialize = { path = "../arkworks-algebra/serialize" }
+#ark-ec = { path = "../arkworks-algebra/ec" }
+#ark-ff = { path = "../arkworks-algebra/ff" }
+ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
+ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
+ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
+
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
 polymesh-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
@@ -188,11 +196,7 @@ backend_bp = [
 
 no_std = ["alloc"]
 
-alloc = [
-    "serde?/alloc",
-    "serde_json?/alloc",
-    "serde_arrays?/alloc",
-]
+alloc = ["serde?/alloc", "serde_json?/alloc", "serde_arrays?/alloc"]
 
 std = [
     "log/std",
@@ -210,7 +214,4 @@ std = [
 ]
 
 asm = ["polymesh-dart-bp?/asm"]
-parallel = [
-    "rayon",
-    "polymesh-dart-bp?/parallel",
-]
+parallel = ["rayon", "polymesh-dart-bp?/parallel"]
