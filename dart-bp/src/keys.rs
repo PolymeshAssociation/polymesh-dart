@@ -1,6 +1,6 @@
-use crate::{TXN_CHALLENGE_LABEL, add_to_transcript, NONCE_LABEL};
-use crate::util::add_slice_to_transcript;
 use crate::error::{Error, Result};
+use crate::util::add_slice_to_transcript;
+use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::One;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};

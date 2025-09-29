@@ -1,0 +1,81 @@
+name: Dart-BP Tests
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'dart-bp/**'
+      - 'dart-common/**'  # Include dart-common since dart-bp might depend on it
+      - 'Cargo.toml'      # Root workspace file
+      - 'Cargo.lock'      # Lockfile changes
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'dart-bp/**'
+      - 'dart-common/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test dart-bp crate
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Check formatting
+      run: cargo fmt --package polymesh-dart-bp -- --check
+      
+    - name: Run tests
+      run: cargo test --release --package polymesh-dart-bp
+      
+    - name: Run tests with ignore_prover_input_sanitation feature
+      run: cargo test --release --package polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
+      
+  test-wasm:
+    name: Build dart-bp for WASM target
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Build for WASM
+      run: cargo build --package polymesh-dart-bp --target wasm32-unknown-unknown --no-default-features

@@ -425,6 +425,7 @@ pub fn Poseidon_hash_2_gadget_simple<F: PrimeField, CS: ConstraintSystem<F>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::poseidon_impls::poseidon_2::params::pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3};
     use ark_pallas::Affine as PallasA;
     use ark_pallas::Fr;
     use ark_serialize::CanonicalSerialize;
@@ -434,7 +435,6 @@ mod tests {
     use dock_crypto_utils::transcript::MerlinTranscript;
     use rand_core::CryptoRngCore;
     use std::time::Instant;
-    use crate::poseidon_impls::poseidon_2::params::pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3};
 
     fn poseidon2_perm_sbox<R: CryptoRngCore>(
         rng: &mut R,
@@ -445,7 +445,16 @@ mod tests {
     ) {
         let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new(width, degree, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec()).unwrap();
+        let params = Poseidon2Params::<Fr>::new(
+            width,
+            degree,
+            full_rounds,
+            partial_rounds,
+            MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
+            MAT_INTERNAL3.as_ref().unwrap().to_vec(),
+            RC3.as_ref().unwrap().to_vec(),
+        )
+        .unwrap();
 
         let poseidon2 = Poseidon2::new(params.clone());
 
@@ -506,7 +515,16 @@ mod tests {
     ) {
         let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new(width, degree, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec()).unwrap();
+        let params = Poseidon2Params::<Fr>::new(
+            width,
+            degree,
+            full_rounds,
+            partial_rounds,
+            MAT_DIAG3_M_1.as_ref().unwrap().to_vec(),
+            MAT_INTERNAL3.as_ref().unwrap().to_vec(),
+            RC3.as_ref().unwrap().to_vec(),
+        )
+        .unwrap();
 
         let xl = Fr::rand(rng);
         let xr = Fr::rand(rng);

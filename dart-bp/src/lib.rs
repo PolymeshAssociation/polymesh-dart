@@ -23,14 +23,14 @@ pub mod util;
 pub mod account;
 pub mod account_registration;
 mod error;
+pub mod fee_account;
 pub mod leg;
 pub mod poseidon_impls;
-pub mod fee_account;
 
 pub use error::Error;
 
 pub use polymesh_dart_common::{
-    AssetId, Balance, PendingTxnCounter, BALANCE_BITS, MAX_BALANCE, MAX_ASSET_ID,
+    AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE, PendingTxnCounter,
 };
 
 // TODO: General question: Should i be hashing a generator/commitment every time i use it so that the instance is always hashed in order of invoking the protocol?

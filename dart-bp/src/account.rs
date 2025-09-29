@@ -4,6 +4,7 @@ use ark_std::collections::{BTreeMap, BTreeSet};
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
+use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{
     bp_gens_for_vec_commitment,
     enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
@@ -17,10 +18,16 @@ use crate::util::{
 use crate::util::{
     enforce_balance_change_prover, enforce_balance_change_verifier,
     generate_schnorr_responses_for_balance_change, get_verification_tuples_with_rng,
-    initialize_curve_tree_prover_with_given_transcripts, initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
+    initialize_curve_tree_prover_with_given_transcripts,
+    initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
     verify_given_verification_tuples, verify_with_rng,
 };
-use crate::{error::Result, Error, TXN_ODD_LABEL};
+use crate::{
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, ID_LABEL, INCREASE_BAL_BY_LABEL,
+    LEG_ENC_LABEL, NONCE_LABEL, PK_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL,
+    TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
+};
+use crate::{Error, TXN_ODD_LABEL, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
@@ -35,21 +42,16 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndReran
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{
-    AssetId, Balance, NullifierSkGenCounter, PendingTxnCounter, MAX_ASSET_ID, MAX_BALANCE,
+    AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE, NullifierSkGenCounter, PendingTxnCounter,
 };
 use rand_core::CryptoRngCore;
-use crate::{add_to_transcript, ACCOUNT_COMMITMENT_LABEL,
-            ASSET_ID_LABEL, BALANCE_LABEL,
-            ID_LABEL, INCREASE_BAL_BY_LABEL,
-            LEG_ENC_LABEL,
-            NONCE_LABEL, PK_LABEL,
-            RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
 };
+use schnorr_pok::partial::{
+    Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
+};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse};
-use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
@@ -474,15 +476,24 @@ impl<
 
         let mut transcript = even_prover.transcript();
 
-        add_to_transcript!(transcript, 
-            ROOT_LABEL, root,
-            RE_RANDOMIZED_PATH_LABEL, re_randomized_path,
-            NONCE_LABEL, nonce,
-            ISSUER_PK_LABEL, issuer_pk,
-            ID_LABEL, account.id,
-            ASSET_ID_LABEL, account.asset_id,
-            INCREASE_BAL_BY_LABEL, increase_bal_by,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment
+        add_to_transcript!(
+            transcript,
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            ISSUER_PK_LABEL,
+            issuer_pk,
+            ID_LABEL,
+            account.id,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            INCREASE_BAL_BY_LABEL,
+            increase_bal_by,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
         );
 
         // We don't need to check if the new balance overflows or not as the chain tracks the total supply
@@ -594,10 +605,7 @@ impl<
         let mut wits = BTreeMap::new();
         wits.insert(3, updated_account.current_rho);
         wits.insert(4, updated_account.randomness);
-        let resp_acc_new = t_acc_new.partial_response(
-            wits,
-            &prover_challenge,
-        )?;
+        let resp_acc_new = t_acc_new.partial_response(wits, &prover_challenge)?;
 
         // Response for witness will already be generated in sigma protocol for leaf
         let resp_null = t_null.gen_partial_proof();
@@ -607,10 +615,7 @@ impl<
         // Response for other witnesses will already be generated in sigma protocol for leaf, and new account commitment
         let mut w = BTreeMap::new();
         w.insert(0, comm_bp_blinding);
-        let resp_bp = t_bp.partial_response(
-            w,
-            &prover_challenge,
-        )?;
+        let resp_bp = t_bp.partial_response(w, &prover_challenge)?;
 
         let (even_proof, odd_proof) =
             prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
@@ -702,25 +707,35 @@ impl<
                 self.resp_bp.responses.len(),
             ));
         }
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier_with_given_transcripts(
-            &self.re_randomized_path,
-            root,
-            account_tree_params,
-            transcript_even,
-            transcript_odd,
-        );
+        let (mut even_verifier, odd_verifier) =
+            initialize_curve_tree_verifier_with_given_transcripts(
+                &self.re_randomized_path,
+                root,
+                account_tree_params,
+                transcript_even,
+                transcript_odd,
+            );
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        add_to_transcript!(verifier_transcript,
-            ROOT_LABEL, root,
-            RE_RANDOMIZED_PATH_LABEL, self.re_randomized_path,
-            NONCE_LABEL, nonce,
-            ISSUER_PK_LABEL, issuer_pk,
-            ID_LABEL, id,
-            ASSET_ID_LABEL, asset_id,
-            INCREASE_BAL_BY_LABEL, increase_bal_by,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment
+        add_to_transcript!(
+            verifier_transcript,
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            self.re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            ISSUER_PK_LABEL,
+            issuer_pk,
+            ID_LABEL,
+            id,
+            ASSET_ID_LABEL,
+            asset_id,
+            INCREASE_BAL_BY_LABEL,
+            increase_bal_by,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
         );
 
         let nullifier_gen = account_comm_key.current_rho_gen();
@@ -755,7 +770,10 @@ impl<
         let increase_bal_by = F0::from(increase_bal_by);
 
         let issuer_pk_proj = issuer_pk.into_group();
-        let y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm - issuer_pk_proj - (account_comm_key.id_gen() * id);
+        let y = self.re_randomized_path.get_rerandomized_leaf()
+            - asset_id_comm
+            - issuer_pk_proj
+            - (account_comm_key.id_gen() * id);
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
@@ -763,7 +781,11 @@ impl<
             &verifier_challenge,
         )?;
 
-        let y = updated_account_commitment.0 - asset_id_comm - issuer_pk_proj - (account_comm_key.id_gen() * id)  - (account_comm_key.balance_gen() * increase_bal_by);
+        let y = updated_account_commitment.0
+            - asset_id_comm
+            - issuer_pk_proj
+            - (account_comm_key.id_gen() * id)
+            - (account_comm_key.balance_gen() * increase_bal_by);
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_leaf.0[0]);
         missing_resps.insert(1, self.resp_leaf.0[1]);
@@ -776,10 +798,12 @@ impl<
             missing_resps,
         )?;
 
-        if !self
-            .resp_null
-            .verify(&nullifier, &nullifier_gen, &verifier_challenge, &self.resp_leaf.0[3])
-        {
+        if !self.resp_null.verify(
+            &nullifier,
+            &nullifier_gen,
+            &verifier_challenge,
+            &self.resp_leaf.0[3],
+        ) {
             return Err(Error::ProofVerificationError(
                 "Nullifier verification failed".to_string(),
             ));
@@ -1043,12 +1067,18 @@ impl<
                 transcript_odd,
             );
 
-        add_to_transcript!(even_prover.transcript(),
-            ROOT_LABEL, root,
-            RE_RANDOMIZED_PATH_LABEL, re_randomized_path,
-            NONCE_LABEL, nonce,
-            LEG_ENC_LABEL, leg_enc,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment
+        add_to_transcript!(
+            even_prover.transcript(),
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            LEG_ENC_LABEL,
+            leg_enc,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
         );
 
         let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = leg_enc_rand;
@@ -1336,20 +1366,27 @@ impl<
                 proof.resp_bp_randomness_relations.responses.len(),
             ));
         }
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier_with_given_transcripts(
-            &proof.re_randomized_path,
-            root,
-            account_tree_params,
-            transcript_even,
-            transcript_odd,
-        );
+        let (mut even_verifier, odd_verifier) =
+            initialize_curve_tree_verifier_with_given_transcripts(
+                &proof.re_randomized_path,
+                root,
+                account_tree_params,
+                transcript_even,
+                transcript_odd,
+            );
 
-        add_to_transcript!(even_verifier.transcript(),
-            ROOT_LABEL, root,
-            RE_RANDOMIZED_PATH_LABEL, proof.re_randomized_path,
-            NONCE_LABEL, nonce,
-            LEG_ENC_LABEL, leg_enc,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment
+        add_to_transcript!(
+            even_verifier.transcript(),
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            proof.re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            LEG_ENC_LABEL,
+            leg_enc,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
         );
 
         enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change(
@@ -1718,7 +1755,20 @@ impl<
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(rng, leg_enc, root, updated_account_commitment, nullifier, nonce, account_tree_params, account_comm_key, enc_key_gen, enc_gen, even_transcript, odd_transcript)
+        self.verify_with_given_transcript(
+            rng,
+            leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_transcript,
+            odd_transcript,
+        )
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -1984,7 +2034,20 @@ impl<
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(rng, leg_enc, root, updated_account_commitment, nullifier, nonce, account_tree_params, account_comm_key, enc_key_gen, enc_gen, even_transcript, odd_transcript)
+        self.verify_with_given_transcript(
+            rng,
+            leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_transcript,
+            odd_transcript,
+        )
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -3318,11 +3381,16 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         //
         // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare. If its not possible then do a membership proof
 
-        add_to_transcript!(transcript,
-            NONCE_LABEL, nonce,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment,
-            ID_LABEL, account.id,
-            PK_LABEL, pk
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            ID_LABEL,
+            account.id,
+            PK_LABEL,
+            pk
         );
 
         let null_gen = account_comm_key.current_rho_gen();
@@ -3356,8 +3424,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
         t_pk.challenge_contribution(&pk_gen, &pk, &mut transcript)?;
 
-        let prover_challenge =
-            transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let resp_acc = t_acc.response(
             &[account.rho, account.current_rho, account.randomness],
@@ -3411,11 +3478,16 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
-        add_to_transcript!(transcript,
-            NONCE_LABEL, nonce,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment,
-            ID_LABEL, id,
-            PK_LABEL, pk
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            ID_LABEL,
+            id,
+            PK_LABEL,
+            pk
         );
 
         let null_gen = account_comm_key.current_rho_gen();
@@ -3427,8 +3499,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         self.resp_pk
             .challenge_contribution(&pk_gen, &pk, &mut transcript)?;
 
-        let verifier_challenge =
-            transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
             - (pk.into_group()
@@ -3448,10 +3519,12 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         )?;
 
         // rho in account matches the one in nullifier
-        if !self
-            .resp_null
-            .verify(&self.nullifier, &null_gen, &verifier_challenge, &self.resp_acc.0[1])
-        {
+        if !self.resp_null.verify(
+            &self.nullifier,
+            &null_gen,
+            &verifier_challenge,
+            &self.resp_acc.0[1],
+        ) {
             return Err(Error::ProofVerificationError(
                 "Nullifier proof verification failed".to_string(),
             ));
@@ -3528,7 +3601,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         // Next few fields args can be abstracted in a single argument. Like a map with key as index and value as legs, keys, etc for that index
-    legs: Vec<(LegEncryption<G>, LegEncryptionRandomness<G::ScalarField>)>,
+        legs: Vec<(LegEncryption<G>, LegEncryptionRandomness<G::ScalarField>)>,
         sender_in_leg_indices: BTreeSet<usize>,
         receiver_in_leg_indices: BTreeSet<usize>,
         pending_sent_amount: Balance,
@@ -3560,18 +3633,28 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let at = G::ScalarField::from(account.asset_id);
         let h_at = enc_gen * at;
 
-        add_to_transcript!(transcript,
-            NONCE_LABEL, nonce,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment,
-            PENDING_SENT_AMOUNT_LABEL, pending_sent_amount,
-            PENDING_RECV_AMOUNT_LABEL, pending_recv_amount,
-            ASSET_ID_LABEL, account.asset_id,
-            BALANCE_LABEL, account.balance,
-            COUNTER_LABEL, account.counter,
-            ID_LABEL, account.id,
-            PK_LABEL, pk
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PENDING_SENT_AMOUNT_LABEL,
+            pending_sent_amount,
+            PENDING_RECV_AMOUNT_LABEL,
+            pending_recv_amount,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            BALANCE_LABEL,
+            account.balance,
+            COUNTER_LABEL,
+            account.counter,
+            ID_LABEL,
+            account.id,
+            PK_LABEL,
+            pk
         );
-        
+
         // Add legs separately since it's an array
         for l in &legs {
             let mut buf = vec![];
@@ -3673,10 +3756,18 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
                 let y = legs[i].0.ct_r.into_group() - pk;
-                t_pk_recv[&i].challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+                t_pk_recv[&i].challenge_contribution(
+                    &enc_key_gen,
+                    &y.into_affine(),
+                    &mut transcript,
+                )?;
             } else if sender_in_leg_indices.contains(&i) {
                 let y = legs[i].0.ct_s.into_group() - pk;
-                t_pk_send[&i].challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+                t_pk_send[&i].challenge_contribution(
+                    &enc_key_gen,
+                    &y.into_affine(),
+                    &mut transcript,
+                )?;
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"
@@ -3684,7 +3775,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             }
 
             let y = legs[i].0.ct_asset_id.into_group() - h_at;
-            t_asset_id[i].challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+            t_asset_id[i].challenge_contribution(
+                &enc_key_gen,
+                &y.into_affine(),
+                &mut transcript,
+            )?;
         }
 
         let y = enc_total_send - (enc_gen * G::ScalarField::from(pending_sent_amount));
@@ -3692,8 +3787,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let y = enc_total_recv - (enc_gen * G::ScalarField::from(pending_recv_amount));
         t_recv_amount.challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
 
-        let prover_challenge =
-            transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let mut resp_pk_send = BTreeMap::new();
         let mut resp_pk_recv = BTreeMap::new();
@@ -3818,18 +3912,28 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let at = G::ScalarField::from(asset_id);
         let h_at = enc_gen * at;
 
-        add_to_transcript!(transcript,
-            NONCE_LABEL, nonce,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment,
-            PENDING_SENT_AMOUNT_LABEL, pending_sent_amount,
-            PENDING_RECV_AMOUNT_LABEL, pending_recv_amount,
-            ASSET_ID_LABEL, asset_id,
-            BALANCE_LABEL, balance,
-            COUNTER_LABEL, counter,
-            ID_LABEL, id,
-            PK_LABEL, pk
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PENDING_SENT_AMOUNT_LABEL,
+            pending_sent_amount,
+            PENDING_RECV_AMOUNT_LABEL,
+            pending_recv_amount,
+            ASSET_ID_LABEL,
+            asset_id,
+            BALANCE_LABEL,
+            balance,
+            COUNTER_LABEL,
+            counter,
+            ID_LABEL,
+            id,
+            PK_LABEL,
+            pk
         );
-        
+
         // Add legs separately since it's an array
         for l in &legs {
             let mut buf = vec![];
@@ -3878,21 +3982,29 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             }
 
             let y = legs[i].ct_asset_id.into_group() - h_at;
-            self.resp_asset_id[i]
-                .challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+            self.resp_asset_id[i].challenge_contribution(
+                &enc_key_gen,
+                &y.into_affine(),
+                &mut transcript,
+            )?;
         }
 
         let y_total_send =
             (enc_total_send - (enc_gen * G::ScalarField::from(pending_sent_amount))).into_affine();
-        self.resp_sent_amount
-            .challenge_contribution(&enc_key_gen, &y_total_send, &mut transcript)?;
+        self.resp_sent_amount.challenge_contribution(
+            &enc_key_gen,
+            &y_total_send,
+            &mut transcript,
+        )?;
         let y_total_recv =
             (enc_total_recv - (enc_gen * G::ScalarField::from(pending_recv_amount))).into_affine();
-        self.resp_recv_amount
-            .challenge_contribution(&enc_key_gen, &y_total_recv, &mut transcript)?;
+        self.resp_recv_amount.challenge_contribution(
+            &enc_key_gen,
+            &y_total_recv,
+            &mut transcript,
+        )?;
 
-        let verifier_challenge =
-            transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
             - (pk.into_group()
@@ -4003,13 +4115,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 fn ensure_same_accounts<G: AffineRepr>(
     old_state: &AccountState<G>,
     new_state: &AccountState<G>,
-    has_balance_changed: bool
+    has_balance_changed: bool,
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
         return Ok(());
     }
-    
+
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
         if old_state.id != new_state.id {
@@ -4034,11 +4146,15 @@ fn ensure_same_accounts<G: AffineRepr>(
         }
         if has_balance_changed {
             if old_state.balance == new_state.balance {
-                return Err(Error::ProofGenerationError("Balance should have changed but it hasn't".to_string()));
+                return Err(Error::ProofGenerationError(
+                    "Balance should have changed but it hasn't".to_string(),
+                ));
             }
         } else {
             if old_state.balance != new_state.balance {
-                return Err(Error::ProofGenerationError("Balance shouldn't have changed but it has".to_string()));
+                return Err(Error::ProofGenerationError(
+                    "Balance shouldn't have changed but it has".to_string(),
+                ));
             }
         }
         // Reconsider: Should I be checking such expensive relations
@@ -4066,7 +4182,7 @@ fn ensure_correct_balance_change<G: AffineRepr>(
     {
         return Ok(());
     }
-    
+
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
         if has_balance_decreased {
@@ -4091,8 +4207,8 @@ pub mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::keygen_sig;
-    use crate::leg::{AssetCommitmentParams, AssetData, Leg, SettlementTxnProof};
     use crate::leg::tests::setup_keys;
+    use crate::leg::{AssetCommitmentParams, AssetData, Leg, SettlementTxnProof};
     use crate::util::batch_verify_bp;
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
@@ -4509,7 +4625,10 @@ pub mod tests {
 
         let verifier_time = clock.elapsed();
 
-        log::info!("[ext transcript] total proof size = {}", proof.compressed_size());
+        log::info!(
+            "[ext transcript] total proof size = {}",
+            proof.compressed_size()
+        );
         log::info!(
             "[ext transcript] total prover time = {:?}, total verifier time = {:?}",
             prover_time,
@@ -5245,8 +5364,7 @@ pub mod tests {
 
             // Create sender account
             let id = Fr::rand(&mut rng);
-            let (mut account, _, _) =
-                new_account(&mut rng, asset_id, sk_s.clone(), id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s.clone(), id);
             account.balance = 200; // Ensure sufficient balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5411,8 +5529,7 @@ pub mod tests {
 
             // Create receiver account
             let id = Fr::rand(&mut rng);
-            let (mut account, _, _) =
-                new_account(&mut rng, asset_id, sk_r.clone(), id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r.clone(), id);
             account.balance = 200; // Ensure some initial balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5462,7 +5579,7 @@ pub mod tests {
                 enc_key_gen,
                 enc_gen,
             )
-                .unwrap();
+            .unwrap();
 
             proofs.push(proof);
             nullifiers.push(nullifier);
@@ -5534,21 +5651,17 @@ pub mod tests {
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
             setup_gens::<_, NUM_GENS, L>(&mut rng);
 
-        let (
-            ((sk_s, pk_s), (_, pk_s_e)),
-            ((sk_r, pk_r), (_, pk_r_e)),
-            (_, (_, pk_a_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
         let amount = 100;
 
-        let asset_tree_params =
-            SelRerandParameters::<
-                ark_vesta::VestaConfig,
-                ark_pallas::PallasConfig,
-            >::new(NUM_GENS, NUM_GENS)
-            .unwrap();
+        let asset_tree_params = SelRerandParameters::<
+            ark_vesta::VestaConfig,
+            ark_pallas::PallasConfig,
+        >::new(NUM_GENS, NUM_GENS)
+        .unwrap();
 
         // Create asset commitment parameters
         let asset_comm_params = AssetCommitmentParams::new::<Blake2b512>(
@@ -5588,15 +5701,13 @@ pub mod tests {
 
         // Create sender account
         let sender_id = Fr::rand(&mut rng);
-        let (mut sender_account, _, _) =
-            new_account(&mut rng, asset_id, sk_s, sender_id);
+        let (mut sender_account, _, _) = new_account(&mut rng, asset_id, sk_s, sender_id);
         sender_account.balance = 200; // Ensure sufficient balance
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
         // Create receiver account
         let receiver_id = Fr::rand(&mut rng);
-        let (mut receiver_account, _, _) =
-            new_account(&mut rng, asset_id, sk_r, receiver_id);
+        let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, receiver_id);
         receiver_account.balance = 150; // Some initial balance
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
@@ -5806,21 +5917,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Create an updated account that instead increases the balance
@@ -5844,21 +5958,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
 
@@ -5934,21 +6051,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
 
@@ -6026,21 +6146,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Update account with counter decreased by 1 more than it should be
@@ -6064,21 +6187,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
 
@@ -6154,21 +6280,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Update account with counter decreased by 1 more than it should be
@@ -6191,21 +6320,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
 
@@ -6282,21 +6414,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Update account with counter decreased by 1 more than it should be
@@ -6320,21 +6455,24 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
 

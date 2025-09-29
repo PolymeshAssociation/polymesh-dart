@@ -1,31 +1,31 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
 use crate::leg::LegEncryption;
-use crate::{BALANCE_BITS, AssetId, Balance};
-use ark_ec::{AffineRepr, CurveGroup};
+use crate::{AssetId, BALANCE_BITS, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
+use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
+#[cfg(feature = "std")]
+use bulletproofs::r1cs::batch_verify;
 use bulletproofs::r1cs::{
     ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
 };
-#[cfg(feature = "std")]
-use bulletproofs::r1cs::batch_verify;
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
-use ark_std::collections::BTreeMap;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::{CryptoRng, RngCore};
-use schnorr_pok::discrete_log::{
-    PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
+use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
+use schnorr_pok::partial::{
+    Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse};
 
 #[macro_export]
 macro_rules! add_to_transcript {
@@ -263,10 +263,7 @@ pub fn generate_schnorr_responses_for_balance_change<
     wits.insert(1, F0::from(amount));
 
     // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
-    let resp_comm_bp_bal = t_comm_bp_bal.partial_response(
-        wits,
-        prover_challenge,
-    )?;
+    let resp_comm_bp_bal = t_comm_bp_bal.partial_response(wits, prover_challenge)?;
 
     // Response for witness will already be generated in sigma protocol for Bulletproof commitment
     let resp_leg_amount = t_leg_amount.clone().gen_partial1_proof(prover_challenge);
@@ -799,10 +796,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
     }
     wits.insert(5, updated_account.current_rho);
     wits.insert(6, updated_account.randomness);
-    let resp_acc_new = t_acc_new.partial_response(
-        wits,
-        prover_challenge,
-    )?;
+    let resp_acc_new = t_acc_new.partial_response(wits, prover_challenge)?;
 
     // Response for other witnesses will already be generated in sigma protocol for leaf
     let resp_null = t_null.gen_partial_proof();
@@ -812,10 +806,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
     // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_blinding);
-    let resp_bp = t_bp_randomness_relations.partial_response(
-        wits,
-        &prover_challenge,
-    )?;
+    let resp_bp = t_bp_randomness_relations.partial_response(wits, &prover_challenge)?;
     Ok((
         resp_leaf,
         resp_acc_new,
@@ -948,14 +939,14 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         &y.into_affine(),
         t_acc_new,
         verifier_challenge,
-        missing_resps
+        missing_resps,
     )?;
 
     if !resp_null.verify(
         nullifier,
         &account_comm_key.current_rho_gen(),
         verifier_challenge,
-        &resp_leaf.0[5]
+        &resp_leaf.0[5],
     ) {
         return Err(Error::ProofVerificationError(
             "Nullifier verification failed".to_string(),
@@ -966,7 +957,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         &enc_key_gen,
         &enc_gen,
         verifier_challenge,
-        &resp_leaf.0[3]
+        &resp_leaf.0[3],
     ) {
         return Err(Error::ProofVerificationError(
             "Leg asset ID verification failed".to_string(),
@@ -981,7 +972,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         &enc_key_gen,
         &account_comm_key.sk_gen(),
         verifier_challenge,
-        &resp_leaf.0[0]
+        &resp_leaf.0[0],
     ) {
         return Err(Error::ProofVerificationError(
             "Leg public key verification failed".to_string(),
@@ -999,7 +990,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         comm_bp,
         t_bp,
         verifier_challenge,
-        missing_resps
+        missing_resps,
     )?;
 
     Ok(())
@@ -1029,12 +1020,11 @@ pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
-
         ],
         comm_bp_bal,
         t_comm_bp_bal,
         verifier_challenge,
-        missing_resps
+        missing_resps,
     )?;
 
     if !resp_leg_amount.verify(
@@ -1042,7 +1032,7 @@ pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
         &enc_key_gen,
         &enc_gen,
         verifier_challenge,
-        &resp_comm_bp_bal.responses[&1]
+        &resp_comm_bp_bal.responses[&1],
     ) {
         return Err(Error::ProofVerificationError(
             "Leg amount verification failed".to_string(),

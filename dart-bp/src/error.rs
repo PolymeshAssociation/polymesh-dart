@@ -31,7 +31,7 @@ pub enum Error {
     /// Error during account registration.
     #[error("Error during account registration: {0}")]
     RegistrationError(String),
-    
+
     /// Proof of balance error.
     #[error("Proof of balance error: {0}")]
     ProofOfBalanceError(String),

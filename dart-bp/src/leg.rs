@@ -4,10 +4,8 @@ use crate::util::{
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
     verify_given_verification_tuples,
 };
-use crate::{
-    LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
-};
 use crate::{Error, add_to_transcript, error::Result};
+use crate::{LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
@@ -32,12 +30,14 @@ use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{BALANCE_BITS, AssetId, Balance, MAX_BALANCE, MAX_ASSET_ID};
+use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
-use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment};
+use schnorr_pok::partial::{
+    Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
+};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
@@ -762,7 +762,14 @@ impl<
             } else {
                 re_randomized_points[i + 1]
             };
-            let t_1 = PokPedersenCommitmentProtocol::init(r_1, r_1_blinding, &base1, r_1 * blindings_for_points[i + 1], F0::rand(rng), &blinding_base);
+            let t_1 = PokPedersenCommitmentProtocol::init(
+                r_1,
+                r_1_blinding,
+                &base1,
+                r_1 * blindings_for_points[i + 1],
+                F0::rand(rng),
+                &blinding_base,
+            );
             r_1_protocol_base1.push(base1);
 
             let base = &leg_enc.eph_pk_auds_meds[i].1.0;
@@ -810,7 +817,12 @@ impl<
 
         for i in 0..asset_data.keys.len() {
             re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
-            t_points_r1[i].challenge_contribution(&r_1_protocol_base1[i], &blinding_base, &leg_enc.eph_pk_auds_meds[i].1.0, &mut transcript)?;
+            t_points_r1[i].challenge_contribution(
+                &r_1_protocol_base1[i],
+                &blinding_base,
+                &leg_enc.eph_pk_auds_meds[i].1.0,
+                &mut transcript,
+            )?;
             let base = &leg_enc.eph_pk_auds_meds[i].1.0;
             t_points_r2[i].challenge_contribution(
                 base,
@@ -867,7 +879,8 @@ impl<
 
         let mut resp_eph_pk_auds_meds = Vec::with_capacity(asset_data.keys.len());
 
-        for (((t_points_r1, t_points_r2), t_points_r3), t_points_r4) in t_points_r1.into_iter()
+        for (((t_points_r1, t_points_r2), t_points_r3), t_points_r4) in t_points_r1
+            .into_iter()
             .zip(t_points_r2.into_iter())
             .zip(t_points_r3.into_iter())
             .zip(t_points_r4.into_iter())
@@ -1466,14 +1479,17 @@ fn ensure_proper_leg_creation<
         }
         if leg.pk_auds_meds.len() != leg_enc.eph_pk_auds_meds.len() {
             return Err(Error::IncompatibleLegAndLegEncryption(format!(
-                "Number of public key in leg is {} and in leg encryption is {}", leg.pk_auds_meds.len(), leg_enc.eph_pk_auds_meds.len()
-            )))
+                "Number of public key in leg is {} and in leg encryption is {}",
+                leg.pk_auds_meds.len(),
+                leg_enc.eph_pk_auds_meds.len()
+            )));
         }
         for i in 0..leg.pk_auds_meds.len() {
             if leg.pk_auds_meds[i].0 != leg_enc.eph_pk_auds_meds[i].0 {
                 return Err(Error::IncompatibleLegAndLegEncryption(format!(
-                    "Role of public key in leg is {} and in leg encryption is {}", leg.pk_auds_meds[i].0, leg_enc.eph_pk_auds_meds[i].0
-                )))
+                    "Role of public key in leg is {} and in leg encryption is {}",
+                    leg.pk_auds_meds[i].0, leg_enc.eph_pk_auds_meds[i].0
+                )));
             }
         }
         Ok(())
@@ -2074,14 +2090,15 @@ pub mod tests {
             let mut keys = Vec::with_capacity(num_auditors + num_mediators);
             keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
             keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
-            
+
             // Create asset_data with one asset_id
             let asset_data = AssetData::new(
                 asset_id,
                 keys.clone(),
                 &asset_comm_params,
                 asset_tree_params.odd_parameters.delta,
-            ).unwrap();
+            )
+            .unwrap();
 
             let set = vec![asset_data.commitment];
             let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
@@ -2114,21 +2131,24 @@ pub mod tests {
                 &asset_comm_params,
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             let root = asset_tree.root_node();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Create different keys for the leg
@@ -2140,11 +2160,22 @@ pub mod tests {
                 .collect::<Vec<_>>();
 
             let mut different_keys = Vec::with_capacity(num_auditors + num_mediators);
-            different_keys.extend(different_keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
-            different_keys.extend(different_keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
+            different_keys.extend(
+                different_keys_auditor
+                    .iter()
+                    .map(|(_, k)| (true, k.0))
+                    .into_iter(),
+            );
+            different_keys.extend(
+                different_keys_mediator
+                    .iter()
+                    .map(|(_, k)| (false, k.0))
+                    .into_iter(),
+            );
 
             // Create a leg with different auditor/mediator keys than those in asset_data
-            let leg_with_diff_keys = Leg::new(pk_s.0, pk_r.0, different_keys, amount, asset_id).unwrap();
+            let leg_with_diff_keys =
+                Leg::new(pk_s.0, pk_r.0, different_keys, amount, asset_id).unwrap();
             let (leg_enc, leg_enc_rand) = leg_with_diff_keys
                 .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
                 .unwrap();
@@ -2163,19 +2194,22 @@ pub mod tests {
                 &asset_comm_params,
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
 
             // Create a leg with different role for one key than in leg_enc
@@ -2183,8 +2217,10 @@ pub mod tests {
             // Change first key role from auditor (true) to mediator (false)
             keys_with_different_roles[0].0 = !keys_with_different_roles[0].0;
 
-            let leg_with_diff_roles = Leg::new(pk_s.0, pk_r.0, keys_with_different_roles, amount, asset_id).unwrap();
-            let (leg_enc, leg_enc_rand) = leg_with_diff_roles.encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            let leg_with_diff_roles =
+                Leg::new(pk_s.0, pk_r.0, keys_with_different_roles, amount, asset_id).unwrap();
+            let (leg_enc, leg_enc_rand) = leg_with_diff_roles
+                .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
                 .unwrap();
 
             let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
@@ -2201,19 +2237,22 @@ pub mod tests {
                 &asset_comm_params,
                 enc_key_gen,
                 enc_gen,
-            ).unwrap();
+            )
+            .unwrap();
 
             assert!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc,
-                    &root,
-                    nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                ).is_err()
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .is_err()
             );
         }
     }

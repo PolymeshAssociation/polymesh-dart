@@ -19,7 +19,6 @@ use polymesh_dart_bp::account::AccountCommitmentKeyTrait;
 use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig};
-use ark_pallas::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{
     format,
@@ -49,7 +48,7 @@ pub mod sqlx_impl;
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3};
+
 use crate::curve_tree::*;
 use crate::*;
 
@@ -126,11 +125,13 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
+pub const DART_GEN_POSEIDON2: &'static [u8] = b"polymesh-dart-poseidon2";
+
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 
-    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new().expect("Failed to create Poseidon parameters");
+    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new(DART_GEN_POSEIDON2).expect("Failed to create Poseidon parameters");
 }
 
 #[cfg(feature = "std")]
@@ -166,7 +167,7 @@ pub fn poseidon_params() -> &'static PoseidonParameters {
     unsafe {
         if POSEIDON_PARAMS.is_none() {
             POSEIDON_PARAMS = Some(
-                PoseidonParameters::new()
+                PoseidonParameters::new(DART_GEN_POSEIDON2)
                     .expect("Failed to create Poseidon parameters"),
             );
         }
@@ -179,12 +180,12 @@ pub struct PoseidonParameters {
 }
 
 impl PoseidonParameters {
-    pub fn new() -> Result<Self, Error> {
+    pub fn new(label: &[u8]) -> Result<Self, Error> {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(label).into());
         let full_rounds = 8;
         let partial_rounds = 56;
-        let params = Poseidon2Params::<Fr>::new(3, 5, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec())?;
         Ok(Self {
-            params,
+            params: Poseidon2Params::new_with_randoms(&mut rng, 3, 5, full_rounds, partial_rounds)?,
         })
     }
 }
