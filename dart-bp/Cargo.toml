@@ -35,7 +35,7 @@ ark-crypto-primitives = { workspace = true, default-features = false, features =
 ark-relations = { workspace = true, default-features = false }
 ark-r1cs-std = { workspace = true, default-features = false }
 ark-pallas = { workspace = true, default-features = false, features = ["curve"] }
-hex = "0.4.3"
+hex = { version = "0.4.3", default-features = false }
 
 [dev-dependencies]
 test-log = { workspace = true }
@@ -64,7 +64,8 @@ std = [
 	"ark-r1cs-std/std",
 	"zeroize/std",
 	#	"equality_across_groups/std",
-	"ark-pallas/std"
+	"ark-pallas/std",
+	"hex/std"
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
