@@ -34,14 +34,19 @@ ark-crypto-primitives = { workspace = true, default-features = false, features =
 ] }
 ark-relations = { workspace = true, default-features = false }
 ark-r1cs-std = { workspace = true, default-features = false }
+ark-pallas = { workspace = true, default-features = false, features = ["curve"] }
+hex = "0.4.3"
 
 [dev-dependencies]
 test-log = { workspace = true }
 criterion = { workspace = true }
-ark-pallas = { workspace = true, features = ["curve"] }
 ark-vesta = { workspace = true }
 ark-secp256k1 = { workspace = true }
 ark-secq256k1 = { workspace = true }
+
+[[bench]]
+name = "affirmation_proofs"
+harness = false
 
 [features]
 default = ["std", "asm", "parallel"]
@@ -58,7 +63,8 @@ std = [
 	"ark-relations/std",
 	"ark-r1cs-std/std",
 	"zeroize/std",
-	#	"equality_across_groups/std"
+	#	"equality_across_groups/std",
+	"ark-pallas/std"
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]

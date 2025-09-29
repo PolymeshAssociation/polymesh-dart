@@ -1,10 +1,15 @@
 use crate::account::AccountCommitmentKeyTrait;
-use crate::{add_to_transcript, ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, FEE_AMOUNT_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL};
 use crate::error::*;
 use crate::util::{
-    get_verification_tuples_with_rng, initialize_curve_tree_prover, initialize_curve_tree_prover_with_given_transcripts,
-    initialize_curve_tree_verifier, initialize_curve_tree_verifier_with_given_transcripts,
-    prove_with_rng, verify_given_verification_tuples,
+    get_verification_tuples_with_rng, initialize_curve_tree_prover,
+    initialize_curve_tree_prover_with_given_transcripts, initialize_curve_tree_verifier,
+    initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
+    verify_given_verification_tuples,
+};
+use crate::{
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL,
+    RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -12,13 +17,13 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
-use ark_std::{vec, vec::Vec, UniformRand};
+use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, R1CSProof, VerificationTuple};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance, FEE_AMOUNT_BITS, MAX_FEE_AMOUNT};
+use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS, MAX_FEE_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -27,6 +32,8 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+
+pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
 
 /// To commit, use the same commitment key as non-fee asset account commitment.
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -88,7 +95,7 @@ impl<G: AffineRepr> FeeAccountState<G> {
     }
 
     pub fn get_state_for_topup<R: CryptoRngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
-        if amount + self.balance > MAX_FEE_AMOUNT {
+        if amount + self.balance > MAX_FEE_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
         let mut new_state = self.clone();
@@ -159,12 +166,16 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: MerlinTranscript,
     ) -> Result<Self> {
-
-        add_to_transcript!(transcript,
-            NONCE_LABEL, nonce,
-            ASSET_ID_LABEL, account.asset_id,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment,
-            PK_LABEL, pk
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk
         );
 
         // D = pk + g_balance * balance + g_asset_id * asset_id
@@ -239,9 +250,17 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
-
-        add_to_transcript!(transcript, NONCE_LABEL, nonce, ASSET_ID_LABEL, asset_id,
-            ACCOUNT_COMMITMENT_LABEL, account_commitment, PK_LABEL, pk);
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            asset_id,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk
+        );
 
         // D = pk + g_balance * balance + g_asset_id * asset_id
         let D = pk.into_group()
@@ -309,6 +328,10 @@ pub struct FeeAccountTopupTxnProof<
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of issuer secret key using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_pk: PokDiscreteLog<Affine<G0>>,
+    /// Commitment to the balance in new account commitment (which becomes new leaf) used with Bulletproof
+    pub comm_new_bal: Affine<G0>,
+    /// Response for Sigma protocol for proving knowledge of balance in `comm_new_bal`
+    pub resp_bp: Partial2PokPedersenCommitment<Affine<G0>>,
 }
 
 impl<
@@ -381,27 +404,48 @@ impl<
 
         let mut transcript = even_prover.transcript();
 
-        add_to_transcript!(transcript, ROOT_LABEL, root, RE_RANDOMIZED_PATH_LABEL, re_randomized_path,
-            NONCE_LABEL, nonce, PK_LABEL, pk, ASSET_ID_LABEL, account.asset_id,
-            INCREASE_BAL_BY_LABEL, increase_bal_by, UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment);
-
-        // We don't need to check if the new balance overflows or not as the chain tracks the total supply
-        // (total minted value) and ensures that it is bounded, i.e.<= MAX_AMOUNT
+        add_to_transcript!(
+            transcript,
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            PK_LABEL,
+            pk,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            INCREASE_BAL_BY_LABEL,
+            increase_bal_by,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
+        );
 
         // Need to prove that:
         // 1. nullifier is correctly formed
         // 2. sk in account commitment is the same as in the issuer's public key
         // 3. New balance = old balance + increase_bal_by
+        // 4. Range proof on new balance
 
         let new_balance_blinding = F0::rand(rng);
         let old_rho_blinding = F0::rand(rng);
         let new_rho_blinding = F0::rand(rng);
         let old_s_blinding = F0::rand(rng);
         let new_s_blinding = F0::rand(rng);
+        let comm_bp_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.rho_gen();
         let pk_gen = account_comm_key.sk_gen();
         let nullifier = account.nullifier(&account_comm_key);
+
+        let new_balance = F0::from(updated_account.balance);
+
+        // Old account commitment = C = G0 * sk + G1 * old_bal + ...
+        // New account commitment = C' = G0 * sk + G1 * new_bal + ...
+        // And old_bal + increase_bal_by = new_bal where increase_bal_by is public
+        // So the balance committed in C + G1 * increase_bal_by is the same as the balance committed in C'
+        // and thus we prove that balance in C + G1 * increase_bal_by and C' are same
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
@@ -431,11 +475,41 @@ impl<
         t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
         t_pk.challenge_contribution(&pk_gen, &pk, &mut transcript)?;
 
+        // Drop reference to borrow even_prover below
+        let _ = transcript;
+
+        // Range proof on new balance to ensure it's non-negative.
+        let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
+        range_proof(
+            &mut even_prover,
+            new_bal_var.into(),
+            Some(updated_account.balance),
+            FEE_BALANCE_BITS.into(),
+        )?;
+
+        let t_bp = PokPedersenCommitmentProtocol::init(
+            new_balance,
+            new_balance_blinding,
+            &account_tree_params.even_parameters.pc_gens.B,
+            comm_bp_blinding,
+            F0::rand(rng),
+            &account_tree_params.even_parameters.pc_gens.B_blinding,
+        );
+
+        let mut transcript = even_prover.transcript();
+
+        t_bp.challenge_contribution(
+            &account_tree_params.even_parameters.pc_gens.B,
+            &account_tree_params.even_parameters.pc_gens.B_blinding,
+            &comm_new_bal,
+            &mut transcript,
+        )?;
+
         let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         let resp_leaf = t_r_leaf.response(
             &[
-                account.balance.into(),
+                new_balance,
                 account.rho,
                 account.randomness,
                 rerandomization,
@@ -453,6 +527,9 @@ impl<
         let resp_null = t_null.gen_partial_proof();
         let resp_pk = t_pk.gen_proof(&challenge);
 
+        // Response for witness will already be generated in sigma protocol for the new account commitment
+        let resp_bp = t_bp.gen_partial2_proof(&challenge);
+
         let (even_proof, odd_proof) =
             prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
 
@@ -467,6 +544,8 @@ impl<
                 resp_acc_new,
                 resp_null,
                 resp_pk,
+                comm_new_bal,
+                resp_bp,
             },
             nullifier,
         ))
@@ -485,7 +564,9 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
     ) -> Result<()> {
-        let (even_tuple, odd_tuple) = self.verify_except_bp(
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        self.verify_with_given_transcript(
             pk,
             asset_id,
             increase_bal_by,
@@ -496,9 +577,9 @@ impl<
             account_tree_params,
             account_comm_key,
             rng,
-        )?;
-
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+            even_transcript,
+            odd_transcript,
+        )
     }
 
     pub fn verify_with_given_transcript<R: CryptoRngCore>(
@@ -595,36 +676,67 @@ impl<
             ));
         }
 
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier_with_given_transcripts(
-            &self.re_randomized_path,
+        let (mut even_verifier, odd_verifier) =
+            initialize_curve_tree_verifier_with_given_transcripts(
+                &self.re_randomized_path,
+                root,
+                account_tree_params,
+                even_transcript,
+                odd_transcript,
+            );
+
+        let mut transcript = even_verifier.transcript();
+
+        add_to_transcript!(
+            transcript,
+            ROOT_LABEL,
             root,
-            account_tree_params,
-            even_transcript,
-            odd_transcript,
+            RE_RANDOMIZED_PATH_LABEL,
+            self.re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            PK_LABEL,
+            pk,
+            ASSET_ID_LABEL,
+            asset_id,
+            INCREASE_BAL_BY_LABEL,
+            increase_bal_by,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
         );
-
-        let mut verifier_transcript = even_verifier.transcript();
-
-        add_to_transcript!(verifier_transcript, ROOT_LABEL, root, RE_RANDOMIZED_PATH_LABEL, self.re_randomized_path,
-            NONCE_LABEL, nonce, PK_LABEL, pk, ASSET_ID_LABEL, asset_id,
-            INCREASE_BAL_BY_LABEL, increase_bal_by, UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment);
 
         let nullifier_gen = account_comm_key.rho_gen();
         let pk_gen = account_comm_key.sk_gen();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)?;
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)?;
-        self.resp_null.challenge_contribution(
-            &nullifier_gen,
-            &nullifier,
-            &mut verifier_transcript,
-        )?;
+        self.t_r_leaf.serialize_compressed(&mut transcript)?;
+        self.t_acc_new.serialize_compressed(&mut transcript)?;
+        self.resp_null
+            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
         self.resp_pk
-            .challenge_contribution(&pk_gen, &pk, &mut verifier_transcript)?;
+            .challenge_contribution(&pk_gen, &pk, &mut transcript)?;
 
-        let challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        // Drop reference to borrow even_verifier below
+        let _ = transcript;
+
+        let new_bal_var = even_verifier.commit(self.comm_new_bal);
+
+        range_proof(
+            &mut even_verifier,
+            new_bal_var.into(),
+            None,
+            FEE_BALANCE_BITS.into(),
+        )?;
+
+        let mut transcript = even_verifier.transcript();
+
+        self.resp_bp.challenge_contribution(
+            &account_tree_params.even_parameters.pc_gens.B,
+            &account_tree_params.even_parameters.pc_gens.B_blinding,
+            &self.comm_new_bal,
+            &mut transcript,
+        )?;
+
+        let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
@@ -632,7 +744,8 @@ impl<
 
         let issuer_pk_proj = pk.into_group();
         let reduce = asset_id_comm + issuer_pk_proj;
-        let y = self.re_randomized_path.get_rerandomized_leaf().into_group() - reduce;
+        let y = self.re_randomized_path.get_rerandomized_leaf().into_group() - reduce
+            + (account_comm_key.balance_gen() * increase_bal_by);
         self.resp_leaf.is_valid(
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
@@ -640,9 +753,7 @@ impl<
             &challenge,
         )?;
 
-        let y = updated_account_commitment.0.into_group()
-            - reduce
-            - (account_comm_key.balance_gen() * increase_bal_by);
+        let y = updated_account_commitment.0.into_group() - reduce;
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_leaf.0[0]);
         self.resp_acc_new.is_valid(
@@ -654,22 +765,29 @@ impl<
         )?;
 
         // rho matches the one in nullifier
-        if !self.resp_null.verify(
-            &nullifier,
-            &nullifier_gen,
-            &challenge,
-            &self.resp_leaf.0[1],
-        ) {
+        if !self
+            .resp_null
+            .verify(&nullifier, &nullifier_gen, &challenge, &self.resp_leaf.0[1])
+        {
             return Err(Error::ProofVerificationError(
                 "Nullifier verification failed".to_string(),
             ));
         }
-        if !self
-            .resp_pk
-            .verify(&pk, &pk_gen, &challenge)
-        {
+        if !self.resp_pk.verify(&pk, &pk_gen, &challenge) {
             return Err(Error::ProofVerificationError(
                 "Issuer public key verification failed".to_string(),
+            ));
+        }
+
+        if !self.resp_bp.verify(
+            &self.comm_new_bal,
+            &account_tree_params.even_parameters.pc_gens.B,
+            &account_tree_params.even_parameters.pc_gens.B_blinding,
+            &challenge,
+            &self.resp_leaf.0[0],
+        ) {
+            return Err(Error::ProofVerificationError(
+                "Sigma protocol for Bulletproof commitment failed".to_string(),
             ));
         }
 
@@ -767,9 +885,21 @@ impl<
 
         let mut transcript = even_prover.transcript();
 
-        add_to_transcript!(transcript, ROOT_LABEL, root, RE_RANDOMIZED_PATH_LABEL, re_randomized_path,
-            NONCE_LABEL, nonce, ASSET_ID_LABEL, account.asset_id, FEE_AMOUNT_LABEL, fee_amount,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment);
+        add_to_transcript!(
+            transcript,
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            FEE_AMOUNT_LABEL,
+            fee_amount,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
+        );
 
         // Need to prove that:
         // 1. nullifier is correctly formed
@@ -789,6 +919,12 @@ impl<
         let nullifier = account.nullifier(&account_comm_key);
 
         let new_balance = F0::from(updated_account.balance);
+
+        // Old account commitment = C = G0 * sk + G1 * old_bal + ...
+        // New account commitment = C' = G0 * sk + G1 * new_bal + ...
+        // And old_bal - fee_amount = new_bal where fee_amount is public
+        // So the balance committed in C - G1 * fee_amount is the same as the balance committed in C'
+        // and thus we prove that balance in C - G1 * fee_amount and C' are same
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
@@ -830,7 +966,7 @@ impl<
             &mut even_prover,
             new_bal_var.into(),
             Some(updated_account.balance),
-            FEE_AMOUNT_BITS.into(),
+            FEE_BALANCE_BITS.into(),
         )?;
 
         let t_bp = PokPedersenCommitmentProtocol::init(
@@ -851,7 +987,7 @@ impl<
             &mut transcript,
         )?;
 
-        let prover_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         let resp_leaf = t_r_leaf.response(
             &[
@@ -861,17 +997,17 @@ impl<
                 account.randomness,
                 rerandomization,
             ],
-            &prover_challenge,
+            &challenge,
         )?;
         let mut wits = BTreeMap::new();
         wits.insert(2, updated_account.rho);
         wits.insert(3, updated_account.randomness);
         // Response for witnesses will already be generated in sigma protocol for the leaf
-        let resp_acc_new = t_acc_new.partial_response(wits, &prover_challenge)?;
+        let resp_acc_new = t_acc_new.partial_response(wits, &challenge)?;
         let resp_null = t_null.gen_partial_proof();
 
         // Response for witness will already be generated in sigma protocol for the new account commitment
-        let resp_bp = t_bp.gen_partial2_proof(&prover_challenge);
+        let resp_bp = t_bp.gen_partial2_proof(&challenge);
 
         let (even_proof, odd_proof) =
             prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
@@ -954,26 +1090,33 @@ impl<
             account_tree_params,
         );
 
-        let mut verifier_transcript = even_verifier.transcript();
+        let mut transcript = even_verifier.transcript();
 
-        add_to_transcript!(verifier_transcript, ROOT_LABEL, root, RE_RANDOMIZED_PATH_LABEL, self.re_randomized_path,
-            NONCE_LABEL, nonce, ASSET_ID_LABEL, asset_id, FEE_AMOUNT_LABEL, fee_amount,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL, updated_account_commitment);
+        add_to_transcript!(
+            transcript,
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            self.re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            asset_id,
+            FEE_AMOUNT_LABEL,
+            fee_amount,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
+        );
 
         let nullifier_gen = account_comm_key.rho_gen();
 
-        self.t_r_leaf
-            .serialize_compressed(&mut verifier_transcript)?;
-        self.t_acc_new
-            .serialize_compressed(&mut verifier_transcript)?;
-        self.resp_null.challenge_contribution(
-            &nullifier_gen,
-            &nullifier,
-            &mut verifier_transcript,
-        )?;
+        self.t_r_leaf.serialize_compressed(&mut transcript)?;
+        self.t_acc_new.serialize_compressed(&mut transcript)?;
+        self.resp_null
+            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
 
         // Drop reference to borrow even_verifier below
-        let _ = verifier_transcript;
+        let _ = transcript;
 
         let new_bal_var = even_verifier.commit(self.comm_new_bal);
 
@@ -981,19 +1124,19 @@ impl<
             &mut even_verifier,
             new_bal_var.into(),
             None,
-            FEE_AMOUNT_BITS.into(),
+            FEE_BALANCE_BITS.into(),
         )?;
 
-        let mut verifier_transcript = even_verifier.transcript();
+        let mut transcript = even_verifier.transcript();
 
         self.resp_bp.challenge_contribution(
             &account_tree_params.even_parameters.pc_gens.B,
             &account_tree_params.even_parameters.pc_gens.B_blinding,
             &self.comm_new_bal,
-            &mut verifier_transcript,
+            &mut transcript,
         )?;
 
-        let verifier_challenge = verifier_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
@@ -1006,7 +1149,7 @@ impl<
             &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
             &y.into_affine(),
             &self.t_r_leaf,
-            &verifier_challenge,
+            &challenge,
         )?;
 
         let y = updated_account_commitment.0 - asset_id_comm;
@@ -1017,17 +1160,15 @@ impl<
             &Self::acc_new_gens(account_comm_key),
             &y.into_affine(),
             &self.t_acc_new,
-            &verifier_challenge,
+            &challenge,
             missing_resps,
         )?;
 
         // rho matches the one in nullifier
-        if !self.resp_null.verify(
-            &nullifier,
-            &nullifier_gen,
-            &verifier_challenge,
-            &self.resp_leaf.0[2],
-        ) {
+        if !self
+            .resp_null
+            .verify(&nullifier, &nullifier_gen, &challenge, &self.resp_leaf.0[2])
+        {
             return Err(Error::ProofVerificationError(
                 "Nullifier verification failed".to_string(),
             ));
@@ -1037,11 +1178,11 @@ impl<
             &self.comm_new_bal,
             &account_tree_params.even_parameters.pc_gens.B,
             &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &verifier_challenge,
+            &challenge,
             &self.resp_leaf.0[1],
         ) {
             return Err(Error::ProofVerificationError(
-                "Range proof verification failed".to_string(),
+                "Sigma protocol for Bulletproof commitment failed".to_string(),
             ));
         }
 
@@ -1089,7 +1230,7 @@ fn ensure_correct_account_state<G: AffineRepr>(
     {
         return Ok(());
     }
-    
+
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
         // Ensure accounts are consistent (same sk, asset_id)
@@ -1125,7 +1266,7 @@ pub mod tests {
     use super::*;
     use crate::account::tests::setup_gens;
     use crate::account_registration::tests::setup_comm_key;
-    use crate::keys::{keygen_sig, SigKey};
+    use crate::keys::{SigKey, keygen_sig};
     use crate::util::batch_verify_bp;
     use ark_std::cfg_into_iter;
     use curve_tree_relations::curve_tree::CurveTree;
@@ -1630,5 +1771,157 @@ pub mod tests {
             "For {batch_size} fee payment proofs, verifier time = {:?}, pre_msm_check time {:?}, total batch verifier time {:?}",
             verifier_time, pre_msm_check, batch_verifier_time
         );
+    }
+
+    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
+
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
+        use super::*;
+
+        #[test]
+        fn increase_balance_more_than_expected_in_topup_txn() {
+            // A fee account sends FeeAccountTopupTxnProof but increases the balance more than the expected increase_bal_by amount. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 2000;
+            let (account_tree_params, account_comm_key, _, _) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            let asset_id = 1;
+
+            // Issuer creates keys
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+            let balance = 1000;
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            // Add fee account commitment in curve tree
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(3),
+            );
+
+            let increase_bal_by = 10;
+
+            let nonce = b"test-nonce";
+
+            // Create updated account but increase balance more than expected
+            let mut updated_account = account
+                .get_state_for_topup(&mut rng, increase_bal_by)
+                .unwrap();
+            updated_account.balance = account.balance + 50; // Add extra on top of the actual increase amount
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let (proof, nullifier) = FeeAccountTopupTxnProof::new(
+                &mut rng,
+                &pk_i.0,
+                increase_bal_by,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        pk_i.0,
+                        asset_id,
+                        increase_bal_by,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                    )
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn decrease_balance_less_than_expected_in_payment_txn() {
+            // A fee account sends FeePaymentProof but decreases the balance less than the expected fee_amount. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 2000;
+            let (account_tree_params, account_comm_key, _, _) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            let asset_id = 1;
+
+            // Investor has fee payment account with some balance
+            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let balance = 1000;
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk, balance);
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(3),
+            );
+
+            let fee_amount = 10;
+            let nonce = b"a_txn_id,a_payee_id";
+
+            // Create updated account but decrease balance less than expected
+            let mut updated_account = account.get_state_for_payment(&mut rng, fee_amount).unwrap();
+            updated_account.balance = account.balance + 5; // Decrease by 5 less than the actual fee amount
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let (proof, nullifier) = FeePaymentProof::new(
+                &mut rng,
+                fee_amount,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        asset_id,
+                        fee_amount,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                    )
+                    .is_err()
+            );
+        }
     }
 }

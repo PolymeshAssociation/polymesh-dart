@@ -96,6 +96,14 @@ pub enum Error {
     #[error("Leg asset-id is {0} but asset-data has {1}")]
     IncompatibleAssetId(AssetId, AssetId),
 
+    /// Keys mismatch leg and asset data
+    #[error("Keys mismatch leg and asset data")]
+    IncorrectKeyForAuditorsMediators,
+
+    /// Incompatible leg and leg encryption
+    #[error("Incompatible leg and leg encryption because: {0}")]
+    IncompatibleLegAndLegEncryption(String),
+
     /// pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness
     #[error(
         "pk_T was either provided when proof didn't have encrypted randomness or it wasn't provided when proof had encrypted randomness"
@@ -121,6 +129,10 @@ pub enum Error {
     /// Input size not equal to state size
     #[error("Input size {0} not equal to state size {1}")]
     UnequalInputSizeAndStateSize(usize, usize),
+
+    /// Invalid hex string format
+    #[error("Invalid hex string format")]
+    InvalidHexString,
 }
 
 impl Error {

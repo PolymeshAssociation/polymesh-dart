@@ -1485,7 +1485,7 @@ impl DartChainState {
                 .total_supply
                 .checked_add(proof.amount)
                 .ok_or_else(|| anyhow!("Total supply overflow for asset ID {}", proof.asset_id))?;
-            if new_total_supply > MAX_AMOUNT {
+            if new_total_supply > MAX_BALANCE {
                 return Err(anyhow!(
                     "Total supply exceeds maximum amount for asset ID {}",
                     proof.asset_id

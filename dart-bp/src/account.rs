@@ -3,7 +3,7 @@ use ark_std::collections::{BTreeMap, BTreeSet};
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::poseidon_impls::poseidon_2::{Poseidon2Params, Poseidon_hash_2_simple};
+use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
 use crate::util::{
     bp_gens_for_vec_commitment,
     enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
@@ -35,20 +35,27 @@ use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndReran
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{
-    AssetId, Balance, NullifierSkGenCounter, PendingTxnCounter, MAX_AMOUNT, MAX_ASSET_ID,
+    AssetId, Balance, NullifierSkGenCounter, PendingTxnCounter, MAX_ASSET_ID, MAX_BALANCE,
 };
 use rand_core::CryptoRngCore;
 use crate::{add_to_transcript, ACCOUNT_COMMITMENT_LABEL,
-            ASSET_ID_LABEL, BALANCE_LABEL, COUNTER_LABEL,
+            ASSET_ID_LABEL, BALANCE_LABEL,
             ID_LABEL, INCREASE_BAL_BY_LABEL,
-            ISSUER_PK_LABEL, LEGS_LABEL, LEG_ENC_LABEL,
-            NONCE_LABEL, PENDING_RECV_AMOUNT_LABEL, PENDING_SENT_AMOUNT_LABEL, PK_LABEL,
+            LEG_ENC_LABEL,
+            NONCE_LABEL, PK_LABEL,
             RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL};
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse};
+use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
+
+pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
+pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
+pub const LEGS_LABEL: &'static [u8; 4] = b"legs";
+pub const PENDING_SENT_AMOUNT_LABEL: &'static [u8; 19] = b"pending_sent_amount";
+pub const PENDING_RECV_AMOUNT_LABEL: &'static [u8; 19] = b"pending_recv_amount";
 
 pub const NUM_GENERATORS: usize = 8;
 
@@ -258,7 +265,7 @@ where
     }
 
     pub fn get_state_for_mint(&self, amount: u64) -> Result<Self> {
-        if amount + self.balance > MAX_AMOUNT {
+        if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
         let mut new_state = self.clone();
@@ -291,7 +298,7 @@ where
                 "Counter must be greater than 0".to_string(),
             ));
         }
-        if amount + self.balance > MAX_AMOUNT {
+        if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
         let mut new_state = self.clone();
@@ -307,7 +314,7 @@ where
                 "Counter must be greater than 0".to_string(),
             ));
         }
-        if amount + self.balance > MAX_AMOUNT {
+        if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
         let mut new_state = self.clone();
@@ -4176,7 +4183,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         let id = Fr::rand(&mut rng);
-        let (account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id.clone());
+        let (account, _, _) = new_account(&mut rng, asset_id, sk_i, id.clone());
 
         let account_tree = get_tree_with_account_comm::<L>(
             &account,
@@ -4321,7 +4328,7 @@ pub mod tests {
 
         // Sender account
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -4429,7 +4436,7 @@ pub mod tests {
 
         // Sender account
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -4546,7 +4553,7 @@ pub mod tests {
 
         // Receiver account
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
         let account_tree = get_tree_with_account_comm::<L>(
@@ -4651,7 +4658,7 @@ pub mod tests {
 
         // Receiver account
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -4757,7 +4764,7 @@ pub mod tests {
 
         // Sender account with non-zero counter
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         account.balance = 50;
         account.counter = 1;
 
@@ -4858,7 +4865,7 @@ pub mod tests {
 
         // Sender account
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_s, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 1;
@@ -4964,7 +4971,7 @@ pub mod tests {
 
         // Receiver account with non-zero counter
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk_r, id);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         account.balance = 50;
         account.counter = 1;
 
@@ -5042,7 +5049,7 @@ pub mod tests {
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         // Account exists with some balance and pending txns
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -5093,7 +5100,7 @@ pub mod tests {
 
         // Account exists with some balance and pending txns
         let id = Fr::rand(&mut rng);
-        let (mut account, _, _) = new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -5239,7 +5246,7 @@ pub mod tests {
             // Create sender account
             let id = Fr::rand(&mut rng);
             let (mut account, _, _) =
-                new_account::<_, PallasA>(&mut rng, asset_id, sk_s.clone(), id);
+                new_account(&mut rng, asset_id, sk_s.clone(), id);
             account.balance = 200; // Ensure sufficient balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5405,7 +5412,7 @@ pub mod tests {
             // Create receiver account
             let id = Fr::rand(&mut rng);
             let (mut account, _, _) =
-                new_account::<_, PallasA>(&mut rng, asset_id, sk_r.clone(), id);
+                new_account(&mut rng, asset_id, sk_r.clone(), id);
             account.balance = 200; // Ensure some initial balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5582,14 +5589,14 @@ pub mod tests {
         // Create sender account
         let sender_id = Fr::rand(&mut rng);
         let (mut sender_account, _, _) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk_s, sender_id);
+            new_account(&mut rng, asset_id, sk_s, sender_id);
         sender_account.balance = 200; // Ensure sufficient balance
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
         // Create receiver account
         let receiver_id = Fr::rand(&mut rng);
         let (mut receiver_account, _, _) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk_r, receiver_id);
+            new_account(&mut rng, asset_id, sk_r, receiver_id);
         receiver_account.balance = 150; // Some initial balance
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
@@ -5718,5 +5725,619 @@ pub mod tests {
         let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
 
         batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+    }
+
+    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
+
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
+        use super::*;
+
+        #[test]
+        fn keep_balance_same_in_send_txn() {
+            // A sender account sends AffirmAsSenderTxnProof but does not decrease the balance from his account. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            // All parties generate their keys
+            let (
+                ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+                ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Sender account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
+            // Assume that account had some balance. Either got it as the issuer or from another transfer
+            account.balance = 200;
+
+            let account_tree = get_tree_with_account_comm::<L>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+            )
+            .unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let nonce = b"test-nonce";
+
+            // Create an updated account that doesn't decrease the balance
+            let mut updated_account = account.get_state_for_send(amount).unwrap();
+            updated_account.balance = account.balance; // Keep same balance
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+
+            // Create an updated account that instead increases the balance
+            let mut updated_account = account.get_state_for_send(amount).unwrap();
+            updated_account.balance = account.balance + amount; // Increase balance
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+        }
+
+        #[test]
+        fn increase_balance_in_receive_txn() {
+            // A receiver account sends AffirmAsReceiverTxnProof but increases the balance. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            // All parties generate their keys
+            let (
+                ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+                ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Receiver account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
+            // Assume that account had some balance. Either got it as the issuer or from another transfer
+            account.balance = 200;
+
+            let account_tree = get_tree_with_account_comm::<L>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+            )
+            .unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let nonce = b"test-nonce";
+
+            // Create a malicious updated account that increases balance
+            let mut updated_account = account.get_state_for_receive();
+            updated_account.balance = account.balance + amount;
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
+                &mut rng,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+        }
+
+        #[test]
+        fn increase_balance_incorrectly_during_claiming_received_funds() {
+            // A receiver account sends ClaimReceivedTxnProof but increases the balance more than the actual claim amount. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            // All parties generate their keys
+            let (
+                ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+                ((sk_r, pk_r), (_sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Receiver account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
+            // Assume that account had some balance and it had sent the receive transaction to increase its counter
+            account.balance = 200;
+            account.counter += 2;
+
+            let account_tree = get_tree_with_account_comm::<L>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+            )
+            .unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let nonce = b"test-nonce";
+
+            // Update account that increases balance more than the actual claim amount
+            let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
+            updated_account.balance = account.balance + 75; // Add extra on top of the actual amount
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = ClaimReceivedTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+
+            // Update account with counter decreased by 1 more than it should be
+            let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
+            updated_account.counter -= 1;
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = ClaimReceivedTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+        }
+
+        #[test]
+        fn increase_balance_in_counter_update_by_sender() {
+            // A sender account sends SenderCounterUpdateTxnProof but increases their balance when it should remain the same. This proof should fail
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            // All parties generate their keys
+            let (
+                ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+                ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Sender account with non-zero counter
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
+            account.balance = 50;
+            account.counter = 2;
+
+            let account_tree = get_tree_with_account_comm::<L>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+            )
+            .unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let nonce = b"test-nonce";
+
+            // Update account that increases balance when it should remain the same
+            let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
+            updated_account.balance = account.balance + amount;
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = SenderCounterUpdateTxnProof::new(
+                &mut rng,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+
+            // Update account with counter decreased by 1 more than it should be
+            let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
+            updated_account.counter -= 1;
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = SenderCounterUpdateTxnProof::new(
+                &mut rng,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+        }
+
+        #[test]
+        fn incorrect_updates_in_reverse_send_txn() {
+            // A sender account sends SenderReverseTxnProof but makes incorrect updates to balance or counter. These proofs should fail
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<_, NUM_GENS, L>(&mut rng);
+
+            // All parties generate their keys
+            let (
+                ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
+                ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Sender account
+            let id = Fr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
+            // Assume that account had some balance and it had sent the send transaction to increase its counter
+            account.balance = 200;
+            account.counter += 2;
+
+            let account_tree = get_tree_with_account_comm::<L>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+            )
+            .unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let root = account_tree.root_node();
+
+            let nonce = b"test-nonce";
+
+            // Update account that increases balance more than required
+            let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
+            updated_account.balance = account.balance + 50; // Add extra on top of the actual amount
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = SenderReverseTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+
+            // Update account with counter decreased by 1 more than it should be
+            let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
+            updated_account.counter -= 1;
+
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let (proof, nullifier) = SenderReverseTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            ).unwrap();
+
+            assert!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    updated_account_comm,
+                    nullifier,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                ).is_err()
+            );
+        }
+
+        // More tests can be added like secret key mismatch, incorrect rho or randomness creation, etc.
     }
 }

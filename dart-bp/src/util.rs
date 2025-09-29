@@ -1,7 +1,7 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
 use crate::leg::LegEncryption;
-use crate::{AMOUNT_BITS, AssetId, Balance};
+use crate::{BALANCE_BITS, AssetId, Balance};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
@@ -240,7 +240,7 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
         )?;
     }
     // new balance does not overflow
-    range_proof(cs, var_bal_new.into(), new_bal, AMOUNT_BITS.into())?;
+    range_proof(cs, var_bal_new.into(), new_bal, BALANCE_BITS.into())?;
     Ok(())
 }
 
@@ -1204,8 +1204,8 @@ mod tests {
 
         // This should fail due to overflow
         let amount = 5;
-        let old_bal = (1 << AMOUNT_BITS) - amount;
-        let new_bal = 1 << AMOUNT_BITS;
+        let old_bal = (1 << BALANCE_BITS) - amount;
+        let new_bal = 1 << BALANCE_BITS;
         assert!(!prove_verify_balance_change(
             &pc_gens, &bp_gens, old_bal, new_bal, amount, false
         ));

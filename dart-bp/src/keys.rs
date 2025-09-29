@@ -1,4 +1,4 @@
-use crate::{TXN_CHALLENGE_LABEL, add_to_transcript, NONCE_LABEL, T_SIG_KEY, T_ENC_KEY};
+use crate::{TXN_CHALLENGE_LABEL, add_to_transcript, NONCE_LABEL};
 use crate::util::add_slice_to_transcript;
 use crate::error::{Error, Result};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -13,6 +13,9 @@ use core::ops::Neg;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+pub const T_SIG_KEY: &'static [u8; 9] = b"t_sig_key";
+pub const T_ENC_KEY: &'static [u8; 9] = b"t_enc_key";
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);

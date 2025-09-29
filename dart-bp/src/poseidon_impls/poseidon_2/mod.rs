@@ -1,120 +1,16 @@
 // The native implementation is taken from here https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2.rs
 
+pub mod params;
+
 use crate::error::{Error, Result};
-use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use ark_ff::PrimeField;
 use ark_std::borrow::ToOwned;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError, Variable};
-use rand_core::CryptoRngCore;
+pub use params::Poseidon2Params;
 
 pub const ZERO_CONST: u64 = 0;
-
-#[derive(Clone, Debug)]
-pub struct Poseidon2Params<F: PrimeField> {
-    pub state_size: usize,
-    /// sbox degree
-    pub degree: usize,
-    pub rounds_f_beginning: usize,
-    pub rounds_p: usize,
-    #[allow(dead_code)]
-    pub rounds_f_end: usize,
-    pub rounds: usize,
-    pub mat_internal_diag_m_1: Vec<F>,
-    pub _mat_internal: Vec<Vec<F>>,
-    pub round_constants: Vec<Vec<F>>,
-}
-
-impl<F: PrimeField> Poseidon2Params<F> {
-    pub fn new(
-        state_size: usize,
-        degree: usize,
-        rounds_f: usize,
-        rounds_p: usize,
-        mat_internal_diag_m_1: &[F],
-        mat_internal: &[Vec<F>],
-        round_constants: &[Vec<F>],
-    ) -> Result<Self> {
-        // We only need t to be 3 for now. Support for 2 is simple so keeping it
-        if state_size != 2 && state_size != 3 {
-            return Err(Error::UnexpectedStateSizeForPoseidon2(state_size));
-        }
-        if degree != 3 && degree != 5 && degree != 7 {
-            return Err(Error::UnexpectedDegreeForPoseidon2(degree));
-        }
-        if rounds_f % 2 == 1 {
-            return Err(Error::IncorrectNumberOfFullRoundsForPoseidon2(rounds_f));
-        }
-        let r = rounds_f / 2;
-        let rounds = rounds_f + rounds_p;
-
-        Ok(Poseidon2Params {
-            state_size,
-            degree,
-            rounds_f_beginning: r,
-            rounds_p,
-            rounds_f_end: r,
-            rounds,
-            mat_internal_diag_m_1: mat_internal_diag_m_1.to_owned(),
-            _mat_internal: mat_internal.to_owned(),
-            round_constants: round_constants.to_owned(),
-        })
-    }
-
-    /// Only for testing purposes
-    pub fn new_with_randoms<R: CryptoRngCore>(
-        rng: &mut R,
-        state_size: usize,
-        degree: usize,
-        rounds_f: usize,
-        rounds_p: usize,
-    ) -> Result<Self> {
-        let mat_internal_diag_m_1: Vec<F> = (0..state_size).map(|_| F::rand(rng)).collect();
-        let mat_internal: Vec<Vec<F>> = (0..state_size)
-            .map(|_| (0..state_size).map(|_| F::rand(rng)).collect())
-            .collect();
-        let round_constants: Vec<Vec<F>> = (0..(rounds_f + rounds_p))
-            .map(|_| (0..state_size).map(|_| F::rand(rng)).collect())
-            .collect();
-
-        Self::new(
-            state_size,
-            degree,
-            rounds_f,
-            rounds_p,
-            &mat_internal_diag_m_1,
-            &mat_internal,
-            &round_constants,
-        )
-    }
-
-    #[allow(dead_code)]
-    pub fn equivalent_round_constants(
-        round_constants: &[Vec<F>],
-        mat_internal: &[Vec<F>],
-        rounds_f_beginning: usize,
-        rounds_p: usize,
-    ) -> Vec<Vec<F>> {
-        let mut opt = vec![Vec::new(); rounds_p + 1];
-        let mat_internal_inv = mat_inverse(mat_internal);
-
-        let p_end = rounds_f_beginning + rounds_p - 1;
-        let mut tmp = round_constants[p_end].clone();
-        for i in (0..rounds_p - 1).rev() {
-            let inv_cip = mat_vec_mul(&mat_internal_inv, &tmp);
-            opt[i + 1] = vec![inv_cip[0]];
-            tmp = round_constants[rounds_f_beginning + i].clone();
-            for i in 1..inv_cip.len() {
-                tmp[i] += inv_cip[i];
-            }
-        }
-        opt[0] = tmp;
-        opt[rounds_p] = vec![F::zero(); opt[0].len()]; // opt[0].len() = t
-
-        opt
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct Poseidon2<F: PrimeField> {
@@ -186,6 +82,9 @@ impl<F: PrimeField> Poseidon2<F> {
                 res.mul_assign(input);
             }
             _ => {
+                // This is unreachable because `Poseidon2Params` will never be initialized with such a degree
+                // and the call to `Self::permutation` ensures that only degrees supported by `Poseidon2Params`
+                // are accepted
                 unreachable!()
             }
         }
@@ -266,6 +165,9 @@ impl<F: PrimeField> Poseidon2<F> {
             //     }
             // }
             _ => {
+                // This is unreachable because `Poseidon2Params` will never be initialized with such a state size
+                // and the call to `Self::permutation` ensures that only state sizes supported by `Poseidon2Params`
+                // are accepted
                 unreachable!()
             }
         }
@@ -310,6 +212,9 @@ impl<F: PrimeField> Poseidon2<F> {
             //     }
             // }
             _ => {
+                // This is unreachable because `Poseidon2Params` will never be initialized with such a state size
+                // and the call to `Self::permutation` ensures that only state sizes supported by `Poseidon2Params`
+                // are accepted
                 unreachable!()
             }
         }
@@ -529,6 +434,7 @@ mod tests {
     use dock_crypto_utils::transcript::MerlinTranscript;
     use rand_core::CryptoRngCore;
     use std::time::Instant;
+    use crate::poseidon_impls::poseidon_2::params::pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3};
 
     fn poseidon2_perm_sbox<R: CryptoRngCore>(
         rng: &mut R,
@@ -539,14 +445,7 @@ mod tests {
     ) {
         let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new_with_randoms(
-            rng,
-            width,
-            degree,
-            full_rounds,
-            partial_rounds,
-        )
-        .unwrap();
+        let params = Poseidon2Params::<Fr>::new(width, degree, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec()).unwrap();
 
         let poseidon2 = Poseidon2::new(params.clone());
 
@@ -607,14 +506,7 @@ mod tests {
     ) {
         let width = 3;
 
-        let params = Poseidon2Params::<Fr>::new_with_randoms(
-            rng,
-            width,
-            degree,
-            full_rounds,
-            partial_rounds,
-        )
-        .unwrap();
+        let params = Poseidon2Params::<Fr>::new(width, degree, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec()).unwrap();
 
         let xl = Fr::rand(rng);
         let xr = Fr::rand(rng);

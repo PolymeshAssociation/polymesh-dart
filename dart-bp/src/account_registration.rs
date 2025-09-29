@@ -1,20 +1,19 @@
 use ark_std::collections::BTreeMap;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::{TXN_CHALLENGE_LABEL};
+use crate::TXN_CHALLENGE_LABEL;
 use crate::error::*;
-use crate::{NONCE_LABEL, ASSET_ID_LABEL, ACCOUNT_COMMITMENT_LABEL, PK_LABEL, ID_LABEL, PK_T_LABEL, PK_T_GEN_LABEL};
-
-use crate::poseidon_impls::poseidon_2::{Poseidon_hash_2_constraints_simple, Poseidon2Params};
+use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
+use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::util::bp_gens_for_vec_commitment;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{UniformRand, vec, vec::Vec};
+use ark_std::{vec, vec::Vec, UniformRand};
 use ark_std::string::ToString;
 use bulletproofs::r1cs::{
-    ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, Verifier, VerificationTuple,
+    ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve::curve_check;
@@ -34,6 +33,10 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse};
 use crate::add_to_transcript;
+use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
+
+pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
+pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
 
 /// Proof of encrypted randomness. The randomness is broken into `NUM_CHUNKS` chunks of `CHUNK_BITS` bits each
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
@@ -1277,20 +1280,20 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
 pub mod tests {
     use super::*;
     use crate::account::NUM_GENERATORS;
-    use crate::keys::{SigKey, keygen_enc, keygen_sig};
+    use crate::keys::{keygen_enc, keygen_sig, SigKey};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
-    use crate::poseidon_impls::poseidon_2::Poseidon2Params;
+    use crate::poseidon_impls::poseidon_2::params::{Poseidon2Params, pallas::{MAT_DIAG3_M_1, MAT_INTERNAL3, RC3}};
     use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
     use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
     use ark_crypto_primitives::{
-        crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
+        crh::poseidon::{constraints::TwoToOneCRHGadget, TwoToOneCRH},
         sponge::poseidon::PoseidonConfig,
     };
     use ark_ff::{Field, PrimeField};
     use ark_r1cs_std::alloc::AllocVar;
     use ark_r1cs_std::{
-        R1CSVar,
         fields::fp::{AllocatedFp, FpVar},
+        R1CSVar,
     };
     use ark_std::UniformRand;
     use curve_tree_relations::curve_tree::SelRerandParameters;
@@ -1333,14 +1336,13 @@ pub mod tests {
         PoseidonConfig::<F>::new(FULL_ROUNDS, PARTIAL_ROUNDS, ALPHA, mds, ark, RATE, CAPACITY)
     }
 
-    pub fn test_params_for_poseidon2<R: CryptoRngCore, F: PrimeField>(
-        rng: &mut R,
-    ) -> Poseidon2Params<F> {
+    pub fn test_params_for_poseidon2(
+    ) -> Poseidon2Params<Fr> {
         // NOTE: These numbers are for 2:1 compression and 256 bit group (Table 1 from Poseidon2 paper) and that is the only config we use. These should be changed if we decide to use something else.
         let full_rounds = 8;
         let partial_rounds = 56;
         let degree = 5;
-        Poseidon2Params::new_with_randoms(rng, 3, degree, full_rounds, partial_rounds).unwrap()
+        Poseidon2Params::<Fr>::new(3, degree, full_rounds, partial_rounds, MAT_DIAG3_M_1.as_ref().unwrap().to_vec(), MAT_INTERNAL3.as_ref().unwrap().to_vec(), RC3.as_ref().unwrap().to_vec()).unwrap()
     }
 
     #[test]
@@ -1388,17 +1390,17 @@ pub mod tests {
     }
 
     // pub fn new_account<R: CryptoRngCore, G: AffineRepr>(rng: &mut R, asset_id: AssetId, sk: SigKey<G>) -> (AccountState<G>, NullifierSkGenCounter, PoseidonConfig<G::ScalarField>) where G::ScalarField: Absorb {
-    pub fn new_account<R: CryptoRngCore, G: AffineRepr>(
+    pub fn new_account<R: CryptoRngCore>(
         rng: &mut R,
         asset_id: AssetId,
-        sk: SigKey<G>,
-        id: G::ScalarField,
+        sk: SigKey<PallasA>,
+        id: Fr,
     ) -> (
-        AccountState<G>,
+        AccountState<PallasA>,
         NullifierSkGenCounter,
-        Poseidon2Params<G::ScalarField>,
+        Poseidon2Params<Fr>,
     ) {
-        let params = test_params_for_poseidon2::<_, G::ScalarField>(rng);
+        let params = test_params_for_poseidon2();
         let counter = 1;
         let account = AccountState::new(rng, id, sk.0, asset_id, counter, params.clone()).unwrap();
         (account, counter, params)
@@ -1418,7 +1420,7 @@ pub mod tests {
         // User hashes it id onto the field
         let id = Fr::rand(&mut rng);
 
-        let (account, c, poseidon_config) = new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id);
+        let (account, c, poseidon_config) = new_account(&mut rng, asset_id, sk_i, id);
         assert_eq!(account.id, id);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
@@ -1454,7 +1456,7 @@ pub mod tests {
 
         let clock = Instant::now();
         let (account, nullifier_gen_counter, poseidon_params) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk_i, id.clone());
+            new_account(&mut rng, asset_id, sk_i, id.clone());
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
@@ -1535,7 +1537,7 @@ pub mod tests {
 
         let clock = Instant::now();
         let (mut account, nullifier_gen_counter, poseidon_params) =
-            new_account::<_, PallasA>(&mut rng, asset_id, sk, id.clone());
+            new_account(&mut rng, asset_id, sk, id.clone());
         // Make randomness small to run test faster
         account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1795,7 +1797,7 @@ pub mod tests {
         let asset_id = 2;
         let counter = 1;
 
-        let poseidon_params = test_params_for_poseidon2::<_, Fr>(&mut rng);
+        let poseidon_params = test_params_for_poseidon2();
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, counter);
         let rho = Poseidon_hash_2_simple::<Fr>(sk, combined, poseidon_params.clone()).unwrap();
         let current_rho = rho.square();
@@ -1853,7 +1855,7 @@ pub mod tests {
 
         let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
 
-        let poseidon_params = test_params_for_poseidon2::<_, Fr>(&mut rng);
+        let poseidon_params = test_params_for_poseidon2();
         let nullifier_gen_counter = 1;
 
         let batch_size = 5_usize;
@@ -2054,5 +2056,72 @@ pub mod tests {
         let batch_verifier_time_with_pk_T = clock.elapsed();
 
         println!("For {batch_size} proofs with pk_T, verifier time = {:?}, batch verifier time {:?}", verifier_time_with_pk_T, batch_verifier_time_with_pk_T);
+    }
+
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
+        use super::*;
+
+        #[test]
+        fn registration_with_non_zero_balance() {
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+
+            // Create public params (generators, etc)
+            let account_tree_params =
+                SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+                    .unwrap();
+
+            let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+
+            let asset_id = 1;
+
+            // Investor creates keys
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let id = Fr::rand(&mut rng);
+
+            let (mut account, nullifier_gen_counter, poseidon_params) =
+                new_account(&mut rng, asset_id, sk_i, id.clone());
+            
+            // Set non-zero balance - this should cause proof verification to fail
+            account.balance = 100;
+            
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            let nonce = b"test-nonce-0";
+
+            // With ignore_prover_input_sanitation, proof creation should succeed
+            let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
+                &mut rng,
+                pk_i.0,
+                &account,
+                account_comm.clone(),
+                nullifier_gen_counter,
+                nonce,
+                account_comm_key.clone(),
+                &account_tree_params.even_parameters.pc_gens,
+                &account_tree_params.even_parameters.bp_gens,
+                &poseidon_params,
+                None,
+            ).unwrap();
+
+            assert!(reg_proof.verify(
+                &mut rng,
+                id,
+                &pk_i.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nullifier,
+                nonce,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens,
+                &account_tree_params.even_parameters.bp_gens,
+                &poseidon_params,
+                None,
+            ).is_err());
+        }
     }
 }
