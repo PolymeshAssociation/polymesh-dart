@@ -1198,6 +1198,60 @@ impl DartProverAccountTree {
     }
 }
 
+pub trait AccountLookup {
+    /// Get the encryption public key for the account.
+    fn get_account_enc_pk(&self, account: &AccountPublicKey) -> Option<EncryptionPublicKey>;
+
+    /// Get the account public key for the given encryption public key.
+    fn get_account(&self, enc_pk: &EncryptionPublicKey) -> Option<AccountPublicKey>;
+}
+
+#[derive(Clone, Debug, Default)]
+#[cfg(feature = "std")]
+pub struct AccountLookupMap {
+    enc_to_acct: HashMap<EncryptionPublicKey, AccountPublicKey>,
+    acct_to_enc: HashMap<AccountPublicKey, EncryptionPublicKey>,
+}
+
+#[cfg(feature = "std")]
+impl AccountLookup for AccountLookupMap {
+    fn get_account_enc_pk(&self, account: &AccountPublicKey) -> Option<EncryptionPublicKey> {
+        self.acct_to_enc.get(account).copied()
+    }
+
+    fn get_account(&self, enc_pk: &EncryptionPublicKey) -> Option<AccountPublicKey> {
+        self.enc_to_acct.get(enc_pk).copied()
+    }
+}
+
+#[cfg(feature = "std")]
+impl AccountLookupMap {
+    pub fn new() -> Self {
+        Self {
+            enc_to_acct: HashMap::new(),
+            acct_to_enc: HashMap::new(),
+        }
+    }
+
+    pub fn ensure_unregistered(&self, keys: &AccountPublicKeys) -> Result<(), Error> {
+        if self.enc_to_acct.contains_key(&keys.enc) {
+            return Err(Error::AccountPublicKeyExists);
+        }
+        if self.acct_to_enc.contains_key(&keys.acct) {
+            return Err(Error::AccountPublicKeyExists);
+        }
+        Ok(())
+    }
+
+    /// Register an account's encryption public key and account public key in the lookup map.
+    pub fn register_account_keys(&mut self, account_pk_keys: &AccountPublicKeys) {
+        self.enc_to_acct
+            .insert(account_pk_keys.enc, account_pk_keys.acct);
+        self.acct_to_enc
+            .insert(account_pk_keys.acct, account_pk_keys.enc);
+    }
+}
+
 pub struct DartChainState {
     signers: HashMap<SignerAddress, SignerState>,
 

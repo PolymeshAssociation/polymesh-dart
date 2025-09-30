@@ -19,10 +19,8 @@ curve_tree_relations = { package = "relations", git = "https://github.com/Polyme
 
 #dock_crypto_utils = { path = "../crypto/utils" }
 #schnorr_pok = { path = "../crypto/schnorr_pok" }
-
 dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
 schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
-#equality_across_groups = { git = "https://github.com/PolymeshAssociation/crypto" }
 
 # Polymesh changes.
 #ark-serialize = { path = "../arkworks-algebra/serialize" }
