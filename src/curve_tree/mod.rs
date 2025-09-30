@@ -181,6 +181,25 @@ impl CurveTreeConfig for AccountTreeConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
+pub struct FeeAccountTreeConfig;
+impl CurveTreeConfig for FeeAccountTreeConfig {
+    const L: usize = FEE_ACCOUNT_TREE_L;
+    const M: usize = FEE_ACCOUNT_TREE_M;
+    const EVEN_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
+    const ODD_GEN_LENGTH: usize = crate::MAX_CURVE_TREE_GENS;
+    const APPEND_ONLY: bool = true;
+
+    type F0 = <PallasParameters as CurveConfig>::ScalarField;
+    type F1 = <VestaParameters as CurveConfig>::ScalarField;
+    type P0 = PallasParameters;
+    type P1 = VestaParameters;
+
+    fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
+        get_account_curve_tree_parameters()
+    }
+}
+
 #[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct WrappedCurveTreeParameters(Vec<u8>);
 

@@ -49,6 +49,9 @@ pub use leg::*;
 mod keys;
 pub use keys::*;
 
+mod fee;
+pub use fee::*;
+
 use crate::curve_tree::*;
 use crate::*;
 
@@ -1162,6 +1165,7 @@ impl<
             state_change.new_commitment,
             current_account_path,
             &root,
+            // TODO: Use the caller's identity?
             b"",
             tree_lookup.params(),
             dart_gens().account_comm_key(),
