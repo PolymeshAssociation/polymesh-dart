@@ -255,33 +255,15 @@ pub trait ValidateCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConf
     fn params(&self) -> &CurveTreeParameters<C>;
 }
 
-impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AssetTreeConfig>
-    for &CompressedCurveTreeRoot<L, M, AssetTreeConfig>
+impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
+    for &CompressedCurveTreeRoot<L, M, C>
 {
-    fn get_block_root(
-        &self,
-        _block: BlockNumber,
-    ) -> Option<CompressedCurveTreeRoot<L, M, AssetTreeConfig>> {
+    fn get_block_root(&self, _block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
         Some((*self).clone())
     }
 
-    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        get_asset_curve_tree_parameters()
-    }
-}
-
-impl<const L: usize, const M: usize> ValidateCurveTreeRoot<L, M, AccountTreeConfig>
-    for &CompressedCurveTreeRoot<L, M, AccountTreeConfig>
-{
-    fn get_block_root(
-        &self,
-        _block: BlockNumber,
-    ) -> Option<CompressedCurveTreeRoot<L, M, AccountTreeConfig>> {
-        Some((*self).clone())
-    }
-
-    fn params(&self) -> &CurveTreeParameters<AccountTreeConfig> {
-        get_account_curve_tree_parameters()
+    fn params(&self) -> &CurveTreeParameters<C> {
+        C::parameters()
     }
 }
 

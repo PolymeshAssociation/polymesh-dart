@@ -156,6 +156,10 @@ rand = { workspace = true }
 name = "proof_benchmark"
 harness = false
 
+[[bench]]
+name = "fee_payments"
+harness = false
+
 [features]
 default = [
     "std",

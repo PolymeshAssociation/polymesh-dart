@@ -308,7 +308,7 @@ impl FeeAccountRegistrationProof {
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
-    pub fn verify<R: RngCore + CryptoRng>(&self, identity: &[u8]) -> Result<(), Error> {
+    pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
         let proof = self.proof.decode()?;
         proof.verify(
             &self.account.get_affine()?,
