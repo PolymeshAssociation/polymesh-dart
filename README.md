@@ -8,6 +8,8 @@ A Rust implementation of the DART (Decentralized, Anonymous and Regulation-Frien
 
 DART is a privacy-preserving protocol that allows for confidential asset transfers while still maintaining regulatory compliance. This library provides the cryptographic primitives and zero-knowledge proof systems that power the Polymesh confidential asset infrastructure.
 
+For detailed information, please refer to the [P-DART paper](https://assets.polymesh.network/P-DART-v1.pdf).
+
 Key features:
 
 - Zero-knowledge proofs for asset transfers
