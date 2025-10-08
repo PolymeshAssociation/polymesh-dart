@@ -36,14 +36,14 @@ pub type AssetCommitmentParameters<C> =
 
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
-    static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
+    static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters(b"asset-tree-params");
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
             b"asset-comm-params",
             MAX_ASSET_KEYS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens,
         );
-    static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();
+    static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters(b"account-tree-params");
 }
 
 #[cfg(not(feature = "std"))]
@@ -134,10 +134,7 @@ pub trait CurveTreeConfig:
     type P0: SWCurveConfig<ScalarField = Self::F0, BaseField = Self::F1> + Clone + Copy + PartialEq;
     type P1: SWCurveConfig<ScalarField = Self::F1, BaseField = Self::F0> + Clone + Copy + PartialEq;
 
-    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
-        SelRerandParameters::new(Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
-            .expect("Failed to create SelRerandParameters")
-    }
+    fn build_parameters(label: &[u8]) -> SelRerandParameters<Self::P0, Self::P1>;
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1>;
 }
@@ -155,6 +152,11 @@ impl CurveTreeConfig for AssetTreeConfig {
     type F1 = <PallasParameters as CurveConfig>::ScalarField;
     type P0 = VestaParameters;
     type P1 = PallasParameters;
+
+    fn build_parameters(label: &[u8]) -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters::<Self::P0, Self::P1>::new_using_label(label, Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
+            .expect("Failed to create SelRerandParameters")
+    }
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_asset_curve_tree_parameters()
@@ -175,6 +177,11 @@ impl CurveTreeConfig for AccountTreeConfig {
     type P0 = PallasParameters;
     type P1 = VestaParameters;
 
+    fn build_parameters(label: &[u8]) -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters::<Self::P0, Self::P1>::new_using_label(label, Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
+            .expect("Failed to create SelRerandParameters")
+    }
+
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_account_curve_tree_parameters()
     }
@@ -193,6 +200,11 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     type F1 = <VestaParameters as CurveConfig>::ScalarField;
     type P0 = PallasParameters;
     type P1 = VestaParameters;
+
+    fn build_parameters(label: &[u8]) -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters::<Self::P0, Self::P1>::new_using_label(label, Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
+            .expect("Failed to create SelRerandParameters")
+    }
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_account_curve_tree_parameters()
