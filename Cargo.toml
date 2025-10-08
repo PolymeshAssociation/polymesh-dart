@@ -3,7 +3,7 @@ name = "polymesh-dart"
 version = "0.1.0"
 edition = "2024"
 description = "Polymesh DART assets."
-authors = ["Polymesh Association"]
+authors = ["Polymesh Labs"]
 license = "GPL-3.0"
 
 [workspace]

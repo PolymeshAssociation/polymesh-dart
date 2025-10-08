@@ -2,6 +2,8 @@
 name = "polymesh-dart-bp"
 version = "0.1.0"
 edition = "2024"
+description = "Polymesh DART assets."
+authors = ["Polymesh Labs"]
 license = "GPL-3.0"
 
 [dependencies]
