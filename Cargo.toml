@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Polymesh DART assets."
 authors = ["Polymesh Association"]
-license-file = "LICENSE.pdf"
+license = "GPL-3.0"
 
 [workspace]
 members = ["dart-bp", "dart-testing-cli", "dart-common"]
