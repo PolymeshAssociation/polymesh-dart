@@ -208,34 +208,13 @@ pub struct AccountCommitmentKey {
 impl AccountCommitmentKey {
     /// Create a new account commitment key
     pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA) -> Self {
-        let balance_gen = hash_to_pallas(
-            label, 
-            b" : balance_gen"
-        ).into_affine();
-        let counter_gen = hash_to_pallas(
-            label,
-            b" : counter_gen"
-        ).into_affine();
-        let asset_id_gen = hash_to_pallas(
-            label,
-            b" : asset_id_gen"
-        ).into_affine();
-        let rho_gen = hash_to_pallas(
-            label,
-            b" : rho_gen"
-        ).into_affine();
-        let current_rho_gen = hash_to_pallas(
-            label,
-            b" : current_rho_gen"
-        ).into_affine();
-        let randomness_gen = hash_to_pallas(
-            label,
-            b" : randomness_gen"
-        ).into_affine();
-        let identity_gen = hash_to_pallas(
-            label,
-            b" : identity_gen"
-        ).into_affine();
+        let balance_gen = hash_to_pallas(label, b" : balance_gen").into_affine();
+        let counter_gen = hash_to_pallas(label, b" : counter_gen").into_affine();
+        let asset_id_gen = hash_to_pallas(label, b" : asset_id_gen").into_affine();
+        let rho_gen = hash_to_pallas(label, b" : rho_gen").into_affine();
+        let current_rho_gen = hash_to_pallas(label, b" : current_rho_gen").into_affine();
+        let randomness_gen = hash_to_pallas(label, b" : randomness_gen").into_affine();
+        let identity_gen = hash_to_pallas(label, b" : identity_gen").into_affine();
 
         Self {
             sk_gen,
@@ -299,25 +278,13 @@ pub struct DartBPGenerators {
 impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
     pub fn new(label: &[u8]) -> Self {
-        let sig_key_gen =
-            hash_to_pallas(
-                label,
-                b" : sig_key_gen"
-            ).into_affine();
-        let enc_key_gen =
-            hash_to_pallas(
-                label,
-                b" : enc_key_gen"
-            ).into_affine();
+        let sig_key_gen = hash_to_pallas(label, b" : sig_key_gen").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b" : enc_key_gen").into_affine();
 
         let account_comm_key =
             AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen);
 
-        let leg_asset_value_gen =
-            hash_to_pallas(
-                label,
-                b" : leg_asset_value_gen"
-            ).into_affine();
+        let leg_asset_value_gen = hash_to_pallas(label, b" : leg_asset_value_gen").into_affine();
 
         Self {
             sig_key_gen,
@@ -711,7 +678,7 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT, ASSET_TREE_GENS)?,
+            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT)?,
             assets: HashMap::new(),
         })
     }

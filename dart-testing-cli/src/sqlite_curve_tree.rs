@@ -31,7 +31,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     type Error = anyhow::Error;
     type Updater = DefaultCurveTreeUpdater<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>;
 
-    fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
+    fn new(_height: NodeLevel) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(
             "AssetCurveTreeSqliteStorage does not support new() - use new() with db connection"
         ))
@@ -258,7 +258,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     type Error = anyhow::Error;
     type Updater = DefaultCurveTreeUpdater<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>;
 
-    fn new(_height: NodeLevel, _gens_length: usize) -> Result<Self, Self::Error> {
+    fn new(_height: NodeLevel) -> Result<Self, Self::Error> {
         Err(anyhow::anyhow!(
             "AccountCurveTreeSqliteStorage does not support new() - use new() with db connection"
         ))

@@ -14,7 +14,6 @@ fn proof_benchmark(c: &mut Criterion) {
     let mut account_tree =
         ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
             ACCOUNT_TREE_HEIGHT,
-            ACCOUNT_TREE_GENS,
         )
         .expect("Failed to create account tree");
     let account_params = account_tree.params().clone();

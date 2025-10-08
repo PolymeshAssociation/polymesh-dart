@@ -1167,7 +1167,7 @@ pub struct DartProverAccountTree {
 impl DartProverAccountTree {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            account_tree: ProverCurveTree::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)?,
+            account_tree: ProverCurveTree::new(ACCOUNT_TREE_HEIGHT)?,
             last_leaf_index: 0,
         })
     }
@@ -1285,7 +1285,7 @@ pub struct DartChainState {
 impl DartChainState {
     pub fn new() -> Result<Self> {
         let asset_tree = AssetCurveTree::new()?;
-        let account_tree = VerifierCurveTree::new(ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_GENS)?;
+        let account_tree = VerifierCurveTree::new(ACCOUNT_TREE_HEIGHT)?;
         Ok(Self {
             signers: HashMap::new(),
 

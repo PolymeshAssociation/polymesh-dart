@@ -9,12 +9,11 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     let ctx = b"fee_benchmark";
 
     // Set up fee account tree (assuming FeeAccountCurveTree exists; adjust if needed).
-    let mut fee_account_tree = ProverCurveTree::<
-        FEE_ACCOUNT_TREE_L,
-        FEE_ACCOUNT_TREE_M,
-        FeeAccountTreeConfig,
-    >::new(FEE_ACCOUNT_TREE_HEIGHT, FEE_ACCOUNT_TREE_GENS)
-    .expect("Failed to create fee account tree");
+    let mut fee_account_tree =
+        ProverCurveTree::<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FeeAccountTreeConfig>::new(
+            FEE_ACCOUNT_TREE_HEIGHT,
+        )
+        .expect("Failed to create fee account tree");
 
     // Generate account keys.
     let account_keys = AccountKeys::rand(&mut rng).expect("Failed to generate account keys");

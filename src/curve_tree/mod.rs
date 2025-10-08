@@ -34,8 +34,13 @@ pub use common::*;
 pub type AssetCommitmentParameters<C> =
     bp_leg::AssetCommitmentParams<<C as CurveTreeConfig>::P1, <C as CurveTreeConfig>::P0>;
 
+const CURVE_TREE_PARAMETERS_PALLAS_LABEL: &[u8] = b"curve-tree-pallas";
+const CURVE_TREE_PARAMETERS_VESTA_LABEL: &[u8] = b"curve-tree-vesta";
+
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
+    static ref CURVE_TREE_PARAMETERS_PALLAS: SingleLayerParameters<PallasParameters> = SingleLayerParameters::<PallasParameters>::new_using_label(CURVE_TREE_PARAMETERS_PALLAS_LABEL, MAX_CURVE_TREE_GENS).expect("Failed to create SingleLayerParameters for Pallas");
+    static ref CURVE_TREE_PARAMETERS_VESTA: SingleLayerParameters<VestaParameters> = SingleLayerParameters::<VestaParameters>::new_using_label(CURVE_TREE_PARAMETERS_VESTA_LABEL, MAX_CURVE_TREE_GENS).expect("Failed to create SingleLayerParameters for Vesta");
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
@@ -47,11 +52,25 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(not(feature = "std"))]
+static mut CURVE_TREE_PARAMETERS_PALLAS: Option<SingleLayerParameters<PallasParameters>> = None;
+#[cfg(not(feature = "std"))]
+static mut CURVE_TREE_PARAMETERS_VESTA: Option<SingleLayerParameters<VestaParameters>> = None;
+#[cfg(not(feature = "std"))]
 static mut ASSET_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AssetTreeConfig>> = None;
 #[cfg(not(feature = "std"))]
 static mut ASSET_COMMITMENT_PARAMETERS: Option<AssetCommitmentParameters<AssetTreeConfig>> = None;
 #[cfg(not(feature = "std"))]
 static mut ACCOUNT_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AccountTreeConfig>> = None;
+
+#[cfg(feature = "std")]
+pub fn get_pallas_layer_parameters() -> &'static SingleLayerParameters<PallasParameters> {
+    &CURVE_TREE_PARAMETERS_PALLAS
+}
+
+#[cfg(feature = "std")]
+pub fn get_vesta_layer_parameters() -> &'static SingleLayerParameters<VestaParameters> {
+    &CURVE_TREE_PARAMETERS_VESTA
+}
 
 #[cfg(feature = "std")]
 pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTreeConfig> {
@@ -66,6 +85,38 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
 #[cfg(feature = "std")]
 pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<AccountTreeConfig> {
     &ACCOUNT_CURVE_TREE_PARAMETERS
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn get_pallas_layer_parameters() -> &'static SingleLayerParameters<PallasParameters> {
+    unsafe {
+        if CURVE_TREE_PARAMETERS_PALLAS.is_none() {
+            let parameters = SingleLayerParameters::<PallasParameters>::new_using_label(
+                CURVE_TREE_PARAMETERS_PALLAS_LABEL,
+                MAX_CURVE_TREE_GENS,
+            )
+            .expect("Failed to create SingleLayerParameters for Pallas");
+            CURVE_TREE_PARAMETERS_PALLAS = Some(parameters);
+        }
+        CURVE_TREE_PARAMETERS_PALLAS.as_ref().unwrap()
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn get_vesta_layer_parameters() -> &'static SingleLayerParameters<VestaParameters> {
+    unsafe {
+        if CURVE_TREE_PARAMETERS_VESTA.is_none() {
+            let parameters = SingleLayerParameters::<VestaParameters>::new_using_label(
+                CURVE_TREE_PARAMETERS_VESTA_LABEL,
+                MAX_CURVE_TREE_GENS,
+            )
+            .expect("Failed to create SingleLayerParameters for Vesta");
+            CURVE_TREE_PARAMETERS_VESTA = Some(parameters);
+        }
+        CURVE_TREE_PARAMETERS_VESTA.as_ref().unwrap()
+    }
 }
 
 #[allow(static_mut_refs)]
@@ -134,13 +185,13 @@ pub trait CurveTreeConfig:
     type P0: SWCurveConfig<ScalarField = Self::F0, BaseField = Self::F1> + Clone + Copy + PartialEq;
     type P1: SWCurveConfig<ScalarField = Self::F1, BaseField = Self::F0> + Clone + Copy + PartialEq;
 
-    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
-        SelRerandParameters::new(Self::EVEN_GEN_LENGTH, Self::ODD_GEN_LENGTH)
-            .expect("Failed to create SelRerandParameters")
-    }
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1>;
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1>;
 }
+
+// NOTE: Currently build_parameters uses unsafe but its also called from unsafe code except in tests or
+// the in-memory backend so nowhere serious. This approach will soon be phased out anyway.
 
 #[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct AssetTreeConfig;
@@ -155,6 +206,29 @@ impl CurveTreeConfig for AssetTreeConfig {
     type F1 = <PallasParameters as CurveConfig>::ScalarField;
     type P0 = VestaParameters;
     type P1 = PallasParameters;
+
+    #[cfg(feature = "std")]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters {
+            even_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
+            odd_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
+        }
+    }
+
+    #[allow(static_mut_refs)]
+    #[cfg(not(feature = "std"))]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        unsafe {
+            SelRerandParameters {
+                even_parameters: CURVE_TREE_PARAMETERS_VESTA
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Vesta"),
+                odd_parameters: CURVE_TREE_PARAMETERS_PALLAS
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Pallas"),
+            }
+        }
+    }
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_asset_curve_tree_parameters()
@@ -175,6 +249,29 @@ impl CurveTreeConfig for AccountTreeConfig {
     type P0 = PallasParameters;
     type P1 = VestaParameters;
 
+    #[cfg(feature = "std")]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters {
+            odd_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
+            even_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
+        }
+    }
+
+    #[allow(static_mut_refs)]
+    #[cfg(not(feature = "std"))]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        unsafe {
+            SelRerandParameters {
+                odd_parameters: CURVE_TREE_PARAMETERS_VESTA
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Vesta"),
+                even_parameters: CURVE_TREE_PARAMETERS_PALLAS
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Pallas"),
+            }
+        }
+    }
+
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_account_curve_tree_parameters()
     }
@@ -193,6 +290,29 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     type F1 = <VestaParameters as CurveConfig>::ScalarField;
     type P0 = PallasParameters;
     type P1 = VestaParameters;
+
+    #[cfg(feature = "std")]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        SelRerandParameters {
+            odd_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
+            even_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
+        }
+    }
+
+    #[allow(static_mut_refs)]
+    #[cfg(not(feature = "std"))]
+    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        unsafe {
+            SelRerandParameters {
+                odd_parameters: CURVE_TREE_PARAMETERS_VESTA
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Vesta"),
+                even_parameters: CURVE_TREE_PARAMETERS_PALLAS
+                    .clone()
+                    .expect("Failed to create SingleLayerParameters for Pallas"),
+            }
+        }
+    }
 
     fn parameters() -> &'static SelRerandParameters<Self::P0, Self::P1> {
         get_account_curve_tree_parameters()
@@ -316,10 +436,10 @@ pub struct FullCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> {
-    /// Creates a new instance of `FullCurveTree` with the given height and generators length.
-    pub fn new_with_capacity(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
+    /// Creates a new instance of `FullCurveTree`.
+    pub fn new_with_capacity(height: NodeLevel) -> Result<Self, Error> {
         Ok(Self {
-            tree: CurveTreeWithBackend::new(height, gens_length)?,
+            tree: CurveTreeWithBackend::new(height)?,
         })
     }
 
@@ -428,10 +548,10 @@ pub struct VerifierCurveTree<const L: usize, const M: usize, C: CurveTreeConfig>
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> VerifierCurveTree<L, M, C> {
-    /// Creates a new instance of `VerifierCurveTree` with the given height and generators length.
-    pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, Error> {
+    /// Creates a new instance of `VerifierCurveTree`.
+    pub fn new(height: NodeLevel) -> Result<Self, Error> {
         Ok(Self {
-            tree: CurveTreeWithBackend::new(height, gens_length)?,
+            tree: CurveTreeWithBackend::new(height)?,
         })
     }
 
@@ -497,10 +617,10 @@ impl<
     E: From<crate::Error>,
 > ProverCurveTree<L, M, C, B, E>
 {
-    /// Creates a new instance of `ProverCurveTree` with the given height and generators length.
-    pub fn new(height: NodeLevel, gens_length: usize) -> Result<Self, E> {
+    /// Creates a new instance of `ProverCurveTree`.
+    pub fn new(height: NodeLevel) -> Result<Self, E> {
         Ok(Self {
-            tree: CurveTreeWithBackend::<L, M, C, B, E>::new(height, gens_length)?,
+            tree: CurveTreeWithBackend::<L, M, C, B, E>::new(height)?,
             leaf_to_index: BTreeMap::new(),
         })
     }

@@ -8,7 +8,6 @@ use polymesh_dart::curve_tree::{
 
 const L: usize = 16;
 const HEIGHT: NodeLevel = 4;
-const GENS_LENGTH: usize = 32;
 
 fn create_test_leaf(value: usize) -> CompressedLeafValue<AccountTreeConfig> {
     use ark_ec::{AffineRepr, CurveGroup};
@@ -25,9 +24,8 @@ fn setup_trees() -> (
     FullCurveTree<L, 1, AccountTreeConfig>,
     CompressedCurveTreeRoot<L, 1, AccountTreeConfig>,
 ) {
-    let mut storage_tree =
-        FullCurveTree::<L, 1, AccountTreeConfig>::new_with_capacity(HEIGHT, GENS_LENGTH)
-            .expect("Failed to create storage tree");
+    let mut storage_tree = FullCurveTree::<L, 1, AccountTreeConfig>::new_with_capacity(HEIGHT)
+        .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
     let mut lean_root = CompressedCurveTreeRoot::new(HEIGHT);

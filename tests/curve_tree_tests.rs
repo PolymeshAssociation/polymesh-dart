@@ -4,15 +4,14 @@ use ark_ec::AffineRepr;
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
-    AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeParameters,
-    CurveTreePath, FullCurveTree,
+    AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeConfig,
+    CurveTreeParameters, CurveTreePath, FullCurveTree,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasParameters, VestaA, VestaParameters};
 
 const L: usize = 16;
 const HEIGHT: NodeLevel = 4;
-const GENS_LENGTH: usize = 32;
 
 /// A Full Curve Tree that support both insertion and updates.
 pub struct CurveTreeOld<const L: usize> {
@@ -35,9 +34,9 @@ impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
 }
 
 impl<const L: usize> CurveTreeOld<L> {
-    /// Creates a new instance of `FullCurveTree` with the given height and generators length.
-    pub fn new_with_capacity(height: usize, gens_length: usize) -> Result<Self, Error> {
-        let params = SelRerandParameters::new(gens_length, gens_length)?;
+    /// Creates a new instance of `FullCurveTree`
+    pub fn new_with_capacity(height: usize) -> Result<Self, Error> {
+        let params = AssetTreeConfig::build_parameters();
         Ok(Self {
             tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)),
             leaves: vec![],
@@ -132,13 +131,12 @@ fn setup_trees() -> (
     FullCurveTree<L, 1, AssetTreeConfig>,
     SelRerandParameters<VestaParameters, PallasParameters>,
 ) {
-    let mut full_tree = CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize, GENS_LENGTH)
-        .expect("Failed to create full tree");
+    let mut full_tree =
+        CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize).expect("Failed to create full tree");
     assert!(full_tree.height() == HEIGHT as usize);
     let params = full_tree.params().clone();
-    let mut storage_tree =
-        FullCurveTree::<L, 1, AssetTreeConfig>::new_with_capacity(HEIGHT, GENS_LENGTH)
-            .expect("Failed to create storage tree");
+    let mut storage_tree = FullCurveTree::<L, 1, AssetTreeConfig>::new_with_capacity(HEIGHT)
+        .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
     // Insert a leaf into both trees to avoid empty tree edge cases

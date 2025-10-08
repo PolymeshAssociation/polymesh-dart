@@ -544,18 +544,16 @@ macro_rules! impl_curve_tree_with_backend {
         {
             pub $($async_fn)* fn new(
                 height: NodeLevel,
-                gens_length: usize,
             ) -> Result<Self, Error> {
-                let mut tree = Self::new_no_init(height, gens_length)$($await)*?;
+                let mut tree = Self::new_no_init(height)$($await)*?;
                 tree.init_root()$($await)*?;
                 Ok(tree)
             }
 
             pub $($async_fn)* fn new_no_init(
                 height: NodeLevel,
-                gens_length: usize,
             ) -> Result<Self, Error> {
-                let backend = B::new(height, gens_length)$($await)*?;
+                let backend = B::new(height)$($await)*?;
                 Ok(Self::new_with_backend(backend)$($await)*?)
             }
 
