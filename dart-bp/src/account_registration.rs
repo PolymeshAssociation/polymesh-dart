@@ -1465,12 +1465,12 @@ pub mod tests {
         fields::fp::{AllocatedFp, FpVar},
     };
     use ark_std::UniformRand;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
     use curve_tree_relations::curve_tree::SelRerandParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
-    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1542,10 +1542,7 @@ pub mod tests {
         // TODO:
     }
 
-
-    pub fn setup_comm_key(
-        label: &[u8],
-    ) -> impl AccountCommitmentKeyTrait<PallasA> {
+    pub fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
         [
             hash_to_pallas(label, b"sk-gen").into_affine(),
             hash_to_pallas(label, b"balance-gen").into_affine(),

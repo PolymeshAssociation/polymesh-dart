@@ -1,6 +1,6 @@
+use ark_ec::CurveGroup;
 use ark_pallas::Affine as PallasA;
 use ark_std::{UniformRand, format};
-use ark_ec::CurveGroup;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};

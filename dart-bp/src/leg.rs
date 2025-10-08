@@ -11,6 +11,7 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
+use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::format;
@@ -18,6 +19,7 @@ use ark_std::iter;
 use ark_std::ops::Neg;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::BulletproofGens;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, R1CSProof, Variable, VerificationTuple,
 };
@@ -41,8 +43,6 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use ark_pallas::PallasConfig;
-use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
 pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
@@ -86,11 +86,13 @@ impl<
 }
 
 impl<
-    G1: SWCurveConfig<ScalarField = <PallasConfig as CurveConfig>::BaseField, BaseField = <PallasConfig as CurveConfig>::ScalarField> + Clone + Copy
-> AssetCommitmentParams<
-    PallasConfig,
-    G1
-> {
+    G1: SWCurveConfig<
+            ScalarField = <PallasConfig as CurveConfig>::BaseField,
+            BaseField = <PallasConfig as CurveConfig>::ScalarField,
+        > + Clone
+        + Copy,
+> AssetCommitmentParams<PallasConfig, G1>
+{
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
     pub fn new(
         label: &[u8],
@@ -1669,10 +1671,10 @@ pub mod tests {
     use ark_ec::VariableBaseMSM;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use rand_core::CryptoRngCore;
     use std::time::Instant;
-    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1719,9 +1721,7 @@ pub mod tests {
         let label = b"asset-tree-params";
         let asset_tree_params =
             SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
-                label,
-                NUM_GENS,
-                NUM_GENS,
+                label, NUM_GENS, NUM_GENS,
             )
             .unwrap();
 
@@ -1734,12 +1734,11 @@ pub mod tests {
         let num_mediators = 3;
         let asset_id = 1;
 
-        let asset_comm_params =
-            AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
-                b"asset-comm-params",
-                num_auditors + num_mediators,
-                &asset_tree_params.even_parameters.bp_gens,
-            );
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors + num_mediators,
+            &asset_tree_params.even_parameters.bp_gens,
+        );
 
         // Account signing (affirmation) keys
         let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
@@ -2076,12 +2075,11 @@ pub mod tests {
 
         let batch_size = 5;
 
-        let asset_comm_params =
-            AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
-                b"asset-comm-params",
-                num_auditors + num_mediators,
-                &asset_tree_params.even_parameters.bp_gens,
-            );
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors + num_mediators,
+            &asset_tree_params.even_parameters.bp_gens,
+        );
 
         // Account signing (affirmation) keys
         let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
@@ -2299,12 +2297,11 @@ pub mod tests {
             let num_mediators = 3;
             let asset_id = 1;
 
-            let asset_comm_params =
-                AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
-                    b"asset-comm-params",
-                    num_auditors + num_mediators,
-                    &asset_tree_params.even_parameters.bp_gens,
-                );
+            let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+                b"asset-comm-params",
+                num_auditors + num_mediators,
+                &asset_tree_params.even_parameters.bp_gens,
+            );
 
             // Account signing (affirmation) keys
             let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);

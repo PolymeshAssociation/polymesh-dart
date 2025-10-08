@@ -4367,9 +4367,9 @@ pub mod tests {
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use std::time::Instant;
-    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -4432,8 +4432,10 @@ pub mod tests {
     ) {
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new_using_label(label, NUM_GENS, NUM_GENS)
-                .unwrap();
+            SelRerandParameters::<PallasParameters, VestaParameters>::new_using_label(
+                label, NUM_GENS, NUM_GENS,
+            )
+            .unwrap();
         let account_comm_key = setup_comm_key(label);
         let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
