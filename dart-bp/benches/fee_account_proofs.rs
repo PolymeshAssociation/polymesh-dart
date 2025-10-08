@@ -1,5 +1,7 @@
 use ark_pallas::Affine as PallasA;
-use ark_std::UniformRand;
+use ark_std::{UniformRand, format};
+use ark_ec::CurveGroup;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -15,9 +17,9 @@ type F0 = ark_pallas::Fr;
 type F1 = ark_vesta::Fr;
 
 /// Setup commitment key (duplicated from test module)
-fn setup_comm_key<R: CryptoRngCore>(rng: &mut R) -> [PallasA; NUM_GENERATORS] {
+fn setup_comm_key(label: &[u8]) -> [PallasA; NUM_GENERATORS] {
     let account_comm_key: [PallasA; NUM_GENERATORS] = (0..NUM_GENERATORS)
-        .map(|_| PallasA::rand(rng))
+        .map(|i| hash_to_pallas(label, format!("account-comm-{}", i).as_bytes()).into_affine())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
@@ -46,7 +48,7 @@ fn create_shared_setup<R: CryptoRngCore>(
     // Create public params (generators, etc)
     let account_tree_params =
         SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS).unwrap();
-    let account_comm_key = setup_comm_key(rng);
+    let account_comm_key = setup_comm_key(b"testing");
 
     (account_tree_params, account_comm_key)
 }

@@ -7,7 +7,6 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::{Zero, vec, vec::Vec};
-use blake2::Blake2b512;
 
 pub use curve_tree_relations::{
     curve_tree::{Root, RootNode, SelRerandParameters},
@@ -39,7 +38,7 @@ pub type AssetCommitmentParameters<C> =
 lazy_static::lazy_static! {
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
-        AssetCommitmentParameters::<AssetTreeConfig>::new::<Blake2b512>(
+        AssetCommitmentParameters::<AssetTreeConfig>::new(
             b"asset-comm-params",
             MAX_ASSET_KEYS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens,
@@ -87,7 +86,7 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
     unsafe {
         if ASSET_COMMITMENT_PARAMETERS.is_none() {
             let tree_parameters = get_asset_curve_tree_parameters();
-            let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new::<Blake2b512>(
+            let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
                 b"asset-comm-params",
                 MAX_ASSET_KEYS,
                 &tree_parameters.even_parameters.bp_gens,

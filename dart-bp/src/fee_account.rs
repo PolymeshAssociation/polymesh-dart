@@ -1428,7 +1428,7 @@ pub mod tests {
     fn fee_account_init() {
         let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
         let balance = 1000;
@@ -1447,7 +1447,7 @@ pub mod tests {
     fn fee_account_registration() {
         let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
         let balance = 1000;
@@ -1488,7 +1488,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 2000;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<_, NUM_GENS, L>(&mut rng);
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
 
@@ -1636,7 +1636,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 2000;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<_, NUM_GENS, L>(&mut rng);
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
 
@@ -1790,7 +1790,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<_, NUM_GENS, L>(&mut rng);
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
 
@@ -2027,7 +2027,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
             let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             let asset_id = 1;
 
@@ -2089,6 +2089,7 @@ pub mod tests {
                         &account_tree_params,
                         account_comm_key.clone(),
                         &mut rng,
+                        None,
                     )
                     .is_err()
             );
@@ -2103,7 +2104,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
             let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             let asset_id = 1;
 
@@ -2158,6 +2159,7 @@ pub mod tests {
                         &account_tree_params,
                         account_comm_key.clone(),
                         &mut rng,
+                        None,
                     )
                     .is_err()
             );

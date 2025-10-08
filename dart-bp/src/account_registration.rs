@@ -1448,7 +1448,6 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::account::NUM_GENERATORS;
     use crate::keys::{SigKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
@@ -1471,6 +1470,7 @@ pub mod tests {
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1542,16 +1542,20 @@ pub mod tests {
         // TODO:
     }
 
-    // TODO: Modify to create all generators by hashing public strings
-    pub fn setup_comm_key<R: CryptoRngCore, G: AffineRepr>(
-        rng: &mut R,
-    ) -> impl AccountCommitmentKeyTrait<G> + use<R, G> {
-        let account_comm_key: [G; NUM_GENERATORS] = (0..NUM_GENERATORS)
-            .map(|_| G::rand(rng))
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        account_comm_key
+
+    pub fn setup_comm_key(
+        label: &[u8],
+    ) -> impl AccountCommitmentKeyTrait<PallasA> {
+        [
+            hash_to_pallas(label, b"sk-gen").into_affine(),
+            hash_to_pallas(label, b"balance-gen").into_affine(),
+            hash_to_pallas(label, b"counter-gen").into_affine(),
+            hash_to_pallas(label, b"asset-id-gen").into_affine(),
+            hash_to_pallas(label, b"rho-gen").into_affine(),
+            hash_to_pallas(label, b"current-rho-gen").into_affine(),
+            hash_to_pallas(label, b"randomness-gen").into_affine(),
+            hash_to_pallas(label, b"id-gen").into_affine(),
+        ]
     }
 
     // pub fn new_account<R: CryptoRngCore, G: AffineRepr>(rng: &mut R, asset_id: AssetId, sk: SigKey<G>) -> (AccountState<G>, NullifierSkGenCounter, PoseidonConfig<G::ScalarField>) where G::ScalarField: Absorb {
@@ -1575,7 +1579,7 @@ pub mod tests {
     fn account_init() {
         let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
 
@@ -1630,7 +1634,7 @@ pub mod tests {
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
                 .unwrap();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
 
@@ -1732,7 +1736,7 @@ pub mod tests {
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
                 .unwrap();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
 
@@ -1858,7 +1862,7 @@ pub mod tests {
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
                 .unwrap();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
 
@@ -2089,7 +2093,7 @@ pub mod tests {
             SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
                 .unwrap();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let poseidon_params = test_params_for_poseidon2();
         let nullifier_gen_counter = 1;
@@ -2420,7 +2424,7 @@ pub mod tests {
                 SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
                     .unwrap();
 
-            let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+            let account_comm_key = setup_comm_key(b"testing");
 
             let asset_id = 1;
 
@@ -2469,6 +2473,7 @@ pub mod tests {
                         &account_tree_params.even_parameters.pc_gens,
                         &account_tree_params.even_parameters.bp_gens,
                         &poseidon_params,
+                        None,
                         None,
                     )
                     .is_err()

@@ -7,11 +7,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, Encode, MaxEncodedLen};
-use dock_crypto_utils::concat_slices;
-use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use scale_info::TypeInfo;
 
-use ark_ec::{AffineRepr, CurveConfig};
+use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::{
     PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
@@ -21,6 +19,7 @@ use ark_std::vec::Vec;
 
 use blake2::Blake2b512;
 use bounded_collections::{BoundedBTreeSet, BoundedVec, ConstU32, Get};
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 
@@ -209,34 +208,34 @@ pub struct AccountCommitmentKey {
 impl AccountCommitmentKey {
     /// Create a new account commitment key
     pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA) -> Self {
-        let balance_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
-            label,
+        let balance_gen = hash_to_pallas(
+            label, 
             b" : balance_gen"
-        ]);
-        let counter_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let counter_gen = hash_to_pallas(
             label,
             b" : counter_gen"
-        ]);
-        let asset_id_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let asset_id_gen = hash_to_pallas(
             label,
             b" : asset_id_gen"
-        ]);
-        let rho_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let rho_gen = hash_to_pallas(
             label,
             b" : rho_gen"
-        ]);
-        let current_rho_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let current_rho_gen = hash_to_pallas(
             label,
             b" : current_rho_gen"
-        ]);
-        let randomness_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let randomness_gen = hash_to_pallas(
             label,
             b" : randomness_gen"
-        ]);
-        let identity_gen = affine_group_elem_from_try_and_incr::<PallasA, D>(&concat_slices![
+        ).into_affine();
+        let identity_gen = hash_to_pallas(
             label,
             b" : identity_gen"
-        ]);
+        ).into_affine();
 
         Self {
             sk_gen,
@@ -301,24 +300,24 @@ impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
     pub fn new(label: &[u8]) -> Self {
         let sig_key_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+            hash_to_pallas(
                 label,
                 b" : sig_key_gen"
-            ]);
+            ).into_affine();
         let enc_key_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+            hash_to_pallas(
                 label,
                 b" : enc_key_gen"
-            ]);
+            ).into_affine();
 
         let account_comm_key =
             AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen);
 
         let leg_asset_value_gen =
-            affine_group_elem_from_try_and_incr::<PallasA, Blake2b512>(&concat_slices![
+            hash_to_pallas(
                 label,
                 b" : leg_asset_value_gen"
-            ]);
+            ).into_affine();
 
         Self {
             sig_key_gen,

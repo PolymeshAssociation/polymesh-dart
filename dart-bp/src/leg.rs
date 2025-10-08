@@ -8,7 +8,7 @@ use crate::util::{
 use crate::{Error, add_to_transcript, error::Result};
 use crate::{LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
-use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -41,6 +41,8 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use ark_pallas::PallasConfig;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
 pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
@@ -71,12 +73,31 @@ impl<
 > AssetCommitmentParams<G0, G1>
 {
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
-    pub fn new<D: Digest>(
+    /// Use try-and-increment
+    pub fn new_deprecated<D: Digest>(
         label: &[u8],
         num_keys: usize,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = affine_group_elem_from_try_and_incr::<_, D>(&concat_slices![label, b" : j_0"]);
+        let comm_key = bp_gens_for_vec_commitment(num_keys + 1, leaf_layer_bp_gens).collect();
+        Self { j_0, comm_key }
+    }
+}
+
+impl<
+    G1: SWCurveConfig<ScalarField = <PallasConfig as CurveConfig>::BaseField, BaseField = <PallasConfig as CurveConfig>::ScalarField> + Clone + Copy
+> AssetCommitmentParams<
+    PallasConfig,
+    G1
+> {
+    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
+    pub fn new(
+        label: &[u8],
+        num_keys: usize,
+        leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
+    ) -> Self {
+        let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
         let comm_key = bp_gens_for_vec_commitment(num_keys + 1, leaf_layer_bp_gens).collect();
         Self { j_0, comm_key }
     }
@@ -1651,6 +1672,7 @@ pub mod tests {
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use rand_core::CryptoRngCore;
     use std::time::Instant;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1694,25 +1716,26 @@ pub mod tests {
         const L: usize = 64;
 
         // Create public params (generators, etc)
+        let label = b"asset-tree-params";
         let asset_tree_params =
             SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
-                b"asset-tree-params",
+                label,
                 NUM_GENS,
                 NUM_GENS,
             )
             .unwrap();
 
-        let sig_key_gen = PallasA::rand(&mut rng);
-        let enc_key_gen = PallasA::rand(&mut rng);
+        let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
         // Called h in report
-        let enc_gen = PallasA::rand(&mut rng);
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
         let num_auditors = 2;
         let num_mediators = 3;
         let asset_id = 1;
 
         let asset_comm_params =
-            AssetCommitmentParams::<PallasParameters, VestaParameters>::new::<Blake2b512>(
+            AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
                 num_auditors + num_mediators,
                 &asset_tree_params.even_parameters.bp_gens,
@@ -1895,7 +1918,7 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         // TODO: Generate by hashing public string
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
 
@@ -2054,7 +2077,7 @@ pub mod tests {
         let batch_size = 5;
 
         let asset_comm_params =
-            AssetCommitmentParams::<PallasParameters, VestaParameters>::new::<Blake2b512>(
+            AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
                 num_auditors + num_mediators,
                 &asset_tree_params.even_parameters.bp_gens,
@@ -2277,7 +2300,7 @@ pub mod tests {
             let asset_id = 1;
 
             let asset_comm_params =
-                AssetCommitmentParams::<PallasParameters, VestaParameters>::new::<Blake2b512>(
+                AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                     b"asset-comm-params",
                     num_auditors + num_mediators,
                     &asset_tree_params.even_parameters.bp_gens,
@@ -2358,6 +2381,7 @@ pub mod tests {
                         &asset_comm_params,
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -2419,6 +2443,7 @@ pub mod tests {
                         &asset_comm_params,
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -2462,6 +2487,7 @@ pub mod tests {
                         &asset_comm_params,
                         enc_key_gen,
                         enc_gen,
+                        None
                     )
                     .is_err()
             );

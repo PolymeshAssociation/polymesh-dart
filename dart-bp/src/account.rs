@@ -4369,6 +4369,7 @@ pub mod tests {
     use blake2::Blake2b512;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
     use std::time::Instant;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -4421,21 +4422,21 @@ pub mod tests {
         )
     }
 
-    pub fn setup_gens<R: CryptoRngCore, const NUM_GENS: usize, const L: usize>(
-        rng: &mut R,
+    pub fn setup_gens<const NUM_GENS: usize, const L: usize>(
+        label: &[u8],
     ) -> (
         SelRerandParameters<PallasParameters, VestaParameters>,
-        impl AccountCommitmentKeyTrait<PallasA> + use<R, NUM_GENS, L>,
+        impl AccountCommitmentKeyTrait<PallasA>,
         PallasA,
         PallasA,
     ) {
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+            SelRerandParameters::<PallasParameters, VestaParameters>::new_using_label(label, NUM_GENS, NUM_GENS)
                 .unwrap();
-        let account_comm_key = setup_comm_key::<R, PallasA>(rng);
-        let enc_key_gen = PallasA::rand(rng);
-        let enc_gen = PallasA::rand(rng);
+        let account_comm_key = setup_comm_key(label);
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
         (account_tree_params, account_comm_key, enc_key_gen, enc_gen)
     }
 
@@ -4446,7 +4447,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<_, NUM_GENS, L>(&mut rng);
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
 
@@ -4572,7 +4573,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -4704,7 +4705,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -4825,7 +4826,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -4954,7 +4955,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -5084,7 +5085,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -5209,7 +5210,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -5339,7 +5340,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         // All parties generate their keys
         let (
@@ -5461,7 +5462,7 @@ pub mod tests {
     fn pob_with_auditor_as_verifier() {
         let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let asset_id = 1;
 
@@ -5503,7 +5504,7 @@ pub mod tests {
     fn pob_with_anyone() {
         let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key::<_, PallasA>(&mut rng);
+        let account_comm_key = setup_comm_key(b"testing");
 
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
@@ -5620,7 +5621,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 1024;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
         let amount = 100;
@@ -5831,7 +5832,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 1024;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_id = 1;
         let amount = 100;
@@ -6041,7 +6042,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 1024;
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<_, NUM_GENS, L>(&mut rng);
+            setup_gens::<NUM_GENS, L>(b"testing");
 
         let asset_tree_params = SelRerandParameters {
             even_parameters: account_tree_params.odd_parameters.clone(),
@@ -6055,7 +6056,7 @@ pub mod tests {
         let amount = 100;
 
         // Create asset commitment parameters
-        let asset_comm_params = AssetCommitmentParams::new::<Blake2b512>(
+        let asset_comm_params = AssetCommitmentParams::new(
             b"asset-comm-params-for-single-settlement",
             2, // 1 auditor + 1 mediator
             &asset_tree_params.even_parameters.bp_gens,
@@ -6322,7 +6323,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 512;
             let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             // All parties generate their keys
             let (
@@ -6402,6 +6403,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6443,6 +6445,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6457,7 +6460,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 512;
             let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             // All parties generate their keys
             let (
@@ -6536,6 +6539,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6550,7 +6554,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 512;
             let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             // All parties generate their keys
             let (
@@ -6631,6 +6635,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6672,6 +6677,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6686,7 +6692,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 512;
             let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             // All parties generate their keys
             let (
@@ -6765,6 +6771,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6805,6 +6812,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6818,7 +6826,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 512;
             let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-                setup_gens::<_, NUM_GENS, L>(&mut rng);
+                setup_gens::<NUM_GENS, L>(b"testing");
 
             // All parties generate their keys
             let (
@@ -6899,6 +6907,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
@@ -6940,6 +6949,7 @@ pub mod tests {
                         account_comm_key.clone(),
                         enc_key_gen,
                         enc_gen,
+                        None,
                     )
                     .is_err()
             );
