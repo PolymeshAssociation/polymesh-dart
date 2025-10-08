@@ -13,10 +13,9 @@ For detailed information, please refer to the [P-DART paper](https://assets.poly
 Key features:
 
 - Zero-knowledge proofs for asset transfers
-- Confidential asset states with curve tree storage
+- Confidential asset accumulator with curve tree storage
 - Regulatory compliance mechanisms with auditors and mediators
 - Fee payment systems for confidential transactions
-- Account registration and encryption systems
 
 ## Architecture
 
