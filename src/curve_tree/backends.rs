@@ -298,7 +298,6 @@ pub struct CurveTreeMemoryBackend<const L: usize, const M: usize, C: CurveTreeCo
     block_number: BlockNumber,
     roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
     last_root: BlockNumber,
-    parameters: SelRerandParameters<C::P0, C::P1>,
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> core::fmt::Debug
@@ -327,7 +326,6 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeMemoryBackend<
             block_number: 0,
             roots: BTreeMap::new(),
             last_root: 0,
-            parameters: C::build_parameters(),
         })
     }
 }
@@ -343,7 +341,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
     }
 
     fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
-        &self.parameters
+        C::parameters()
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
@@ -465,7 +463,7 @@ where
     }
 
     async fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
-        &self.parameters
+        C::parameters()
     }
 
     async fn get_block_number(&self) -> Result<BlockNumber, Self::Error> {
