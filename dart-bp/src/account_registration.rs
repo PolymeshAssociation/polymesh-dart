@@ -16,6 +16,7 @@ use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
+    add_verification_tuple_to_rmc, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve::curve_check;
@@ -25,6 +26,7 @@ use curve_tree_relations::rerandomize::scalar_mult;
 use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::ff::inner_product;
 use dock_crypto_utils::msm::WindowTable;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
@@ -466,6 +468,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
         self.verify_with_given_transcript(
@@ -483,6 +486,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             poseidon_config,
             T,
             verifier_transcript,
+            rmc,
         )
     }
 
@@ -503,6 +507,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         verifier_transcript: MerlinTranscript,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let tuple = self.verify_except_bp_with_given_transcript(
             id,
@@ -519,14 +524,17 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             T,
             rng,
             verifier_transcript,
+            rmc.as_deref_mut(),
         )?;
 
-        Verifier::<MerlinTranscript, G>::verify_given_verification_tuple(
-            tuple,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
-        )
-        .map_err(|e| e.into())
+        match rmc.as_mut() {
+            Some(rmc) => {
+                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
+                    .map_err(|e| e.into())
+            }
+            _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
+                .map_err(|e| e.into()),
+        }
     }
 
     pub fn verify_except_bp<R: CryptoRngCore>(
@@ -544,6 +552,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
         let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
         self.verify_except_bp_with_given_transcript(
@@ -561,6 +570,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             T,
             rng,
             verifier_transcript,
+            rmc,
         )
     }
 
@@ -580,6 +590,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         T: Option<(G, G, G)>,
         rng: &mut R,
         mut verifier_transcript: MerlinTranscript,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
         let _ = Self::CHECK_CHUNK_BITS;
         if T.is_none() ^ self.encrypted_randomness.is_none() {
@@ -707,92 +718,186 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         // Perform all the verifications except bulletproof verification
-        if !self.resp_acc_comm.verify(
-            &reduced_acc_comm,
-            &account_comm_key.current_rho_gen(),
-            &account_comm_key.randomness_gen(),
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Account commitment verification failed".to_string(),
-            ));
-        }
+        match rmc.as_mut() {
+            Some(rmc_checker) => {
+                // Use RandomizedMultChecker for batched verification
+                self.resp_acc_comm.verify_using_randomized_mult_checker(
+                    reduced_acc_comm,
+                    account_comm_key.current_rho_gen(),
+                    account_comm_key.randomness_gen(),
+                    &verifier_challenge,
+                    rmc_checker,
+                );
 
-        if !self.resp_initial_nullifier.verify(
-            &initial_nullifier,
-            &account_comm_key.rho_gen(),
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Initial nullifier verification failed".to_string(),
-            ));
+                self.resp_initial_nullifier
+                    .verify_using_randomized_mult_checker(
+                        initial_nullifier,
+                        account_comm_key.rho_gen(),
+                        &verifier_challenge,
+                        rmc_checker,
+                    );
+            }
+            None => {
+                // Use individual verification
+                if !self.resp_acc_comm.verify(
+                    &reduced_acc_comm,
+                    &account_comm_key.current_rho_gen(),
+                    &account_comm_key.randomness_gen(),
+                    &verifier_challenge,
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Account commitment verification failed".to_string(),
+                    ));
+                }
+
+                if !self.resp_initial_nullifier.verify(
+                    &initial_nullifier,
+                    &account_comm_key.rho_gen(),
+                    &verifier_challenge,
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Initial nullifier verification failed".to_string(),
+                    ));
+                }
+            }
         }
 
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(1, self.resp_pk.response);
         missing_resps.insert(2, self.resp_initial_nullifier.response);
         missing_resps.insert(3, self.resp_acc_comm.response1);
-        self.resp_comm_rho_bp.is_valid(
-            &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
-            &self.comm_rho_bp,
-            &self.t_comm_rho_bp,
-            &verifier_challenge,
-            missing_resps,
-        )?;
 
-        if !self
-            .resp_pk
-            .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "Public key verification failed".to_string(),
-            ));
+        match rmc.as_mut() {
+            Some(rmc_checker) => {
+                self.resp_comm_rho_bp.verify_using_randomized_mult_checker(
+                    Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens).to_vec(),
+                    self.comm_rho_bp,
+                    self.t_comm_rho_bp,
+                    &verifier_challenge,
+                    missing_resps,
+                    rmc_checker,
+                )?;
+
+                // Use RandomizedMultChecker for public key verification
+                self.resp_pk.verify_using_randomized_mult_checker(
+                    *pk,
+                    account_comm_key.sk_gen(),
+                    &verifier_challenge,
+                    rmc_checker,
+                );
+            }
+            None => {
+                self.resp_comm_rho_bp.is_valid(
+                    &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
+                    &self.comm_rho_bp,
+                    &self.t_comm_rho_bp,
+                    &verifier_challenge,
+                    missing_resps,
+                )?;
+                if !self
+                    .resp_pk
+                    .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
+                {
+                    return Err(Error::ProofVerificationError(
+                        "Public key verification failed".to_string(),
+                    ));
+                }
+            }
         }
 
         if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             // unwrap is fine as its already checked in the beginning
             let enc_rand = self.encrypted_randomness.as_ref().unwrap();
             for i in 0..NUM_CHUNKS {
-                if !enc_rand.resp_eph_pk[i].verify(
-                    &enc_rand.ciphertexts[i].eph_pk,
-                    enc_key_gen,
-                    &verifier_challenge,
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Encrypted randomness verification failed".to_string(),
-                    ));
-                }
-                if !enc_rand.resp_encrypted[i].verify(
-                    &enc_rand.ciphertexts[i].encrypted,
-                    pk_T,
-                    enc_gen,
-                    &verifier_challenge,
-                    &enc_rand.resp_eph_pk[i].response,
-                    &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Encrypted randomness verification failed".to_string(),
-                    ));
+                match rmc.as_mut() {
+                    Some(rmc_checker) => {
+                        // Use RandomizedMultChecker for encrypted randomness verification
+                        enc_rand.resp_eph_pk[i].verify_using_randomized_mult_checker(
+                            enc_rand.ciphertexts[i].eph_pk,
+                            *enc_key_gen,
+                            &verifier_challenge,
+                            rmc_checker,
+                        );
+                        enc_rand.resp_encrypted[i].verify_using_randomized_mult_checker(
+                            enc_rand.ciphertexts[i].encrypted,
+                            *pk_T,
+                            *enc_gen,
+                            &verifier_challenge,
+                            &enc_rand.resp_eph_pk[i].response,
+                            &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
+                            rmc_checker,
+                        );
+                    }
+                    None => {
+                        if !enc_rand.resp_eph_pk[i].verify(
+                            &enc_rand.ciphertexts[i].eph_pk,
+                            enc_key_gen,
+                            &verifier_challenge,
+                        ) {
+                            return Err(Error::ProofVerificationError(
+                                "Encrypted randomness verification failed".to_string(),
+                            ));
+                        }
+                        if !enc_rand.resp_encrypted[i].verify(
+                            &enc_rand.ciphertexts[i].encrypted,
+                            pk_T,
+                            enc_gen,
+                            &verifier_challenge,
+                            &enc_rand.resp_eph_pk[i].response,
+                            &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
+                        ) {
+                            return Err(Error::ProofVerificationError(
+                                "Encrypted randomness verification failed".to_string(),
+                            ));
+                        }
+                    }
                 }
             }
 
-            enc_rand.resp_comm_s_chunks_bp.is_valid(
-                &Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
-                &enc_rand.comm_s_chunks_bp,
-                &enc_rand.t_comm_s_chunks_bp,
-                &verifier_challenge,
-            )?;
+            match rmc {
+                Some(rmc_checker) => {
+                    enc_rand
+                        .resp_comm_s_chunks_bp
+                        .verify_using_randomized_mult_checker(
+                            Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens)
+                                .to_vec(),
+                            enc_rand.comm_s_chunks_bp,
+                            enc_rand.t_comm_s_chunks_bp,
+                            &verifier_challenge,
+                            rmc_checker,
+                        )?;
+                    // Use RandomizedMultChecker for combined randomness verification
+                    enc_rand
+                        .resp_combined_s
+                        .verify_using_randomized_mult_checker(
+                            combined_s_commitment.unwrap(),
+                            *pk_T,
+                            *enc_gen,
+                            &verifier_challenge,
+                            &self.resp_acc_comm.response2,
+                            rmc_checker,
+                        );
+                }
+                None => {
+                    enc_rand.resp_comm_s_chunks_bp.is_valid(
+                        &Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
+                        &enc_rand.comm_s_chunks_bp,
+                        &enc_rand.t_comm_s_chunks_bp,
+                        &verifier_challenge,
+                    )?;
 
-            if !enc_rand.resp_combined_s.verify(
-                &combined_s_commitment.unwrap(),
-                pk_T,
-                enc_gen,
-                &verifier_challenge,
-                &self.resp_acc_comm.response2,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    "Combined randomness verification failed".to_string(),
-                ));
+                    if !enc_rand.resp_combined_s.verify(
+                        &combined_s_commitment.unwrap(),
+                        pk_T,
+                        enc_gen,
+                        &verifier_challenge,
+                        &self.resp_acc_comm.response2,
+                    ) {
+                        return Err(Error::ProofVerificationError(
+                            "Combined randomness verification failed".to_string(),
+                        ));
+                    }
+                }
             }
         }
 
@@ -1361,7 +1466,7 @@ pub mod tests {
         fields::fp::{AllocatedFp, FpVar},
     };
     use ark_std::UniformRand;
-    use bulletproofs::r1cs::batch_verify;
+    use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
     use curve_tree_relations::curve_tree::SelRerandParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
@@ -1480,7 +1585,7 @@ pub mod tests {
         // User hashes it id onto the field
         let id = Fr::rand(&mut rng);
 
-        let (account, c, poseidon_config) = new_account(&mut rng, asset_id, sk_i, id);
+        let (mut account, c, poseidon_config) = new_account(&mut rng, asset_id, sk_i, id);
         assert_eq!(account.id, id);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
@@ -1492,6 +1597,25 @@ pub mod tests {
         assert_eq!(account.current_rho, account.rho.square());
 
         account.commit(account_comm_key).unwrap();
+
+        let initial_rho = account.rho;
+        let initial_randomness = account.randomness;
+
+        // Test current_rho and randomness change correctly
+        // After i iterations: current_rho = rho^{2+i} and randomness = initial_randomness^{2^i}
+        let n = 10;
+        for i in 1..=n {
+            account.refresh_randomness_for_state_change();
+
+            // After i iterations: current_rho = rho^{2+i}
+            let expected_current_rho = initial_rho.pow([2 + i as u64]);
+
+            // After i iterations: randomness = initial_randomness^{2^i}
+            let expected_randomness = initial_randomness.pow([(1 << i) as u64]);
+
+            assert_eq!(account.current_rho, expected_current_rho);
+            assert_eq!(account.randomness, expected_randomness);
+        }
     }
 
     #[test]
@@ -1538,7 +1662,31 @@ pub mod tests {
 
         let prover_time = clock.elapsed();
 
+        // Verify without RandomizedMultChecker
         let clock = Instant::now();
+        reg_proof
+            .verify(
+                &mut rng,
+                id,
+                &pk_i.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nullifier,
+                nonce,
+                account_comm_key.clone(),
+                &account_tree_params.even_parameters.pc_gens,
+                &account_tree_params.even_parameters.bp_gens,
+                &poseidon_params,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time_regular = clock.elapsed();
+
+        let clock = Instant::now();
+        let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
         reg_proof
             .verify(
                 &mut rng,
@@ -1554,17 +1702,18 @@ pub mod tests {
                 &account_tree_params.even_parameters.bp_gens,
                 &poseidon_params,
                 None,
+                Some(&mut rmc),
             )
             .unwrap();
+        assert!(rmc.verify());
+        let verifier_time_rmc = clock.elapsed();
 
-        let verifier_time = clock.elapsed();
-
-        log::info!("For reg. txn");
-        log::info!("total proof size = {}", reg_proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!("For reg. txn");
+        println!("total proof size = {}", reg_proof.compressed_size());
+        println!("total prover time = {:?}", prover_time);
+        println!(
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular, verifier_time_rmc
         );
     }
 
@@ -1621,6 +1770,31 @@ pub mod tests {
 
         let prover_time = clock.elapsed();
 
+        // Verify without RandomizedMultChecker
+        let clock = Instant::now();
+        reg_proof
+            .verify(
+                &mut rng,
+                id,
+                &pk.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nullifier,
+                nonce,
+                account_comm_key.clone(),
+                &account_tree_params.even_parameters.pc_gens,
+                &account_tree_params.even_parameters.bp_gens,
+                &poseidon_params,
+                Some((pk_T.0, enc_key_gen, enc_gen)),
+                None,
+            )
+            .unwrap();
+
+        let verifier_time_regular = clock.elapsed();
+
+        // Verify with RandomizedMultChecker
+        let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
         let clock = Instant::now();
         reg_proof
             .verify(
@@ -1637,10 +1811,11 @@ pub mod tests {
                 &account_tree_params.even_parameters.bp_gens,
                 &poseidon_params,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
+                Some(&mut rmc),
             )
             .unwrap();
-
-        let verifier_time = clock.elapsed();
+        assert!(rmc.verify());
+        let verifier_time_rmc = clock.elapsed();
 
         println!("For reg. txn with {NUM_CHUNKS} chunks each of {CHUNK_BITS} bits");
         println!("total proof size = {}", reg_proof.compressed_size());
@@ -1652,9 +1827,10 @@ pub mod tests {
                 .unwrap()
                 .compressed_size()
         );
+        println!("total prover time = {:?}", prover_time);
         println!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular, verifier_time_rmc
         );
 
         // This will take a long time to decrypt
@@ -1998,6 +2174,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.bp_gens,
                     &poseidon_params,
                     None,
+                    None,
                 )
                 .unwrap();
         }
@@ -2025,6 +2202,7 @@ pub mod tests {
                     &&poseidon_params,
                     None,
                     &mut rng,
+                    None,
                 )
                 .unwrap();
 
@@ -2088,6 +2266,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.bp_gens,
                     &poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
+                    None,
                 )
                 .unwrap();
         }
@@ -2115,6 +2294,7 @@ pub mod tests {
                     &&poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
                     &mut rng,
+                    None,
                 )
                 .unwrap();
 
@@ -2133,6 +2313,94 @@ pub mod tests {
         println!(
             "For {batch_size} proofs with pk_T, verifier time = {:?}, batch verifier time {:?}",
             verifier_time_with_pk_T, batch_verifier_time_with_pk_T
+        );
+
+        // Test batch verification with RandomizedMultChecker for proofs without pk_T
+        let clock = Instant::now();
+
+        let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+        let mut tuples = vec![];
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            tuples.push(
+                proofs_without_pk_T[i]
+                    .verify_except_bp(
+                        ids[i],
+                        &pks[i],
+                        asset_ids[i],
+                        &account_comms[i],
+                        nullifier_gen_counter,
+                        nullifiers_without_pk_T[i],
+                        &nonces[i],
+                        account_comm_key.clone(),
+                        &account_tree_params.even_parameters.pc_gens,
+                        &account_tree_params.even_parameters.bp_gens,
+                        &poseidon_params,
+                        None,
+                        &mut rng,
+                        Some(&mut rmc),
+                    )
+                    .unwrap(),
+            );
+        }
+
+        add_verification_tuples_to_rmc(
+            tuples,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+            &mut rmc,
+        )
+        .unwrap();
+        assert!(rmc.verify());
+        let rmc_verifier_time = clock.elapsed();
+
+        // Test batch verification with RandomizedMultChecker for proofs with pk_T
+        let clock = Instant::now();
+
+        let mut rmc_with_pk_T = RandomizedMultChecker::new(Fr::rand(&mut rng));
+        let mut tuples = vec![];
+
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            tuples.push(
+                proofs_with_pk_T[i]
+                    .verify_except_bp(
+                        ids[i],
+                        &pks[i],
+                        asset_ids[i],
+                        &account_comms[i],
+                        nullifier_gen_counter,
+                        nullifiers_with_pk_T[i],
+                        &nonces[i],
+                        account_comm_key.clone(),
+                        &account_tree_params.even_parameters.pc_gens,
+                        &account_tree_params.even_parameters.bp_gens,
+                        &poseidon_params,
+                        Some((pk_T.0, enc_key_gen, enc_gen)),
+                        &mut rng,
+                        Some(&mut rmc_with_pk_T),
+                    )
+                    .unwrap(),
+            );
+        }
+
+        add_verification_tuples_to_rmc(
+            tuples,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+            &mut rmc_with_pk_T,
+        )
+        .unwrap();
+        assert!(rmc_with_pk_T.verify());
+        let rmc_verifier_time_with_pk_T = clock.elapsed();
+
+        println!(
+            "For {batch_size} proofs without pk_T, RandomizedMultChecker verifier time = {:?}",
+            rmc_verifier_time
+        );
+        println!(
+            "For {batch_size} proofs with pk_T, RandomizedMultChecker verifier time = {:?}",
+            rmc_verifier_time_with_pk_T
         );
     }
 

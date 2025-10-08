@@ -6,7 +6,7 @@ use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{
-    bp_gens_for_vec_commitment,
+    add_verification_tuples_to_rmc, bp_gens_for_vec_commitment,
     enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
     enforce_constraints_for_randomness_relations,
     generate_schnorr_responses_for_common_state_change,
@@ -40,6 +40,7 @@ use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple,
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{
     AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE, NullifierSkGenCounter, PendingTxnCounter,
@@ -1460,7 +1461,16 @@ impl<
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
         let (even_tuple, odd_tuple) = self.verify_except_bp(
             common_state_change_proof,
             balance_change_proof,
@@ -1473,9 +1483,19 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -1492,6 +1512,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         let bp_gens = &account_tree_params.even_parameters.bp_gens;
@@ -1522,6 +1543,7 @@ impl<
             bp_gens,
             enc_key_gen,
             enc_gen,
+            rmc.as_deref_mut(),
         )?;
 
         if let Some(balance_change_proof) = balance_change_proof {
@@ -1538,43 +1560,8 @@ impl<
                 bp_gens,
                 enc_key_gen,
                 enc_gen,
+                rmc.as_deref_mut(),
             )?;
-
-            // // Balance in leaf (old account) is same as in the old balance commitment
-            // if common_state_change_proof.resp_leaf.0[1]
-            //     != balance_change_proof.resp_comm_bp_bal.0[2]
-            // {
-            //     return Err(Error::ProofVerificationError(
-            //         "Balance in leaf does not match old balance commitment".to_string(),
-            //     ));
-            // }
-            //
-            // // Balance in new account commitment is same as in the new balance commitment
-            // if common_state_change_proof.resp_acc_new.0[1]
-            //     != balance_change_proof.resp_comm_bp_bal.0[3]
-            // {
-            //     return Err(Error::ProofVerificationError(
-            //         "Balance in new account does not match new balance commitment".to_string(),
-            //     ));
-            // }
-            //
-            // // Amount in leg is same as amount in commitment
-            // if balance_change_proof.resp_leg_amount.response2
-            //     != balance_change_proof.resp_comm_bp_bal.0[1]
-            // {
-            //     return Err(Error::ProofVerificationError(
-            //         "Amount in leg does not match amount commitment".to_string(),
-            //     ));
-            // }
-        } else {
-            // // Balance in leaf (old account) is same as in the new account commitment
-            // if common_state_change_proof.resp_leaf.0[1]
-            //     != common_state_change_proof.resp_acc_new.0[1]
-            // {
-            //     return Err(Error::ProofVerificationError(
-            //         "Balance in leaf does not match the new account commitment".to_string(),
-            //     ));
-            // }
         }
 
         get_verification_tuples_with_rng(
@@ -1752,6 +1739,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -1768,6 +1759,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -1784,6 +1776,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -1800,6 +1793,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -1817,6 +1811,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
@@ -1862,6 +1857,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 
@@ -1879,7 +1875,15 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -1893,9 +1897,19 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 }
 
@@ -2031,6 +2045,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2047,6 +2065,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2063,6 +2082,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2079,6 +2099,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2096,7 +2117,16 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -2110,9 +2140,19 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
@@ -2129,6 +2169,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init_with_given_transcripts(
             &self.common_proof,
@@ -2165,6 +2206,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 }
@@ -2334,6 +2376,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2350,6 +2396,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2366,6 +2413,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2382,6 +2430,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2399,7 +2448,15 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -2413,9 +2470,19 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
@@ -2432,6 +2499,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
@@ -2477,6 +2545,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 }
@@ -2614,6 +2683,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2630,6 +2703,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2646,6 +2720,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2662,6 +2737,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2679,7 +2755,16 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -2693,9 +2778,19 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
@@ -2712,6 +2807,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init_with_given_transcripts(
             &self.common_proof,
@@ -2748,6 +2844,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 }
@@ -2917,6 +3014,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2933,6 +3034,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2949,6 +3051,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -2965,6 +3068,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -2982,6 +3086,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
@@ -3027,6 +3132,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 
@@ -3044,7 +3150,16 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -3058,9 +3173,19 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 }
 
@@ -3197,6 +3322,10 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -3213,6 +3342,7 @@ impl<
             enc_gen,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -3229,6 +3359,7 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -3245,6 +3376,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -3262,6 +3394,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init_with_given_transcripts(
             &self.common_proof,
@@ -3298,6 +3431,7 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
         )
     }
 
@@ -3315,7 +3449,15 @@ impl<
         enc_gen: Affine<G0>,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             leg_enc,
             root,
@@ -3329,11 +3471,23 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 }
+
+// TODO: PoB can also benefit from RandomizedMultChecker but not doing it for now
 
 /// This is the proof for doing proof of balance with an auditor. This reveals the ID for proof efficiency as the public key is already revealed.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -4209,7 +4363,7 @@ pub mod tests {
     use crate::keys::keygen_sig;
     use crate::leg::tests::setup_keys;
     use crate::leg::{AssetCommitmentParams, AssetData, Leg, SettlementTxnProof};
-    use crate::util::batch_verify_bp;
+    use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -4220,7 +4374,8 @@ pub mod tests {
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
 
-    type Fr = ark_pallas::Fr;
+    type PallasFr = ark_pallas::Fr;
+    type VestaFr = ark_vesta::Fr;
 
     fn setup_leg<R: CryptoRngCore>(
         rng: &mut R,
@@ -4236,7 +4391,7 @@ pub mod tests {
     ) -> (
         Leg<PallasA>,
         LegEncryption<PallasA>,
-        LegEncryptionRandomness<Fr>,
+        LegEncryptionRandomness<PallasFr>,
     ) {
         let leg = Leg::new(pk_s, pk_r, vec![(true, pk_a_e)], amount, asset_id).unwrap();
         let (leg_enc, leg_enc_rand) = leg
@@ -4298,7 +4453,7 @@ pub mod tests {
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (account, _, _) = new_account(&mut rng, asset_id, sk_i, id.clone());
 
         let account_tree = get_tree_with_account_comm::<L>(
@@ -4443,7 +4598,7 @@ pub mod tests {
         );
 
         // Sender account
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
@@ -4493,6 +4648,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -4502,16 +4680,17 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -4551,7 +4730,7 @@ pub mod tests {
         );
 
         // Sender account
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
@@ -4620,6 +4799,7 @@ pub mod tests {
                 enc_gen,
                 even_transcript,
                 odd_transcript,
+                None,
             )
             .unwrap();
 
@@ -4671,7 +4851,7 @@ pub mod tests {
         );
 
         // Receiver account
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
@@ -4719,6 +4899,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -4728,16 +4931,17 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -4776,7 +4980,7 @@ pub mod tests {
         );
 
         // Receiver account
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
@@ -4825,6 +5029,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -4834,16 +5061,17 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -4882,7 +5110,7 @@ pub mod tests {
         );
 
         // Sender account with non-zero counter
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         account.balance = 50;
         account.counter = 1;
@@ -4928,6 +5156,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -4937,16 +5188,17 @@ pub mod tests {
                 account_comm_key,
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -4983,7 +5235,7 @@ pub mod tests {
         );
 
         // Sender account
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
@@ -5032,6 +5284,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -5041,16 +5316,17 @@ pub mod tests {
                 account_comm_key.clone(),
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -5089,7 +5365,7 @@ pub mod tests {
         );
 
         // Receiver account with non-zero counter
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
         account.balance = 50;
         account.counter = 1;
@@ -5135,6 +5411,29 @@ pub mod tests {
         proof
             .verify(
                 &mut rng,
+                leg_enc.clone(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        proof
+            .verify(
+                &mut rng,
                 leg_enc,
                 &root,
                 updated_account_comm,
@@ -5144,16 +5443,17 @@ pub mod tests {
                 account_comm_key,
                 enc_key_gen,
                 enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            prover_time, verifier_time, verifier_time_rmc
         );
     }
 
@@ -5167,7 +5467,7 @@ pub mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         // Account exists with some balance and pending txns
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000;
         account.counter = 7;
@@ -5218,7 +5518,7 @@ pub mod tests {
         let num_pending_txns = 20;
 
         // Account exists with some balance and pending txns
-        let id = Fr::rand(&mut rng);
+        let id = PallasFr::rand(&mut rng);
         let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
@@ -5363,7 +5663,7 @@ pub mod tests {
             leg_enc_rands.push(leg_enc_rand);
 
             // Create sender account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s.clone(), id);
             account.balance = 200; // Ensure sufficient balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -5436,6 +5736,7 @@ pub mod tests {
                     account_comm_key.clone(),
                     enc_key_gen,
                     enc_gen,
+                    None,
                 )
                 .unwrap();
         }
@@ -5461,6 +5762,7 @@ pub mod tests {
                     enc_key_gen,
                     enc_gen,
                     &mut rng,
+                    None,
                 )
                 .unwrap();
             even_tuples.push(even);
@@ -5474,6 +5776,50 @@ pub mod tests {
         println!(
             "For {batch_size} send txn proofs,, verifier time = {:?}, batch verifier time {:?}",
             verifier_time, batch_verifier_time
+        );
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let batch_verifier_rmc_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} send txn proofs, batch verifier_rmc time {:?}",
+            batch_verifier_rmc_time
         );
     }
 
@@ -5528,7 +5874,7 @@ pub mod tests {
             leg_enc_rands.push(leg_enc_rand);
 
             // Create receiver account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r.clone(), id);
             account.balance = 200; // Ensure some initial balance
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -5600,6 +5946,7 @@ pub mod tests {
                     account_comm_key.clone(),
                     enc_key_gen,
                     enc_gen,
+                    None,
                 )
                 .unwrap();
         }
@@ -5625,6 +5972,7 @@ pub mod tests {
                     enc_key_gen,
                     enc_gen,
                     &mut rng,
+                    None,
                 )
                 .unwrap();
             even_tuples.push(even);
@@ -5639,6 +5987,50 @@ pub mod tests {
             "For {batch_size} receive txn proofs, verifier time = {:?}, batch verifier time {:?}",
             verifier_time, batch_verifier_time
         );
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let batch_verifier_rmc_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} receive txn proofs, batch verifier_rmc time {:?}",
+            batch_verifier_rmc_time
+        );
     }
 
     #[test]
@@ -5651,17 +6043,16 @@ pub mod tests {
         let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
             setup_gens::<_, NUM_GENS, L>(&mut rng);
 
+        let asset_tree_params = SelRerandParameters {
+            even_parameters: account_tree_params.odd_parameters.clone(),
+            odd_parameters: account_tree_params.even_parameters.clone(),
+        };
+
         let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
         let amount = 100;
-
-        let asset_tree_params = SelRerandParameters::<
-            ark_vesta::VestaConfig,
-            ark_pallas::PallasConfig,
-        >::new(NUM_GENS, NUM_GENS)
-        .unwrap();
 
         // Create asset commitment parameters
         let asset_comm_params = AssetCommitmentParams::new::<Blake2b512>(
@@ -5700,13 +6091,13 @@ pub mod tests {
             .unwrap();
 
         // Create sender account
-        let sender_id = Fr::rand(&mut rng);
+        let sender_id = PallasFr::rand(&mut rng);
         let (mut sender_account, _, _) = new_account(&mut rng, asset_id, sk_s, sender_id);
         sender_account.balance = 200; // Ensure sufficient balance
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
         // Create receiver account
-        let receiver_id = Fr::rand(&mut rng);
+        let receiver_id = PallasFr::rand(&mut rng);
         let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, receiver_id);
         receiver_account.balance = 150; // Some initial balance
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
@@ -5787,6 +6178,8 @@ pub mod tests {
         )
         .unwrap();
 
+        let start = Instant::now();
+
         // All 3 can be verified in parallel
         let (settlement_even, settlement_odd) = settlement_proof
             .verify_except_bp(
@@ -5798,6 +6191,7 @@ pub mod tests {
                 enc_key_gen,
                 enc_gen,
                 &mut rng,
+                None,
             )
             .unwrap();
 
@@ -5813,6 +6207,7 @@ pub mod tests {
                 enc_key_gen,
                 enc_gen,
                 &mut rng,
+                None,
             )
             .unwrap();
 
@@ -5828,6 +6223,7 @@ pub mod tests {
                 enc_key_gen,
                 enc_gen,
                 &mut rng,
+                None,
             )
             .unwrap();
 
@@ -5836,6 +6232,79 @@ pub mod tests {
         let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
 
         batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+
+        let verifier_time = start.elapsed();
+
+        let start = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let (settlement_even, settlement_odd) = settlement_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (sender_even, sender_odd) = sender_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &account_tree_root,
+                updated_sender_account_comm,
+                sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (receiver_even, receiver_odd) = receiver_proof
+            .verify_except_bp(
+                leg_enc.clone(),
+                &account_tree_root,
+                updated_receiver_account_comm,
+                receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut rng,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        // Asset tree uses opposite curves than account tree so merging accordingly
+        let even_tuples = vec![settlement_odd, sender_even, receiver_even];
+        let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
+
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let verifier_rmc_time = start.elapsed();
+
+        println!(
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time, verifier_rmc_time
+        );
     }
 
     // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
@@ -5879,7 +6348,7 @@ pub mod tests {
             );
 
             // Sender account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
             // Assume that account had some balance. Either got it as the issuer or from another transfer
             account.balance = 200;
@@ -6014,7 +6483,7 @@ pub mod tests {
             );
 
             // Receiver account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
             // Assume that account had some balance. Either got it as the issuer or from another transfer
             account.balance = 200;
@@ -6107,7 +6576,7 @@ pub mod tests {
             );
 
             // Receiver account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
             // Assume that account had some balance and it had sent the receive transaction to increase its counter
             account.balance = 200;
@@ -6243,7 +6712,7 @@ pub mod tests {
             );
 
             // Sender account with non-zero counter
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
             account.balance = 50;
             account.counter = 2;
@@ -6375,7 +6844,7 @@ pub mod tests {
             );
 
             // Sender account
-            let id = Fr::rand(&mut rng);
+            let id = PallasFr::rand(&mut rng);
             let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
             // Assume that account had some balance and it had sent the send transaction to increase its counter
             account.balance = 200;

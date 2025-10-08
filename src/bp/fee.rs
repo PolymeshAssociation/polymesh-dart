@@ -417,6 +417,7 @@ impl<
             tree_roots.params(),
             dart_gens().account_comm_key(),
             rng,
+            None,
         )?;
         Ok(())
     }
@@ -511,6 +512,7 @@ impl<
             tree_roots.params(),
             dart_gens().account_comm_key(),
             rng,
+            None,
         )?;
         Ok(())
     }

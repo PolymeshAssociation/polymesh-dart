@@ -450,6 +450,7 @@ impl<
             asset_comm_params,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -914,6 +915,7 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -1044,6 +1046,7 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -1176,6 +1179,7 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -1306,6 +1310,7 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -1438,6 +1443,7 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }
@@ -1507,6 +1513,7 @@ impl MediatorAffirmationProof {
             self.key_index as usize,
             ctx.as_bytes(),
             dart_gens().leg_asset_value_gen(),
+            None,
         )?;
         Ok(())
     }

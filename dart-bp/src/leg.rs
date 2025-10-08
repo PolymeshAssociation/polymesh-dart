@@ -1,6 +1,7 @@
 use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
-    get_verification_tuples_with_rng, initialize_curve_tree_prover_with_given_transcripts,
+    add_verification_tuples_to_rmc, get_verification_tuples_with_rng,
+    initialize_curve_tree_prover_with_given_transcripts,
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
     verify_given_verification_tuples,
 };
@@ -28,6 +29,7 @@ use digest::Digest;
 use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE};
@@ -939,38 +941,11 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G1>>,
+            &mut RandomizedMultChecker<Affine<G0>>,
+        )>,
     ) -> Result<()> {
-        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-
-        let (even_tuple, odd_tuple) = self.verify_with_given_transcript(
-            leg_enc,
-            tree_root,
-            nonce,
-            tree_parameters,
-            asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            &mut transcript_even,
-            &mut transcript_odd,
-        )?;
-
-        verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters)
-    }
-
-    /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
-        nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
-        asset_comm_params: &AssetCommitmentParams<G0, G1>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-    ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
         let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
         let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
 
@@ -985,6 +960,7 @@ impl<
             rng,
             &mut transcript_even,
             &mut transcript_odd,
+            rmc,
         )
     }
 
@@ -1000,6 +976,81 @@ impl<
         rng: &mut R,
         transcript_even: &mut MerlinTranscript,
         transcript_odd: &mut MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G1>>,
+            &mut RandomizedMultChecker<Affine<G0>>,
+        )>,
+    ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((_, rmc_0)) => Some(&mut **rmc_0),
+            None => None,
+        };
+        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+            leg_enc,
+            tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            transcript_even,
+            transcript_odd,
+            rmc_0,
+        )?;
+
+        match rmc {
+            Some((rmc_1, rmc_0)) => {
+                add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_parameters, rmc_1, rmc_0)
+            }
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters),
+        }
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_except_bp<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        tree_root: &Root<L, 1, G1, G0>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
+        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+
+        self.verify_except_bp_with_given_transcript(
+            leg_enc,
+            tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            &mut transcript_even,
+            &mut transcript_odd,
+            rmc,
+        )
+    }
+
+    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        tree_root: &Root<L, 1, G1, G0>,
+        nonce: &[u8],
+        tree_parameters: &SelRerandParameters<G1, G0>,
+        asset_comm_params: &AssetCommitmentParams<G0, G1>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        transcript_even: &mut MerlinTranscript,
+        transcript_odd: &mut MerlinTranscript,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(
@@ -1121,95 +1172,177 @@ impl<
 
         let challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
-        if !self.resp_amount_enc.verify(
-            &leg_enc.ct_amount,
-            &enc_key_gen,
-            &enc_gen,
-            &challenge,
-            &self.resp_comm_r_i_amount.0[3],
-            &self.resp_comm_r_i_amount.0[8],
-        ) {
-            return Err(Error::ProofVerificationError(
-                "resp_amount_enc verification failed".into(),
-            ));
-        }
+        match rmc.as_mut() {
+            Some(rmc) => {
+                self.resp_amount_enc.verify_using_randomized_mult_checker(
+                    leg_enc.ct_amount,
+                    enc_key_gen,
+                    enc_gen,
+                    &challenge,
+                    &self.resp_comm_r_i_amount.0[3],
+                    &self.resp_comm_r_i_amount.0[8],
+                    rmc,
+                );
 
-        if !self.resp_asset_id.verify(
-            &self.re_randomized_points[0],
-            &asset_comm_params.j_0,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
-            &challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "resp_asset_id verification failed".into(),
-            ));
-        }
+                self.resp_asset_id.verify_using_randomized_mult_checker(
+                    self.re_randomized_points[0],
+                    asset_comm_params.j_0,
+                    tree_parameters.odd_parameters.pc_gens.B_blinding,
+                    &challenge,
+                    rmc,
+                );
 
-        if !self.resp_asset_id_enc.verify(
-            &leg_enc.ct_asset_id,
-            &enc_key_gen,
-            &enc_gen,
-            &challenge,
-            &self.resp_comm_r_i_amount.0[4],
-            &self.resp_asset_id.response1,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "resp_asset_id_enc verification failed".into(),
-            ));
-        }
+                self.resp_asset_id_enc.verify_using_randomized_mult_checker(
+                    leg_enc.ct_asset_id,
+                    enc_key_gen,
+                    enc_gen,
+                    &challenge,
+                    &self.resp_comm_r_i_amount.0[4],
+                    &self.resp_asset_id.response1,
+                    rmc,
+                );
 
-        self.resp_comm_r_i_amount.is_valid(
-            &Self::bp_gens_vec(tree_parameters),
-            &self.comm_r_i_amount,
-            &self.t_comm_r_i_amount,
-            &challenge,
-        )?;
+                self.resp_comm_r_i_amount
+                    .verify_using_randomized_mult_checker(
+                        Self::bp_gens_vec(tree_parameters).to_vec(),
+                        self.comm_r_i_amount,
+                        self.t_comm_r_i_amount,
+                        &challenge,
+                        rmc,
+                    )?;
+            }
+            None => {
+                if !self.resp_amount_enc.verify(
+                    &leg_enc.ct_amount,
+                    &enc_key_gen,
+                    &enc_gen,
+                    &challenge,
+                    &self.resp_comm_r_i_amount.0[3],
+                    &self.resp_comm_r_i_amount.0[8],
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "resp_amount_enc verification failed".into(),
+                    ));
+                }
+
+                if !self.resp_asset_id.verify(
+                    &self.re_randomized_points[0],
+                    &asset_comm_params.j_0,
+                    &tree_parameters.odd_parameters.pc_gens.B_blinding,
+                    &challenge,
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "resp_asset_id verification failed".into(),
+                    ));
+                }
+
+                if !self.resp_asset_id_enc.verify(
+                    &leg_enc.ct_asset_id,
+                    &enc_key_gen,
+                    &enc_gen,
+                    &challenge,
+                    &self.resp_comm_r_i_amount.0[4],
+                    &self.resp_asset_id.response1,
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "resp_asset_id_enc verification failed".into(),
+                    ));
+                }
+
+                self.resp_comm_r_i_amount.is_valid(
+                    &Self::bp_gens_vec(tree_parameters),
+                    &self.comm_r_i_amount,
+                    &self.t_comm_r_i_amount,
+                    &challenge,
+                )?;
+            }
+        }
 
         for i in 0..self.resp_eph_pk_auds_meds.len() {
             let resp = &self.resp_eph_pk_auds_meds[i];
             let D_r1 = &leg_enc.eph_pk_auds_meds[i].1.0;
 
-            if !resp.r_1.verify(
-                D_r1,
-                &r_1_protocol_base1[i],
-                &blinding_base,
-                &challenge,
-                &self.resp_comm_r_i_amount.0[1],
-            ) {
-                return Err(Error::ProofVerificationError(format!(
-                    "resp_leaf_points[{i}].r_1 verification mismatch"
-                )));
-            }
+            match rmc.as_mut() {
+                Some(rmc) => {
+                    resp.r_1.verify_using_randomized_mult_checker(
+                        *D_r1,
+                        r_1_protocol_base1[i],
+                        blinding_base,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[1],
+                        rmc,
+                    );
 
-            if !resp.r_2.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.1,
-                D_r1,
-                &challenge,
-                &self.resp_comm_r_i_amount.0[5],
-            ) {
-                return Err(Error::ProofVerificationError(format!(
-                    "resp_leaf_points[{i}].r_2 verification mismatch"
-                )));
-            }
-            if !resp.r_3.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.2,
-                D_r1,
-                &challenge,
-                &self.resp_comm_r_i_amount.0[6],
-            ) {
-                return Err(Error::ProofVerificationError(format!(
-                    "resp_leaf_points[{i}].r_3 verification mismatch"
-                )));
-            }
-            if !resp.r_4.verify(
-                &leg_enc.eph_pk_auds_meds[i].1.3,
-                D_r1,
-                &challenge,
-                &self.resp_comm_r_i_amount.0[7],
-            ) {
-                return Err(Error::ProofVerificationError(format!(
-                    "resp_leaf_points[{i}].r_4 verification mismatch"
-                )));
+                    resp.r_2.verify_using_randomized_mult_checker(
+                        leg_enc.eph_pk_auds_meds[i].1.1,
+                        *D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[5],
+                        rmc,
+                    );
+
+                    resp.r_3.verify_using_randomized_mult_checker(
+                        leg_enc.eph_pk_auds_meds[i].1.2,
+                        *D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[6],
+                        rmc,
+                    );
+
+                    resp.r_4.verify_using_randomized_mult_checker(
+                        leg_enc.eph_pk_auds_meds[i].1.3,
+                        *D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[7],
+                        rmc,
+                    );
+                }
+                None => {
+                    if !resp.r_1.verify(
+                        D_r1,
+                        &r_1_protocol_base1[i],
+                        &blinding_base,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[1],
+                    ) {
+                        return Err(Error::ProofVerificationError(format!(
+                            "resp_leaf_points[{i}].r_1 verification mismatch"
+                        )));
+                    }
+
+                    if !resp.r_2.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.1,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[5],
+                    ) {
+                        return Err(Error::ProofVerificationError(format!(
+                            "resp_leaf_points[{i}].r_2 verification mismatch"
+                        )));
+                    }
+
+                    if !resp.r_3.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.2,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[6],
+                    ) {
+                        return Err(Error::ProofVerificationError(format!(
+                            "resp_leaf_points[{i}].r_3 verification mismatch"
+                        )));
+                    }
+
+                    if !resp.r_4.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.3,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[7],
+                    ) {
+                        return Err(Error::ProofVerificationError(format!(
+                            "resp_leaf_points[{i}].r_4 verification mismatch"
+                        )));
+                    }
+                }
             }
         }
 
@@ -1220,35 +1353,6 @@ impl<
             &self.odd_proof,
             rng,
         )
-    }
-
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
-        nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
-        asset_comm_params: &AssetCommitmentParams<G0, G1>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        transcript_even: &mut MerlinTranscript,
-        transcript_odd: &mut MerlinTranscript,
-    ) -> Result<()> {
-        let (even_tuple, odd_tuple) = self.verify_with_given_transcript(
-            leg_enc,
-            tree_root,
-            nonce,
-            tree_parameters,
-            asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            transcript_even,
-            transcript_odd,
-        )?;
-
-        verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters)
     }
 
     pub(crate) fn enforce_constraints<CS: ConstraintSystem<F0>>(
@@ -1383,6 +1487,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         index_in_asset_data: usize,
         nonce: &[u8],
         enc_gen: G,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
         self.verify_with_given_transcript(
@@ -1392,6 +1497,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             nonce,
             enc_gen,
             transcript,
+            rmc,
         )
     }
 
@@ -1403,6 +1509,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         nonce: &[u8],
         enc_gen: G,
         mut transcript: MerlinTranscript,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
             return Err(Error::InvalidKeyIndex(index_in_asset_data));
@@ -1441,13 +1548,26 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
-        if !self
-            .resp_enc_pk
-            .verify(&D, &leg_enc.ct_asset_id, &minus_h, &challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "resp_enc_pk verification failed".into(),
-            ));
+        match rmc.as_mut() {
+            Some(rmc) => {
+                self.resp_enc_pk.verify_using_randomized_mult_checker(
+                    D,
+                    leg_enc.ct_asset_id,
+                    minus_h,
+                    &challenge,
+                    rmc,
+                );
+            }
+            None => {
+                if !self
+                    .resp_enc_pk
+                    .verify(&D, &leg_enc.ct_asset_id, &minus_h, &challenge)
+                {
+                    return Err(Error::ProofVerificationError(
+                        "resp_enc_pk verification failed".into(),
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -1524,7 +1644,7 @@ pub mod tests {
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-    use crate::util::batch_verify_bp;
+    use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec::VariableBaseMSM;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -1536,6 +1656,7 @@ pub mod tests {
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
     type PallasFr = ark_pallas::Fr;
+    type VestaFr = ark_vesta::Fr;
 
     /// Generate account signing and encryption keys for all sender, receiver, and auditor.
     /// This is just for testing and in practice, each party generates its own keys.
@@ -1574,8 +1695,12 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+            SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
+                b"asset-tree-params",
+                NUM_GENS,
+                NUM_GENS,
+            )
+            .unwrap();
 
         let sig_key_gen = PallasA::rand(&mut rng);
         let enc_key_gen = PallasA::rand(&mut rng);
@@ -1699,10 +1824,31 @@ pub mod tests {
                 &asset_comm_params,
                 enc_key_gen,
                 enc_gen,
+                None,
             )
             .unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_regular = clock.elapsed();
+
+        let clock = Instant::now();
+        let mut rmc_1 = RandomizedMultChecker::new(ark_vesta::Fr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
+        proof
+            .verify(
+                &mut rng,
+                leg_enc.clone(),
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let verifier_time_rmc = clock.elapsed();
 
         let _r = leg_enc
             .get_encryption_randomness::<Blake2b512>(&sk_r_e.0, false)
@@ -1737,9 +1883,10 @@ pub mod tests {
         }
 
         println!("total proof size = {}", proof.compressed_size());
+        println!("total prover time = {:?}", prover_time);
         println!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular, verifier_time_rmc
         );
     }
 
@@ -1833,20 +1980,39 @@ pub mod tests {
                 mediator_index_in_keys,
                 nonce,
                 enc_gen,
+                None,
             )
             .unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_regular = clock.elapsed();
+
+        // Test verification with RMC as well
+        let clock = Instant::now();
+        let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
+        proof
+            .verify(
+                leg_enc.clone(),
+                accept,
+                mediator_index_in_keys,
+                nonce,
+                enc_gen,
+                Some(&mut rmc),
+            )
+            .unwrap();
+
+        assert!(rmc.verify());
+        let verifier_time_rmc = clock.elapsed();
 
         log::info!("proof size = {}", proof.compressed_size());
+        log::info!("prover time = {:?}", prover_time);
         log::info!(
-            "prover time = {:?}, verifier time = {:?}",
-            prover_time,
-            verifier_time
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular,
+            verifier_time_rmc
         );
 
         match proof
-            .verify(leg_enc.clone(), accept, 10, nonce, enc_gen)
+            .verify(leg_enc.clone(), accept, 10, nonce, enc_gen, None)
             .err()
             .unwrap()
         {
@@ -1855,7 +2021,7 @@ pub mod tests {
         }
 
         match proof
-            .verify(leg_enc.clone(), accept, 0, nonce, enc_gen)
+            .verify(leg_enc.clone(), accept, 0, nonce, enc_gen, None)
             .err()
             .unwrap()
         {
@@ -1998,6 +2164,7 @@ pub mod tests {
                     &asset_comm_params,
                     enc_key_gen,
                     enc_gen,
+                    None,
                 )
                 .unwrap();
         }
@@ -2022,6 +2189,7 @@ pub mod tests {
                     enc_key_gen,
                     enc_gen,
                     &mut rng,
+                    None,
                 )
                 .unwrap();
             even_tuples.push(even);
@@ -2035,6 +2203,49 @@ pub mod tests {
         println!(
             "For {batch_size} leg verification proofs, verifier time = {:?}, batch verifier time {:?}",
             verifier_time, batch_verifier_time
+        );
+
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+
+        for i in 0..batch_size {
+            let root = asset_trees[i].root_node();
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    leg_encs[i].clone(),
+                    &root,
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                    Some(&mut rmc_1),
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            &asset_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let batch_verifier_rmc_time = clock.elapsed();
+
+        println!(
+            "For {batch_size} leg verification proofs, batch_verifier_rmc_time time {:?}",
+            batch_verifier_rmc_time
         );
     }
 

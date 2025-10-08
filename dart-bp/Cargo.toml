@@ -50,6 +50,10 @@ ark-secq256k1 = { workspace = true }
 name = "affirmation_proofs"
 harness = false
 
+[[bench]]
+name = "fee_account_proofs"
+harness = false
+
 [features]
 default = ["std", "asm", "parallel"]
 

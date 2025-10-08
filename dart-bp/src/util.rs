@@ -8,17 +8,20 @@ use ark_ff::{Field, PrimeField};
 use ark_serialize::CanonicalSerialize;
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
-use ark_std::{vec, vec::Vec};
+use ark_std::{format, vec, vec::Vec};
 #[cfg(feature = "std")]
 use bulletproofs::r1cs::batch_verify;
 use bulletproofs::r1cs::{
     ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
+    add_verification_tuple_to_rmc, add_verification_tuples_to_rmc as add_vts_to_rmc,
+    verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::{CryptoRng, RngCore};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
@@ -439,14 +442,14 @@ pub fn verify_given_verification_tuples<
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {
-            Verifier::<MerlinTranscript, Affine<G0>>::verify_given_verification_tuple(
+            verify_given_verification_tuple(
                 even_tuple,
                 &tree_params.even_parameters.pc_gens,
                 &tree_params.even_parameters.bp_gens,
             )
         },
         || {
-            Verifier::<MerlinTranscript, Affine<G1>>::verify_given_verification_tuple(
+            verify_given_verification_tuple(
                 odd_tuple,
                 &tree_params.odd_parameters.pc_gens,
                 &tree_params.odd_parameters.bp_gens,
@@ -456,12 +459,12 @@ pub fn verify_given_verification_tuples<
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        Verifier::<MerlinTranscript, Affine<G0>>::verify_given_verification_tuple(
+        verify_given_verification_tuple(
             even_tuple,
             &tree_params.even_parameters.pc_gens,
             &tree_params.even_parameters.bp_gens,
         ),
-        Verifier::<MerlinTranscript, Affine<G1>>::verify_given_verification_tuple(
+        verify_given_verification_tuple(
             odd_tuple,
             &tree_params.odd_parameters.pc_gens,
             &tree_params.odd_parameters.bp_gens,
@@ -472,6 +475,87 @@ pub fn verify_given_verification_tuples<
     odd_res?;
 
     Ok(())
+}
+
+/// Add bulletproof verification tuples to RandomizedMultChecker
+pub fn add_verification_tuples_to_rmc<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuple: VerificationTuple<Affine<G0>>,
+    odd_tuple: VerificationTuple<Affine<G1>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+    rmc_0: &mut RandomizedMultChecker<Affine<G0>>,
+    rmc_1: &mut RandomizedMultChecker<Affine<G1>>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            add_verification_tuple_to_rmc(
+                even_tuple,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+                rmc_0,
+            )
+        },
+        || {
+            add_verification_tuple_to_rmc(
+                odd_tuple,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+                rmc_1,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        add_verification_tuple_to_rmc(
+            even_tuple,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            rmc_0,
+        ),
+        add_verification_tuple_to_rmc(
+            odd_tuple,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
+            rmc_1,
+        ),
+    );
+
+    even_res.map_err(Error::from)?;
+    odd_res.map_err(Error::from)?;
+
+    Ok(())
+}
+
+/// Verify bulletproof verification tuples using RandomizedMultChecker and return error if either verification fails
+pub fn verify_rmc<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    rmc_0: &RandomizedMultChecker<Affine<G0>>,
+    rmc_1: &RandomizedMultChecker<Affine<G1>>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_verify, odd_verify) = rayon::join(|| rmc_0.verify(), || rmc_1.verify());
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_verify, odd_verify) = (rmc_0.verify(), rmc_1.verify());
+
+    // Return success only if both verifications pass
+    if even_verify && odd_verify {
+        Ok(())
+    } else {
+        Err(Error::ProofVerificationError(
+            format!("RandomizedMultChecker verification failed: even_verify={even_verify}, odd_verify={odd_verify}").to_string(),
+        ))
+    }
 }
 
 #[cfg(feature = "std")]
@@ -514,6 +598,60 @@ pub fn batch_verify_bp<
             odd_tuples,
             &tree_params.odd_parameters.pc_gens,
             &tree_params.odd_parameters.bp_gens,
+        ),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+pub fn add_verification_tuples_batches_to_rmc<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuples: Vec<VerificationTuple<Affine<G0>>>,
+    odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+    rmc_0: &mut RandomizedMultChecker<Affine<G0>>,
+    rmc_1: &mut RandomizedMultChecker<Affine<G1>>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            add_vts_to_rmc(
+                even_tuples,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+                rmc_0,
+            )
+        },
+        || {
+            add_vts_to_rmc(
+                odd_tuples,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+                rmc_1,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        add_vts_to_rmc(
+            even_tuples,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            rmc_0,
+        ),
+        add_vts_to_rmc(
+            odd_tuples,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
+            rmc_1,
         ),
     );
 
@@ -912,13 +1050,29 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
+    mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<()> {
-    resp_leaf.is_valid(
-        &account_comm_key.as_gens_with_blinding(pc_gens.B_blinding),
-        re_randomized_leaf,
-        t_r_leaf,
-        verifier_challenge,
-    )?;
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_leaf.verify_using_randomized_mult_checker(
+                account_comm_key
+                    .as_gens_with_blinding(pc_gens.B_blinding)
+                    .to_vec(),
+                *re_randomized_leaf,
+                *t_r_leaf,
+                verifier_challenge,
+                rmc,
+            )?;
+        }
+        None => {
+            resp_leaf.is_valid(
+                &account_comm_key.as_gens_with_blinding(pc_gens.B_blinding),
+                re_randomized_leaf,
+                t_r_leaf,
+                verifier_challenge,
+            )?;
+        }
+    }
 
     let y = if has_counter_decreased {
         updated_account_commitment.into_group() + account_comm_key.counter_gen()
@@ -934,49 +1088,99 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     missing_resps.insert(3, resp_leaf.0[3]);
     missing_resps.insert(4, resp_leaf.0[4]);
     missing_resps.insert(7, resp_leaf.0[7]);
-    resp_acc_new.is_valid(
-        &account_comm_key.as_gens(),
-        &y.into_affine(),
-        t_acc_new,
-        verifier_challenge,
-        missing_resps,
-    )?;
 
-    if !resp_null.verify(
-        nullifier,
-        &account_comm_key.current_rho_gen(),
-        verifier_challenge,
-        &resp_leaf.0[5],
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Nullifier verification failed".to_string(),
-        ));
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_acc_new.verify_using_randomized_mult_checker(
+                account_comm_key.as_gens().to_vec(),
+                y.into_affine(),
+                *t_acc_new,
+                verifier_challenge,
+                missing_resps,
+                rmc,
+            )?;
+        }
+        None => {
+            resp_acc_new.is_valid(
+                &account_comm_key.as_gens(),
+                &y.into_affine(),
+                t_acc_new,
+                verifier_challenge,
+                missing_resps,
+            )?;
+        }
     }
-    if !resp_leg_asset_id.verify(
-        &leg_enc.ct_asset_id,
-        &enc_key_gen,
-        &enc_gen,
-        verifier_challenge,
-        &resp_leaf.0[3],
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Leg asset ID verification failed".to_string(),
-        ));
-    }
-    if !resp_leg_pk.verify(
-        if is_sender {
-            &leg_enc.ct_s
-        } else {
-            &leg_enc.ct_r
-        },
-        &enc_key_gen,
-        &account_comm_key.sk_gen(),
-        verifier_challenge,
-        &resp_leaf.0[0],
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Leg public key verification failed".to_string(),
-        ));
+
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_null.verify_using_randomized_mult_checker(
+                *nullifier,
+                account_comm_key.current_rho_gen(),
+                verifier_challenge,
+                &resp_leaf.0[5],
+                rmc,
+            );
+
+            resp_leg_asset_id.verify_using_randomized_mult_checker(
+                leg_enc.ct_asset_id,
+                enc_key_gen,
+                enc_gen,
+                verifier_challenge,
+                &resp_leaf.0[3],
+                rmc,
+            );
+
+            resp_leg_pk.verify_using_randomized_mult_checker(
+                if is_sender {
+                    leg_enc.ct_s
+                } else {
+                    leg_enc.ct_r
+                },
+                enc_key_gen,
+                account_comm_key.sk_gen(),
+                verifier_challenge,
+                &resp_leaf.0[0],
+                rmc,
+            );
+        }
+        None => {
+            if !resp_null.verify(
+                nullifier,
+                &account_comm_key.current_rho_gen(),
+                verifier_challenge,
+                &resp_leaf.0[5],
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "Nullifier verification failed".to_string(),
+                ));
+            }
+            if !resp_leg_asset_id.verify(
+                &leg_enc.ct_asset_id,
+                &enc_key_gen,
+                &enc_gen,
+                verifier_challenge,
+                &resp_leaf.0[3],
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "Leg asset ID verification failed".to_string(),
+                ));
+            }
+            if !resp_leg_pk.verify(
+                if is_sender {
+                    &leg_enc.ct_s
+                } else {
+                    &leg_enc.ct_r
+                },
+                &enc_key_gen,
+                &account_comm_key.sk_gen(),
+                verifier_challenge,
+                &resp_leaf.0[0],
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "Leg public key verification failed".to_string(),
+                ));
+            }
+        }
     }
 
     let mut missing_resps = BTreeMap::new();
@@ -985,13 +1189,28 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     missing_resps.insert(3, resp_acc_new.responses[&5]);
     missing_resps.insert(4, resp_leaf.0[6]);
     missing_resps.insert(5, resp_acc_new.responses[&6]);
-    resp_bp.is_valid(
-        &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
-        comm_bp,
-        t_bp,
-        verifier_challenge,
-        missing_resps,
-    )?;
+
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_bp.verify_using_randomized_mult_checker(
+                bp_gens_vec_for_randomness_relations(pc_gens, bp_gens).to_vec(),
+                *comm_bp,
+                *t_bp,
+                verifier_challenge,
+                missing_resps,
+                rmc,
+            )?;
+        }
+        None => {
+            resp_bp.is_valid(
+                &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
+                comm_bp,
+                t_bp,
+                verifier_challenge,
+                missing_resps,
+            )?;
+        }
+    }
 
     Ok(())
 }
@@ -1009,34 +1228,66 @@ pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
     bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
+    mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<()> {
     let mut gens = bp_gens_for_vec_commitment(3, bp_gens);
     let mut missing_resps = BTreeMap::new();
     missing_resps.insert(2, resp_old_bal);
     missing_resps.insert(3, resp_new_bal);
-    resp_comm_bp_bal.is_valid(
-        &[
-            pc_gens.B_blinding,
-            gens.next().unwrap(),
-            gens.next().unwrap(),
-            gens.next().unwrap(),
-        ],
-        comm_bp_bal,
-        t_comm_bp_bal,
-        verifier_challenge,
-        missing_resps,
-    )?;
 
-    if !resp_leg_amount.verify(
-        &leg_enc.ct_amount,
-        &enc_key_gen,
-        &enc_gen,
-        verifier_challenge,
-        &resp_comm_bp_bal.responses[&1],
-    ) {
-        return Err(Error::ProofVerificationError(
-            "Leg amount verification failed".to_string(),
-        ));
+    let bp_bal_gens = [
+        pc_gens.B_blinding,
+        gens.next().unwrap(),
+        gens.next().unwrap(),
+        gens.next().unwrap(),
+    ];
+
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_comm_bp_bal.verify_using_randomized_mult_checker(
+                bp_bal_gens.to_vec(),
+                *comm_bp_bal,
+                *t_comm_bp_bal,
+                verifier_challenge,
+                missing_resps.clone(),
+                rmc,
+            )?;
+        }
+        None => {
+            resp_comm_bp_bal.is_valid(
+                &bp_bal_gens,
+                comm_bp_bal,
+                t_comm_bp_bal,
+                verifier_challenge,
+                missing_resps,
+            )?;
+        }
+    }
+
+    match rmc.as_mut() {
+        Some(rmc) => {
+            resp_leg_amount.verify_using_randomized_mult_checker(
+                leg_enc.ct_amount,
+                enc_key_gen,
+                enc_gen,
+                verifier_challenge,
+                &resp_comm_bp_bal.responses[&1],
+                rmc,
+            );
+        }
+        None => {
+            if !resp_leg_amount.verify(
+                &leg_enc.ct_amount,
+                &enc_key_gen,
+                &enc_gen,
+                verifier_challenge,
+                &resp_comm_bp_bal.responses[&1],
+            ) {
+                return Err(Error::ProofVerificationError(
+                    "Leg amount verification failed".to_string(),
+                ));
+            }
+        }
     }
 
     Ok(())

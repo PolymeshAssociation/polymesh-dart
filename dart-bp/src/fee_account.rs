@@ -1,7 +1,7 @@
 use crate::account::AccountCommitmentKeyTrait;
 use crate::error::*;
 use crate::util::{
-    get_verification_tuples_with_rng, initialize_curve_tree_prover,
+    add_verification_tuples_to_rmc, get_verification_tuples_with_rng, initialize_curve_tree_prover,
     initialize_curve_tree_prover_with_given_transcripts, initialize_curve_tree_verifier,
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
     verify_given_verification_tuples,
@@ -22,6 +22,7 @@ use bulletproofs::r1cs::{ConstraintSystem, R1CSProof, VerificationTuple};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS, MAX_FEE_BALANCE};
 use rand_core::CryptoRngCore;
@@ -563,6 +564,10 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -579,6 +584,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -596,7 +602,15 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
         let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
             pk,
             asset_id,
@@ -610,9 +624,22 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        // TODO: This and similar single verifications can be sped by taking Bulletproof tuples first
+        // so they are not multiplied by the randomness. Then the Sigma protocols can follow.
+        // Extract bases and scalars from rmc since they are less and combine them with Bulletproof crate's verification.
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -628,6 +655,7 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
@@ -644,6 +672,7 @@ impl<
             rng,
             even_transcript,
             odd_transcript,
+            rmc,
         )
     }
 
@@ -662,6 +691,7 @@ impl<
         rng: &mut R,
         even_transcript: MerlinTranscript,
         odd_transcript: MerlinTranscript,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         if self.resp_leaf.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
@@ -746,49 +776,93 @@ impl<
         let reduce = asset_id_comm + issuer_pk_proj;
         let y = self.re_randomized_path.get_rerandomized_leaf().into_group() - reduce
             + (account_comm_key.balance_gen() * increase_bal_by);
-        self.resp_leaf.is_valid(
-            &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-            &y.into_affine(),
-            &self.t_r_leaf,
-            &challenge,
-        )?;
+        let y_affine = y.into_affine();
 
         let y = updated_account_commitment.0.into_group() - reduce;
+        let y_new_affine = y.into_affine();
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_leaf.0[0]);
-        self.resp_acc_new.is_valid(
-            &Self::acc_new_gens(account_comm_key),
-            &y.into_affine(),
-            &self.t_acc_new,
-            &challenge,
-            missing_resps,
-        )?;
 
-        // rho matches the one in nullifier
-        if !self
-            .resp_null
-            .verify(&nullifier, &nullifier_gen, &challenge, &self.resp_leaf.0[1])
-        {
-            return Err(Error::ProofVerificationError(
-                "Nullifier verification failed".to_string(),
-            ));
-        }
-        if !self.resp_pk.verify(&pk, &pk_gen, &challenge) {
-            return Err(Error::ProofVerificationError(
-                "Issuer public key verification failed".to_string(),
-            ));
-        }
-
-        if !self.resp_bp.verify(
-            &self.comm_new_bal,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &challenge,
-            &self.resp_leaf.0[0],
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Sigma protocol for Bulletproof commitment failed".to_string(),
-            ));
+        match rmc.as_mut() {
+            Some(rmc) => {
+                self.resp_leaf.verify_using_randomized_mult_checker(
+                    Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
+                    y_affine,
+                    self.t_r_leaf,
+                    &challenge,
+                    rmc,
+                )?;
+                self.resp_acc_new.verify_using_randomized_mult_checker(
+                    Self::acc_new_gens(account_comm_key).to_vec(),
+                    y_new_affine,
+                    self.t_acc_new,
+                    &challenge,
+                    missing_resps,
+                    rmc,
+                )?;
+                // rho matches the one in nullifier
+                self.resp_null.verify_using_randomized_mult_checker(
+                    nullifier,
+                    nullifier_gen,
+                    &challenge,
+                    &self.resp_leaf.0[1],
+                    rmc,
+                );
+                self.resp_pk
+                    .verify_using_randomized_mult_checker(pk, pk_gen, &challenge, rmc);
+                // Amount matches the one in response for leaf
+                self.resp_bp.verify_using_randomized_mult_checker(
+                    self.comm_new_bal,
+                    account_tree_params.even_parameters.pc_gens.B,
+                    account_tree_params.even_parameters.pc_gens.B_blinding,
+                    &challenge,
+                    &self.resp_leaf.0[0],
+                    rmc,
+                );
+            }
+            None => {
+                self.resp_leaf.is_valid(
+                    &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
+                    &y_affine,
+                    &self.t_r_leaf,
+                    &challenge,
+                )?;
+                self.resp_acc_new.is_valid(
+                    &Self::acc_new_gens(account_comm_key),
+                    &y_new_affine,
+                    &self.t_acc_new,
+                    &challenge,
+                    missing_resps,
+                )?;
+                // rho matches the one in nullifier
+                if !self.resp_null.verify(
+                    &nullifier,
+                    &nullifier_gen,
+                    &challenge,
+                    &self.resp_leaf.0[1],
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Nullifier verification failed".to_string(),
+                    ));
+                }
+                if !self.resp_pk.verify(&pk, &pk_gen, &challenge) {
+                    return Err(Error::ProofVerificationError(
+                        "Issuer public key verification failed".to_string(),
+                    ));
+                }
+                // Amount matches the one in response for leaf
+                if !self.resp_bp.verify(
+                    &self.comm_new_bal,
+                    &account_tree_params.even_parameters.pc_gens.B,
+                    &account_tree_params.even_parameters.pc_gens.B_blinding,
+                    &challenge,
+                    &self.resp_leaf.0[0],
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Sigma protocol for Bulletproof commitment failed".to_string(),
+                    ));
+                }
+            }
         }
 
         get_verification_tuples_with_rng(
@@ -1040,7 +1114,15 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
     ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
         let (even_tuple, odd_tuple) = self.verify_except_bp(
             asset_id,
             fee_amount,
@@ -1051,9 +1133,19 @@ impl<
             account_tree_params,
             account_comm_key,
             rng,
+            rmc_0,
         )?;
 
-        verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for Bulletproof final verification
@@ -1068,6 +1160,7 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         if self.resp_leaf.len() != 5 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
@@ -1145,45 +1238,86 @@ impl<
         let y = self.re_randomized_path.get_rerandomized_leaf()
             - asset_id_comm
             - (account_comm_key.balance_gen() * fee_amount);
-        self.resp_leaf.is_valid(
-            &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-            &y.into_affine(),
-            &self.t_r_leaf,
-            &challenge,
-        )?;
+        let y_affine = y.into_affine();
 
         let y = updated_account_commitment.0 - asset_id_comm;
+        let y_new_affine = y.into_affine();
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_leaf.0[0]);
         missing_resps.insert(1, self.resp_leaf.0[1]);
-        self.resp_acc_new.is_valid(
-            &Self::acc_new_gens(account_comm_key),
-            &y.into_affine(),
-            &self.t_acc_new,
-            &challenge,
-            missing_resps,
-        )?;
 
-        // rho matches the one in nullifier
-        if !self
-            .resp_null
-            .verify(&nullifier, &nullifier_gen, &challenge, &self.resp_leaf.0[2])
-        {
-            return Err(Error::ProofVerificationError(
-                "Nullifier verification failed".to_string(),
-            ));
-        }
+        match rmc.as_mut() {
+            Some(rmc) => {
+                self.resp_leaf.verify_using_randomized_mult_checker(
+                    Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
+                    y_affine,
+                    self.t_r_leaf,
+                    &challenge,
+                    rmc,
+                )?;
+                self.resp_acc_new.verify_using_randomized_mult_checker(
+                    Self::acc_new_gens(account_comm_key).to_vec(),
+                    y_new_affine,
+                    self.t_acc_new,
+                    &challenge,
+                    missing_resps,
+                    rmc,
+                )?;
+                // rho matches the one in nullifier
+                self.resp_null.verify_using_randomized_mult_checker(
+                    nullifier,
+                    nullifier_gen,
+                    &challenge,
+                    &self.resp_leaf.0[2],
+                    rmc,
+                );
+                self.resp_bp.verify_using_randomized_mult_checker(
+                    self.comm_new_bal,
+                    account_tree_params.even_parameters.pc_gens.B,
+                    account_tree_params.even_parameters.pc_gens.B_blinding,
+                    &challenge,
+                    &self.resp_leaf.0[1],
+                    rmc,
+                );
+            }
+            None => {
+                self.resp_leaf.is_valid(
+                    &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
+                    &y_affine,
+                    &self.t_r_leaf,
+                    &challenge,
+                )?;
+                self.resp_acc_new.is_valid(
+                    &Self::acc_new_gens(account_comm_key),
+                    &y_new_affine,
+                    &self.t_acc_new,
+                    &challenge,
+                    missing_resps,
+                )?;
+                // rho matches the one in nullifier
+                if !self.resp_null.verify(
+                    &nullifier,
+                    &nullifier_gen,
+                    &challenge,
+                    &self.resp_leaf.0[2],
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Nullifier verification failed".to_string(),
+                    ));
+                }
 
-        if !self.resp_bp.verify(
-            &self.comm_new_bal,
-            &account_tree_params.even_parameters.pc_gens.B,
-            &account_tree_params.even_parameters.pc_gens.B_blinding,
-            &challenge,
-            &self.resp_leaf.0[1],
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Sigma protocol for Bulletproof commitment failed".to_string(),
-            ));
+                if !self.resp_bp.verify(
+                    &self.comm_new_bal,
+                    &account_tree_params.even_parameters.pc_gens.B,
+                    &account_tree_params.even_parameters.pc_gens.B_blinding,
+                    &challenge,
+                    &self.resp_leaf.0[1],
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Sigma protocol for Bulletproof commitment failed".to_string(),
+                    ));
+                }
+            }
         }
 
         get_verification_tuples_with_rng(
@@ -1267,17 +1401,19 @@ pub mod tests {
     use crate::account::tests::setup_gens;
     use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{SigKey, keygen_sig};
-    use crate::util::batch_verify_bp;
-    use ark_std::cfg_into_iter;
+    use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
+    // use ark_std::cfg_into_iter;
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
 
-    #[cfg(feature = "parallel")]
-    use rayon::prelude::*;
+    // #[cfg(feature = "parallel")]
+    // use rayon::prelude::*;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
+    type F0 = ark_pallas::Fr;
+    type F1 = ark_vesta::Fr;
 
     pub fn new_fee_account<R: CryptoRngCore, G: AffineRepr>(
         rng: &mut R,
@@ -1418,17 +1554,42 @@ pub mod tests {
                 &account_tree_params,
                 account_comm_key.clone(),
                 &mut rng,
+                None,
             )
             .unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_regular = clock.elapsed();
 
-        log::info!("For topup txn");
-        log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+        let clock = Instant::now();
+        let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+        proof
+            .verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some((&mut rmc_0, &mut rmc_1)),
+            )
+            .unwrap();
+
+        let start = Instant::now();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        println!("verify_rmc time: {:?}", start.elapsed());
+        let verifier_time_rmc = clock.elapsed();
+
+        println!("For topup txn");
+        println!("total proof size = {}", proof.compressed_size());
+        println!("total prover time = {:?}", prover_time);
+        println!(
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular, verifier_time_rmc
         );
 
         assert!(
@@ -1444,6 +1605,7 @@ pub mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     &mut rng,
+                    None,
                 )
                 .is_err()
         );
@@ -1461,6 +1623,7 @@ pub mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     &mut rng,
+                    None,
                 )
                 .is_err()
         );
@@ -1534,16 +1697,38 @@ pub mod tests {
                 &account_tree_params,
                 account_comm_key.clone(),
                 &mut rng,
+                None,
             )
             .unwrap();
 
-        let verifier_time = clock.elapsed();
+        let verifier_time_regular = clock.elapsed();
+
+        let clock = Instant::now();
+        let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+        proof
+            .verify(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some((&mut rmc_0, &mut rmc_1)),
+            )
+            .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let verifier_time_rmc = clock.elapsed();
 
         println!("For fee payment txn");
         println!("total proof size = {}", proof.compressed_size());
+        println!("total prover time = {:?}", prover_time);
         println!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time, verifier_time
+            "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
+            verifier_time_regular, verifier_time_rmc
         );
 
         assert!(
@@ -1558,6 +1743,7 @@ pub mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     &mut rng,
+                    None,
                 )
                 .is_err()
         );
@@ -1574,6 +1760,7 @@ pub mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     &mut rng,
+                    None,
                 )
                 .is_err()
         );
@@ -1590,6 +1777,7 @@ pub mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     &mut rng,
+                    None,
                 )
                 .is_err()
         );
@@ -1675,30 +1863,10 @@ pub mod tests {
 
         let clock = Instant::now();
 
-        let res = cfg_into_iter!(0..batch_size)
-            .map(|i| {
-                let mut rng_ = rand::thread_rng();
-                proofs[i].verify(
-                    asset_id,
-                    fee_amount,
-                    updated_account_comms[i],
-                    nullifiers[i],
-                    &root,
-                    &nonces[i],
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng_,
-                )
-            })
-            .map(|r| r)
-            .collect::<Vec<_>>();
-
-        for r in res {
-            r.unwrap();
-        }
-        // for i in 0..batch_size {
-        //     proofs[i]
-        //         .verify(
+        // let res = cfg_into_iter!(0..batch_size)
+        //     .map(|i| {
+        //         let mut rng_ = rand::thread_rng();
+        //         proofs[i].verify(
         //             asset_id,
         //             fee_amount,
         //             updated_account_comms[i],
@@ -1707,10 +1875,33 @@ pub mod tests {
         //             &nonces[i],
         //             &account_tree_params,
         //             account_comm_key.clone(),
-        //             &mut rng,
+        //             &mut rng_,
+        //             None,
         //         )
-        //         .unwrap();
+        //     })
+        //     .map(|r| r)
+        //     .collect::<Vec<_>>();
+        //
+        // for r in res {
+        //     r.unwrap();
         // }
+
+        for i in 0..batch_size {
+            proofs[i]
+                .verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                )
+                .unwrap();
+        }
 
         let verifier_time = clock.elapsed();
 
@@ -1719,32 +1910,10 @@ pub mod tests {
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
 
-        let res = cfg_into_iter!(0..batch_size)
-            .map(|i| {
-                let mut rng_ = rand::thread_rng();
-                proofs[i].verify_except_bp(
-                    asset_id,
-                    fee_amount,
-                    updated_account_comms[i],
-                    nullifiers[i],
-                    &root,
-                    &nonces[i],
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng_,
-                )
-            })
-            .collect::<Vec<_>>();
-        for res in res {
-            let (even, odd) = res.unwrap();
-            even_tuples.push(even);
-            odd_tuples.push(odd);
-        }
-
-        // These can also be done in parallel
-        // for i in 0..batch_size {
-        //     let (even, odd) = proofs[i]
-        //         .verify_except_bp(
+        // let res = cfg_into_iter!(0..batch_size)
+        //     .map(|i| {
+        //         let mut rng_ = rand::thread_rng();
+        //         proofs[i].verify_except_bp(
         //             asset_id,
         //             fee_amount,
         //             updated_account_comms[i],
@@ -1753,12 +1922,36 @@ pub mod tests {
         //             &nonces[i],
         //             &account_tree_params,
         //             account_comm_key.clone(),
-        //             &mut rng,
+        //             &mut rng_,
+        //             None,
         //         )
-        //         .unwrap();
+        //     })
+        //     .collect::<Vec<_>>();
+        // for res in res {
+        //     let (even, odd) = res.unwrap();
         //     even_tuples.push(even);
         //     odd_tuples.push(odd);
         // }
+
+        // These can also be done in parallel
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
 
         let pre_msm_check = clock.elapsed();
 
@@ -1767,9 +1960,55 @@ pub mod tests {
 
         let batch_verifier_time = pre_msm_check + clock.elapsed();
 
+        let clock = Instant::now();
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+
+        let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+
+        for i in 0..batch_size {
+            let (even, odd) = proofs[i]
+                .verify_except_bp(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        let pre_msm_check_rmc = clock.elapsed();
+
+        let clock = Instant::now();
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let batch_verifier_rmc_time = pre_msm_check + clock.elapsed();
+
         println!(
-            "For {batch_size} fee payment proofs, verifier time = {:?}, pre_msm_check time {:?}, total batch verifier time {:?}",
-            verifier_time, pre_msm_check, batch_verifier_time
+            "For {batch_size} fee payment proofs, verifier time = {:?}, pre_msm_check time {:?}, total batch verifier time {:?}, \
+            pre_msm_check_rmc time {:?}, total batch verifier_rmc time {:?}",
+            verifier_time,
+            pre_msm_check,
+            batch_verifier_time,
+            pre_msm_check_rmc,
+            batch_verifier_rmc_time
         );
     }
 
