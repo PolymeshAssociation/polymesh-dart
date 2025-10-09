@@ -36,6 +36,7 @@ pub type AssetCommitmentParameters<C> =
 
 const CURVE_TREE_PARAMETERS_PALLAS_LABEL: &[u8] = b"curve-tree-pallas";
 const CURVE_TREE_PARAMETERS_VESTA_LABEL: &[u8] = b"curve-tree-vesta";
+const ASSET_COMMITMENT_PARAMETERS_LABEL: &[u8] = b"asset-comm-params";
 
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
@@ -44,7 +45,7 @@ lazy_static::lazy_static! {
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
-            b"asset-comm-params",
+            ASSET_COMMITMENT_PARAMETERS_LABEL,
             MAX_ASSET_KEYS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens,
         );
@@ -138,7 +139,7 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
         if ASSET_COMMITMENT_PARAMETERS.is_none() {
             let tree_parameters = get_asset_curve_tree_parameters();
             let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
-                b"asset-comm-params",
+                ASSET_COMMITMENT_PARAMETERS_LABEL,
                 MAX_ASSET_KEYS,
                 &tree_parameters.even_parameters.bp_gens,
             );
@@ -207,26 +208,10 @@ impl CurveTreeConfig for AssetTreeConfig {
     type P0 = VestaParameters;
     type P1 = PallasParameters;
 
-    #[cfg(feature = "std")]
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
         SelRerandParameters {
-            even_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
-            odd_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
-        }
-    }
-
-    #[allow(static_mut_refs)]
-    #[cfg(not(feature = "std"))]
-    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
-        unsafe {
-            SelRerandParameters {
-                even_parameters: CURVE_TREE_PARAMETERS_VESTA
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Vesta"),
-                odd_parameters: CURVE_TREE_PARAMETERS_PALLAS
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Pallas"),
-            }
+            even_parameters: get_vesta_layer_parameters().clone(),
+            odd_parameters: get_pallas_layer_parameters().clone(),
         }
     }
 
@@ -249,26 +234,10 @@ impl CurveTreeConfig for AccountTreeConfig {
     type P0 = PallasParameters;
     type P1 = VestaParameters;
 
-    #[cfg(feature = "std")]
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
         SelRerandParameters {
-            odd_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
-            even_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
-        }
-    }
-
-    #[allow(static_mut_refs)]
-    #[cfg(not(feature = "std"))]
-    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
-        unsafe {
-            SelRerandParameters {
-                odd_parameters: CURVE_TREE_PARAMETERS_VESTA
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Vesta"),
-                even_parameters: CURVE_TREE_PARAMETERS_PALLAS
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Pallas"),
-            }
+            odd_parameters: get_vesta_layer_parameters().clone(),
+            even_parameters: get_pallas_layer_parameters().clone(),
         }
     }
 
@@ -291,26 +260,10 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     type P0 = PallasParameters;
     type P1 = VestaParameters;
 
-    #[cfg(feature = "std")]
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
         SelRerandParameters {
-            odd_parameters: CURVE_TREE_PARAMETERS_VESTA.clone(),
-            even_parameters: CURVE_TREE_PARAMETERS_PALLAS.clone(),
-        }
-    }
-
-    #[allow(static_mut_refs)]
-    #[cfg(not(feature = "std"))]
-    fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
-        unsafe {
-            SelRerandParameters {
-                odd_parameters: CURVE_TREE_PARAMETERS_VESTA
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Vesta"),
-                even_parameters: CURVE_TREE_PARAMETERS_PALLAS
-                    .clone()
-                    .expect("Failed to create SingleLayerParameters for Pallas"),
-            }
+            odd_parameters: get_vesta_layer_parameters().clone(),
+            even_parameters: get_pallas_layer_parameters().clone(),
         }
     }
 
@@ -323,8 +276,8 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
 pub struct WrappedCurveTreeParameters(Vec<u8>);
 
 impl WrappedCurveTreeParameters {
-    pub fn new<C: CurveTreeConfig>(gens_length: usize) -> Result<Self, Error> {
-        let params = CurveTreeParameters::<C>::new(gens_length, gens_length)?;
+    pub fn new<C: CurveTreeConfig>() -> Result<Self, Error> {
+        let params = C::build_parameters();
         let mut buf = Vec::new();
         params.serialize_uncompressed(&mut buf)?;
         Ok(Self(buf))
@@ -479,7 +432,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> 
         &self,
         leaf_index: LeafIndex,
     ) -> Result<CurveTreePath<L, C>, Error> {
-        Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
+        Ok(self.tree.get_path_to_leaf(leaf_index, 0, None)?)
     }
 
     /// Returns the parameters of the curve tree.
@@ -515,7 +468,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     for &FullCurveTree<L, M, C>
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
-        Ok(self.tree.get_path_to_leaf(leaf_index, 0)?)
+        Ok(self.tree.get_path_to_leaf(leaf_index, 0, None)?)
     }
 
     fn get_path_to_leaf(
@@ -702,7 +655,7 @@ impl<
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         Ok(self
             .tree
-            .get_path_to_leaf(leaf_index, 0)
+            .get_path_to_leaf(leaf_index, 0, None)
             .map_err(|_| Error::LeafIndexNotFound(leaf_index))?)
     }
 

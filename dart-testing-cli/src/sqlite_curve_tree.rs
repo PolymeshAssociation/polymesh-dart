@@ -103,6 +103,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
+        _block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedLeafValue<AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
@@ -127,7 +128,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         new_leaf_value: CompressedLeafValue<AssetTreeConfig>,
     ) -> Result<Option<CompressedLeafValue<AssetTreeConfig>>, Self::Error> {
         // Get the old leaf value if it exists
-        let old_leaf = self.get_leaf(leaf_index)?;
+        let old_leaf = self.get_leaf(leaf_index, None)?;
 
         // Encode the new leaf value
         let leaf_data = new_leaf_value.encode();
@@ -153,6 +154,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn get_inner_node(
         &self,
         location: NodeLocation<ASSET_TREE_L>,
+        _block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<1, AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
@@ -330,6 +332,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
+        _block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedLeafValue<AccountTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
@@ -354,7 +357,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
         new_leaf_value: CompressedLeafValue<AccountTreeConfig>,
     ) -> Result<Option<CompressedLeafValue<AccountTreeConfig>>, Self::Error> {
         // Get the old leaf value if it exists
-        let old_leaf = self.get_leaf(leaf_index)?;
+        let old_leaf = self.get_leaf(leaf_index, None)?;
 
         // Encode the new leaf value
         let leaf_data = new_leaf_value.encode();
@@ -380,6 +383,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn get_inner_node(
         &self,
         location: NodeLocation<ACCOUNT_TREE_L>,
+        _block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<1, AccountTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
@@ -457,7 +461,7 @@ impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> for &Acc
     ) -> Result<CurveTreePath<ACCOUNT_TREE_L, AccountTreeConfig>, DartError> {
         Ok(self
             .0
-            .get_path_to_leaf(leaf_index, 0)
+            .get_path_to_leaf(leaf_index, 0, None)
             .map_err(|_| DartError::LeafIndexNotFound(leaf_index))?)
     }
 

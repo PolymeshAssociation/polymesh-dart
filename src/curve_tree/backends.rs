@@ -170,6 +170,7 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
+        block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedLeafValue<C>>, Self::Error>;
 
     fn set_leaf(
@@ -185,6 +186,7 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
+        block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<M, C>>, Self::Error>;
 
     fn set_inner_node(
@@ -263,6 +265,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn get_leaf(
         &self,
         leaf_index: LeafIndex,
+        block_number: Option<BlockNumber>,
     ) -> impl Future<Output = Result<Option<CompressedLeafValue<C>>, Self::Error>> + Send;
 
     fn set_leaf(
@@ -278,6 +281,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
+        block_number: Option<BlockNumber>,
     ) -> impl Future<Output = Result<Option<CompressedInner<M, C>>, Self::Error>> + Send;
 
     fn set_inner_node(
@@ -408,7 +412,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         Ok(())
     }
 
-    fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<CompressedLeafValue<C>>, Error> {
+    fn get_leaf(
+        &self,
+        leaf_index: LeafIndex,
+        _block_number: Option<BlockNumber>,
+    ) -> Result<Option<CompressedLeafValue<C>>, Error> {
         Ok(self.leafs.get(leaf_index as usize).copied())
     }
 
@@ -435,6 +443,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
     fn get_inner_node(
         &self,
         location: NodeLocation<L>,
+        _block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<M, C>>, Error> {
         Ok(self.nodes.get(&location).cloned())
     }
@@ -511,8 +520,9 @@ where
     async fn get_leaf(
         &self,
         leaf_index: LeafIndex,
+        block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedLeafValue<C>>, Error> {
-        CurveTreeBackend::get_leaf(self, leaf_index)
+        CurveTreeBackend::get_leaf(self, leaf_index, block_number)
     }
 
     async fn set_leaf(
@@ -530,8 +540,9 @@ where
     async fn get_inner_node(
         &self,
         location: NodeLocation<L>,
+        block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<M, C>>, Error> {
-        CurveTreeBackend::get_inner_node(self, location)
+        CurveTreeBackend::get_inner_node(self, location, block_number)
     }
 
     async fn set_inner_node(

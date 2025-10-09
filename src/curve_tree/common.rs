@@ -467,7 +467,7 @@ macro_rules! impl_curve_tree_with_backend {
         > CurveTreeLookup<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
         {
             fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, error::Error> {
-                Ok($curve_tree_ty::get_path_to_leaf(self,leaf_index, 0).map_err(|_| error::Error::LeafIndexNotFound(leaf_index))?)
+                Ok($curve_tree_ty::get_path_to_leaf(self,leaf_index, 0, None).map_err(|_| error::Error::LeafIndexNotFound(leaf_index))?)
             }
 
             fn get_path_to_leaf(
@@ -705,7 +705,7 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             pub $($async_fn)* fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<CompressedLeafValue<C>>, Error> {
-                self.backend.get_leaf(leaf_index)$($await)*
+                self.backend.get_leaf(leaf_index, None)$($await)*
             }
 
             $($async_fn)* fn _get_odd_x_coord_children_batch(
@@ -732,7 +732,7 @@ macro_rules! impl_curve_tree_with_backend {
                 let mut x_coord_children = [<C::P1 as ark_ec::CurveConfig>::BaseField::zero(); L];
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
-                    let x_coord = match self.backend.get_inner_node(child)$($await)*? {
+                    let x_coord = match self.backend.get_inner_node(child, None)$($await)*? {
                         Some(node) => match node.decompress()? {
                             Inner::Odd(commitments) => {
                                 Some((commitments[tree_index as usize] + delta).into_affine().x)
@@ -778,9 +778,9 @@ macro_rules! impl_curve_tree_with_backend {
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
                     let commitment = if let NodeLocation::Leaf(leaf_index) = child {
-                        self.backend.get_leaf(leaf_index)$($await)*?.and_then(|leaf| leaf.decompress().ok())
+                        self.backend.get_leaf(leaf_index, None)$($await)*?.and_then(|leaf| leaf.decompress().ok())
                     } else {
-                        match self.backend.get_inner_node(child)$($await)*? {
+                        match self.backend.get_inner_node(child, None)$($await)*? {
                             Some(node) => match node.decompress()? {
                                 Inner::Even(commitments) => Some(commitments[tree_index as usize]),
                                 Inner::Odd(_) => {
@@ -826,7 +826,7 @@ macro_rules! impl_curve_tree_with_backend {
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 let params = self.parameters()$($await)*;
                 let root = NodeLocation::<L>::root(self.height()$($await)*);
-                match self.backend.get_inner_node(root)$($await)*? {
+                match self.backend.get_inner_node(root, None)$($await)*? {
                     Some(node) => match node.decompress()? {
                         Inner::Even(commitments) => Ok(Root::Even(RootNode {
                             commitments: commitments.clone(),
@@ -869,6 +869,7 @@ macro_rules! impl_curve_tree_with_backend {
                 &self,
                 leaf_index: LeafIndex,
                 tree_index: TreeIndex,
+                block_number: Option<BlockNumber>,
             ) -> Result<CurveTreeWitnessPath<L, C::P0, C::P1>, Error> {
                 let height = self.height()$($await)*;
                 let mut even_internal_nodes = Vec::with_capacity(height as usize);
@@ -876,7 +877,7 @@ macro_rules! impl_curve_tree_with_backend {
 
                 let mut even_child = self
                     .backend
-                    .get_leaf(leaf_index)
+                    .get_leaf(leaf_index, block_number)
                     $($await)*?
                     .and_then(|leaf| leaf.decompress().ok())
                     .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
@@ -892,7 +893,7 @@ macro_rules! impl_curve_tree_with_backend {
                     let (parent_location, _) = location.parent();
                     let node = self
                         .backend
-                        .get_inner_node(parent_location)
+                        .get_inner_node(parent_location, block_number)
                         $($await)*?
                         .ok_or_else(|| crate::Error::CurveTreeNodeNotFound {
                             level: parent_location.level(),
@@ -978,7 +979,7 @@ macro_rules! impl_curve_tree_with_backend {
                 while leaf_index < leaf_count {
                     let leaf_value = self
                         .backend
-                        .get_leaf(leaf_index)
+                        .get_leaf(leaf_index, None)
                         $($await)*?
                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
 
@@ -1001,7 +1002,7 @@ macro_rules! impl_curve_tree_with_backend {
                         is_root = location.is_root(height);
 
                         // Get or initialize the node at this location.
-                        let mut node = match self.backend.get_inner_node(location)$($await)*? {
+                        let mut node = match self.backend.get_inner_node(location, None)$($await)*? {
                             Some(node) => {
                                 // Save the old commitments for the next level up.
                                 if node.is_even {
@@ -1069,7 +1070,7 @@ macro_rules! impl_curve_tree_with_backend {
                                     // Get the next uncommitted leaf.
                                     let leaf_value = self
                                         .backend
-                                        .get_leaf(leaf_index)
+                                        .get_leaf(leaf_index, None)
                                         $($await)*?
                                         .ok_or_else(|| crate::Error::CurveTreeLeafIndexOutOfBounds(leaf_index).into())?;
                                     even_old_child = None;
@@ -1149,7 +1150,7 @@ macro_rules! impl_curve_tree_with_backend {
                     location = parent_location;
                     is_root = location.is_root(height);
 
-                    let mut node = match self.backend.get_inner_node(location)$($await)*? {
+                    let mut node = match self.backend.get_inner_node(location, None)$($await)*? {
                         Some(node) => {
                             // Save the old commitments for the next level up.
                             if node.is_even {
@@ -1236,14 +1237,14 @@ macro_rules! impl_curve_tree_with_backend {
                 &self,
                 leaf_index: LeafIndex,
             ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
+                let block_number = self.get_block_number()$($await)*?;
                 // Get the leaf and path for the given leaf index.
                 let leaf = self
                     .backend
-                    .get_leaf(leaf_index)
+                    .get_leaf(leaf_index, Some(block_number))
                     $($await)*?
                     .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
-                let path = self.get_path_to_leaf(leaf_index, 0)$($await)*?;
-                let block_number = self.get_block_number()$($await)*?;
+                let path = self.get_path_to_leaf(leaf_index, 0, Some(block_number))$($await)*?;
                 let root = self.root()$($await)*?;
                 Ok(LeafPathAndRoot {
                     leaf,
