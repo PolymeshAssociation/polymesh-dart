@@ -627,7 +627,7 @@ impl<
         odd_transcript: MerlinTranscript,
     ) -> Result<Self> {
         ensure_proper_leg_creation(&leg, &leg_enc, &asset_data)?;
-        let (mut even_prover, mut odd_prover, re_randomized_path, re_randomization_of_leaf) =
+        let (mut even_prover, mut odd_prover, re_randomized_path, mut re_randomization_of_leaf) =
             initialize_curve_tree_prover_with_given_transcripts(
                 rng,
                 leaf_path,
