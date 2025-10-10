@@ -396,7 +396,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ac0a738472e7e8c4ec2ae2ee7b8207bbb9544968"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#b69781c87207ead36b4dd220b727c6b9ff29994e"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -1851,7 +1851,7 @@ checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ac0a738472e7e8c4ec2ae2ee7b8207bbb9544968"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#b69781c87207ead36b4dd220b727c6b9ff29994e"
 dependencies = [
  "ark-crypto-primitives",
  "ark-ec",
