@@ -43,6 +43,7 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
 pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
@@ -176,7 +177,7 @@ impl<
     // More efficient update methods can be added in future
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
 pub struct Leg<G: AffineRepr> {
     /// Public key of sender
     pub pk_s: G,
@@ -194,7 +195,7 @@ pub struct Leg<G: AffineRepr> {
 pub struct EphemeralPublicKey<G: AffineRepr>(pub G, pub G, pub G, pub G);
 
 /// (r_1, r_2, r_3, r_4)
-#[derive(Clone, Copy, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
 pub struct LegEncryptionRandomness<F: PrimeField>(pub F, pub F, pub F, pub F);
 
 /// Twisted Elgamal encryption of sender, receiver public keys, amount and asset id for all the auditors and mediators
@@ -248,15 +249,18 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         enc_key_gen: G,
         enc_gen: G,
     ) -> Result<(LegEncryption<G>, LegEncryptionRandomness<F>)> {
-        let y = F::rand(rng);
+        let mut y = F::rand(rng);
+
+        let mut amount = F::from(self.amount);
+        let mut asset_id = F::from(self.asset_id);
 
         // Optimz: Lot of the following operations can benefit from `WindowTable`
         let shared_secret = (enc_key_gen * y).into_affine();
         let (r1, r2, r3, r4) = Self::encryption_randomness::<D>(shared_secret)?;
         let ct_s = (enc_key_gen * r1 + self.pk_s).into_affine();
         let ct_r = (enc_key_gen * r2 + self.pk_r).into_affine();
-        let ct_amount = (enc_key_gen * r3 + enc_gen * F::from(self.amount)).into_affine();
-        let ct_asset_id = (enc_key_gen * r4 + enc_gen * F::from(self.asset_id)).into_affine();
+        let ct_amount = (enc_key_gen * r3 + enc_gen * amount).into_affine();
+        let ct_asset_id = (enc_key_gen * r4 + enc_gen * asset_id).into_affine();
         let eph_pk_auds_meds = self.pk_auds_meds.iter().map(|(role, pk)| {
             (
                 *role,
@@ -271,6 +275,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         let eph_pk_s = (pk_s_enc * y).into_affine();
         let eph_pk_r = (pk_r_enc * y).into_affine();
+
+        Zeroize::zeroize(&mut amount);
+        Zeroize::zeroize(&mut asset_id);
+        Zeroize::zeroize(&mut y);
+
         Ok((
             LegEncryption {
                 ct_s,

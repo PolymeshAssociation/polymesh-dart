@@ -472,7 +472,7 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account, true)?;
         ensure_correct_balance_change(account, updated_account, increase_bal_by, false)?;
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
             initialize_curve_tree_prover_with_given_transcripts(
                 rng,
                 leaf_path,
@@ -512,13 +512,13 @@ impl<
         // 3. sk in account commitment is the same as in the issuer's public key
         // 4. New balance = old balance + increase_bal_by
 
-        let counter_blinding = F0::rand(rng);
-        let new_balance_blinding = F0::rand(rng);
-        let initial_rho_blinding = F0::rand(rng);
-        let old_rho_blinding = F0::rand(rng);
-        let new_rho_blinding = F0::rand(rng);
-        let old_s_blinding = F0::rand(rng);
-        let new_s_blinding = F0::rand(rng);
+        let mut counter_blinding = F0::rand(rng);
+        let mut new_balance_blinding = F0::rand(rng);
+        let mut initial_rho_blinding = F0::rand(rng);
+        let mut old_rho_blinding = F0::rand(rng);
+        let mut new_rho_blinding = F0::rand(rng);
+        let mut old_s_blinding = F0::rand(rng);
+        let mut new_s_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.current_rho_gen();
         let pk_gen = account_comm_key.sk_gen();
@@ -564,7 +564,7 @@ impl<
         // Drop reference to borrow even_prover below
         let _ = transcript;
 
-        let comm_bp_blinding = F0::rand(rng);
+        let mut comm_bp_blinding = F0::rand(rng);
         let (comm_bp, vars) = even_prover.commit_vec(
             &[
                 account.rho,
@@ -596,17 +596,19 @@ impl<
 
         let prover_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
+        let mut wits = [
+            account.balance.into(),
+            account.counter.into(),
+            account.rho,
+            account.current_rho,
+            account.randomness,
+            rerandomization,
+        ];
         let resp_leaf = t_r_leaf.response(
-            &[
-                account.balance.into(),
-                account.counter.into(),
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                rerandomization,
-            ],
+            &wits,
             &prover_challenge,
         )?;
+        Zeroize::zeroize(&mut wits);
 
         // Response for other witnesses will already be generated in sigma protocol for leaf
         let mut wits = BTreeMap::new();
@@ -623,6 +625,16 @@ impl<
         let mut w = BTreeMap::new();
         w.insert(0, comm_bp_blinding);
         let resp_bp = t_bp.partial_response(w, &prover_challenge)?;
+
+        counter_blinding.zeroize();
+        new_balance_blinding.zeroize();
+        initial_rho_blinding.zeroize();
+        old_rho_blinding.zeroize();
+        new_rho_blinding.zeroize();
+        old_s_blinding.zeroize();
+        new_s_blinding.zeroize();
+        comm_bp_blinding.zeroize();
+        rerandomization.zeroize();
 
         let (even_proof, odd_proof) =
             prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
@@ -1096,18 +1108,18 @@ impl<
             updated_account_commitment
         );
 
-        let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = leg_enc_rand;
+        let LegEncryptionRandomness(mut r_1, mut r_2, r_3, mut r_4) = leg_enc_rand;
         let r_pk = if is_sender { r_1 } else { r_2 };
 
-        let id_blinding = F0::rand(rng);
-        let sk_blinding = F0::rand(rng);
-        let old_counter_blinding = F0::rand(rng);
-        let asset_id_blinding = F0::rand(rng);
-        let initial_rho_blinding = F0::rand(rng);
-        let old_rho_blinding = F0::rand(rng);
-        let new_rho_blinding = F0::rand(rng);
-        let old_randomness_blinding = F0::rand(rng);
-        let new_randomness_blinding = F0::rand(rng);
+        let mut id_blinding = F0::rand(rng);
+        let mut sk_blinding = F0::rand(rng);
+        let mut old_counter_blinding = F0::rand(rng);
+        let mut asset_id_blinding = F0::rand(rng);
+        let mut initial_rho_blinding = F0::rand(rng);
+        let mut old_rho_blinding = F0::rand(rng);
+        let mut new_rho_blinding = F0::rand(rng);
+        let mut old_randomness_blinding = F0::rand(rng);
+        let mut new_randomness_blinding = F0::rand(rng);
 
         let (old_balance_blinding, new_balance_blinding) = if has_balance_changed {
             (F0::rand(rng), F0::rand(rng))
@@ -1153,6 +1165,20 @@ impl<
             enc_key_gen,
             enc_gen,
         )?;
+
+        Zeroize::zeroize(&mut r_1);
+        Zeroize::zeroize(&mut r_2);
+        Zeroize::zeroize(&mut r_4);
+        Zeroize::zeroize(&mut id_blinding);
+        Zeroize::zeroize(&mut sk_blinding);
+        Zeroize::zeroize(&mut old_counter_blinding);
+        Zeroize::zeroize(&mut asset_id_blinding);
+        Zeroize::zeroize(&mut initial_rho_blinding);
+        Zeroize::zeroize(&mut old_rho_blinding);
+        Zeroize::zeroize(&mut new_rho_blinding);
+        Zeroize::zeroize(&mut old_randomness_blinding);
+        Zeroize::zeroize(&mut new_randomness_blinding);
+
         Ok(Self {
             even_prover: Some(even_prover),
             odd_prover: Some(odd_prover),
@@ -1201,6 +1227,10 @@ impl<
             &self.t_bp_randomness_relations,
             challenge,
         )?;
+
+        Zeroize::zeroize(&mut self.leaf_rerandomization);
+        Zeroize::zeroize(&mut self.comm_bp_blinding);
+
         let even_prover = self.even_prover.take().unwrap();
         let odd_prover = self.odd_prover.take().unwrap();
         let (even_proof, odd_proof) =
@@ -1233,9 +1263,9 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         ct_amount: &Affine<G0>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
-        old_balance_blinding: F0,
-        new_balance_blinding: F0,
-        r_3: F0,
+        mut old_balance_blinding: F0,
+        mut new_balance_blinding: F0,
+        mut r_3: F0,
         has_balance_decreased: bool,
         mut even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         pc_gens: &PedersenGens<Affine<G0>>,
@@ -1256,7 +1286,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         let mut transcript = even_prover.transcript();
 
-        let amount_blinding = F0::rand(rng);
+        let mut amount_blinding = F0::rand(rng);
         let (t_comm_bp_bal, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
             rng,
             amount,
@@ -1271,6 +1301,12 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
             enc_gen,
             &mut transcript,
         )?;
+
+        Zeroize::zeroize(&mut old_balance_blinding);
+        Zeroize::zeroize(&mut new_balance_blinding);
+        Zeroize::zeroize(&mut amount_blinding);
+        Zeroize::zeroize(&mut r_3);
+
         Ok(Self {
             amount,
             old_balance: account.balance,
