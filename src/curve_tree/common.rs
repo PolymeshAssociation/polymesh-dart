@@ -704,8 +704,8 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(leaf_index)
             }
 
-            pub $($async_fn)* fn get_leaf(&self, leaf_index: LeafIndex) -> Result<Option<CompressedLeafValue<C>>, Error> {
-                self.backend.get_leaf(leaf_index, None)$($await)*
+            pub $($async_fn)* fn get_leaf(&self, leaf_index: LeafIndex, block_number: Option<BlockNumber>) -> Result<Option<CompressedLeafValue<C>>, Error> {
+                self.backend.get_leaf(leaf_index, block_number)$($await)*
             }
 
             $($async_fn)* fn _get_odd_x_coord_children_batch(
@@ -1240,12 +1240,11 @@ macro_rules! impl_curve_tree_with_backend {
                 let block_number = self.get_block_number()$($await)*?;
                 // Get the leaf and path for the given leaf index.
                 let leaf = self
-                    .backend
                     .get_leaf(leaf_index, Some(block_number))
                     $($await)*?
                     .ok_or_else(|| crate::Error::LeafIndexNotFound(leaf_index))?;
                 let path = self.get_path_to_leaf(leaf_index, 0, Some(block_number))$($await)*?;
-                let root = self.root()$($await)*?;
+                let root = self.fetch_root(Some(block_number))$($await)*?;
                 Ok(LeafPathAndRoot {
                     leaf,
                     leaf_index,

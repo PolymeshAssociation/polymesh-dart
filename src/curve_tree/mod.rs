@@ -610,7 +610,7 @@ impl<
     /// Apply new leaves from the backend and insert them into `leaf_to_index` map.
     pub fn apply_new_leaves(&mut self) {
         let mut last_index = self.leaf_to_index.len() as LeafIndex;
-        while let Ok(Some(leaf)) = self.tree.get_leaf(last_index) {
+        while let Ok(Some(leaf)) = self.tree.get_leaf(last_index, None) {
             let leaf_buf = leaf.encode();
             self.leaf_to_index.insert(leaf_buf, last_index as u64);
             last_index += 1;
