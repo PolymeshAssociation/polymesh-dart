@@ -33,11 +33,14 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
 
 /// To commit, use the same commitment key as non-fee asset account commitment.
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct FeeAccountState<G: AffineRepr> {
     // TODO: Remove this later.
     pub sk: G::ScalarField,
@@ -184,9 +187,8 @@ impl<G: AffineRepr> RegTxnProof<G> {
             + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance))
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id));
 
-        let sk_blinding = G::ScalarField::rand(rng);
-        let rho_blinding = G::ScalarField::rand(rng);
-        let randomness_blinding = G::ScalarField::rand(rng);
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut randomness_blinding = G::ScalarField::rand(rng);
 
         // For proving Comm - D = g_rho * rho + g_randomness * randomness
         let comm_protocol = PokPedersenCommitmentProtocol::init(
@@ -197,6 +199,10 @@ impl<G: AffineRepr> RegTxnProof<G> {
             randomness_blinding,
             &account_comm_key.randomness_gen(),
         );
+
+        rho_blinding.zeroize();
+        randomness_blinding.zeroize();
+
         let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
         comm_protocol.challenge_contribution(
             &account_comm_key.rho_gen(),
@@ -205,8 +211,13 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &mut transcript,
         )?;
 
+        let mut sk_blinding = G::ScalarField::rand(rng);
+
         let pk_protocol =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+
+        sk_blinding.zeroize();
+
         pk_protocol.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
         let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);

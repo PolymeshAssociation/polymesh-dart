@@ -110,8 +110,8 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         let key_pairs: Vec<_> = keys.iter().map(|((s, _), (e, _))| (*s, *e)).collect();
         add_slice_to_transcript(&mut transcript, b"keys", &key_pairs)?;
 
-        let r_sig = G::ScalarField::rand(rng);
-        let r_enc = G::ScalarField::rand(rng);
+        let mut r_sig = G::ScalarField::rand(rng);
+        let mut r_enc = G::ScalarField::rand(rng);
 
         let t_sig = (sig_key_gen * r_sig).into_affine();
         let t_enc = (enc_key_gen * r_enc).into_affine();
@@ -122,6 +122,9 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 
         let mut s_sig = r_sig;
         let mut s_enc = r_enc;
+
+        r_sig.zeroize();
+        r_enc.zeroize();
 
         let mut c = challenge;
         for ((_, s), (_, e)) in keys.into_iter() {
@@ -231,7 +234,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         let enc_keys: Vec<_> = keys.iter().map(|(e, _)| *e).collect();
         add_slice_to_transcript(&mut transcript, b"keys", &enc_keys)?;
 
-        let r = G::ScalarField::rand(rng);
+        let mut r = G::ScalarField::rand(rng);
         let t = (enc_key_gen * r).into_affine();
 
         add_to_transcript!(transcript, T_ENC_KEY, t);
@@ -239,6 +242,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let mut s = r;
+        r.zeroize();
         let mut c = challenge;
         for (_, e) in keys.into_iter() {
             s += c * e;

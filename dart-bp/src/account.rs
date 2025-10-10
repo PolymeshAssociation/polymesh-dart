@@ -38,6 +38,7 @@ use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
+use core::mem::ManuallyDrop;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -53,6 +54,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
@@ -153,7 +155,9 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct AccountState<G: AffineRepr> {
     pub id: G::ScalarField,
     // TODO: Remove this later.
@@ -936,6 +940,7 @@ pub struct BalanceChangeProof<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0
     pub resp_leg_amount: Partial1PokPedersenCommitment<Affine<G0>>,
 }
 
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct CommonStateChangeProver<
     'a,
     const L: usize,
@@ -944,16 +949,21 @@ pub struct CommonStateChangeProver<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub even_prover: Prover<'a, MerlinTranscript, Affine<G0>>,
-    pub odd_prover: Prover<'a, MerlinTranscript, Affine<G1>>,
+    #[zeroize(skip)]
+    pub even_prover: Option<Prover<'a, MerlinTranscript, Affine<G0>>>,
+    #[zeroize(skip)]
+    pub odd_prover: Option<Prover<'a, MerlinTranscript, Affine<G1>>>,
+    #[zeroize(skip)]
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
     pub leaf_rerandomization: F0,
+    #[zeroize(skip)]
     pub nullifier: Affine<G0>,
     pub t_r_leaf: SchnorrCommitment<Affine<G0>>,
     pub t_acc_new: SchnorrCommitment<Affine<G0>>,
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
     pub t_leg_asset_id: PokPedersenCommitmentProtocol<Affine<G0>>,
     pub t_leg_pk: PokPedersenCommitmentProtocol<Affine<G0>>,
+    #[zeroize(skip)]
     pub comm_bp_randomness_relations: Affine<G0>,
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
@@ -962,11 +972,13 @@ pub struct CommonStateChangeProver<
     pub new_balance_blinding: F0,
 }
 
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct BalanceChangeProver<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
     pub amount: Balance,
     pub old_balance: Balance,
     pub new_balance: Balance,
     pub comm_bp_bal_blinding: G0::ScalarField,
+    #[zeroize(skip)]
     pub comm_bp_bal: Affine<G0>,
     pub t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
     pub t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
@@ -1140,8 +1152,8 @@ impl<
             enc_gen,
         )?;
         Ok(Self {
-            even_prover,
-            odd_prover,
+            even_prover: Some(even_prover),
+            odd_prover: Some(odd_prover),
             re_randomized_path,
             leaf_rerandomization,
             nullifier,
@@ -1160,7 +1172,7 @@ impl<
     }
 
     pub fn gen_proof<R: CryptoRngCore>(
-        self,
+        mut self,
         rng: &mut R,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -1181,19 +1193,21 @@ impl<
             self.comm_bp_blinding,
             &self.t_r_leaf,
             &self.t_acc_new,
-            self.t_null,
-            self.t_leg_asset_id,
-            self.t_leg_pk,
+            self.t_null.clone(),
+            self.t_leg_asset_id.clone(),
+            self.t_leg_pk.clone(),
             &self.t_bp_randomness_relations,
             challenge,
         )?;
+        let even_prover = self.even_prover.take().unwrap();
+        let odd_prover = self.odd_prover.take().unwrap();
         let (even_proof, odd_proof) =
-            prove_with_rng(self.even_prover, self.odd_prover, &account_tree_params, rng)?;
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
 
         Ok(CommonStateChangeProof {
             even_proof,
             odd_proof,
-            re_randomized_path: self.re_randomized_path,
+            re_randomized_path: self.re_randomized_path.clone(),
             t_r_leaf: self.t_r_leaf.t,
             t_acc_new: self.t_acc_new.t,
             resp_leaf,
@@ -1271,8 +1285,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         let (resp_comm_bp_bal, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
             self.amount,
             self.comm_bp_bal_blinding,
-            self.t_comm_bp_bal,
-            self.t_leg_amount,
+            self.t_comm_bp_bal.clone(),
+            self.t_leg_amount.clone(),
             challenge,
         )?;
         Ok(BalanceChangeProof {
@@ -1684,6 +1698,7 @@ impl<
             odd_transcript,
         )?;
 
+        let mut even_prover = common_prover.even_prover.take().unwrap();
         let balance_change_prover = BalanceChangeProver::init(
             rng,
             amount,
@@ -1694,7 +1709,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             true,
-            &mut common_prover.even_prover,
+            &mut even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -1703,10 +1718,11 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -2017,10 +2033,13 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let mut even_prover = common_prover.even_prover.take().unwrap();
+
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -2321,6 +2340,8 @@ impl<
             odd_transcript,
         )?;
 
+        let mut even_prover = common_prover.even_prover.take().unwrap();
+
         let balance_change_prover = BalanceChangeProver::init(
             rng,
             amount,
@@ -2331,7 +2352,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             false,
-            &mut common_prover.even_prover,
+            &mut even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -2340,10 +2361,11 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -2655,10 +2677,13 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let mut even_prover = common_prover.even_prover.take().unwrap();
+
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -2959,6 +2984,7 @@ impl<
             odd_transcript,
         )?;
 
+        let mut even_prover = common_prover.even_prover.take().unwrap();
         let balance_change_prover = BalanceChangeProver::init(
             rng,
             amount,
@@ -2969,7 +2995,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             false,
-            &mut common_prover.even_prover,
+            &mut even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -2978,10 +3004,11 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -3294,10 +3321,13 @@ impl<
 
         let nullifier = common_prover.nullifier;
 
-        let challenge = common_prover
-            .even_prover
+        let mut even_prover = common_prover.even_prover.take().unwrap();
+
+        let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        common_prover.even_prover = Some(even_prover);
 
         let common_proof = common_prover.gen_proof(
             rng,
@@ -5627,7 +5657,7 @@ pub mod tests {
 
         let asset_id = 1;
         let amount = 100;
-        let batch_size = 5;
+        let batch_size = 10;
 
         let mut accounts = Vec::with_capacity(batch_size);
         let mut updated_accounts = Vec::with_capacity(batch_size);

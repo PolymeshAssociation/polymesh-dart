@@ -38,6 +38,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::Zeroize;
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
@@ -176,10 +177,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
             + (account_comm_key.id_gen() * account.id);
 
-        let sk_blinding = G::ScalarField::rand(rng);
-        let rho_blinding = G::ScalarField::rand(rng);
-        let current_rho_blinding = G::ScalarField::rand(rng);
-        let s_blinding = G::ScalarField::rand(rng);
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut current_rho_blinding = G::ScalarField::rand(rng);
+        let mut s_blinding = G::ScalarField::rand(rng);
 
         // For proving Comm - D - initial_nullifier = g_i * rho^2 + g_j * s
         let comm_protocol = PokPedersenCommitmentProtocol::init(
@@ -301,6 +301,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             poseidon_config,
         )?;
 
+        let mut sk_blinding = G::ScalarField::rand(rng);
+
         let t_comm_rho_bp = SchnorrCommitment::new(
             &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
             vec![
@@ -313,6 +315,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let t_pk =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+
+        sk_blinding.zeroize();
+        rho_blinding.zeroize();
+        current_rho_blinding.zeroize();
 
         // Commit to each chunk of randomness and prove that each chunk in range using BP
         let (comm_s_chunks_bp, com_s_bp_blinding) =
@@ -366,6 +372,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     s_blinding,
                     &h,
                 );
+                s_blinding.zeroize();
                 combined_s_proto.challenge_contribution(
                     &pk_T,
                     &h,
