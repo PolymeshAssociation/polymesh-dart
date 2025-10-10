@@ -38,7 +38,7 @@ fn new_fee_account<R: CryptoRngCore>(
 
 /// Create shared setup params for fee account benchmarks
 fn create_shared_setup<R: CryptoRngCore>(
-    rng: &mut R,
+    _rng: &mut R,
 ) -> (
     SelRerandParameters<PallasParameters, VestaParameters>,
     [PallasA; NUM_GENERATORS],
