@@ -155,6 +155,8 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     }
 }
 
+// Consider using https://github.com/jymchng/sosecrets-rs for blindings as well as i know how many times the blinding is needed.
+
 #[derive(
     Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
 )]
