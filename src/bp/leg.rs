@@ -638,7 +638,7 @@ impl LegEncrypted {
             (
                 key_index,
                 leg_enc.decrypt_given_key_with_limits(
-                    &keys.secret.0.0,
+                    keys.secret.0.0,
                     key_index,
                     enc_gen,
                     max_asset_id,
@@ -651,7 +651,7 @@ impl LegEncrypted {
             let mut idx = 0;
             loop {
                 if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
-                    &keys.secret.0.0,
+                    keys.secret.0.0,
                     idx,
                     enc_gen,
                     max_asset_id,
@@ -741,7 +741,7 @@ impl LegEncrypted {
             }
             LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
                 let leg_enc = self.decode()?;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, idx as usize, enc_gen)?
+                leg_enc.decrypt_given_key(keys.enc.secret.0.0, idx as usize, enc_gen)?
             }
         };
         Ok(Leg {
@@ -761,7 +761,7 @@ impl LegEncrypted {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
         let (sender, receiver, asset_id, amount) = leg_enc.decrypt_given_r_checked(
-            rand,
+            rand.clone(),
             enc_key_gen,
             enc_gen,
             keys.acct.public.get_affine()?,
@@ -789,7 +789,7 @@ impl LegEncrypted {
         let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role, keys)?;
         let pk = account_pk.get_affine()?;
         let (sender, receiver, asset_id, amount) =
-            leg_enc.decrypt_given_r_checked(rand, enc_key_gen, enc_gen, pk, is_sender)?;
+            leg_enc.decrypt_given_r_checked(rand.clone(), enc_key_gen, enc_gen, pk, is_sender)?;
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,

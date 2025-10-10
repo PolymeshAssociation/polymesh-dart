@@ -7,14 +7,12 @@ on:
       - 'dart-bp/**'
       - 'dart-common/**'  # Include dart-common since dart-bp might depend on it
       - 'Cargo.toml'      # Root workspace file
-      - 'Cargo.lock'      # Lockfile changes
   pull_request:
     branches: [ main ]
     paths:
       - 'dart-bp/**'
       - 'dart-common/**'
       - 'Cargo.toml'
-      - 'Cargo.lock'
 
 env:
   CARGO_TERM_COLOR: always

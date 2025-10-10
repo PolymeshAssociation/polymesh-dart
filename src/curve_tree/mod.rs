@@ -40,13 +40,13 @@ const ASSET_COMMITMENT_PARAMETERS_LABEL: &[u8] = b"asset-comm-params";
 
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
-    static ref CURVE_TREE_PARAMETERS_PALLAS: SingleLayerParameters<PallasParameters> = SingleLayerParameters::<PallasParameters>::new_using_label(CURVE_TREE_PARAMETERS_PALLAS_LABEL, MAX_CURVE_TREE_GENS).expect("Failed to create SingleLayerParameters for Pallas");
-    static ref CURVE_TREE_PARAMETERS_VESTA: SingleLayerParameters<VestaParameters> = SingleLayerParameters::<VestaParameters>::new_using_label(CURVE_TREE_PARAMETERS_VESTA_LABEL, MAX_CURVE_TREE_GENS).expect("Failed to create SingleLayerParameters for Vesta");
+    static ref CURVE_TREE_PARAMETERS_PALLAS: SingleLayerParameters<PallasParameters> = SingleLayerParameters::<PallasParameters>::new_using_label(CURVE_TREE_PARAMETERS_PALLAS_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Pallas");
+    static ref CURVE_TREE_PARAMETERS_VESTA: SingleLayerParameters<VestaParameters> = SingleLayerParameters::<VestaParameters>::new_using_label(CURVE_TREE_PARAMETERS_VESTA_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Vesta");
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
             ASSET_COMMITMENT_PARAMETERS_LABEL,
-            MAX_ASSET_KEYS,
+            MAX_ASSET_KEYS as u32,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens,
         );
     static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();

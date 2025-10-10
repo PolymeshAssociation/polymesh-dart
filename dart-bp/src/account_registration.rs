@@ -977,7 +977,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     ) -> Vec<G> {
         let mut g = Vec::with_capacity(NUM_CHUNKS + 1);
         g.push(leaf_level_pc_gens.B_blinding);
-        let mut gens = bp_gens_for_vec_commitment(NUM_CHUNKS, leaf_level_bp_gens);
+        let mut gens = bp_gens_for_vec_commitment(NUM_CHUNKS as u32, leaf_level_bp_gens);
         for _ in 0..NUM_CHUNKS {
             g.push(gens.next().unwrap());
         }
