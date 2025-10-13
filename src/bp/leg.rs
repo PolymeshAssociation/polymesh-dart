@@ -638,7 +638,7 @@ impl LegEncrypted {
             (
                 key_index,
                 leg_enc.decrypt_given_key_with_limits(
-                    keys.secret.0.0,
+                    &keys.secret.0.0,
                     key_index,
                     enc_gen,
                     max_asset_id,
@@ -651,7 +651,7 @@ impl LegEncrypted {
             let mut idx = 0;
             loop {
                 if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
-                    keys.secret.0.0,
+                    &keys.secret.0.0,
                     idx,
                     enc_gen,
                     max_asset_id,
@@ -741,7 +741,7 @@ impl LegEncrypted {
             }
             LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
                 let leg_enc = self.decode()?;
-                leg_enc.decrypt_given_key(keys.enc.secret.0.0, idx as usize, enc_gen)?
+                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, idx as usize, enc_gen)?
             }
         };
         Ok(Leg {

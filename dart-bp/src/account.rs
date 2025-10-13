@@ -604,10 +604,7 @@ impl<
             account.randomness,
             rerandomization,
         ];
-        let resp_leaf = t_r_leaf.response(
-            &wits,
-            &prover_challenge,
-        )?;
+        let resp_leaf = t_r_leaf.response(&wits, &prover_challenge)?;
         Zeroize::zeroize(&mut wits);
 
         // Response for other witnesses will already be generated in sigma protocol for leaf
@@ -4501,7 +4498,7 @@ pub mod tests {
         // Create public params (generators, etc)
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new_using_label(
-                label, NUM_GENS, NUM_GENS,
+                label, NUM_GENS as u32, NUM_GENS as u32,
             )
             .unwrap();
         let account_comm_key = setup_comm_key(label);

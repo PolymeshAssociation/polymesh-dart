@@ -714,11 +714,7 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         old_account.randomness,
         updated_account.randomness,
     ];
-    let (comm_bp_randomness_relations, vars) = prover.commit_vec(
-        &wits,
-        comm_bp_blinding,
-        bp_gens,
-    );
+    let (comm_bp_randomness_relations, vars) = prover.commit_vec(&wits, comm_bp_blinding, bp_gens);
 
     Zeroize::zeroize(&mut wits);
 
@@ -948,10 +944,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
         account.id,
         leaf_rerandomization,
     ];
-    let resp_leaf = t_r_leaf.response(
-        &wits,
-        prover_challenge,
-    )?;
+    let resp_leaf = t_r_leaf.response(&wits, prover_challenge)?;
 
     Zeroize::zeroize(&mut wits);
 

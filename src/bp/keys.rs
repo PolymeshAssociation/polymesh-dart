@@ -82,8 +82,9 @@ impl EncryptionPublicKey {
 pub struct EncryptionSecretKey(pub(crate) bp_keys::DecKey<PallasA>);
 
 /// The encryption key pair, consisting of the public and secret keys.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct EncryptionKeyPair {
+    #[zeroize(skip)]
     pub public: EncryptionPublicKey,
     pub secret: EncryptionSecretKey,
 }
@@ -161,8 +162,9 @@ impl AccountPublicKey {
 pub struct AccountSecretKey(pub(crate) bp_keys::SigKey<PallasA>);
 
 /// The account key pair, consisting of the public and secret keys.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct AccountKeyPair {
+    #[zeroize(skip)]
     pub public: AccountPublicKey,
     pub secret: AccountSecretKey,
 }
@@ -217,7 +219,7 @@ pub struct AccountPublicKeys {
 }
 
 /// The pair of key pairs for an account: the encryption key pair and the account key pair.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct AccountKeys {
     pub enc: EncryptionKeyPair,
     pub acct: AccountKeyPair,

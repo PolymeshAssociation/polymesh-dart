@@ -1,4 +1,3 @@
-use std::mem;
 use crate::TXN_CHALLENGE_LABEL;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::add_to_transcript;
@@ -39,6 +38,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use core::mem;
 use zeroize::Zeroize;
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
@@ -330,12 +330,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 for (i, var) in vars.into_iter().enumerate() {
                     let chunk = mem::take(&mut s_chunks_as_u64[i]);
                     // chunk is zeroized in range_proof
-                    range_proof(
-                        &mut prover,
-                        var.into(),
-                        Some(chunk),
-                        CHUNK_BITS,
-                    )?;
+                    range_proof(&mut prover, var.into(), Some(chunk), CHUNK_BITS)?;
                 }
                 (Some(comm_s_bp), Some(com_s_bp_blinding))
             } else {
@@ -364,7 +359,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 t_comm_s_chunks_bp.challenge_contribution(&mut transcript_ref)?;
 
                 let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-                let mut combined_enc_rand = inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
+                let mut combined_enc_rand =
+                    inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
                 let pk_T = T.as_ref().unwrap().0;
                 let h = T.as_ref().unwrap().2;
                 let combined_s_commitment =
@@ -1652,7 +1648,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                 .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1754,7 +1750,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                 .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1880,7 +1876,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                 .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -2111,7 +2107,7 @@ pub mod tests {
 
         // Create public params (generators, etc)
         let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                 .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
