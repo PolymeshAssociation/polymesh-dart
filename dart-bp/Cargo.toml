@@ -38,6 +38,7 @@ ark-crypto-primitives = { workspace = true, default-features = false, features =
 ark-relations = { workspace = true, default-features = false }
 ark-r1cs-std = { workspace = true, default-features = false }
 ark-pallas = { workspace = true, default-features = false, features = ["curve"] }
+rand_chacha = { workspace = true, default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1.21.3", default-features = false, features = ["alloc", "race"] }
 

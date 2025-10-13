@@ -23,7 +23,8 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::{difference, range_proof};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use rand_core::{CryptoRng, RngCore};
+use rand_chacha::ChaChaRng;
+use rand_core::{CryptoRng, RngCore, SeedableRng};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
@@ -302,16 +303,24 @@ pub fn prove_with_rng<
     tree_params: &SelRerandParameters<G0, G1>,
     rng: &mut R,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
+    // Generate 2 new rngs from the given one
+    let mut seed_even = [0_u8; 32];
+    rng.fill_bytes(&mut seed_even);
+    let mut seed_odd = [0_u8; 32];
+    rng.fill_bytes(&mut seed_odd);
+    let mut rng_even = ChaChaRng::from_seed(seed_even);
+    let mut rng_odd = ChaChaRng::from_seed(seed_odd);
+
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
-        || even_prover.prove(&tree_params.even_parameters.bp_gens),
-        || odd_prover.prove(&tree_params.odd_parameters.bp_gens),
+        || even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, &mut rng_even),
+        || odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, &mut rng_odd),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_proof, odd_proof) = (
-        even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, rng),
-        odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, rng),
+        even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, &mut rng_even),
+        odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, &mut rng_odd),
     );
 
     let (even_proof, odd_proof) = (even_proof?, odd_proof?);
