@@ -19,6 +19,7 @@ use bulletproofs::r1cs::{
     add_verification_tuple_to_rmc, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
+use core::mem;
 use curve_tree_relations::curve::curve_check;
 use curve_tree_relations::lookup::Lookup3Bit;
 use curve_tree_relations::range_proof::range_proof;
@@ -38,7 +39,6 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use core::mem;
 use zeroize::Zeroize;
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
@@ -1647,9 +1647,11 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -1749,9 +1751,11 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -1875,9 +1879,11 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2106,9 +2112,11 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 

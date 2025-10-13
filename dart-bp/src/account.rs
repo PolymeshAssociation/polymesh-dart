@@ -4498,7 +4498,9 @@ pub mod tests {
         // Create public params (generators, etc)
         let account_tree_params =
             SelRerandParameters::<PallasParameters, VestaParameters>::new_using_label(
-                label, NUM_GENS as u32, NUM_GENS as u32,
+                label,
+                NUM_GENS as u32,
+                NUM_GENS as u32,
             )
             .unwrap();
         let account_comm_key = setup_comm_key(label);

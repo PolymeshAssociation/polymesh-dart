@@ -106,7 +106,9 @@ impl<
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct AssetData<
     F0: PrimeField,
     F1: PrimeField,
@@ -468,10 +470,16 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let asset_id = self.decrypt_asset_id(&sk_inv, key_index, enc_gen, max_asset_id)? as AssetId;
         let amount = self.decrypt_amount(&sk_inv, key_index, enc_gen, max_amount)?;
 
-        let sender =
-            Self::decrypt_as_group_element(&sk_inv, self.ct_s, self.eph_pk_auds_meds[key_index].1.0);
-        let receiver =
-            Self::decrypt_as_group_element(&sk_inv, self.ct_r, self.eph_pk_auds_meds[key_index].1.1);
+        let sender = Self::decrypt_as_group_element(
+            &sk_inv,
+            self.ct_s,
+            self.eph_pk_auds_meds[key_index].1.0,
+        );
+        let receiver = Self::decrypt_as_group_element(
+            &sk_inv,
+            self.ct_r,
+            self.eph_pk_auds_meds[key_index].1.1,
+        );
 
         Zeroize::zeroize(&mut sk_inv);
 
@@ -879,7 +887,6 @@ impl<
         );
         Zeroize::zeroize(&mut r_4_blinding);
 
-
         // Proving correctness of asset-id in the point
         let t_asset_id = PokPedersenCommitmentProtocol::init(
             at,
@@ -953,10 +960,7 @@ impl<
             r_4_r_1_inv,
             amount,
         ];
-        let resp_comm_r_i_amount = t_comm_r_i_amount.response(
-            &wits,
-            &challenge,
-        )?;
+        let resp_comm_r_i_amount = t_comm_r_i_amount.response(&wits, &challenge)?;
 
         Zeroize::zeroize(&mut wits);
         Zeroize::zeroize(&mut comm_r_i_blinding);
@@ -1790,7 +1794,9 @@ pub mod tests {
         let label = b"asset-tree-params";
         let asset_tree_params =
             SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
-                label, NUM_GENS as u32, NUM_GENS as u32,
+                label,
+                NUM_GENS as u32,
+                NUM_GENS as u32,
             )
             .unwrap();
 
@@ -2130,9 +2136,11 @@ pub mod tests {
         const L: usize = 64;
 
         // Create public params (generators, etc)
-        let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                .unwrap();
+        let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let sig_key_gen = PallasA::rand(&mut rng);
         let enc_key_gen = PallasA::rand(&mut rng);
