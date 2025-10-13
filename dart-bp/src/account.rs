@@ -38,7 +38,6 @@ use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
-use core::mem::ManuallyDrop;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
