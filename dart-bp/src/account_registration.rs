@@ -19,6 +19,7 @@ use bulletproofs::r1cs::{
     add_verification_tuple_to_rmc, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
+use core::mem;
 use curve_tree_relations::curve::curve_check;
 use curve_tree_relations::lookup::Lookup3Bit;
 use curve_tree_relations::range_proof::range_proof;
@@ -38,6 +39,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::Zeroize;
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
@@ -176,10 +178,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
             + (account_comm_key.id_gen() * account.id);
 
-        let sk_blinding = G::ScalarField::rand(rng);
-        let rho_blinding = G::ScalarField::rand(rng);
-        let current_rho_blinding = G::ScalarField::rand(rng);
-        let s_blinding = G::ScalarField::rand(rng);
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut current_rho_blinding = G::ScalarField::rand(rng);
+        let mut s_blinding = G::ScalarField::rand(rng);
 
         // For proving Comm - D - initial_nullifier = g_i * rho^2 + g_j * s
         let comm_protocol = PokPedersenCommitmentProtocol::init(
@@ -211,7 +212,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
         // Break randomness `s` in `NUM_CHUNKS` chunks and encrypt each chunk using exponent Elgamal. Then initialize sigma
         // protocols for proving correctness of each ciphertext
-        let enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
+        let mut enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             let (s_chunks, s_chunks_as_u64) =
                 digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
             let table = WindowTable::new(NUM_CHUNKS, enc_gen.into_group());
@@ -301,6 +302,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             poseidon_config,
         )?;
 
+        let mut sk_blinding = G::ScalarField::rand(rng);
+
         let t_comm_rho_bp = SchnorrCommitment::new(
             &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
             vec![
@@ -314,19 +317,20 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let t_pk =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
 
+        sk_blinding.zeroize();
+        rho_blinding.zeroize();
+        current_rho_blinding.zeroize();
+
         // Commit to each chunk of randomness and prove that each chunk in range using BP
         let (comm_s_chunks_bp, com_s_bp_blinding) =
-            if let Some((s_chunks, s_chunks_as_u64, _, _, _, _, _)) = &enc_prep {
+            if let Some((s_chunks, s_chunks_as_u64, _, _, _, _, _)) = &mut enc_prep {
                 let com_s_bp_blinding = G::ScalarField::rand(rng);
                 let (comm_s_bp, vars) =
                     prover.commit_vec(s_chunks, com_s_bp_blinding, &leaf_level_bp_gens);
                 for (i, var) in vars.into_iter().enumerate() {
-                    range_proof(
-                        &mut prover,
-                        var.into(),
-                        Some(s_chunks_as_u64[i]),
-                        CHUNK_BITS,
-                    )?;
+                    let chunk = mem::take(&mut s_chunks_as_u64[i]);
+                    // chunk is zeroized in range_proof
+                    range_proof(&mut prover, var.into(), Some(chunk), CHUNK_BITS)?;
                 }
                 (Some(comm_s_bp), Some(com_s_bp_blinding))
             } else {
@@ -340,11 +344,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         // Take challenge contribution of ciphertext of each chunk
         let (t_comm_s_chunks_bp, combined_s_proto) =
-            if let Some((_, _, enc_rands, _, s_chunks_blindings, _, _)) = &enc_prep {
+            if let Some((_, _, enc_rands, _, s_chunks_blindings, _, _)) = &mut enc_prep {
                 let mut blindings = vec![G::ScalarField::rand(rng)];
                 for i in 0..NUM_CHUNKS {
-                    blindings.push(s_chunks_blindings[i]);
+                    // Move the value out of s_chunks_blindings[i]
+                    let b = mem::take(&mut s_chunks_blindings[i]);
+                    blindings.push(b);
                 }
+                // blindings will be zeroized in Drop of SchnorrCommitment
                 let t_comm_s_chunks_bp = SchnorrCommitment::new(
                     &Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
                     blindings,
@@ -352,11 +359,18 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 t_comm_s_chunks_bp.challenge_contribution(&mut transcript_ref)?;
 
                 let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-                let combined_enc_rand = inner_product::<G::ScalarField>(enc_rands, &powers);
+                let mut combined_enc_rand =
+                    inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
                 let pk_T = T.as_ref().unwrap().0;
                 let h = T.as_ref().unwrap().2;
                 let combined_s_commitment =
                     (pk_T * combined_enc_rand + h * account.randomness).into_affine();
+
+                for i in 0..NUM_CHUNKS {
+                    // Move the value out of enc_rands[i] and then zeroize
+                    let mut e = mem::take(&mut enc_rands[i]);
+                    Zeroize::zeroize(&mut e);
+                }
 
                 let combined_s_proto = PokPedersenCommitmentProtocol::init(
                     combined_enc_rand,
@@ -366,6 +380,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     s_blinding,
                     &h,
                 );
+
+                s_blinding.zeroize();
+                combined_enc_rand.zeroize();
+
                 combined_s_proto.challenge_contribution(
                     &pk_T,
                     &h,
@@ -417,6 +435,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
             let t_comm_s_chunks_bp = t_comm_s_chunks_bp.unwrap();
             let resp_comm_s_chunks_bp = t_comm_s_chunks_bp.response(&wits, &prover_challenge)?;
+            Zeroize::zeroize(&mut wits);
+
             // Responses for the witness for chunk is already generated by sigma protocol for account commitment
             let resp_combined_s = combined_s_proto
                 .unwrap()
@@ -953,7 +973,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     ) -> Vec<G> {
         let mut g = Vec::with_capacity(NUM_CHUNKS + 1);
         g.push(leaf_level_pc_gens.B_blinding);
-        let mut gens = bp_gens_for_vec_commitment(NUM_CHUNKS, leaf_level_bp_gens);
+        let mut gens = bp_gens_for_vec_commitment(NUM_CHUNKS as u32, leaf_level_bp_gens);
         for _ in 0..NUM_CHUNKS {
             g.push(gens.next().unwrap());
         }
@@ -1627,9 +1647,11 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -1729,9 +1751,11 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -1855,9 +1879,11 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2086,9 +2112,11 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2418,7 +2446,7 @@ pub mod tests {
 
             // Create public params (generators, etc)
             let account_tree_params =
-                SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS)
+                SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                     .unwrap();
 
             let account_comm_key = setup_comm_key(b"testing");

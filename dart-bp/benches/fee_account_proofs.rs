@@ -46,8 +46,11 @@ fn create_shared_setup<R: CryptoRngCore>(
     const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
 
     // Create public params (generators, etc)
-    let account_tree_params =
-        SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS).unwrap();
+    let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        NUM_GENS as u32,
+        NUM_GENS as u32,
+    )
+    .unwrap();
     let account_comm_key = setup_comm_key(b"testing");
 
     (account_tree_params, account_comm_key)

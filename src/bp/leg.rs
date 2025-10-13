@@ -761,7 +761,7 @@ impl LegEncrypted {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
         let (sender, receiver, asset_id, amount) = leg_enc.decrypt_given_r_checked(
-            rand,
+            rand.clone(),
             enc_key_gen,
             enc_gen,
             keys.acct.public.get_affine()?,
@@ -789,7 +789,7 @@ impl LegEncrypted {
         let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role, keys)?;
         let pk = account_pk.get_affine()?;
         let (sender, receiver, asset_id, amount) =
-            leg_enc.decrypt_given_r_checked(rand, enc_key_gen, enc_gen, pk, is_sender)?;
+            leg_enc.decrypt_given_r_checked(rand.clone(), enc_key_gen, enc_gen, pk, is_sender)?;
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,

@@ -29,6 +29,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::Zeroize;
 
 #[macro_export]
 macro_rules! add_to_transcript {
@@ -668,24 +669,24 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     G0: SWCurveConfig<ScalarField = F0> + Copy,
 >(
     rng: &mut R,
-    asset_id: AssetId,
+    mut asset_id: AssetId,
     leg_enc: &LegEncryption<Affine<G0>>,
     old_account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     is_sender: bool,
-    id_blinding: F0,
-    sk_blinding: F0,
-    old_balance_blinding: F0,
-    new_balance_blinding: F0,
-    old_counter_blinding: F0,
-    initial_rho_blinding: F0,
-    old_rho_blinding: F0,
-    new_rho_blinding: F0,
-    old_randomness_blinding: F0,
-    new_randomness_blinding: F0,
-    asset_id_blinding: F0,
-    r_pk: F0, // r_1 or r_2 depending on sender or receiver
-    r_4: F0,
+    mut id_blinding: F0,
+    mut sk_blinding: F0,
+    mut old_balance_blinding: F0,
+    mut new_balance_blinding: F0,
+    mut old_counter_blinding: F0,
+    mut initial_rho_blinding: F0,
+    mut old_rho_blinding: F0,
+    mut new_rho_blinding: F0,
+    mut old_randomness_blinding: F0,
+    mut new_randomness_blinding: F0,
+    mut asset_id_blinding: F0,
+    mut r_pk: F0, // r_1 or r_2 depending on sender or receiver
+    mut r_4: F0,
     prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     pc_gens: &PedersenGens<Affine<G0>>,
@@ -706,17 +707,16 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     let nullifier = old_account.nullifier(account_comm_key);
 
     let comm_bp_blinding = F0::rand(rng);
-    let (comm_bp_randomness_relations, vars) = prover.commit_vec(
-        &[
-            old_account.rho,
-            old_account.current_rho,
-            updated_account.current_rho,
-            old_account.randomness,
-            updated_account.randomness,
-        ],
-        comm_bp_blinding,
-        bp_gens,
-    );
+    let mut wits = [
+        old_account.rho,
+        old_account.current_rho,
+        updated_account.current_rho,
+        old_account.randomness,
+        updated_account.randomness,
+    ];
+    let (comm_bp_randomness_relations, vars) = prover.commit_vec(&wits, comm_bp_blinding, bp_gens);
+
+    Zeroize::zeroize(&mut wits);
 
     enforce_constraints_for_randomness_relations(prover, vars);
 
@@ -790,6 +790,21 @@ pub fn generate_schnorr_t_values_for_common_state_change<
         ],
     );
 
+    Zeroize::zeroize(&mut asset_id);
+    Zeroize::zeroize(&mut id_blinding);
+    Zeroize::zeroize(&mut sk_blinding);
+    Zeroize::zeroize(&mut old_balance_blinding);
+    Zeroize::zeroize(&mut new_balance_blinding);
+    Zeroize::zeroize(&mut old_counter_blinding);
+    Zeroize::zeroize(&mut initial_rho_blinding);
+    Zeroize::zeroize(&mut old_rho_blinding);
+    Zeroize::zeroize(&mut new_rho_blinding);
+    Zeroize::zeroize(&mut old_randomness_blinding);
+    Zeroize::zeroize(&mut new_randomness_blinding);
+    Zeroize::zeroize(&mut asset_id_blinding);
+    Zeroize::zeroize(&mut r_pk);
+    Zeroize::zeroize(&mut r_4);
+
     let mut transcript = prover.transcript();
 
     // Add challenge contribution of each of the above commitments to the transcript
@@ -835,12 +850,12 @@ pub fn generate_schnorr_t_values_for_balance_change<
     G0: SWCurveConfig<ScalarField = F0>,
 >(
     rng: &mut R,
-    amount: Balance,
+    mut amount: Balance,
     ct_amount: &Affine<G0>,
-    old_balance_blinding: F0,
-    new_balance_blinding: F0,
-    amount_blinding: F0,
-    r_3: F0,
+    mut old_balance_blinding: F0,
+    mut new_balance_blinding: F0,
+    mut amount_blinding: F0,
+    mut r_3: F0,
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
     enc_key_gen: Affine<G0>,
@@ -877,6 +892,12 @@ pub fn generate_schnorr_t_values_for_balance_change<
         &enc_gen,
     );
 
+    Zeroize::zeroize(&mut amount);
+    Zeroize::zeroize(&mut old_balance_blinding);
+    Zeroize::zeroize(&mut new_balance_blinding);
+    Zeroize::zeroize(&mut amount_blinding);
+    Zeroize::zeroize(&mut r_3);
+
     // Add challenge contribution of each of the above commitments to the transcript
     t_comm_bp_bal.challenge_contribution(&mut prover_transcript)?;
     t_leg_amount.challenge_contribution(
@@ -912,20 +933,20 @@ pub fn generate_schnorr_responses_for_common_state_change<
     Partial1PokPedersenCommitment<Affine<G0>>,
     PartialSchnorrResponse<Affine<G0>>,
 )> {
-    let resp_leaf = t_r_leaf.response(
-        &[
-            account.sk,
-            account.balance.into(),
-            account.counter.into(),
-            account.asset_id.into(),
-            account.rho,
-            account.current_rho,
-            account.randomness,
-            account.id,
-            leaf_rerandomization,
-        ],
-        prover_challenge,
-    )?;
+    let mut wits = [
+        account.sk,
+        account.balance.into(),
+        account.counter.into(),
+        account.asset_id.into(),
+        account.rho,
+        account.current_rho,
+        account.randomness,
+        account.id,
+        leaf_rerandomization,
+    ];
+    let resp_leaf = t_r_leaf.response(&wits, prover_challenge)?;
+
+    Zeroize::zeroize(&mut wits);
 
     // Response for other witnesses will already be generated in sigma protocol for leaf
     let mut wits = BTreeMap::new();
@@ -1328,7 +1349,7 @@ fn bp_gens_vec_for_randomness_relations<G0: SWCurveConfig + Copy>(
 /// Generators used by Bulletproofs to construct vector commitment, i.e. when `commit_vec` is called. The resulting commitment
 /// has the first generator as the blinding generator and then these generators follow.
 pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
-    size: usize,
+    size: u32,
     bp_gens: &BulletproofGens<G>,
 ) -> Copied<impl Iterator<Item = &G>> {
     bp_gens.share(0).G(size).copied()

@@ -43,6 +43,7 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
 pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
@@ -76,7 +77,7 @@ impl<
     /// Use try-and-increment
     pub fn new_deprecated<D: Digest>(
         label: &[u8],
-        num_keys: usize,
+        num_keys: u32,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = affine_group_elem_from_try_and_incr::<_, D>(&concat_slices![label, b" : j_0"]);
@@ -96,7 +97,7 @@ impl<
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
     pub fn new(
         label: &[u8],
-        num_keys: usize,
+        num_keys: u32,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
@@ -105,7 +106,9 @@ impl<
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct AssetData<
     F0: PrimeField,
     F1: PrimeField,
@@ -176,7 +179,9 @@ impl<
     // More efficient update methods can be added in future
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct Leg<G: AffineRepr> {
     /// Public key of sender
     pub pk_s: G,
@@ -194,7 +199,9 @@ pub struct Leg<G: AffineRepr> {
 pub struct EphemeralPublicKey<G: AffineRepr>(pub G, pub G, pub G, pub G);
 
 /// (r_1, r_2, r_3, r_4)
-#[derive(Clone, Copy, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct LegEncryptionRandomness<F: PrimeField>(pub F, pub F, pub F, pub F);
 
 /// Twisted Elgamal encryption of sender, receiver public keys, amount and asset id for all the auditors and mediators
@@ -248,15 +255,18 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         enc_key_gen: G,
         enc_gen: G,
     ) -> Result<(LegEncryption<G>, LegEncryptionRandomness<F>)> {
-        let y = F::rand(rng);
+        let mut y = F::rand(rng);
+
+        let mut amount = F::from(self.amount);
+        let mut asset_id = F::from(self.asset_id);
 
         // Optimz: Lot of the following operations can benefit from `WindowTable`
         let shared_secret = (enc_key_gen * y).into_affine();
         let (r1, r2, r3, r4) = Self::encryption_randomness::<D>(shared_secret)?;
         let ct_s = (enc_key_gen * r1 + self.pk_s).into_affine();
         let ct_r = (enc_key_gen * r2 + self.pk_r).into_affine();
-        let ct_amount = (enc_key_gen * r3 + enc_gen * F::from(self.amount)).into_affine();
-        let ct_asset_id = (enc_key_gen * r4 + enc_gen * F::from(self.asset_id)).into_affine();
+        let ct_amount = (enc_key_gen * r3 + enc_gen * amount).into_affine();
+        let ct_asset_id = (enc_key_gen * r4 + enc_gen * asset_id).into_affine();
         let eph_pk_auds_meds = self.pk_auds_meds.iter().map(|(role, pk)| {
             (
                 *role,
@@ -271,6 +281,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         let eph_pk_s = (pk_s_enc * y).into_affine();
         let eph_pk_r = (pk_r_enc * y).into_affine();
+
+        Zeroize::zeroize(&mut amount);
+        Zeroize::zeroize(&mut asset_id);
+        Zeroize::zeroize(&mut y);
+
         Ok((
             LegEncryption {
                 ct_s,
@@ -286,12 +301,15 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
     }
 
     /// Hash `shared_secret` to get `r_i`
-    fn encryption_randomness<D: FullDigest>(shared_secret: G) -> Result<(F, F, F, F)> {
+    fn encryption_randomness<D: FullDigest>(mut shared_secret: G) -> Result<(F, F, F, F)> {
         let mut shared_secret_bytes = vec![];
         shared_secret.serialize_compressed(&mut shared_secret_bytes)?;
 
         let hasher = <DefaultFieldHasher<D> as HashToField<F>>::new(SK_EPH_GEN_LABEL);
         let mut r = hasher.hash_to_field(&shared_secret_bytes, 4);
+
+        Zeroize::zeroize(&mut shared_secret);
+        Zeroize::zeroize(&mut shared_secret_bytes);
 
         Ok((r.remove(0), r.remove(0), r.remove(0), r.remove(0)))
     }
@@ -303,7 +321,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         sk: &F,
         is_sender: bool,
     ) -> Result<LegEncryptionRandomness<F>> {
-        let sk_inv = sk
+        let mut sk_inv = sk
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
         let pk = if is_sender {
@@ -312,6 +330,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.eph_pk_r
         };
         let shared_secret = (pk * sk_inv).into_affine();
+
+        Zeroize::zeroize(&mut sk_inv);
+
         let (r_1, r_2, r_3, r_4) = Leg::encryption_randomness::<D>(shared_secret)?;
         Ok(LegEncryptionRandomness(r_1, r_2, r_3, r_4))
     }
@@ -335,7 +356,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
     ) -> Result<(G, G, AssetId, Balance)> {
-        let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = r;
+        let LegEncryptionRandomness(mut r_1, mut r_2, mut r_3, mut r_4) = r;
         let enc_key_gen = enc_key_gen.into_group();
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
@@ -348,6 +369,12 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 
         let sender = Self::decrypt_as_group_element_given_r(&r_1, self.ct_s, enc_key_gen);
         let receiver = Self::decrypt_as_group_element_given_r(&r_2, self.ct_r, enc_key_gen);
+
+        Zeroize::zeroize(&mut r_1);
+        Zeroize::zeroize(&mut r_2);
+        Zeroize::zeroize(&mut r_3);
+        Zeroize::zeroize(&mut r_4);
+
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
@@ -365,7 +392,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         pk: G,
         is_sender: bool,
     ) -> Result<(G, G, AssetId, Balance)> {
-        let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = r;
+        let LegEncryptionRandomness(mut r_1, mut r_2, mut r_3, mut r_4) = r;
         let enc_key_gen = enc_key_gen.into_group();
 
         // Check that decrypted sender/receiver matches `pk`
@@ -397,6 +424,12 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let asset_id =
             self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen, MAX_ASSET_ID)? as AssetId;
         let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen, MAX_BALANCE)?;
+
+        Zeroize::zeroize(&mut r_1);
+        Zeroize::zeroize(&mut r_2);
+        Zeroize::zeroize(&mut r_3);
+        Zeroize::zeroize(&mut r_4);
+
         Ok((sender, receiver, asset_id, amount))
     }
 
@@ -428,7 +461,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
 
         // Compute inverse of secret key once.
-        let sk_inv = sk
+        let mut sk_inv = sk
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
@@ -447,6 +480,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.ct_r,
             self.eph_pk_auds_meds[key_index].1.1,
         );
+
+        Zeroize::zeroize(&mut sk_inv);
+
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
@@ -463,6 +499,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         max_asset_id: AssetId,
     ) -> Result<u64> {
         let asset_id = Self::decrypt_as_group_element_given_r(r_i, self.ct_asset_id, enc_key_gen);
+
         solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as u64, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
@@ -475,6 +512,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         max_amount: Balance,
     ) -> Result<u64> {
         let amount = Self::decrypt_as_group_element_given_r(r_i, self.ct_amount, enc_key_gen);
+
         solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
@@ -494,6 +532,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.ct_asset_id,
             self.eph_pk_auds_meds[key_index].1.3,
         );
+
         solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as _, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
@@ -513,6 +552,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.ct_amount,
             self.eph_pk_auds_meds[key_index].1.2,
         );
+
         solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
@@ -522,12 +562,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         encrypted: G,
         enc_key_gen: G::Group,
     ) -> G::Group {
-        encrypted.into_group() - enc_key_gen * *r_i
+        encrypted.into_group() - enc_key_gen * r_i
     }
 
     pub fn decrypt_as_group_element(sk_inv: &F, encrypted: G, eph_pk: G) -> G::Group {
-        let g_k = (eph_pk * sk_inv).into_affine();
-        encrypted.into_group() - g_k
+        encrypted.into_group() - eph_pk * sk_inv
     }
 }
 
@@ -627,7 +666,7 @@ impl<
         odd_transcript: MerlinTranscript,
     ) -> Result<Self> {
         ensure_proper_leg_creation(&leg, &leg_enc, &asset_data)?;
-        let (mut even_prover, mut odd_prover, re_randomized_path, re_randomization_of_leaf) =
+        let (mut even_prover, mut odd_prover, re_randomized_path, mut re_randomization_of_leaf) =
             initialize_curve_tree_prover_with_given_transcripts(
                 rng,
                 leaf_path,
@@ -646,13 +685,17 @@ impl<
             re_randomized_path
         );
 
-        let at = F0::from(leg.asset_id);
-        let amount = F0::from(leg.amount);
+        let mut at = F0::from(leg.asset_id);
+        let mut amount = F0::from(leg.amount);
 
         let rerandomized_leaf = re_randomized_path.get_rerandomized_leaf();
 
+        let num_asset_data_keys = asset_data.keys.len();
+
         let asset_data_points =
             AssetData::points(leg.asset_id, &asset_data.keys, &asset_comm_params);
+
+        let num_asset_data_points = asset_data_points.len();
 
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if cfg!(debug_assertions) {
@@ -662,7 +705,7 @@ impl<
                 .map(|p| (tree_parameters.odd_parameters.delta + p).into_affine().x)
                 .collect::<Vec<_>>();
             let commitment = G1::msm(
-                &asset_comm_params.comm_key[..(asset_data_points.len())],
+                &asset_comm_params.comm_key[..num_asset_data_points],
                 x_coords.as_slice(),
             )
             .unwrap();
@@ -674,7 +717,7 @@ impl<
             );
         }
 
-        let blindings_for_points = (0..asset_data_points.len())
+        let mut blindings_for_points = (0..num_asset_data_points)
             .map(|_| F0::rand(rng))
             .collect::<Vec<_>>();
         let re_randomized_points = prove_naive(
@@ -686,6 +729,8 @@ impl<
             &tree_parameters.odd_parameters,
         )?;
 
+        Zeroize::zeroize(&mut re_randomization_of_leaf);
+
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if cfg!(debug_assertions) {
             assert_eq!(
@@ -694,7 +739,7 @@ impl<
                     + (tree_parameters.odd_parameters.pc_gens.B_blinding * blindings_for_points[0])
             );
 
-            for i in 0..asset_data.keys.len() {
+            for i in 0..num_asset_data_keys {
                 let (r, k) = asset_data.keys[i];
                 let k = if r {
                     asset_comm_params.j_0 + k
@@ -709,44 +754,49 @@ impl<
             }
         }
 
-        let LegEncryptionRandomness(r_1, r_2, r_3, r_4) = leg_enc_rand;
+        let LegEncryptionRandomness(mut r_1, mut r_2, mut r_3, mut r_4) = leg_enc_rand;
 
         // Question: Does r_2 appear without any link?. Maybe I use similar relation for r_2 as r_1 and use the optimization for r_3 and r_4.
         // Because if proof for r_2 can be forged then venue can make the receiver public key unrecoverable for auditor
 
-        let r_1_blinding = F0::rand(rng);
-        let r_2_blinding = F0::rand(rng);
-        let r_3_blinding = F0::rand(rng);
-        let r_4_blinding = F0::rand(rng);
+        let mut r_1_blinding = F0::rand(rng);
+        let mut r_2_blinding = F0::rand(rng);
+        let mut r_3_blinding = F0::rand(rng);
+        let mut r_4_blinding = F0::rand(rng);
 
-        let r_1_inv = r_1.inverse().ok_or_else(|| Error::InvertingZero)?;
-        let r_2_r_1_inv = r_2 * r_1_inv;
-        let r_3_r_1_inv = r_3 * r_1_inv;
-        let r_4_r_1_inv = r_4 * r_1_inv;
-        let r_2_r_1_inv_blinding = F0::rand(rng);
-        let r_3_r_1_inv_blinding = F0::rand(rng);
-        let r_4_r_1_inv_blinding = F0::rand(rng);
+        let mut r_1_inv = r_1.inverse().ok_or_else(|| Error::InvertingZero)?;
+        let mut r_2_r_1_inv = r_2 * r_1_inv;
+        let mut r_3_r_1_inv = r_3 * r_1_inv;
+        let mut r_4_r_1_inv = r_4 * r_1_inv;
+        let mut r_2_r_1_inv_blinding = F0::rand(rng);
+        let mut r_3_r_1_inv_blinding = F0::rand(rng);
+        let mut r_4_r_1_inv_blinding = F0::rand(rng);
 
-        let amount_blinding = F0::rand(rng);
-        let asset_id_blinding = F0::rand(rng);
+        Zeroize::zeroize(&mut r_1_inv);
 
-        let comm_r_i_blinding = F0::rand(rng);
+        let mut amount_blinding = F0::rand(rng);
+        let mut asset_id_blinding = F0::rand(rng);
+
+        let mut comm_r_i_blinding = F0::rand(rng);
+        let mut wits = [
+            r_1,
+            r_2,
+            r_3,
+            r_4,
+            r_2_r_1_inv,
+            r_3_r_1_inv,
+            r_4_r_1_inv,
+            amount,
+        ];
         // Commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
         let (comm_r_i_amount, vars) = odd_prover.commit_vec(
-            &[
-                r_1,
-                r_2,
-                r_3,
-                r_4,
-                r_2_r_1_inv,
-                r_3_r_1_inv,
-                r_4_r_1_inv,
-                amount,
-            ],
+            &wits,
             comm_r_i_blinding,
             &tree_parameters.odd_parameters.bp_gens,
         );
         Self::enforce_constraints(&mut odd_prover, Some(leg.amount), vars)?;
+
+        Zeroize::zeroize(&mut wits);
 
         // Sigma protocol for proving knowledge of `comm_r_i_amount`
         let t_comm_r_i_amount = SchnorrCommitment::new(
@@ -768,11 +818,11 @@ impl<
 
         // TODO: This can be optimized by combining these.
 
-        let mut r_1_protocol_base1 = Vec::with_capacity(asset_data.keys.len());
-        let mut t_points_r1 = Vec::with_capacity(asset_data.keys.len());
-        let mut t_points_r2 = Vec::with_capacity(asset_data.keys.len());
-        let mut t_points_r3 = Vec::with_capacity(asset_data.keys.len());
-        let mut t_points_r4 = Vec::with_capacity(asset_data.keys.len());
+        let mut r_1_protocol_base1 = Vec::with_capacity(num_asset_data_keys);
+        let mut t_points_r1 = Vec::with_capacity(num_asset_data_keys);
+        let mut t_points_r2 = Vec::with_capacity(num_asset_data_keys);
+        let mut t_points_r3 = Vec::with_capacity(num_asset_data_keys);
+        let mut t_points_r4 = Vec::with_capacity(num_asset_data_keys);
         let aud_role_base = asset_comm_params.j_0.neg();
         let blinding_base = tree_parameters
             .odd_parameters
@@ -808,6 +858,12 @@ impl<
             t_points_r4.push(t_4);
         }
 
+        Zeroize::zeroize(&mut r_1_blinding);
+        Zeroize::zeroize(&mut r_2_blinding);
+        Zeroize::zeroize(&mut r_2_r_1_inv_blinding);
+        Zeroize::zeroize(&mut r_3_r_1_inv_blinding);
+        Zeroize::zeroize(&mut r_4_r_1_inv_blinding);
+
         // Proving correctness of twisted Elgamal encryption of amount
         let t_amount_enc = PokPedersenCommitmentProtocol::init(
             r_3,
@@ -817,6 +873,8 @@ impl<
             amount_blinding,
             &enc_gen,
         );
+        Zeroize::zeroize(&mut r_3_blinding);
+        Zeroize::zeroize(&mut amount_blinding);
 
         // Proving correctness of twisted Elgamal encryption of asset-id
         let t_asset_id_enc = PokPedersenCommitmentProtocol::init(
@@ -827,6 +885,7 @@ impl<
             asset_id_blinding,
             &enc_gen,
         );
+        Zeroize::zeroize(&mut r_4_blinding);
 
         // Proving correctness of asset-id in the point
         let t_asset_id = PokPedersenCommitmentProtocol::init(
@@ -837,10 +896,13 @@ impl<
             F0::rand(rng),
             &tree_parameters.odd_parameters.pc_gens.B_blinding,
         );
+        Zeroize::zeroize(&mut asset_id_blinding);
+        Zeroize::zeroize(&mut at);
+        Zeroize::zeroize(&mut blindings_for_points);
 
         t_comm_r_i_amount.challenge_contribution(&mut transcript)?;
 
-        for i in 0..asset_data.keys.len() {
+        for i in 0..num_asset_data_keys {
             re_randomized_points[i + 1].serialize_compressed(&mut transcript)?;
             t_points_r1[i].challenge_contribution(
                 &r_1_protocol_base1[i],
@@ -887,20 +949,29 @@ impl<
 
         let challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
 
-        let resp_comm_r_i_amount = t_comm_r_i_amount.response(
-            &[
-                comm_r_i_blinding,
-                r_1,
-                r_2,
-                r_3,
-                r_4,
-                r_2_r_1_inv,
-                r_3_r_1_inv,
-                r_4_r_1_inv,
-                amount,
-            ],
-            &challenge,
-        )?;
+        let mut wits = [
+            comm_r_i_blinding,
+            r_1,
+            r_2,
+            r_3,
+            r_4,
+            r_2_r_1_inv,
+            r_3_r_1_inv,
+            r_4_r_1_inv,
+            amount,
+        ];
+        let resp_comm_r_i_amount = t_comm_r_i_amount.response(&wits, &challenge)?;
+
+        Zeroize::zeroize(&mut wits);
+        Zeroize::zeroize(&mut comm_r_i_blinding);
+        Zeroize::zeroize(&mut r_1);
+        Zeroize::zeroize(&mut r_2);
+        Zeroize::zeroize(&mut r_3);
+        Zeroize::zeroize(&mut r_4);
+        Zeroize::zeroize(&mut r_2_r_1_inv);
+        Zeroize::zeroize(&mut r_3_r_1_inv);
+        Zeroize::zeroize(&mut r_4_r_1_inv);
+        Zeroize::zeroize(&mut amount);
 
         let mut resp_eph_pk_auds_meds = Vec::with_capacity(asset_data.keys.len());
 
@@ -1458,7 +1529,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         rng: &mut R,
         leg_enc: LegEncryption<G>,
         asset_id: AssetId,
-        mediator_sk: G::ScalarField,
+        mut mediator_sk: G::ScalarField,
         accept: bool,
         index_in_asset_data: usize,
         nonce: &[u8],
@@ -1484,6 +1555,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             G::ScalarField::rand(rng),
             &minus_h,
         );
+
+        Zeroize::zeroize(&mut mediator_sk);
 
         enc_pk.challenge_contribution(&leg_enc.ct_asset_id, &minus_h, &D, &mut transcript)?;
 
@@ -1721,7 +1794,9 @@ pub mod tests {
         let label = b"asset-tree-params";
         let asset_tree_params =
             SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
-                label, NUM_GENS, NUM_GENS,
+                label,
+                NUM_GENS as u32,
+                NUM_GENS as u32,
             )
             .unwrap();
 
@@ -1755,7 +1830,7 @@ pub mod tests {
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
 
-        let mut keys = Vec::with_capacity(num_auditors + num_mediators);
+        let mut keys = Vec::with_capacity((num_auditors + num_mediators) as usize);
         keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
         keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
         let asset_data = AssetData::new(
@@ -1769,15 +1844,15 @@ pub mod tests {
         // Check asset_data is correctly constructed
         let points = AssetData::points(asset_id, &asset_data.keys, &asset_comm_params);
         assert_eq!(points[0], asset_comm_params.j_0 * PallasFr::from(asset_id));
-        for i in 0..num_auditors {
+        for i in 0..num_auditors as usize {
             assert_eq!(
                 points[i + 1].into_group(),
                 asset_comm_params.j_0 + keys_auditor[i].1.0
             );
         }
-        for i in 0..num_mediators {
+        for i in 0..num_mediators as usize {
             assert_eq!(
-                points[i + 1 + num_auditors].into_group(),
+                points[i + 1 + num_auditors as usize].into_group(),
                 keys_mediator[i].1.0
             );
         }
@@ -1787,7 +1862,7 @@ pub mod tests {
             .map(|p| (asset_tree_params.odd_parameters.delta + p).into_affine().x)
             .collect::<Vec<_>>();
         let expected_commitment = ark_vesta::Projective::msm(
-            &asset_comm_params.comm_key[..(num_auditors + num_mediators + 1)],
+            &asset_comm_params.comm_key[..(num_auditors + num_mediators + 1) as usize],
             x_coords.as_slice(),
         )
         .unwrap();
@@ -2061,9 +2136,11 @@ pub mod tests {
         const L: usize = 64;
 
         // Create public params (generators, etc)
-        let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS, NUM_GENS)
-                .unwrap();
+        let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
 
         let sig_key_gen = PallasA::rand(&mut rng);
         let enc_key_gen = PallasA::rand(&mut rng);
@@ -2096,7 +2173,7 @@ pub mod tests {
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
 
-        let mut keys = Vec::with_capacity(num_auditors + num_mediators);
+        let mut keys = Vec::with_capacity((num_auditors + num_mediators) as usize);
         keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
         keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
 
@@ -2286,7 +2363,7 @@ pub mod tests {
 
             // Create public params (generators, etc)
             let asset_tree_params =
-                SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS, NUM_GENS)
+                SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
                     .unwrap();
 
             let sig_key_gen = PallasA::rand(&mut rng);
@@ -2318,7 +2395,7 @@ pub mod tests {
                 .map(|_| keygen_enc(&mut rng, enc_key_gen))
                 .collect::<Vec<_>>();
 
-            let mut keys = Vec::with_capacity(num_auditors + num_mediators);
+            let mut keys = Vec::with_capacity((num_auditors + num_mediators) as usize);
             keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
             keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
 
@@ -2391,7 +2468,7 @@ pub mod tests {
                 .map(|_| keygen_enc(&mut rng, enc_key_gen))
                 .collect::<Vec<_>>();
 
-            let mut different_keys = Vec::with_capacity(num_auditors + num_mediators);
+            let mut different_keys = Vec::with_capacity((num_auditors + num_mediators) as usize);
             different_keys.extend(
                 different_keys_auditor
                     .iter()

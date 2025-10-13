@@ -261,8 +261,8 @@ pub fn update_inner_node<
         let mut gen_iter = parameters
             .bp_gens
             .share(0)
-            .G(L * (tree_index as usize + 1))
-            .skip(L * tree_index as usize + child_index as usize);
+            .G((L * (tree_index + 1)) as u32)
+            .skip(L * tree_index + child_index as usize);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
         commitments[tree_index] = (commitments[tree_index].into_group()
             + *g * (*new_x_coord - old_x_coord))

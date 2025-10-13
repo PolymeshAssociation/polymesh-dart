@@ -33,11 +33,14 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
 
 /// To commit, use the same commitment key as non-fee asset account commitment.
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
 pub struct FeeAccountState<G: AffineRepr> {
     // TODO: Remove this later.
     pub sk: G::ScalarField,
@@ -184,9 +187,8 @@ impl<G: AffineRepr> RegTxnProof<G> {
             + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance))
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id));
 
-        let sk_blinding = G::ScalarField::rand(rng);
-        let rho_blinding = G::ScalarField::rand(rng);
-        let randomness_blinding = G::ScalarField::rand(rng);
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut randomness_blinding = G::ScalarField::rand(rng);
 
         // For proving Comm - D = g_rho * rho + g_randomness * randomness
         let comm_protocol = PokPedersenCommitmentProtocol::init(
@@ -197,6 +199,10 @@ impl<G: AffineRepr> RegTxnProof<G> {
             randomness_blinding,
             &account_comm_key.randomness_gen(),
         );
+
+        rho_blinding.zeroize();
+        randomness_blinding.zeroize();
+
         let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
         comm_protocol.challenge_contribution(
             &account_comm_key.rho_gen(),
@@ -205,8 +211,13 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &mut transcript,
         )?;
 
+        let mut sk_blinding = G::ScalarField::rand(rng);
+
         let pk_protocol =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+
+        sk_blinding.zeroize();
+
         pk_protocol.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
         let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
@@ -394,7 +405,7 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_correct_account_state(account, updated_account, increase_bal_by, false)?;
 
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
             initialize_curve_tree_prover_with_given_transcripts(
                 rng,
                 leaf_path,
@@ -429,18 +440,18 @@ impl<
         // 3. New balance = old balance + increase_bal_by
         // 4. Range proof on new balance
 
-        let new_balance_blinding = F0::rand(rng);
-        let old_rho_blinding = F0::rand(rng);
-        let new_rho_blinding = F0::rand(rng);
-        let old_s_blinding = F0::rand(rng);
-        let new_s_blinding = F0::rand(rng);
-        let comm_bp_blinding = F0::rand(rng);
+        let mut new_balance_blinding = F0::rand(rng);
+        let mut old_rho_blinding = F0::rand(rng);
+        let mut new_rho_blinding = F0::rand(rng);
+        let mut old_s_blinding = F0::rand(rng);
+        let mut new_s_blinding = F0::rand(rng);
+        let mut comm_bp_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.rho_gen();
         let pk_gen = account_comm_key.sk_gen();
         let nullifier = account.nullifier(&account_comm_key);
 
-        let new_balance = F0::from(updated_account.balance);
+        let mut new_balance = F0::from(updated_account.balance);
 
         // Old account commitment = C = G0 * sk + G1 * old_bal + ...
         // New account commitment = C' = G0 * sk + G1 * new_bal + ...
@@ -497,6 +508,13 @@ impl<
             &account_tree_params.even_parameters.pc_gens.B_blinding,
         );
 
+        new_balance_blinding.zeroize();
+        old_rho_blinding.zeroize();
+        new_rho_blinding.zeroize();
+        old_s_blinding.zeroize();
+        new_s_blinding.zeroize();
+        comm_bp_blinding.zeroize();
+
         let mut transcript = even_prover.transcript();
 
         t_bp.challenge_contribution(
@@ -523,6 +541,9 @@ impl<
         wits.insert(1, updated_account.rho);
         wits.insert(2, updated_account.randomness);
         let resp_acc_new = t_acc_new.partial_response(wits, &challenge)?;
+
+        new_balance.zeroize();
+        rerandomization.zeroize();
 
         // Response for witness will already be generated in sigma protocol for the leaf
         let resp_null = t_null.gen_partial_proof();
@@ -948,7 +969,7 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_correct_account_state(account, updated_account, fee_amount, true)?;
 
-        let (mut even_prover, odd_prover, re_randomized_path, rerandomization) =
+        let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
             initialize_curve_tree_prover(
                 rng,
                 TXN_EVEN_LABEL,
@@ -981,18 +1002,18 @@ impl<
         // 3. Old balance = new balance + fee_amount
         // 4. Range proof on new balance
 
-        let sk_blinding = F0::rand(rng);
-        let new_balance_blinding = F0::rand(rng);
-        let old_rho_blinding = F0::rand(rng);
-        let new_rho_blinding = F0::rand(rng);
-        let old_s_blinding = F0::rand(rng);
-        let new_s_blinding = F0::rand(rng);
-        let comm_bp_blinding = F0::rand(rng);
+        let mut sk_blinding = F0::rand(rng);
+        let mut new_balance_blinding = F0::rand(rng);
+        let mut old_rho_blinding = F0::rand(rng);
+        let mut new_rho_blinding = F0::rand(rng);
+        let mut old_s_blinding = F0::rand(rng);
+        let mut new_s_blinding = F0::rand(rng);
+        let mut comm_bp_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
 
-        let new_balance = F0::from(updated_account.balance);
+        let mut new_balance = F0::from(updated_account.balance);
 
         // Old account commitment = C = G0 * sk + G1 * old_bal + ...
         // New account commitment = C' = G0 * sk + G1 * new_bal + ...
@@ -1052,6 +1073,14 @@ impl<
             &account_tree_params.even_parameters.pc_gens.B_blinding,
         );
 
+        sk_blinding.zeroize();
+        new_balance_blinding.zeroize();
+        old_rho_blinding.zeroize();
+        new_rho_blinding.zeroize();
+        old_s_blinding.zeroize();
+        new_s_blinding.zeroize();
+        comm_bp_blinding.zeroize();
+
         let mut transcript = even_prover.transcript();
 
         t_bp.challenge_contribution(
@@ -1078,6 +1107,10 @@ impl<
         wits.insert(3, updated_account.randomness);
         // Response for witnesses will already be generated in sigma protocol for the leaf
         let resp_acc_new = t_acc_new.partial_response(wits, &challenge)?;
+
+        new_balance.zeroize();
+        rerandomization.zeroize();
+
         let resp_null = t_null.gen_partial_proof();
 
         // Response for witness will already be generated in sigma protocol for the new account commitment

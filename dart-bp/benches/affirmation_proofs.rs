@@ -28,8 +28,11 @@ fn create_shared_setup<R: rand_core::CryptoRngCore>(
 ) {
     const NUM_GENS: usize = 1 << 12;
 
-    let account_tree_params =
-        SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS, NUM_GENS).unwrap();
+    let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        NUM_GENS as u32,
+        NUM_GENS as u32,
+    )
+    .unwrap();
 
     // Setup commitment key using array implementation
     let account_comm_key: [PallasA; 8] = [
