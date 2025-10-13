@@ -2362,9 +2362,11 @@ pub mod tests {
             const L: usize = 64;
 
             // Create public params (generators, etc)
-            let asset_tree_params =
-                SelRerandParameters::<VestaParameters, PallasParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                    .unwrap();
+            let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
             let sig_key_gen = PallasA::rand(&mut rng);
             let enc_key_gen = PallasA::rand(&mut rng);

@@ -2446,8 +2446,11 @@ pub mod tests {
 
             // Create public params (generators, etc)
             let account_tree_params =
-                SelRerandParameters::<PallasParameters, VestaParameters>::new(NUM_GENS as u32, NUM_GENS as u32)
-                    .unwrap();
+                SelRerandParameters::<PallasParameters, VestaParameters>::new(
+                    NUM_GENS as u32,
+                    NUM_GENS as u32,
+                )
+                .unwrap();
 
             let account_comm_key = setup_comm_key(b"testing");
 
