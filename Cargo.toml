@@ -217,3 +217,20 @@ std = [
 
 asm = ["polymesh-dart-bp?/asm"]
 parallel = ["rayon", "polymesh-dart-bp?/parallel"]
+
+[profile.release]
+opt-level = 3
+
+[profile.bench]
+inherits = "release"
+# https://doc.rust-lang.org/rustc/linker-plugin-lto.html
+lto = "fat"
+
+# Use this profile to compile binary for deployment
+[profile.production]
+inherits = "release"
+# Keeping lto independent from bench for now
+# https://doc.rust-lang.org/rustc/linker-plugin-lto.html
+lto = "fat"
+# https://doc.rust-lang.org/rustc/codegen-options/index.html#codegen-units
+codegen-units = 1
