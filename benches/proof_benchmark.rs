@@ -299,7 +299,7 @@ fn proof_benchmark(c: &mut Criterion) {
         .collect::<Vec<_>>();
 
     #[cfg(not(feature = "parallel"))]
-    {
+    let proofs = {
         let mut proofs = Vec::new();
         for _ in 0..NUM_PROOFS {
             proofs.push(
@@ -317,7 +317,7 @@ fn proof_benchmark(c: &mut Criterion) {
             );
         }
         proofs
-    }
+    };
 
     // Benchmark: Parallel verification of sender affirmation proofs.
     c.bench_function("Parallel SenderAffirmationProof verify 10", |b| {
