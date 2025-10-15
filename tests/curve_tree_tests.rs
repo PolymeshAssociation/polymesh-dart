@@ -5,7 +5,7 @@ use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 
 use polymesh_dart::curve_tree::{
     AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeConfig,
-    CurveTreeParameters, CurveTreePath, FullCurveTree,
+    CurveTreeParameters, CurveTreePath, CurveTreeWithBackend,
 };
 use polymesh_dart::{Error, LeafIndex, NodeLevel};
 use polymesh_dart::{PallasParameters, VestaA, VestaParameters};
@@ -24,7 +24,7 @@ pub struct CurveTreeOld<const L: usize> {
 
 impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FullCurveTree")
+        f.debug_struct("CurveTreeOld")
             .field("tree", &self.tree)
             .field("height", &self.height)
             .field("length", &self.length)
@@ -34,7 +34,7 @@ impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
 }
 
 impl<const L: usize> CurveTreeOld<L> {
-    /// Creates a new instance of `FullCurveTree`
+    /// Creates a new instance of `CurveTreeWithBackend`
     pub fn new_with_capacity(height: usize) -> Result<Self, Error> {
         let params = AssetTreeConfig::build_parameters();
         Ok(Self {
@@ -128,21 +128,21 @@ fn create_test_leaf(value: usize) -> CompressedLeafValue<AssetTreeConfig> {
 
 fn setup_trees() -> (
     CurveTreeOld<L>,
-    FullCurveTree<L, 1, AssetTreeConfig>,
+    CurveTreeWithBackend<L, 1, AssetTreeConfig>,
     SelRerandParameters<VestaParameters, PallasParameters>,
 ) {
     let mut full_tree =
         CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize).expect("Failed to create full tree");
     assert!(full_tree.height() == HEIGHT as usize);
     let params = full_tree.params().clone();
-    let mut storage_tree = FullCurveTree::<L, 1, AssetTreeConfig>::new_with_capacity(HEIGHT)
+    let mut storage_tree = CurveTreeWithBackend::<L, 1, AssetTreeConfig>::new(HEIGHT)
         .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
     // Insert a leaf into both trees to avoid empty tree edge cases
     let leaf = create_test_leaf(u32::MAX as usize);
     full_tree.insert(leaf).unwrap();
-    storage_tree.insert(leaf).unwrap();
+    storage_tree.insert_leaf(leaf).unwrap();
 
     // Compare roots
     let full_root = full_tree.root();
@@ -226,7 +226,7 @@ fn assert_paths_equal(
     }
 }
 
-/// Test insertion of leafs into `CurveTreeStorage` against the `FullCurveTree` implementation.
+/// Test insertion of leafs into `CurveTreeStorage` against the `CurveTreeWithBackend` implementation.
 #[test]
 fn test_inserts() {
     let (mut full_tree, mut storage_tree, _params) = setup_trees();
@@ -237,7 +237,7 @@ fn test_inserts() {
 
         // Insert into both trees
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Compare roots
         let full_root = full_tree.root();
@@ -264,7 +264,7 @@ fn test_growth_beyond_l() {
 
         // Insert into both trees
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Compare roots after each insertion
         let full_root = full_tree.root();
@@ -288,7 +288,7 @@ fn test_mixed_updates_and_inserts() {
     for i in 1..=initial_leaves {
         let leaf = create_test_leaf(i);
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Now mix updates and new insertions
@@ -299,13 +299,13 @@ fn test_mixed_updates_and_inserts() {
 
         full_tree.update(new_value, update_index).unwrap();
         storage_tree
-            .update(new_value, update_index as LeafIndex)
+            .update_leaf(update_index as LeafIndex, new_value)
             .unwrap();
 
         // Insert a new leaf
         let new_leaf = create_test_leaf(200 + round);
         full_tree.insert(new_leaf).unwrap();
-        storage_tree.insert(new_leaf).unwrap();
+        storage_tree.insert_leaf(new_leaf).unwrap();
 
         // Compare roots after each round
         let full_root = full_tree.root();
@@ -329,14 +329,14 @@ fn test_leaf_paths() {
         leaf_values.push(leaf);
 
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Compare paths for each leaf
     for (leaf_index, &_leaf_value) in leaf_values.iter().enumerate() {
         let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
         let storage_path = storage_tree
-            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .get_path_to_leaf(leaf_index as LeafIndex, 0, None)
             .unwrap();
 
         assert_paths_equal(
@@ -357,7 +357,7 @@ fn test_paths_after_updates() {
     for i in 1..=num_leaves {
         let leaf = create_test_leaf(i);
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Update some leaves
@@ -366,14 +366,14 @@ fn test_paths_after_updates() {
 
         full_tree.update(new_value, update_index).unwrap();
         storage_tree
-            .update(new_value, update_index as LeafIndex)
+            .update_leaf(update_index as LeafIndex, new_value)
             .unwrap();
 
         // Check that all paths are still consistent
         for leaf_index in 0..num_leaves {
             let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
             let storage_path = storage_tree
-                .get_path_to_leaf_index(leaf_index as LeafIndex)
+                .get_path_to_leaf(leaf_index as LeafIndex, 0, None)
                 .unwrap();
 
             assert_paths_equal(
@@ -406,13 +406,13 @@ fn test_update_first_leaf() {
     for i in 1..=3 {
         let leaf = create_test_leaf(i);
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Update the first leaf (index 0)
     let new_first_leaf = create_test_leaf(999);
     full_tree.update(new_first_leaf, 0).unwrap();
-    storage_tree.update(new_first_leaf, 0).unwrap();
+    storage_tree.update_leaf(0, new_first_leaf).unwrap();
 
     // Check roots match
     let full_root = full_tree.root();
@@ -423,7 +423,7 @@ fn test_update_first_leaf() {
     for leaf_index in 0..3 {
         let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
         let storage_path = storage_tree
-            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .get_path_to_leaf(leaf_index as LeafIndex, 0, None)
             .unwrap();
 
         assert_paths_equal(
@@ -446,7 +446,7 @@ fn test_large_tree_growth() {
         let leaf = create_test_leaf(i);
 
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Check roots every few insertions to catch issues early
         if i % L == 0 {
@@ -469,7 +469,7 @@ fn test_large_tree_growth() {
     for &leaf_index in [0, L - 1, L, L + 1, num_leaves - 1].iter() {
         let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
         let storage_path = storage_tree
-            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .get_path_to_leaf(leaf_index as LeafIndex, 0, None)
             .unwrap();
 
         assert_paths_equal(
@@ -494,7 +494,7 @@ fn test_batched_leaf_inserts() {
         let leaf = create_test_leaf(i);
 
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert_delayed_update(leaf).unwrap();
+        storage_tree.insert_leaf_delayed_update(leaf).unwrap();
 
         // Check roots every few insertions to catch issues early
         if i % L == 0 {
@@ -518,7 +518,7 @@ fn test_batched_leaf_inserts() {
     for &leaf_index in [0, L - 1, L, L + 1, num_leaves - 1].iter() {
         let full_path = full_tree.get_path_to_leaf_index(leaf_index).unwrap();
         let storage_path = storage_tree
-            .get_path_to_leaf_index(leaf_index as LeafIndex)
+            .get_path_to_leaf(leaf_index as LeafIndex, 0, None)
             .unwrap();
 
         assert_paths_equal(
@@ -537,7 +537,7 @@ fn test_sequential_leaf_updates() {
     for i in 1..=4 {
         let leaf = create_test_leaf(i);
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Update the same leaf multiple times
@@ -547,7 +547,7 @@ fn test_sequential_leaf_updates() {
 
         full_tree.update(new_value, target_index).unwrap();
         storage_tree
-            .update(new_value, target_index as LeafIndex)
+            .update_leaf(target_index as LeafIndex, new_value)
             .unwrap();
 
         // Check roots after each update
@@ -565,7 +565,7 @@ fn test_sequential_leaf_updates() {
         // Check path for the updated leaf
         let full_path = full_tree.get_path_to_leaf_index(target_index).unwrap();
         let storage_path = storage_tree
-            .get_path_to_leaf_index(target_index as LeafIndex)
+            .get_path_to_leaf(target_index as LeafIndex, 0, None)
             .unwrap();
         assert_paths_equal(
             &full_path,
@@ -588,7 +588,7 @@ fn test_stress_updates_and_insertions() {
     for i in 1..=initial_batch {
         let leaf = create_test_leaf(i);
         full_tree.insert(leaf).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
     }
 
     // Perform mixed operations
@@ -597,7 +597,7 @@ fn test_stress_updates_and_insertions() {
         for j in 1..=2 {
             let leaf = create_test_leaf(1000 * cycle + j);
             full_tree.insert(leaf).unwrap();
-            storage_tree.insert(leaf).unwrap();
+            storage_tree.insert_leaf(leaf).unwrap();
         }
 
         // Update existing leaves (update multiple leaves per cycle)
@@ -610,7 +610,7 @@ fn test_stress_updates_and_insertions() {
             let new_value = create_test_leaf(2000 * cycle + update_idx);
             full_tree.update(new_value, update_idx).unwrap();
             storage_tree
-                .update(new_value, update_idx as LeafIndex)
+                .update_leaf(update_idx as LeafIndex, new_value)
                 .unwrap();
         }
 

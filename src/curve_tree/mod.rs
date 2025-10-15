@@ -384,113 +384,6 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L
     }
 }
 
-pub struct FullCurveTree<const L: usize, const M: usize, C: CurveTreeConfig> {
-    tree: CurveTreeWithBackend<L, M, C>,
-}
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> FullCurveTree<L, M, C> {
-    /// Creates a new instance of `FullCurveTree`.
-    pub fn new_with_capacity(height: NodeLevel) -> Result<Self, Error> {
-        Ok(Self {
-            tree: CurveTreeWithBackend::new(height)?,
-        })
-    }
-
-    pub fn height(&self) -> NodeLevel {
-        self.tree.height()
-    }
-
-    /// Insert a new leaf into the curve tree.
-    pub fn insert(&mut self, leaf: CompressedLeafValue<C>) -> Result<LeafIndex, Error> {
-        self.tree.insert_leaf(leaf)
-    }
-
-    /// Insert a new leaf into the curve tree without committing it immediately.
-    pub fn insert_delayed_update(
-        &mut self,
-        leaf: CompressedLeafValue<C>,
-    ) -> Result<LeafIndex, Error> {
-        self.tree.insert_leaf_delayed_update(leaf)
-    }
-
-    /// Commits all uncommitted leaves to the curve tree.
-    pub fn commit_leaves_to_tree(&mut self) -> Result<bool, Error> {
-        self.tree.commit_leaves_to_tree()
-    }
-
-    /// Updates an existing leaf in the curve tree.
-    pub fn update(
-        &mut self,
-        leaf: CompressedLeafValue<C>,
-        leaf_index: LeafIndex,
-    ) -> Result<(), Error> {
-        self.tree.update_leaf(leaf_index, leaf)
-    }
-
-    /// Returns the path to a leaf in the curve tree by its index.
-    pub fn get_path_to_leaf_index(
-        &self,
-        leaf_index: LeafIndex,
-    ) -> Result<CurveTreePath<L, C>, Error> {
-        Ok(self.tree.get_path_to_leaf(leaf_index, 0, None)?)
-    }
-
-    /// Returns the parameters of the curve tree.
-    pub fn params(&self) -> &CurveTreeParameters<C> {
-        self.tree.parameters()
-    }
-
-    /// Get the root node of the curve tree.
-    pub fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        self.tree.root()
-    }
-
-    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
-        self.tree.set_block_number(block_number)?;
-        Ok(())
-    }
-
-    pub fn store_root(&mut self) -> Result<(), Error> {
-        self.tree.store_root()?;
-        Ok(())
-    }
-
-    pub fn fetch_root(
-        &self,
-        block: BlockNumber,
-    ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        let block = block.into();
-        self.tree.fetch_root(block)
-    }
-}
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C>
-    for &FullCurveTree<L, M, C>
-{
-    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
-        Ok(self.tree.get_path_to_leaf(leaf_index, 0, None)?)
-    }
-
-    fn get_path_to_leaf(
-        &self,
-        _leaf: CompressedLeafValue<C>,
-    ) -> Result<CurveTreePath<L, C>, Error> {
-        Err(Error::LeafNotFound)
-    }
-
-    fn params(&self) -> &CurveTreeParameters<C> {
-        self.tree.parameters()
-    }
-
-    fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        self.tree.root()
-    }
-
-    fn get_block_number(&self) -> Result<BlockNumber, Error> {
-        Ok(self.tree.get_block_number()?)
-    }
-}
-
 /// A Curve Tree for the Prover in the Dart BP protocol.
 pub struct ProverCurveTree<
     const L: usize,
@@ -628,7 +521,7 @@ impl<
 /// Represents a tree of asset states in the Dart BP protocol.
 #[cfg(feature = "std")]
 pub struct AssetCurveTree {
-    pub tree: FullCurveTree<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
+    pub tree: CurveTreeWithBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     assets: HashMap<AssetId, (LeafIndex, AssetState)>,
 }
 
@@ -637,7 +530,7 @@ impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT)?,
+            tree: CurveTreeWithBackend::new(ASSET_TREE_HEIGHT)?,
             assets: HashMap::new(),
         })
     }
@@ -662,12 +555,12 @@ impl AssetCurveTree {
                 *existing_state = state;
                 let index = *index;
                 // Update the leaf in the curve tree.
-                self.tree.update(leaf, index)?;
+                self.tree.update_leaf(index, leaf)?;
 
                 Ok(index)
             }
             Entry::Vacant(entry) => {
-                let index = self.tree.insert(leaf)?;
+                let index = self.tree.insert_leaf(leaf)?;
                 entry.insert((index, state));
 
                 Ok(index)
@@ -680,11 +573,11 @@ impl AssetCurveTree {
         asset_id: AssetId,
     ) -> Option<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>> {
         let (leaf_index, _) = self.assets.get(&asset_id)?;
-        self.tree.get_path_to_leaf_index(*leaf_index).ok()
+        self.tree.get_path_to_leaf(*leaf_index, 0, None).ok()
     }
 
     pub fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        self.tree.params()
+        self.tree.parameters()
     }
 
     pub fn root(
@@ -710,11 +603,11 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
         &self,
         block_number: BlockNumber,
     ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
-        self.tree.fetch_root(block_number).ok()
+        self.tree.fetch_root(Some(block_number)).ok()
     }
 
     fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        self.tree.params()
+        self.tree.parameters()
     }
 }
 

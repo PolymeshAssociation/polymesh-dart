@@ -3,7 +3,8 @@ use test_log::test;
 use polymesh_dart::NodeLevel;
 use polymesh_dart::PallasA;
 use polymesh_dart::curve_tree::{
-    AccountTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, FullCurveTree, LeanCurveTree,
+    AccountTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeWithBackend,
+    LeanCurveTree,
 };
 
 const L: usize = 16;
@@ -21,10 +22,10 @@ fn create_test_leaf(value: usize) -> CompressedLeafValue<AccountTreeConfig> {
 
 fn setup_trees() -> (
     LeanCurveTree<L, 1, AccountTreeConfig>,
-    FullCurveTree<L, 1, AccountTreeConfig>,
+    CurveTreeWithBackend<L, 1, AccountTreeConfig>,
     CompressedCurveTreeRoot<L, 1, AccountTreeConfig>,
 ) {
-    let mut storage_tree = FullCurveTree::<L, 1, AccountTreeConfig>::new_with_capacity(HEIGHT)
+    let mut storage_tree = CurveTreeWithBackend::<L, 1, AccountTreeConfig>::new(HEIGHT)
         .expect("Failed to create storage tree");
     assert!(storage_tree.height() == HEIGHT);
 
@@ -36,7 +37,7 @@ fn setup_trees() -> (
     // Insert a leaf into both trees to avoid empty tree edge cases
     let leaf = create_test_leaf(0);
     lean_tree.append_leaf(leaf, &mut lean_root).unwrap();
-    storage_tree.insert(leaf).unwrap();
+    storage_tree.insert_leaf(leaf).unwrap();
 
     // Compare roots
     let storage_root = storage_tree.root().expect("Failed to get storage root");
@@ -81,7 +82,7 @@ fn assert_roots_equal(
     }
 }
 
-/// Test insertion of leafs into `CurveTreeStorage` against the `FullCurveTree` implementation.
+/// Test insertion of leafs into `CurveTreeStorage` against the `CurveTreeWithBackend` implementation.
 #[test]
 fn test_inserts() {
     let (mut lean_tree, mut storage_tree, mut lean_root) = setup_trees();
@@ -92,7 +93,7 @@ fn test_inserts() {
 
         // Insert into both trees
         lean_tree.append_leaf(leaf, &mut lean_root).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Compare roots
         let storage_root = storage_tree.root().expect("Failed to get storage root");
@@ -118,7 +119,7 @@ fn test_growth_beyond_l() {
 
         // Insert into both trees
         lean_tree.append_leaf(leaf, &mut lean_root).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Compare roots after each insertion
         let storage_root = storage_tree.root().expect("Failed to get storage root");
@@ -143,7 +144,7 @@ fn test_large_tree_growth() {
         let leaf = create_test_leaf(i);
 
         lean_tree.append_leaf(leaf, &mut lean_root).unwrap();
-        storage_tree.insert(leaf).unwrap();
+        storage_tree.insert_leaf(leaf).unwrap();
 
         // Check roots every few insertions to catch issues early
         if i % L == 0 {
