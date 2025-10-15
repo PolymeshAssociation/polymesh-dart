@@ -13,12 +13,11 @@ use ark_std::{
     string::{String, ToString},
     vec::Vec,
 };
-use blake2::{Blake2b512, Blake2s256};
+use blake2::Blake2b512;
 use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use digest::Digest;
 use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
 use polymesh_dart_common::{LegId, MediatorId, SettlementId};
 
@@ -323,10 +322,7 @@ impl<
 > SettlementProof<T, C>
 {
     pub fn hash(&self) -> SettlementHash {
-        let mut hasher = Blake2s256::new();
-        let data = self.encode();
-        hasher.update(&data);
-        SettlementHash(hasher.finalize().into())
+        SettlementHash(blake2_256(self))
     }
 
     pub fn verify<R: RngCore + CryptoRng>(

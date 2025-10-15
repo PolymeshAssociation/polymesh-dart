@@ -108,6 +108,7 @@ scale-info = { workspace = true, default-features = false, features = [
     "derive",
 ] }
 bounded-collections = { workspace = true, default-features = false }
+sp-io = { version = "7.0.0", default-features = false, optional = true }
 
 # serde support
 serde = { workspace = true, default-features = false, features = [

@@ -341,49 +341,6 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L
     }
 }
 
-pub struct RootHistory<const L: usize, const M: usize, C: CurveTreeConfig> {
-    block_roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
-    next_block_number: BlockNumber,
-    history_length: usize,
-}
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
-    /// Creates a new instance of `RootHistory` with the given history length and parameters.
-    pub fn new(history_length: usize) -> Self {
-        Self {
-            block_roots: BTreeMap::new(),
-            next_block_number: 0,
-            history_length,
-        }
-    }
-
-    /// Adds a new root to the history.
-    pub fn add_root(&mut self, root: CompressedCurveTreeRoot<L, M, C>) -> BlockNumber {
-        let block_number = self.next_block_number;
-        self.next_block_number += 1;
-
-        if self.block_roots.len() >= self.history_length {
-            let to_remove = block_number - self.history_length as BlockNumber;
-            self.block_roots.remove(&to_remove);
-        }
-        self.block_roots.insert(block_number, root);
-        block_number
-    }
-}
-
-impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
-    for &RootHistory<L, M, C>
-{
-    fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
-        let block: BlockNumber = block.try_into().ok()?;
-        self.block_roots.get(&block).cloned()
-    }
-
-    fn params(&self) -> &CurveTreeParameters<C> {
-        C::parameters()
-    }
-}
-
 /// A Curve Tree for the Prover in the Dart BP protocol.
 pub struct ProverCurveTree<
     const L: usize,
