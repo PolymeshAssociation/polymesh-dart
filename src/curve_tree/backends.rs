@@ -205,7 +205,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn new(height: NodeLevel) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
-    fn parameters(&self) -> impl Future<Output = &SelRerandParameters<C::P0, C::P1>> + Send;
+    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
 
     fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
@@ -471,7 +471,7 @@ where
         Ok(CurveTreeMemoryBackend::new(height)?)
     }
 
-    async fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
+    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
         C::parameters()
     }
 

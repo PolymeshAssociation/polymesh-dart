@@ -478,7 +478,7 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             fn params(&self) -> &CurveTreeParameters<C> {
-                self.parameters()
+                C::parameters()
             }
 
             fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, error::Error> {
@@ -503,7 +503,7 @@ macro_rules! impl_curve_tree_with_backend {
             }
 
             fn params(&self) -> &CurveTreeParameters<C> {
-                self.parameters()
+                C::parameters()
             }
         }
     };
@@ -670,8 +670,8 @@ macro_rules! impl_curve_tree_with_backend {
                 self.backend.height()$($await)*
             }
 
-            pub $($async_fn)* fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
-                self.backend.parameters()$($await)*
+            pub fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
+                C::parameters()
             }
 
             pub $($async_fn)* fn insert_leaf(
@@ -824,7 +824,7 @@ macro_rules! impl_curve_tree_with_backend {
             $($async_fn)* fn inner_slow_build_root(
                 &self,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
-                let params = self.parameters()$($await)*;
+                let params = self.parameters();
                 let root = NodeLocation::<L>::root(self.height()$($await)*);
                 match self.backend.get_inner_node(root, None)$($await)*? {
                     Some(node) => match node.decompress()? {
@@ -887,7 +887,7 @@ macro_rules! impl_curve_tree_with_backend {
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
 
                 // Get the parameters for the tree.
-                let params = self.parameters()$($await)*;
+                let params = self.parameters();
 
                 while !location.is_root(height) {
                     let (parent_location, _) = location.parent();

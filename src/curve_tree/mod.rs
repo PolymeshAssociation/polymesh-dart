@@ -345,17 +345,15 @@ pub struct RootHistory<const L: usize, const M: usize, C: CurveTreeConfig> {
     block_roots: BTreeMap<BlockNumber, CompressedCurveTreeRoot<L, M, C>>,
     next_block_number: BlockNumber,
     history_length: usize,
-    params: CurveTreeParameters<C>,
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> RootHistory<L, M, C> {
     /// Creates a new instance of `RootHistory` with the given history length and parameters.
-    pub fn new(history_length: usize, params: &CurveTreeParameters<C>) -> Self {
+    pub fn new(history_length: usize) -> Self {
         Self {
             block_roots: BTreeMap::new(),
             next_block_number: 0,
             history_length,
-            params: params.clone(),
         }
     }
 
@@ -382,7 +380,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L
     }
 
     fn params(&self) -> &CurveTreeParameters<C> {
-        &self.params
+        C::parameters()
     }
 }
 
