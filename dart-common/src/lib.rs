@@ -45,3 +45,4 @@ pub const SETTLEMENT_MAX_LEGS: u32 = 16;
 
 pub const MAX_KEYS_PER_REG_PROOF: u32 = 100;
 pub const MAX_ACCOUNT_ASSET_REG_PROOFS: u32 = 50;
+pub const MAX_BATCHED_PROOFS: u32 = 10;

@@ -426,19 +426,10 @@ impl<const M: usize, C: CurveTreeConfig> CompressedInner<M, C> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Inner<const M: usize, C: CurveTreeConfig> {
     Even([Affine<C::P0>; M]),
     Odd([Affine<C::P1>; M]),
-}
-
-impl<const M: usize, C: CurveTreeConfig> core::fmt::Debug for Inner<M, C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Inner::Even(commitment) => write!(f, "Even({:?})", commitment),
-            Inner::Odd(commitment) => write!(f, "Odd({:?})", commitment),
-        }
-    }
 }
 
 #[macro_export]

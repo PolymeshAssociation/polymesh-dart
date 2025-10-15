@@ -95,8 +95,16 @@ impl<T: DartLimits> AssetState<T> {
     }
 }
 
+type BPMintTxnProof<C> = bp_account::MintTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.
@@ -108,23 +116,7 @@ pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub nullifier: AccountStateNullifier,
 
     // proof
-    proof: WrappedCanonical<bp_account::MintTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>>,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for AssetMintingProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AssetMintingProof")
-            .field("pk", &self.pk)
-            .field("asset_id", &self.asset_id)
-            .field("amount", &self.amount)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .finish()
-    }
+    proof: WrappedCanonical<BPMintTxnProof<C>>,
 }
 
 impl<

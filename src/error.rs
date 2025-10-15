@@ -103,6 +103,10 @@ pub enum Error {
     /// Too many account asset registration proofs in transaction.
     #[error("Too many account asset registration proofs in transaction")]
     TooManyAccountAssetRegProofs,
+
+    /// Too many proofs in batched proof.
+    #[error("Too many proofs in batched proof")]
+    TooManyBatchedProofs,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

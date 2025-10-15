@@ -19,8 +19,8 @@ use polymesh_dart_bp::{
     },
 };
 use polymesh_dart_common::{
-    MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MAX_KEYS_PER_REG_PROOF,
-    MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MAX_BATCHED_PROOFS,
+    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
 
 #[cfg(feature = "sqlx")]
@@ -34,6 +34,9 @@ pub use account::*;
 
 mod asset;
 pub use asset::*;
+
+mod batched;
+pub use batched::*;
 
 mod leg;
 pub use leg::*;
@@ -51,9 +54,12 @@ use crate::curve_tree::{
 };
 use crate::*;
 
-pub trait DartLimits: Clone + core::fmt::Debug {
+pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
     /// The maximum number of keys in an account registration proof.
     type MaxKeysPerRegProof: Get<u32> + Clone + core::fmt::Debug;
+
+    /// The maximum number of proofs in a single batched proof.
+    type MaxBatchedProofs: Get<u32> + Clone + core::fmt::Debug;
 
     /// The maximum number of account asset registration proofs in a single transaction.
     type MaxAccountAssetRegProofs: Get<u32> + Clone + core::fmt::Debug;
@@ -73,6 +79,7 @@ pub trait DartLimits: Clone + core::fmt::Debug {
 
 impl DartLimits for () {
     type MaxKeysPerRegProof = ConstU32<500>;
+    type MaxBatchedProofs = ConstU32<MAX_BATCHED_PROOFS>;
     type MaxAccountAssetRegProofs = ConstU32<200>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
@@ -80,11 +87,12 @@ impl DartLimits for () {
     type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolymeshPrivateLimits;
 
 impl DartLimits for PolymeshPrivateLimits {
     type MaxKeysPerRegProof = ConstU32<MAX_KEYS_PER_REG_PROOF>;
+    type MaxBatchedProofs = ConstU32<MAX_BATCHED_PROOFS>;
     type MaxAccountAssetRegProofs = ConstU32<MAX_ACCOUNT_ASSET_REG_PROOFS>;
     type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;

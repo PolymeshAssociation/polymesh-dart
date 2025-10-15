@@ -323,7 +323,7 @@ impl FeeAccountRegistrationProof {
 }
 
 /// Fee payment account topup proof.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub account: AccountPublicKey,
@@ -423,6 +423,14 @@ impl<
     }
 }
 
+type BPFeePaymentProof<C> = bp_fee_account::FeePaymentProof<
+    FEE_ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// Fee payment proof.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
@@ -433,9 +441,7 @@ pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_fee_account::FeePaymentProof<FEE_ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
+    proof: WrappedCanonical<BPFeePaymentProof<C>>,
 }
 
 impl<
@@ -515,5 +521,58 @@ impl<
             None,
         )?;
         Ok(())
+    }
+}
+
+/// Fee payment + batch of proofs.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T, C))]
+pub struct FeePaymentWithBatchedProofs<
+    T: DartLimits = (),
+    C: CurveTreeConfig = FeeAccountTreeConfig,
+> {
+    pub fee_payment: FeeAccountPaymentProof<C>,
+    pub batched_proofs: BatchedProofs<T>,
+}
+
+pub const FEE_PAYMENT_BATCH_CTX: &[u8] = b"FeePaymentBatch";
+
+impl<
+    T: DartLimits,
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> FeePaymentWithBatchedProofs<T, C>
+{
+    /// Generate a new fee payment for a batch of proofs.
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        account: &AccountKeyPair,
+        batched_proofs: BatchedProofs<T>,
+        account_state: &mut FeeAccountAssetState,
+        amount: Balance,
+        tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
+    ) -> Result<Self, Error> {
+        let ctx = batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        let fee_payment =
+            FeeAccountPaymentProof::new(rng, account, &ctx, account_state, amount, tree_lookup)?;
+
+        Ok(Self {
+            fee_payment,
+            batched_proofs,
+        })
+    }
+
+    /// Verifies only the fee payment for this batch of proofs.
+    pub fn verify_fee_payment<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
+    ) -> Result<(), Error> {
+        let ctx = self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        self.fee_payment.verify(rng, &ctx, tree_roots)
     }
 }

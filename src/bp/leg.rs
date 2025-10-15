@@ -347,25 +347,24 @@ impl<
     }
 }
 
+type BPSettlementTxnProof<C> = bp_leg::SettlementTxnProof<
+    ASSET_TREE_L,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::P1,
+    <C as CurveTreeConfig>::P0,
+>;
+
 /// The proof for a settlement leg in the Dart BP protocol.
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
 
-    proof: WrappedCanonical<bp_leg::SettlementTxnProof<ASSET_TREE_L, C::F1, C::F0, C::P1, C::P0>>,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for SettlementLegProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SettlementLegProof")
-            .field("leg_enc", &self.leg_enc)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPSettlementTxnProof<C>>,
 }
 
 impl<
@@ -456,7 +455,7 @@ impl<
 ///
 /// This allows building the settlement off-chain and collecting the leg affirmations
 /// before submitting the settlement to the chain.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T, C))]
 pub struct HashedSettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     /// The settlement proof containing the memo, root, and legs.
@@ -464,14 +463,6 @@ pub struct HashedSettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetT
     /// The hash of the settlement, used to tie the leg affirmations to this settlement.
     pub hash: SettlementHash,
 }
-
-impl<T: DartLimits, C: CurveTreeConfig> PartialEq for HashedSettlementProof<T, C> {
-    fn eq(&self, other: &Self) -> bool {
-        self.settlement == other.settlement && self.hash == other.hash
-    }
-}
-
-impl<T: DartLimits, C: CurveTreeConfig> Eq for HashedSettlementProof<T, C> {}
 
 /// Counts of the legs and sender/receiver affirmations in a batched settlement.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
@@ -798,8 +789,16 @@ impl LegEncrypted {
     }
 }
 
+type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -807,24 +806,7 @@ pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_account::AffirmAsSenderTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for SenderAffirmationProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SenderAffirmationProof")
-            .field("leg_ref", &self.leg_ref)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
 }
 
 impl<
@@ -931,8 +913,16 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     }
 }
 
+type BPAffirmAsReceiverTxnProof<C> = bp_account::AffirmAsReceiverTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -940,24 +930,7 @@ pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_account::AffirmAsReceiverTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for ReceiverAffirmationProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ReceiverAffirmationProof")
-            .field("leg_ref", &self.leg_ref)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
 }
 
 impl<
@@ -1062,8 +1035,16 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverAffirmationProof<C> {
     }
 }
 
+type BPClaimReceivedTxnProof<C> = bp_account::ClaimReceivedTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -1071,24 +1052,7 @@ pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_account::ClaimReceivedTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for ReceiverClaimProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ReceiverClaimProof")
-            .field("leg_ref", &self.leg_ref)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPClaimReceivedTxnProof<C>>,
 }
 
 impl<
@@ -1195,8 +1159,16 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     }
 }
 
+type BPSenderCounterUpdateTxnProof<C> = bp_account::SenderCounterUpdateTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -1204,24 +1176,7 @@ pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_account::SenderCounterUpdateTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for SenderCounterUpdateProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SenderCounterUpdateProof")
-            .field("leg_ref", &self.leg_ref)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPSenderCounterUpdateTxnProof<C>>,
 }
 
 impl<
@@ -1326,8 +1281,16 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderCounterUpdateProof<C> {
     }
 }
 
+type BPSenderReverseTxnProof<C> = bp_account::SenderReverseTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -1335,24 +1298,7 @@ pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<
-        bp_account::SenderReverseTxnProof<ACCOUNT_TREE_L, C::F0, C::F1, C::P0, C::P1>,
-    >,
-}
-
-impl<C: CurveTreeConfig> core::fmt::Debug for SenderReversalProof<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SenderReversalProof")
-            .field("leg_ref", &self.leg_ref)
-            .field("root_block", &self.root_block)
-            .field(
-                "updated_account_state_commitment",
-                &self.updated_account_state_commitment,
-            )
-            .field("nullifier", &self.nullifier)
-            .field("proof", &self.proof)
-            .finish()
-    }
+    proof: WrappedCanonical<BPSenderReverseTxnProof<C>>,
 }
 
 impl<

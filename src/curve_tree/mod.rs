@@ -185,8 +185,16 @@ pub trait CurveTreeConfig:
 
     type F0: PrimeField + core::fmt::Debug;
     type F1: PrimeField + core::fmt::Debug;
-    type P0: SWCurveConfig<ScalarField = Self::F0, BaseField = Self::F1> + Clone + Copy + PartialEq;
-    type P1: SWCurveConfig<ScalarField = Self::F1, BaseField = Self::F0> + Clone + Copy + PartialEq;
+    type P0: SWCurveConfig<ScalarField = Self::F0, BaseField = Self::F1>
+        + Clone
+        + Copy
+        + PartialEq
+        + Eq;
+    type P1: SWCurveConfig<ScalarField = Self::F1, BaseField = Self::F0>
+        + Clone
+        + Copy
+        + PartialEq
+        + Eq;
 
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1>;
 
