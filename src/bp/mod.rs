@@ -1,6 +1,3 @@
-#[cfg(feature = "std")]
-use std::collections::HashMap;
-
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -51,7 +48,11 @@ pub use keys::*;
 mod fee;
 pub use fee::*;
 
-use crate::curve_tree::*;
+use crate::curve_tree::{
+    AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
+    CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
+    get_asset_commitment_parameters, get_asset_curve_tree_parameters,
+};
 use crate::*;
 
 pub trait DartLimits: Clone + core::fmt::Debug {
@@ -663,99 +664,6 @@ impl<T: DartLimits> AssetState<T> {
     pub fn commitment(&self) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
         let asset_data = self.asset_data()?;
         CompressedLeafValue::from_affine(asset_data.commitment)
-    }
-}
-
-/// Represents a tree of asset states in the Dart BP protocol.
-#[cfg(feature = "std")]
-pub struct AssetCurveTree {
-    pub tree: FullCurveTree<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
-    assets: HashMap<AssetId, (LeafIndex, AssetState)>,
-}
-
-#[cfg(feature = "std")]
-impl AssetCurveTree {
-    /// Creates a new instance of `AssetCurveTree` with the specified parameters.
-    pub fn new() -> Result<Self, Error> {
-        Ok(Self {
-            tree: FullCurveTree::new_with_capacity(ASSET_TREE_HEIGHT)?,
-            assets: HashMap::new(),
-        })
-    }
-
-    /// Returns the asset state for the given asset ID, if it exists.
-    pub fn get_asset_state(&self, asset_id: AssetId) -> Option<AssetState> {
-        self.assets.get(&asset_id).map(|(_, state)| state.clone())
-    }
-
-    /// Sets the asset state in the tree and returns the index of the asset state.
-    pub fn set_asset_state(&mut self, state: AssetState) -> Result<LeafIndex, Error> {
-        let asset_id = state.asset_id;
-        // Get the new asset state commitment.
-        let asset_data = state.asset_data()?;
-        let leaf = CompressedLeafValue::from_affine(asset_data.commitment)?;
-
-        // Update or insert the asset state.
-        use std::collections::hash_map::Entry;
-        match self.assets.entry(asset_id) {
-            Entry::Occupied(mut entry) => {
-                let (index, existing_state) = entry.get_mut();
-                *existing_state = state;
-                let index = *index;
-                // Update the leaf in the curve tree.
-                self.tree.update(leaf, index)?;
-
-                Ok(index)
-            }
-            Entry::Vacant(entry) => {
-                let index = self.tree.insert(leaf)?;
-                entry.insert((index, state));
-
-                Ok(index)
-            }
-        }
-    }
-
-    pub fn get_asset_state_path(
-        &self,
-        asset_id: AssetId,
-    ) -> Option<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>> {
-        let (leaf_index, _) = self.assets.get(&asset_id)?;
-        self.tree.get_path_to_leaf_index(*leaf_index).ok()
-    }
-
-    pub fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        self.tree.params()
-    }
-
-    pub fn root(
-        &self,
-    ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
-        self.tree.root()
-    }
-
-    pub fn set_block_number(&mut self, block_number: BlockNumber) -> Result<(), Error> {
-        self.tree.set_block_number(block_number)?;
-        Ok(())
-    }
-
-    pub fn store_root(&mut self) -> Result<(), Error> {
-        self.tree.store_root()?;
-        Ok(())
-    }
-}
-
-#[cfg(feature = "std")]
-impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &AssetCurveTree {
-    fn get_block_root(
-        &self,
-        block_number: BlockNumber,
-    ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
-        self.tree.fetch_root(block_number).ok()
-    }
-
-    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        self.tree.params()
     }
 }
 

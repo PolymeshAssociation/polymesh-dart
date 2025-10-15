@@ -13,8 +13,8 @@ use std::{
 
 use polymesh_dart::{
     curve_tree::{
-        AccountTreeConfig, AssetTreeConfig, CurveTreeLookup, FullCurveTree, ProverCurveTree,
-        ValidateCurveTreeRoot, VerifierCurveTree,
+        AccountTreeConfig, AssetCurveTree, AssetTreeConfig, CurveTreeLookup, FullCurveTree,
+        ProverCurveTree, ValidateCurveTreeRoot, VerifierCurveTree,
     },
     *,
 };
