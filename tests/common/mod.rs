@@ -13,8 +13,8 @@ use std::{
 
 use polymesh_dart::{
     curve_tree::{
-        AccountTreeConfig, AssetCurveTree, AssetTreeConfig, CurveTreeLookup, FullCurveTree,
-        ProverCurveTree, ValidateCurveTreeRoot, VerifierCurveTree,
+        AccountTreeConfig, AssetCurveTree, AssetTreeConfig, CurveTreeLookup, CurveTreeWithBackend,
+        FullCurveTree, ProverCurveTree, ValidateCurveTreeRoot,
     },
     *,
 };
@@ -104,7 +104,7 @@ impl DartUserAccountInner {
             asset_id,
             0,
             self.address.ctx(),
-            chain.account_tree.params(),
+            chain.account_tree.parameters(),
         )?;
         chain.initialize_account_asset(&self.address, proof)?;
         asset_state.commit_pending_state()?;
@@ -1267,7 +1267,7 @@ pub struct DartChainState {
 
     /// Accounts initialized with assets.
     account_assets: HashSet<(AccountPublicKey, AssetId)>,
-    account_tree: VerifierCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+    account_tree: CurveTreeWithBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     account_nullifiers: HashSet<AccountStateNullifier>,
 
     /// Account leafs in the order they have been inserted.
@@ -1285,7 +1285,7 @@ pub struct DartChainState {
 impl DartChainState {
     pub fn new() -> Result<Self> {
         let asset_tree = AssetCurveTree::new()?;
-        let account_tree = VerifierCurveTree::new(ACCOUNT_TREE_HEIGHT)?;
+        let account_tree = CurveTreeWithBackend::new(ACCOUNT_TREE_HEIGHT)?;
         Ok(Self {
             signers: HashMap::new(),
 
@@ -1314,7 +1314,7 @@ impl DartChainState {
 
     pub fn account_tree(
         &self,
-    ) -> &VerifierCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> {
+    ) -> &CurveTreeWithBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig> {
         &self.account_tree
     }
 
@@ -1347,7 +1347,7 @@ impl DartChainState {
 
         for commitment in self.pending_account_updates.drain(..) {
             // Add the commitment to the account tree.
-            self.account_tree.insert(commitment.as_leaf_value()?)?;
+            self.account_tree.insert_leaf(commitment.as_leaf_value()?)?;
             self.account_leafs.push(commitment);
         }
         // We need to store curve tree roots.
@@ -1515,7 +1515,7 @@ impl DartChainState {
         // Verify the proof for the account and asset.
         let mut rng = rand::thread_rng();
         proof
-            .verify(caller.ctx(), self.account_tree.params(), &mut rng)
+            .verify(caller.ctx(), self.account_tree.parameters(), &mut rng)
             .with_context(|| {
                 format!(
                     "Invalid proof for account {:?} and asset ID {}",

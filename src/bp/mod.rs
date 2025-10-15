@@ -29,11 +29,11 @@ pub mod sqlx_impl;
 pub mod encode;
 pub use encode::{CompressedAffine, WrappedCanonical};
 
-mod asset;
-pub use asset::*;
-
 mod account;
 pub use account::*;
+
+mod asset;
+pub use asset::*;
 
 mod leg;
 pub use leg::*;
@@ -45,8 +45,9 @@ mod fee;
 pub use fee::*;
 
 use crate::curve_tree::{
-    CompressedLeafValue, CurveTreeConfig, CurveTreeLookup, CurveTreePath, FeeAccountTreeConfig,
-    ValidateCurveTreeRoot,
+    AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
+    CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
+    get_asset_commitment_parameters, get_asset_curve_tree_parameters,
 };
 use crate::*;
 

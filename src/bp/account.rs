@@ -17,11 +17,6 @@ use polymesh_dart_bp::{
 };
 use polymesh_dart_common::NullifierSkGenCounter;
 
-use crate::curve_tree::{
-    AccountTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup, CurveTreeParameters,
-    CurveTreePath,
-};
-
 use super::*;
 use crate::*;
 

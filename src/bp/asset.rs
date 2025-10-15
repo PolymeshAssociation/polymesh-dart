@@ -13,10 +13,6 @@ use rand_core::{CryptoRng, RngCore};
 use polymesh_dart_bp::account as bp_account;
 
 use super::*;
-use crate::curve_tree::{
-    AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
-    ValidateCurveTreeRoot, get_asset_commitment_parameters, get_asset_curve_tree_parameters,
-};
 use crate::*;
 
 /// Represents the state of an asset in the Dart BP protocol.
