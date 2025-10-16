@@ -15,7 +15,7 @@ use super::*;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ProofHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
-/// A single batched proof.
+/// A single batched proof (no identity).
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub enum BatchedProof<T: DartLimits = ()> {
@@ -29,19 +29,11 @@ pub enum BatchedProof<T: DartLimits = ()> {
 }
 
 /// A batch of DART proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedProofs<T: DartLimits = ()> {
     pub proofs: BoundedVec<BatchedProof<T>, T::MaxBatchedProofs>,
 }
-
-impl<T: DartLimits> PartialEq for BatchedProofs<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.proofs == other.proofs
-    }
-}
-
-impl<T: DartLimits> Eq for BatchedProofs<T> {}
 
 impl<T: DartLimits> BatchedProofs<T> {
     /// Creates a new, empty instance of `BatchedProofs`.

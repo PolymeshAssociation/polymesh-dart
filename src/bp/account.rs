@@ -303,19 +303,11 @@ impl AccountAssetState {
 /// Batched account asset registration proof.
 ///
 /// This is used to register multiple account/asset pairs in a single proof.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedAccountAssetRegistrationProof<T: DartLimits = ()> {
     pub proofs: BoundedVec<AccountAssetRegistrationProof, T::MaxAccountAssetRegProofs>,
 }
-
-impl<T: DartLimits> PartialEq for BatchedAccountAssetRegistrationProof<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.proofs == other.proofs
-    }
-}
-
-impl<T: DartLimits> Eq for BatchedAccountAssetRegistrationProof<T> {}
 
 impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     /// Generate a new batched account asset registration proof.

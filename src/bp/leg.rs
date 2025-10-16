@@ -294,7 +294,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T, C))]
 pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
@@ -302,14 +302,6 @@ pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeCon
 
     pub legs: BoundedVec<SettlementLegProof<C>, T::MaxSettlementLegs>,
 }
-
-impl<T: DartLimits, C: CurveTreeConfig> PartialEq for SettlementProof<T, C> {
-    fn eq(&self, other: &Self) -> bool {
-        self.memo == other.memo && self.root_block == other.root_block && self.legs == other.legs
-    }
-}
-
-impl<T: DartLimits, C: CurveTreeConfig> Eq for SettlementProof<T, C> {}
 
 impl<
     T: DartLimits,
@@ -474,7 +466,7 @@ pub struct BatchedSettlementCounts {
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConfig> {
     /// The sender's affirmation proof.
     pub sender: Option<SenderAffirmationProof<C>>,
@@ -482,16 +474,10 @@ pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConf
     pub receiver: Option<ReceiverAffirmationProof<C>>,
 }
 
-impl<C: CurveTreeConfig> PartialEq for BatchedSettlementLegAffirmations<C> {
-    fn eq(&self, other: &Self) -> bool {
-        self.sender == other.sender && self.receiver == other.receiver
-    }
-}
-
 /// A batched settlement proof allows including the sender and receiver affirmation proofs
 /// with the settlement creation proof to reduce the number of transactions
 /// required to finalize a settlement.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedSettlementProof<
     T: DartLimits = (),
@@ -504,17 +490,6 @@ pub struct BatchedSettlementProof<
     /// The leg affirmations for each leg in the settlement.
     pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<A>, T::MaxSettlementLegs>,
 }
-
-impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> PartialEq
-    for BatchedSettlementProof<T, C, A>
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.hashed_settlement == other.hashed_settlement
-            && self.leg_affirmations == other.leg_affirmations
-    }
-}
-
-impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> Eq for BatchedSettlementProof<T, C, A> {}
 
 impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementProof<T, C, A> {
     /// The settlemetn reference using the hash of the settlement.

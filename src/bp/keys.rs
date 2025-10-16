@@ -263,21 +263,13 @@ impl AccountKeys {
 /// DART account registration proof.
 ///
 /// This is used to prove knowledge of the secret keys (account and encryption keys) for 1 or more DART accounts.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
     proof: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
 }
-
-impl<T: DartLimits> PartialEq for AccountRegistrationProof<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.accounts == other.accounts && self.proof == other.proof
-    }
-}
-
-impl<T: DartLimits> Eq for AccountRegistrationProof<T> {}
 
 impl<T: DartLimits> AccountRegistrationProof<T> {
     /// Generate a new account registration proof for the given accounts.
@@ -341,20 +333,12 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 }
 
 /// Encryption key registration proof for auditors and mediators.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 
     proof: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
 }
-
-impl<T: DartLimits> PartialEq for EncryptionKeyRegistrationProof<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.keys == other.keys && self.proof == other.proof
-    }
-}
-
-impl<T: DartLimits> Eq for EncryptionKeyRegistrationProof<T> {}
 
 impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
     /// Generate a new encryption key registration proof for the given keys.

@@ -8,7 +8,7 @@ use ark_ff::{
 use ark_serialize::CanonicalSerialize;
 
 use blake2::Blake2b512;
-use bounded_collections::{ConstU32, Get};
+use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use digest::Digest;
 
@@ -54,50 +54,68 @@ use crate::curve_tree::{
 };
 use crate::*;
 
+/// Use `GetExtra` as the trait bounds for pallet `Config` parameters
+/// that will be used for bounded collections.
+pub trait GetExtra<T>: Get<T> + Clone + core::fmt::Debug + Default + PartialEq + Eq {}
+
+/// ConstSize type wrapper.
+///
+/// This allows the use of Bounded collections in extrinsic parameters.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConstSize<const T: u32>;
+
+impl<const T: u32> Get<u32> for ConstSize<T> {
+    fn get() -> u32 {
+        T
+    }
+}
+
+impl<const T: u32> GetExtra<u32> for ConstSize<T> {}
+
 pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
     /// The maximum number of keys in an account registration proof.
-    type MaxKeysPerRegProof: Get<u32> + Clone + core::fmt::Debug;
+    type MaxKeysPerRegProof: GetExtra<u32>;
 
     /// The maximum number of proofs in a single batched proof.
-    type MaxBatchedProofs: Get<u32> + Clone + core::fmt::Debug;
+    type MaxBatchedProofs: GetExtra<u32>;
 
     /// The maximum number of account asset registration proofs in a single transaction.
-    type MaxAccountAssetRegProofs: Get<u32> + Clone + core::fmt::Debug;
+    type MaxAccountAssetRegProofs: GetExtra<u32>;
 
     /// The maximum number of legs in a settlement.
-    type MaxSettlementLegs: Get<u32> + Clone + core::fmt::Debug;
+    type MaxSettlementLegs: GetExtra<u32>;
 
     /// The maximum settlement memo length.
-    type MaxSettlementMemoLength: Get<u32> + Clone + core::fmt::Debug;
+    type MaxSettlementMemoLength: GetExtra<u32>;
 
     /// The maximum number of asset auditors.
-    type MaxAssetAuditors: Get<u32> + Clone + core::fmt::Debug;
+    type MaxAssetAuditors: GetExtra<u32>;
 
     /// The maximum number of asset mediators.
-    type MaxAssetMediators: Get<u32> + Clone + core::fmt::Debug;
+    type MaxAssetMediators: GetExtra<u32>;
 }
 
 impl DartLimits for () {
-    type MaxKeysPerRegProof = ConstU32<500>;
-    type MaxBatchedProofs = ConstU32<MAX_BATCHED_PROOFS>;
-    type MaxAccountAssetRegProofs = ConstU32<200>;
-    type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
-    type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
-    type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
-    type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
+    type MaxKeysPerRegProof = ConstSize<500>;
+    type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
+    type MaxAccountAssetRegProofs = ConstSize<200>;
+    type MaxSettlementLegs = ConstSize<SETTLEMENT_MAX_LEGS>;
+    type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;
+    type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
+    type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolymeshPrivateLimits;
 
 impl DartLimits for PolymeshPrivateLimits {
-    type MaxKeysPerRegProof = ConstU32<MAX_KEYS_PER_REG_PROOF>;
-    type MaxBatchedProofs = ConstU32<MAX_BATCHED_PROOFS>;
-    type MaxAccountAssetRegProofs = ConstU32<MAX_ACCOUNT_ASSET_REG_PROOFS>;
-    type MaxSettlementLegs = ConstU32<SETTLEMENT_MAX_LEGS>;
-    type MaxSettlementMemoLength = ConstU32<MEMO_MAX_LENGTH>;
-    type MaxAssetAuditors = ConstU32<MAX_ASSET_AUDITORS>;
-    type MaxAssetMediators = ConstU32<MAX_ASSET_MEDIATORS>;
+    type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
+    type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
+    type MaxAccountAssetRegProofs = ConstSize<MAX_ACCOUNT_ASSET_REG_PROOFS>;
+    type MaxSettlementLegs = ConstSize<SETTLEMENT_MAX_LEGS>;
+    type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;
+    type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
+    type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
 }
 
 pub type LeafIndex = u64;
