@@ -539,14 +539,16 @@ impl<
     /// Generate a new batched fee account topup proof.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        topups: &mut [(&AccountKeyPair, Balance, &mut FeeAccountAssetState)],
+        topups: &mut [(&AccountKeyPair, Balance, FeeAccountAssetState)],
         ctx: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         let mut proofs = BoundedVec::with_bounded_capacity(topups.len());
-        for (account, amount, account_state) in topups.into_iter() {
+        let mut account_states = Vec::with_capacity(topups.len());
+        for (account, amount, account_state) in topups.iter_mut() {
             let proof =
-                FeeAccountTopupProof::new(rng, account, *account_state, *amount, ctx, tree_lookup)?;
+                FeeAccountTopupProof::new(rng, account, account_state, *amount, ctx, tree_lookup)?;
+            account_states.push(account_state.clone());
             proofs
                 .try_push(proof)
                 .map_err(|_| Error::TooManyBatchedProofs)?;
