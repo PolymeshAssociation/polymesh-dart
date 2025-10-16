@@ -455,7 +455,7 @@ macro_rules! impl_curve_tree_with_backend {
             C: CurveTreeConfig,
             B: $curve_tree_backend_trait<L, M, C, Error = Error>,
             Error: From<crate::Error>,
-        > CurveTreeLookup<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
+        > CurveTreeLookup<L, M, C> for $curve_tree_ty<L, M, C, B, Error>
         {
             fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, error::Error> {
                 Ok($curve_tree_ty::get_path_to_leaf(self,leaf_index, 0, None).map_err(|_| error::Error::LeafIndexNotFound(leaf_index))?)
@@ -487,7 +487,7 @@ macro_rules! impl_curve_tree_with_backend {
             C: CurveTreeConfig,
             B: $curve_tree_backend_trait<L, M, C, Error = Error>,
             Error: From<crate::Error>,
-        > ValidateCurveTreeRoot<L, M, C> for &$curve_tree_ty<L, M, C, B, Error>
+        > ValidateCurveTreeRoot<L, M, C> for $curve_tree_ty<L, M, C, B, Error>
         {
             fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
                 self.fetch_root(Some(block)).ok()

@@ -326,6 +326,31 @@ pub trait CurveTreeLookup<const L: usize, const M: usize, C: CurveTreeConfig> {
     fn get_block_number(&self) -> Result<BlockNumber, Error>;
 }
 
+// Implement CurveTreeLookup for references to types that implement CurveTreeLookup.
+impl<const L: usize, const M: usize, C: CurveTreeConfig, T: CurveTreeLookup<L, M, C>>
+    CurveTreeLookup<L, M, C> for &T
+{
+    fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
+        (*self).get_path_to_leaf_index(leaf_index)
+    }
+
+    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error> {
+        (*self).get_path_to_leaf(leaf)
+    }
+
+    fn params(&self) -> &CurveTreeParameters<C> {
+        (*self).params()
+    }
+
+    fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
+        (*self).root()
+    }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        (*self).get_block_number()
+    }
+}
+
 /// Check if the tree root is valid.
 ///
 /// This allows verifying proofs against older tree roots.
@@ -337,8 +362,21 @@ pub trait ValidateCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConf
     fn params(&self) -> &CurveTreeParameters<C>;
 }
 
+/// Implement ValidateCurveTreeRoot for references to types that implement ValidateCurveTreeRoot.
+impl<const L: usize, const M: usize, C: CurveTreeConfig, T: ValidateCurveTreeRoot<L, M, C>>
+    ValidateCurveTreeRoot<L, M, C> for &T
+{
+    fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
+        (*self).get_block_root(block)
+    }
+
+    fn params(&self) -> &CurveTreeParameters<C> {
+        C::parameters()
+    }
+}
+
 impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
-    for &CompressedCurveTreeRoot<L, M, C>
+    for CompressedCurveTreeRoot<L, M, C>
 {
     fn get_block_root(&self, _block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
         Some((*self).clone())
@@ -449,7 +487,7 @@ impl<
     C: CurveTreeConfig,
     B: CurveTreeBackend<L, M, C, Error = E>,
     E: From<crate::Error>,
-> CurveTreeLookup<L, M, C> for &ProverCurveTree<L, M, C, B, E>
+> CurveTreeLookup<L, M, C> for ProverCurveTree<L, M, C, B, E>
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         Ok(self

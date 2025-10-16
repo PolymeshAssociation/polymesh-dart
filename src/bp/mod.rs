@@ -20,7 +20,8 @@ use polymesh_dart_bp::{
 };
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MAX_BATCHED_PROOFS,
-    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS, MAX_KEYS_PER_REG_PROOF,
+    MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
 
 #[cfg(feature = "sqlx")]
@@ -79,6 +80,12 @@ pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
     /// The maximum number of proofs in a single batched proof.
     type MaxBatchedProofs: GetExtra<u32>;
 
+    /// The maximum number of fee account registration proofs in a single transaction.
+    type MaxFeeAccountRegProofs: GetExtra<u32>;
+
+    /// The maximum number of fee account topup proofs in a single transaction.
+    type MaxFeeAccountTopupProofs: GetExtra<u32>;
+
     /// The maximum number of account asset registration proofs in a single transaction.
     type MaxAccountAssetRegProofs: GetExtra<u32>;
 
@@ -98,6 +105,8 @@ pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
 impl DartLimits for () {
     type MaxKeysPerRegProof = ConstSize<500>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
+    type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
+    type MaxFeeAccountTopupProofs = ConstSize<MAX_FEE_ACCOUNT_TOPUP_PROOFS>;
     type MaxAccountAssetRegProofs = ConstSize<200>;
     type MaxSettlementLegs = ConstSize<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;
@@ -111,6 +120,8 @@ pub struct PolymeshPrivateLimits;
 impl DartLimits for PolymeshPrivateLimits {
     type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
+    type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
+    type MaxFeeAccountTopupProofs = ConstSize<MAX_FEE_ACCOUNT_TOPUP_PROOFS>;
     type MaxAccountAssetRegProofs = ConstSize<MAX_ACCOUNT_ASSET_REG_PROOFS>;
     type MaxSettlementLegs = ConstSize<SETTLEMENT_MAX_LEGS>;
     type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;

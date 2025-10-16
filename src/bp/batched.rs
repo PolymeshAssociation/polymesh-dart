@@ -1,4 +1,5 @@
 use ark_std::collections::BTreeMap;
+use ark_std::vec::Vec;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -147,7 +148,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> BatchCompressedCurveTre
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> ValidateCurveTreeRoot<L, M, C>
-    for &BatchCompressedCurveTreeRoots<L, M, C>
+    for BatchCompressedCurveTreeRoots<L, M, C>
 {
     fn get_block_root(&self, block: BlockNumber) -> Option<CompressedCurveTreeRoot<L, M, C>> {
         let block: BlockNumber = block.try_into().ok()?;
