@@ -1,5 +1,4 @@
-use ark_std::collections::BTreeMap;
-use ark_std::vec::Vec;
+use ark_std::{collections::BTreeMap, vec::Vec};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

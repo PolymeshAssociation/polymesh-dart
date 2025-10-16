@@ -26,7 +26,7 @@ use curve_tree_relations::range_proof::range_proof;
 use curve_tree_relations::rerandomize::scalar_mult;
 use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::ff::inner_product;
-use dock_crypto_utils::msm::WindowTable;
+use dock_crypto_utils::msm::multiply_field_elems_with_same_group_elem;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -215,10 +215,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             let (s_chunks, s_chunks_as_u64) =
                 digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
-            let table = WindowTable::new(NUM_CHUNKS, enc_gen.into_group());
 
             // encs[i] = h * s_chunks[i]
-            let encs = G::Group::normalize_batch(&table.multiply_many(&s_chunks));
+            let encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
+                enc_gen.into_group(),
+                &s_chunks,
+            ));
 
             let enc_rands = (0..NUM_CHUNKS)
                 .map(|_| G::ScalarField::rand(rng))
@@ -1057,10 +1059,10 @@ impl<
         let T_2 = (pk_T * r_2).into_affine();
         let p_1_xy = p_1.xy().unwrap();
         let p_2_xy = p_2.xy().unwrap();
-        let x_1 = *p_1_xy.0;
-        let y_1 = *p_1_xy.1;
-        let x_2 = *p_2_xy.0;
-        let y_2 = *p_2_xy.1;
+        let x_1 = p_1_xy.0;
+        let y_1 = p_1_xy.1;
+        let x_2 = p_2_xy.0;
+        let y_2 = p_2_xy.1;
 
         // x_1 is rho
         // x_2 is randomness
@@ -1472,18 +1474,18 @@ pub mod tests {
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
     use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
-    use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
-    use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
-    use ark_crypto_primitives::{
-        crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
-        sponge::poseidon::PoseidonConfig,
-    };
-    use ark_ff::{Field, PrimeField};
-    use ark_r1cs_std::alloc::AllocVar;
-    use ark_r1cs_std::{
-        R1CSVar,
-        fields::fp::{AllocatedFp, FpVar},
-    };
+    // use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
+    // use ark_crypto_primitives::crh::{TwoToOneCRHScheme, TwoToOneCRHSchemeGadget};
+    // use ark_crypto_primitives::{
+    //     crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
+    //     sponge::poseidon::PoseidonConfig,
+    // };
+    use ark_ff::Field;
+    // use ark_r1cs_std::alloc::AllocVar;
+    // use ark_r1cs_std::{
+    //     R1CSVar,
+    //     fields::fp::{AllocatedFp, FpVar},
+    // };
     use ark_std::UniformRand;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
@@ -1498,7 +1500,7 @@ pub mod tests {
     type VestaA = ark_vesta::Affine;
     type Fr = ark_pallas::Fr;
 
-    pub fn test_params_for_poseidon_0<R: CryptoRngCore, F: PrimeField>(
+    /*pub fn test_params_for_poseidon_0<R: CryptoRngCore, F: PrimeField>(
         rng: &mut R,
     ) -> PoseidonConfig<F> {
         // Parameters for testing only.
@@ -1524,13 +1526,13 @@ pub mod tests {
         }
 
         PoseidonConfig::<F>::new(FULL_ROUNDS, PARTIAL_ROUNDS, ALPHA, mds, ark, RATE, CAPACITY)
-    }
+    }*/
 
     pub fn test_params_for_poseidon2() -> Poseidon2Params<Fr> {
         get_poseidon2_params_for_2_1_hashing().unwrap()
     }
 
-    #[test]
+    /*#[test]
     fn test_poseidon() {
         let mut rng = rand::thread_rng();
 
@@ -1560,7 +1562,7 @@ pub mod tests {
         // let cs_inner = cs.into_inner();
         // println!("{}", cs_inner.is_some());
         // TODO:
-    }
+    }*/
 
     pub fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
         [
@@ -1953,11 +1955,11 @@ pub mod tests {
 
         let sk_inv = sk_T.0.inverse().unwrap();
         assert_eq!(
-            *(reg_proof.T_1 * sk_inv).into_affine().x().unwrap(),
+            (reg_proof.T_1 * sk_inv).into_affine().x().unwrap(),
             account.rho
         );
         assert_eq!(
-            *(reg_proof.T_2 * sk_inv).into_affine().x().unwrap(),
+            (reg_proof.T_2 * sk_inv).into_affine().x().unwrap(),
             account.randomness
         );
     }

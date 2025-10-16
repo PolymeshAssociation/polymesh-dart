@@ -231,8 +231,8 @@ where
         let p_1 = (pk_T_gen * r_1).into_affine();
         let p_2 = (pk_T_gen * r_2).into_affine();
         // r_1 and r_2 can't be 0 so unwrap is fine
-        let rho = *p_1.x().unwrap();
-        let randomness = *p_2.x().unwrap();
+        let rho = p_1.x().unwrap();
+        let randomness = p_2.x().unwrap();
         let current_rho = rho.square();
 
         Ok((

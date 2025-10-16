@@ -145,7 +145,7 @@ pub type VestaScalar = <VestaA as AffineRepr>::ScalarField;
 pub const ACCOUNT_IDENTITY_LABEL: &[u8; 16] = b"account-identity";
 pub(crate) fn hash_identity<F: PrimeField>(did: &[u8]) -> F {
     let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<F>>::new(ACCOUNT_IDENTITY_LABEL);
-    let r = hasher.hash_to_field(&did, 1);
+    let r = hasher.hash_to_field::<1>(&did);
     r[0]
 }
 

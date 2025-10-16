@@ -26,9 +26,14 @@ schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
 #ark-serialize = { path = "../arkworks-algebra/serialize" }
 #ark-ec = { path = "../arkworks-algebra/ec" }
 #ark-ff = { path = "../arkworks-algebra/ff" }
-ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
-ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
-ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-v0.4" }
+#ark-pallas = { path = "../arkworks-algebra/curves/pallas" }
+#ark-vesta = { path = "../arkworks-algebra/curves/vesta" }
+
+ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
@@ -55,16 +60,14 @@ bounded-collections = { version = "0.1.4", default-features = false }
 codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false }
 scale-info = { version = "2.0", default-features = false }
 
-ark-ff = { version = "0.4", default-features = false }
-ark-ec = { version = "0.4", default-features = false }
-ark-serialize = { version = "0.4", default-features = false }
-ark-std = { version = "0.4", default-features = false }
-ark-crypto-primitives = { version = "0.4.0", default-features = false, features = [
-    "crh",
-    "r1cs",
-] }
-ark-relations = { version = "0.4.0", default-features = false }
-ark-r1cs-std = { version = "0.4.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
+ark-ec = { version = "0.5.0", default-features = false }
+ark-serialize = { version = "0.5.0", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+#ark-crypto-primitives = { version = "0.5.0", default-features = false, features = [
+#    "crh",
+#    "r1cs",
+#] }
 digest = { version = "0.10.7", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 rayon = { version = "1.5.3", default-features = false }
@@ -72,6 +75,9 @@ rayon = { version = "1.5.3", default-features = false }
 dock_crypto_utils = { version = "0.22.0", default-features = false }
 schnorr_pok = { version = "0.22.0", default-features = false }
 #equality_across_groups = { version = "0.2.0", default-features = false }
+
+ark-pallas = { version = "0.5.0", default-features = false }
+ark-vesta = { version = "0.5.0", default-features = false }
 
 # Curve tree dependencies
 bulletproofs = { version = "2.0.0", default-features = false }
@@ -81,10 +87,6 @@ curve_tree_relations = { version = "0.1.0", package = "relations", default-featu
 anyhow = { version = "1.0.98", default-features = false }
 test-log = { version = "0.2.17", default-features = false }
 criterion = { version = "0.3", default-features = false }
-ark-pallas = { version = "0.4", default-features = false }
-ark-vesta = { version = "0.4", default-features = false }
-ark-secp256k1 = { version = "0.4", default-features = false }
-ark-secq256k1 = { version = "0.4", default-features = false }
 
 [dependencies]
 polymesh-dart-bp = { workspace = true, default-features = false, optional = true }
@@ -140,8 +142,6 @@ dock_crypto_utils = { workspace = true, default-features = false, optional = tru
 schnorr_pok = { workspace = true, default-features = false, optional = true }
 ark-pallas = { workspace = true, default-features = false, optional = true }
 ark-vesta = { workspace = true, default-features = false, optional = true }
-ark-secp256k1 = { workspace = true, default-features = false, optional = true }
-ark-secq256k1 = { workspace = true, default-features = false, optional = true }
 
 # Curve tree BP dependencies
 bulletproofs = { workspace = true, default-features = false, optional = true }
@@ -193,8 +193,6 @@ backend_bp = [
     "curve_tree_relations",
     "ark-pallas/curve",
     "ark-vesta",
-    "ark-secp256k1",
-    "ark-secq256k1",
 ]
 
 no_std = ["alloc"]

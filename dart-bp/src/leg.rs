@@ -306,12 +306,14 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         shared_secret.serialize_compressed(&mut shared_secret_bytes)?;
 
         let hasher = <DefaultFieldHasher<D> as HashToField<F>>::new(SK_EPH_GEN_LABEL);
-        let mut r = hasher.hash_to_field(&shared_secret_bytes, 4);
+        let r = hasher.hash_to_field::<4>(&shared_secret_bytes);
 
         Zeroize::zeroize(&mut shared_secret);
         Zeroize::zeroize(&mut shared_secret_bytes);
 
-        Ok((r.remove(0), r.remove(0), r.remove(0), r.remove(0)))
+        let [r_1, r_2, r_3, r_4] = r;
+
+        Ok((r_1, r_2, r_3, r_4))
     }
 }
 
