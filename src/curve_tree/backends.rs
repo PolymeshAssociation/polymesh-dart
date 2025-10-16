@@ -58,11 +58,15 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     }
 
     fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        self.first().expect("No paths available").root()
+        self.first()
+            .ok_or_else(|| Error::CurveTreeRootNotFound)?
+            .root()
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {
-        self.first().expect("No paths available").get_block_number()
+        self.first()
+            .ok_or_else(|| Error::CurveTreeRootNotFound)?
+            .get_block_number()
     }
 }
 
