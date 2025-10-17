@@ -19,33 +19,18 @@ use rand_core::{CryptoRng, RngCore};
 use bounded_collections::BoundedVec;
 
 use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
-use polymesh_dart_common::{LegId, MediatorId, SettlementId};
+use polymesh_dart_common::{LegId, MediatorId};
 
 use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct SettlementHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
-
+/// The settlement reference is it the hash of the settlement creation proof.
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-pub enum SettlementRef {
-    /// ID based reference.
-    #[cfg_attr(feature = "utoipa", schema(example = json!({"ID": 1})))]
-    ID(#[codec(compact)] SettlementId),
-    /// Hash based reference.
-    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
-    Hash(SettlementHash),
-}
-
-impl From<SettlementId> for SettlementRef {
-    fn from(id: SettlementId) -> Self {
-        SettlementRef::ID(id)
-    }
-}
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -68,13 +53,9 @@ impl LegRef {
         self.leg_id
     }
 
-    /// Returns the settlement ID if the settlement reference is an ID.
-    pub fn settlement_id(&self) -> Option<SettlementId> {
-        if let SettlementRef::ID(id) = &self.settlement {
-            Some(*id)
-        } else {
-            None
-        }
+    /// Returns the settlement reference.
+    pub fn settlement_ref(&self) -> SettlementRef {
+        self.settlement
     }
 
     /// The settlement/leg context to tie proofs to a leg.
@@ -313,8 +294,8 @@ impl<
         >,
 > SettlementProof<T, C>
 {
-    pub fn hash(&self) -> SettlementHash {
-        SettlementHash(blake2_256(self))
+    pub fn settlement_ref(&self) -> SettlementRef {
+        SettlementRef(blake2_256(self))
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -443,19 +424,6 @@ impl<
     }
 }
 
-/// Represents a hashed settlement proof in the Dart BP protocol.
-///
-/// This allows building the settlement off-chain and collecting the leg affirmations
-/// before submitting the settlement to the chain.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T, C))]
-pub struct HashedSettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
-    /// The settlement proof containing the memo, root, and legs.
-    pub settlement: SettlementProof<T, C>,
-    /// The hash of the settlement, used to tie the leg affirmations to this settlement.
-    pub hash: SettlementHash,
-}
-
 /// Counts of the legs and sender/receiver affirmations in a batched settlement.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct BatchedSettlementCounts {
@@ -485,23 +453,28 @@ pub struct BatchedSettlementProof<
     A: CurveTreeConfig = AccountTreeConfig,
 > {
     /// The settlement proof containing the memo, root, and legs.
-    pub hashed_settlement: HashedSettlementProof<T, C>,
+    pub settlement: SettlementProof<T, C>,
 
     /// The leg affirmations for each leg in the settlement.
     pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<A>, T::MaxSettlementLegs>,
 }
 
-impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementProof<T, C, A> {
-    /// The settlemetn reference using the hash of the settlement.
-    pub fn settlement_ref(&self) -> SettlementRef {
-        SettlementRef::Hash(self.hashed_settlement.hash)
-    }
-
-    /// The settlement creation proof.
-    pub fn settlement_proof(&self) -> &SettlementProof<T, C> {
-        &self.hashed_settlement.settlement
-    }
-
+impl<
+    T: DartLimits,
+    C: CurveTreeConfig<
+            F0 = <VestaParameters as CurveConfig>::ScalarField,
+            F1 = <PallasParameters as CurveConfig>::ScalarField,
+            P0 = VestaParameters,
+            P1 = PallasParameters,
+        >,
+    A: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> BatchedSettlementProof<T, C, A>
+{
     /// Get leg and sender/receiver affirmation counts.
     pub fn count_leg_affirmations(&self) -> BatchedSettlementCounts {
         let mut leg_count = 0;
@@ -529,7 +502,7 @@ impl<T: DartLimits, C: CurveTreeConfig, A: CurveTreeConfig> BatchedSettlementPro
     ///
     /// Returns `true` if all leg references match the settlement legs.
     pub fn check_leg_references(&self) -> bool {
-        let settlement = self.settlement_ref();
+        let settlement = self.settlement.settlement_ref();
         for (idx, leg_aff) in self.leg_affirmations.iter().enumerate() {
             let leg_ref = LegRef::new(settlement, idx as LegId);
             if let Some(sender) = &leg_aff.sender {

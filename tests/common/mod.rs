@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, anyhow};
 use ark_std::rand;
 use codec::{Decode, Encode};
-use polymesh_dart_common::{MediatorId, SETTLEMENT_MAX_LEGS, SettlementId};
+use polymesh_dart_common::{MediatorId, SETTLEMENT_MAX_LEGS};
 use rand_core::{CryptoRng, RngCore};
 
 use std::{
@@ -615,7 +615,7 @@ impl DartUser {
         &self,
         chain: &mut DartChainState,
         proof: SettlementProof<()>,
-    ) -> Result<SettlementId> {
+    ) -> Result<SettlementRef> {
         chain.create_settlement(&self.address, proof)
     }
 }
@@ -913,13 +913,13 @@ pub enum SettlementStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DartSettlement {
-    pub id: SettlementId,
+    pub id: SettlementRef,
     pub legs: Vec<DartSettlementLeg>,
     pub status: SettlementStatus,
 }
 
 impl DartSettlement {
-    pub fn from_proof(id: SettlementId, proof: SettlementProof<()>) -> Result<Self> {
+    pub fn from_proof(id: SettlementRef, proof: SettlementProof<()>) -> Result<Self> {
         let legs = proof
             .legs
             .into_iter()
@@ -1144,7 +1144,7 @@ impl DartSettlement {
 
         // If the settlement is pending, we can execute it.
         self.set_status(SettlementStatus::Executed);
-        log::debug!("Settlement {} executed", self.id);
+        log::debug!("Settlement {:?} executed", self.id);
         Ok(())
     }
 
@@ -1154,7 +1154,7 @@ impl DartSettlement {
 
         // If the settlement is executed or rejected, we can finalize it.
         self.set_status(SettlementStatus::Finalized);
-        log::debug!("Settlement {} finalized", self.id);
+        log::debug!("Settlement {:?} finalized", self.id);
         Ok(())
     }
 }
@@ -1278,8 +1278,7 @@ pub struct DartChainState {
     pending_account_updates: Vec<AccountStateCommitment>,
 
     /// Settlements in the chain state.
-    settlements: HashMap<SettlementId, DartSettlement>,
-    next_settlement_id: SettlementId,
+    settlements: HashMap<SettlementRef, DartSettlement>,
 }
 
 impl DartChainState {
@@ -1304,7 +1303,6 @@ impl DartChainState {
             pending_account_updates: Vec::new(),
 
             settlements: HashMap::new(),
-            next_settlement_id: 0,
         })
     }
 
@@ -1569,7 +1567,7 @@ impl DartChainState {
         &mut self,
         caller: &SignerAddress,
         proof: SettlementProof<()>,
-    ) -> Result<SettlementId> {
+    ) -> Result<SettlementRef> {
         self.ensure_caller(caller)?;
 
         // Test SCALE encoding of the proof.
@@ -1589,46 +1587,41 @@ impl DartChainState {
             .verify(&self.asset_tree, &mut rng)
             .context("Invalid settlement proof")?;
 
-        // Allocate a new settlement ID.
-        let settlement_id = self.next_settlement_id;
-        self.next_settlement_id += 1;
-
         // Save the settlement.
-        let settlement = DartSettlement::from_proof(settlement_id, proof)?;
-        self.settlements.insert(settlement_id, settlement);
+        let settlement_ref = proof.settlement_ref();
+        let settlement = DartSettlement::from_proof(settlement_ref, proof)?;
+        self.settlements.insert(settlement_ref, settlement);
 
-        Ok(settlement_id)
+        Ok(settlement_ref)
     }
 
     /// Query an encrypted settlement leg by reference.
     pub fn get_settlement_leg(&self, leg_ref: &LegRef) -> Result<&DartSettlementLeg> {
-        let settlement_id = leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = leg_ref.settlement_ref();
         let leg_id = leg_ref.leg_id() as usize;
 
         // Get the settlement.
         let settlement = self
             .settlements
-            .get(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         // Get the leg.
         settlement.legs.get(leg_id).ok_or_else(|| {
             anyhow!(
-                "Leg index {} out of bounds for settlement ID {}",
+                "Leg index {} out of bounds for settlement {:?}",
                 leg_id,
-                settlement_id
+                settlement_ref
             )
         })
     }
 
     /// Query the settlement status by settlement ID.
-    pub fn get_settlement_status(&self, settlement_id: SettlementId) -> Result<SettlementStatus> {
+    pub fn get_settlement_status(&self, settlement_ref: SettlementRef) -> Result<SettlementStatus> {
         self.settlements
-            .get(&settlement_id)
+            .get(&settlement_ref)
             .map(|settlement| settlement.status.clone())
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))
     }
 
     /// Verify a sender affirmation proof for a settlement leg.
@@ -1642,10 +1635,7 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Ensure the nullifier is unique.
         let nullifier = proof.nullifier();
@@ -1654,8 +1644,8 @@ impl DartChainState {
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         let mut rng = rand::thread_rng();
         // Verify the sender affirmation proof and update the settlement status.
@@ -1679,10 +1669,7 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Ensure the nullifier is unique.
         let nullifier = proof.nullifier();
@@ -1691,8 +1678,8 @@ impl DartChainState {
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         let mut rng = rand::thread_rng();
         // Verify the receiver affirmation proof and update the settlement status.
@@ -1716,16 +1703,13 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         // Verify the mediator affirmation proof and update the settlement status.
         settlement.mediator_affirmation(&proof)?;
@@ -1744,10 +1728,7 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Ensure the nullifier is unique.
         let nullifier = proof.nullifier();
@@ -1756,8 +1737,8 @@ impl DartChainState {
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         let mut rng = rand::thread_rng();
         // Verify the sender counter update proof and update the settlement status.
@@ -1785,10 +1766,7 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Ensure the nullifier is unique.
         let nullifier = proof.nullifier();
@@ -1797,8 +1775,8 @@ impl DartChainState {
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         let mut rng = rand::thread_rng();
         // Verify the sender reversal proof and update the settlement status.
@@ -1822,10 +1800,7 @@ impl DartChainState {
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
 
-        let settlement_id = proof
-            .leg_ref
-            .settlement_id()
-            .ok_or(anyhow!("Leg reference does not contain a settlement ID"))?;
+        let settlement_ref = proof.leg_ref.settlement_ref();
 
         // Ensure the nullifier is unique.
         let nullifier = proof.nullifier();
@@ -1834,8 +1809,8 @@ impl DartChainState {
         // Get the settlement.
         let settlement = self
             .settlements
-            .get_mut(&settlement_id)
-            .ok_or_else(|| anyhow!("Settlement ID {} does not exist", settlement_id))?;
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         let mut rng = rand::thread_rng();
         // Verify the receiver claim proof and update the settlement status.

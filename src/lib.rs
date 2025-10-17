@@ -20,7 +20,7 @@ pub use polymesh_dart_common::{
     ASSET_TREE_HEIGHT, ASSET_TREE_L, ASSET_TREE_M, AssetId, BALANCE_BITS, Balance, BlockNumber,
     FEE_ACCOUNT_TREE_GENS, FEE_ACCOUNT_TREE_HEIGHT, FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M,
     FEE_BALANCE_BITS, LegId, MAX_ASSET_ID, MAX_BALANCE, MAX_CURVE_TREE_GENS, MediatorId,
-    PendingTxnCounter, SettlementId,
+    PendingTxnCounter,
 };
 
 #[cfg(feature = "sp-io")]

@@ -14,6 +14,8 @@ use polymesh_dart::*;
 mod sqlite_curve_tree;
 use sqlite_curve_tree::{AccountCurveTree, AccountRootHistory, AssetCurveTree, AssetRootHistory};
 
+pub type SettlementId = i64;
+
 /// The affirmation status for each party in a DART settlement leg.
 #[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
 pub enum AffirmationStatus {
@@ -234,7 +236,7 @@ pub struct SettlementInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettlementLegInfo {
     pub id: i64,
-    pub settlement_db_id: i64,
+    pub settlement_id: i64,
     pub leg_index: LegId,
     pub encrypted_leg: Vec<u8>, // Serialized LegEncrypted
     pub sender_status: String,
@@ -453,7 +455,7 @@ impl DartTestingDb {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS settlements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                settlement_id INTEGER NOT NULL UNIQUE,
+                settlement_ref BLOB NOT NULL UNIQUE,
                 status TEXT NOT NULL DEFAULT 'Pending',
                 created_by_signer_id INTEGER,
                 FOREIGN KEY(created_by_signer_id) REFERENCES signers(id)
@@ -465,14 +467,14 @@ impl DartTestingDb {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS settlement_legs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                settlement_db_id INTEGER NOT NULL,
+                settlement_id INTEGER NOT NULL,
                 leg_index INTEGER NOT NULL,
                 encrypted_leg BLOB NOT NULL,
                 sender_status TEXT NOT NULL DEFAULT 'Pending',
                 receiver_status TEXT NOT NULL DEFAULT 'Pending',
                 mediator_status TEXT,
-                FOREIGN KEY(settlement_db_id) REFERENCES settlements(id),
-                UNIQUE(settlement_db_id, leg_index)
+                FOREIGN KEY(settlement_id) REFERENCES settlements(id),
+                UNIQUE(settlement_id, leg_index)
             )",
             [],
         )?;
@@ -1040,20 +1042,14 @@ impl DartTestingDb {
         // Verify settlement proof
         settlement.verify(&self.asset_roots, rng)?;
 
-        // Get next settlement ID
-        let settlement_id: SettlementId = self.conn.query_row(
-            "SELECT COALESCE(MAX(settlement_id), -1) + 1 FROM settlements",
-            [],
-            |row| row.get(0),
-        )?;
-
+        let settlement_ref = settlement.settlement_ref();
         // Store settlement
         self.conn.execute(
-            "INSERT INTO settlements (settlement_id, status) VALUES (?1, 'Pending')",
-            params![settlement_id],
+            "INSERT INTO settlements (settlement_ref, status) VALUES (?1, 'Pending')",
+            params![settlement_ref.0],
         )?;
 
-        let settlement_db_id = self.conn.last_insert_rowid();
+        let settlement_id = self.conn.last_insert_rowid();
 
         // Store settlement legs
         for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
@@ -1063,9 +1059,9 @@ impl DartTestingDb {
             let mediator_status = if has_mediator { Some("Pending") } else { None };
 
             self.conn.execute(
-                "INSERT INTO settlement_legs (settlement_db_id, leg_index, encrypted_leg, sender_status, receiver_status, mediator_status) 
+                "INSERT INTO settlement_legs (settlement_id, leg_index, encrypted_leg, sender_status, receiver_status, mediator_status) 
                  VALUES (?1, ?2, ?3, 'Pending', 'Pending', ?4)",
-                params![settlement_db_id, leg_index as u32, encrypted_leg, mediator_status],
+                params![settlement_id, leg_index as u32, encrypted_leg, mediator_status],
             )?;
         }
 
@@ -1111,7 +1107,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
+            |account_keys,
+             leg_ref,
+             leg_enc,
+             leg_enc_rand,
+             leg,
+             account_state,
+             account_tree,
+             rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1137,7 +1140,7 @@ impl DartTestingDb {
                 // Update settlement leg status
                 conn.execute(
                     "UPDATE settlement_legs SET sender_status = 'Affirmed' 
-                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                     WHERE settlement_id = ?1 AND leg_index = ?2",
                     params![settlement_id, leg_index],
                 )?;
                 Ok(())
@@ -1177,7 +1180,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |account_keys, leg_ref, leg_enc, leg_enc_rand, _leg, account_state, account_tree, rng| {
+            |account_keys,
+             leg_ref,
+             leg_enc,
+             leg_enc_rand,
+             _leg,
+             account_state,
+             account_tree,
+             rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::new(
                     rng,
@@ -1198,7 +1208,7 @@ impl DartTestingDb {
                 // Update settlement leg status
                 conn.execute(
                     "UPDATE settlement_legs SET sender_status = 'Finalized' 
-                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                     WHERE settlement_id = ?1 AND leg_index = ?2",
                     params![settlement_id, leg_index],
                 )?;
                 Ok(())
@@ -1238,7 +1248,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::Sender,
             proof_action,
-            |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, account_state, account_tree, rng| {
+            |account_keys,
+             leg_ref,
+             leg_enc,
+             leg_enc_rand,
+             leg,
+             account_state,
+             account_tree,
+             rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
                 Ok(SenderReversalProof::new(
@@ -1261,7 +1278,7 @@ impl DartTestingDb {
                 // Update settlement leg status
                 conn.execute(
                     "UPDATE settlement_legs SET sender_status = 'Finalized' 
-                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                     WHERE settlement_id = ?1 AND leg_index = ?2",
                     params![settlement_id, leg_index],
                 )?;
                 Ok(())
@@ -1331,7 +1348,7 @@ impl DartTestingDb {
                 // Update settlement leg status
                 conn.execute(
                     "UPDATE settlement_legs SET receiver_status = 'Affirmed' 
-                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                     WHERE settlement_id = ?1 AND leg_index = ?2",
                     params![settlement_id, leg_index],
                 )?;
                 Ok(())
@@ -1374,8 +1391,7 @@ impl DartTestingDb {
         let account_keys = account_info.account_keys()?;
 
         // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
+        let (encrypted_leg, leg_ref) = self.get_encrypted_leg(settlement_id, leg_index)?;
 
         let proof = if let Some(proof) = proof_action.get_proof()? {
             proof
@@ -1414,7 +1430,7 @@ impl DartTestingDb {
         let status = if accept { "Affirmed" } else { "Rejected" };
         self.conn.execute(
             "UPDATE settlement_legs SET mediator_status = ?1 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?2) AND leg_index = ?3",
+             WHERE settlement_id = ?2 AND leg_index = ?3",
             params![status, settlement_id, leg_index],
         )?;
 
@@ -1476,7 +1492,7 @@ impl DartTestingDb {
                 // Update settlement leg status
                 conn.execute(
                     "UPDATE settlement_legs SET receiver_status = 'Finalized' 
-                     WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2",
+                     WHERE settlement_id = ?1 AND leg_index = ?2",
                     params![settlement_id, leg_index],
                 )?;
                 Ok(())
@@ -1490,30 +1506,34 @@ impl DartTestingDb {
         &self,
         settlement_id: SettlementId,
         leg_index: LegId,
-    ) -> Result<LegEncrypted> {
+    ) -> Result<(LegEncrypted, LegRef)> {
         log::debug!(
             "Getting encrypted leg for settlement {}, leg {}",
             settlement_id,
             leg_index
         );
         let mut stmt = self.conn.prepare(
-            "SELECT encrypted_leg FROM settlement_legs 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
+            "SELECT encrypted_leg, settlement_ref FROM settlement_legs 
+                JOIN settlements ON settlement_legs.settlement_id = settlements.id
+             WHERE settlement_id = ?1 AND leg_index = ?2",
         )?;
 
-        let encrypted_leg_data: Vec<u8> =
-            stmt.query_row(params![settlement_id, leg_index], |row| row.get(0))?;
+        let (encrypted_leg_data, settlement_ref): (Vec<u8>, [u8; 32]) = stmt
+            .query_row(params![settlement_id, leg_index], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
         log::debug!("Encrypted leg data length: {}", encrypted_leg_data.len());
 
         let encrypted_leg = Decode::decode(&mut encrypted_leg_data.as_slice())?;
-        Ok(encrypted_leg)
+        let leg_ref = LegRef::new(SettlementRef(settlement_ref), leg_index as u8);
+        Ok((encrypted_leg, leg_ref))
     }
 
     fn check_and_update_settlement_status(&mut self, settlement_id: SettlementId) -> Result<()> {
         // Get all legs for this settlement
         let mut stmt = self.conn.prepare(
             "SELECT sender_status, receiver_status, mediator_status FROM settlement_legs 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1)",
+             WHERE settlement_id = ?1",
         )?;
 
         let rows = stmt.query_map(params![settlement_id], |row| {
@@ -1572,7 +1592,7 @@ impl DartTestingDb {
         };
 
         self.conn.execute(
-            "UPDATE settlements SET status = ?1 WHERE settlement_id = ?2",
+            "UPDATE settlements SET status = ?1 WHERE id = ?2",
             params![new_status, settlement_id],
         )?;
 
@@ -1670,7 +1690,7 @@ impl DartTestingDb {
         log::debug!("Getting status for settlement ID {}", settlement_id);
         let mut stmt = self
             .conn
-            .prepare("SELECT status FROM settlements WHERE settlement_id = ?1")?;
+            .prepare("SELECT status FROM settlements WHERE id = ?1")?;
         let status = stmt.query_row(params![settlement_id], |row| row.get::<_, String>(0))?;
         Ok(status)
     }
@@ -1691,7 +1711,7 @@ impl DartTestingDb {
         );
         let mut stmt = self.conn.prepare(
             "SELECT sender_status, receiver_status, mediator_status FROM settlement_legs 
-             WHERE settlement_db_id = (SELECT id FROM settlements WHERE settlement_id = ?1) AND leg_index = ?2"
+             WHERE settlement_id = ?1 AND leg_index = ?2",
         )?;
 
         let (sender_str, receiver_str, mediator_str): (String, String, Option<String>) = stmt
@@ -1780,8 +1800,7 @@ impl DartTestingDb {
         let account_keys = account_info.account_keys()?;
 
         // Get settlement leg
-        let leg_ref = LegRef::new(settlement_id.into(), leg_index as u8);
-        let encrypted_leg = self.get_encrypted_leg(settlement_id, leg_index)?;
+        let (encrypted_leg, leg_ref) = self.get_encrypted_leg(settlement_id, leg_index)?;
         let (leg, leg_enc_rand) = encrypted_leg.decrypt_with_randomness(role, &account_keys)?;
         let asset_id = leg.asset_id();
 

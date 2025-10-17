@@ -221,6 +221,7 @@ fn proof_benchmark(c: &mut Criterion) {
         })
         .encrypt_and_prove(&mut rng, &asset_tree.tree)
         .expect("Failed to create settlement");
+    let settlement_ref = settlement.settlement_ref();
 
     // Benchmark: Verify settlement proof.
     c.bench_function("SettlementProof verify", |b| {
@@ -235,7 +236,7 @@ fn proof_benchmark(c: &mut Criterion) {
     let leg_enc_rand = leg_enc
         .get_encryption_randomness(LegRole::Sender, &issuer_keys.enc)
         .expect("Failed to decrypt sender's secret key");
-    let leg_ref = LegRef::new(0.into(), 0 as _);
+    let leg_ref = LegRef::new(settlement_ref, 0 as _);
 
     // Benchmark: Generate of sender affirmation proof.
     c.bench_function("SenderAffirmationProof generate", |b| {

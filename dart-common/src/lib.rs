@@ -5,7 +5,6 @@ pub type Balance = u64;
 pub type PendingTxnCounter = u64;
 pub type BlockNumber = u32;
 
-pub type SettlementId = u64;
 pub type LegId = u8;
 pub type MediatorId = u8;
 
