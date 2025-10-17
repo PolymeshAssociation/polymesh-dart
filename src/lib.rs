@@ -30,8 +30,7 @@ pub fn blake2_256<T: codec::Encode>(data: &T) -> [u8; 32] {
 
 #[cfg(not(feature = "sp-io"))]
 pub fn blake2_256<T: codec::Encode>(data: &T) -> [u8; 32] {
-    use blake2::{Blake2s256, Digest};
-    let mut hasher = Blake2s256::new();
-    hasher.update(&data.encode());
-    hasher.finalize().into()
+    use digest::{Digest, generic_array::typenum::U32};
+    type Blake2b256 = blake2::Blake2b<U32>;
+    Blake2b256::digest(&data.encode()).into()
 }

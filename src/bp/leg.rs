@@ -26,7 +26,9 @@ use crate::curve_tree::*;
 use crate::*;
 
 /// The settlement reference is it the hash of the settlement creation proof.
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
