@@ -34,7 +34,9 @@ use crate::*;
 #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
 pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct LegRef {
