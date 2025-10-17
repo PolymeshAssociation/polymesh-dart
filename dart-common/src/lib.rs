@@ -33,6 +33,7 @@ pub const FEE_ACCOUNT_TREE_L: usize = 512;
 pub const FEE_ACCOUNT_TREE_M: usize = 1;
 pub const FEE_ACCOUNT_TREE_HEIGHT: u8 = 4;
 pub const FEE_ACCOUNT_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
+pub const FEE_ASSET_ID: AssetId = 0;
 
 pub const ASSET_TREE_L: usize = 64;
 pub const ASSET_TREE_M: usize = 1;

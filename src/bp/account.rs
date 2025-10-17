@@ -93,7 +93,20 @@ impl TryFrom<BPAccountState> for AccountState {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountStateNullifier(CompressedAffine);
 

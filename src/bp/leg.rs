@@ -259,6 +259,8 @@ impl<T: DartLimits> SettlementBuilder<T> {
     ) -> Result<SettlementProof<T, C>, Error> {
         let memo = BoundedVec::try_from(self.memo)
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        // TODO: need to collect all asset leaf paths based on the `root_block` number.
+        // To avoid getting paths based on different roots if a new block is produced during proof generation.
         let root_block = asset_tree.get_block_number()?;
 
         let mut legs = Vec::with_capacity(self.legs.len());

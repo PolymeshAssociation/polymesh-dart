@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use ark_std::vec::Vec;
+use curve_tree_relations::curve_tree::Root;
 
 use bounded_collections::BoundedVec;
 use codec::{Decode, Encode, MaxEncodedLen};
@@ -88,7 +89,20 @@ impl TryFrom<BPFeeAccountState> for FeeAccountState {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FeeAccountStateNullifier(CompressedAffine);
 
@@ -269,7 +283,7 @@ impl FeeAccountAssetState {
 pub struct FeeAccountRegistrationProof {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
-    pub balance: Balance,
+    pub amount: Balance,
     pub account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
@@ -302,7 +316,7 @@ impl FeeAccountRegistrationProof {
             Self {
                 account: pk,
                 asset_id,
-                balance,
+                amount: balance,
                 account_state_commitment: FeeAccountStateCommitment::from_affine(commitment.0)?,
                 nullifier,
 
@@ -317,7 +331,7 @@ impl FeeAccountRegistrationProof {
         let proof = self.proof.decode()?;
         proof.verify(
             &self.account.get_affine()?,
-            self.balance,
+            self.amount,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             identity,
@@ -329,6 +343,7 @@ impl FeeAccountRegistrationProof {
 
 /// A batch of Fee account registration proofs.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T))]
 pub struct BatchedFeeAccountRegistrationProof<T: DartLimits = ()> {
     pub proofs: BoundedVec<FeeAccountRegistrationProof, T::MaxFeeAccountRegProofs>,
 }
@@ -408,6 +423,17 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
     pub fn len(&self) -> usize {
         self.proofs.len()
     }
+
+    /// Get the total amount of all proofs in the batch.
+    pub fn total_amount(&self, asset_id: AssetId) -> Balance {
+        let mut total: Balance = 0;
+        for proof in &self.proofs {
+            if proof.asset_id == asset_id {
+                total = total.saturating_add(proof.amount);
+            }
+        }
+        total
+    }
 }
 
 type BPFeeAccountTopupTxnProof<C> = bp_fee_account::FeeAccountTopupTxnProof<
@@ -425,7 +451,6 @@ pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
     pub amount: Balance,
-    pub root_block: BlockNumber,
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
@@ -455,7 +480,6 @@ impl<
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(tree_lookup)?;
 
-        let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
@@ -476,7 +500,6 @@ impl<
             account: pk,
             asset_id: state_change.new_state.asset_id,
             amount,
-            root_block: try_block_number(root_block)?,
             updated_account_state_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
 
@@ -489,16 +512,8 @@ impl<
         &self,
         rng: &mut R,
         ctx: &[u8],
-        tree_roots: &impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
+        root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
     ) -> Result<(), Error> {
-        // Get the curve tree root.
-        let root = tree_roots
-            .get_block_root(self.root_block.into())
-            .ok_or_else(|| {
-                log::error!("Invalid root for fee account topup proof");
-                Error::CurveTreeRootNotFound
-            })?;
-        let root = root.root_node()?;
         let proof = self.proof.decode()?;
         proof.verify(
             self.account.get_affine()?,
@@ -508,7 +523,7 @@ impl<
             self.nullifier.get_affine()?,
             &root,
             ctx,
-            tree_roots.params(),
+            C::parameters(),
             dart_gens().account_comm_key(),
             rng,
             None,
@@ -519,10 +534,13 @@ impl<
 
 /// A batch of Fee account topup proofs.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T, C))]
 pub struct BatchedFeeAccountTopupProof<
     T: DartLimits = (),
     C: CurveTreeConfig = FeeAccountTreeConfig,
 > {
+    pub root_block: BlockNumber,
+
     pub proofs: BoundedVec<FeeAccountTopupProof<C>, T::MaxFeeAccountTopupProofs>,
 }
 
@@ -543,6 +561,8 @@ impl<
         ctx: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
+        let root_block = tree_lookup.get_block_number()?;
+
         let mut proofs = BoundedVec::with_bounded_capacity(topups.len());
         let mut account_states = Vec::with_capacity(topups.len());
         for (account, amount, account_state) in topups.iter_mut() {
@@ -553,7 +573,10 @@ impl<
                 .try_push(proof)
                 .map_err(|_| Error::TooManyBatchedProofs)?;
         }
-        Ok(Self { proofs })
+        Ok(Self {
+            root_block: try_block_number(root_block)?,
+            proofs,
+        })
     }
 
     /// Verify the batched fee account topup proofs.
@@ -566,10 +589,17 @@ impl<
              impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C> + Send + Sync
          ),
     ) -> Result<(), Error> {
-        self.proofs.par_iter().try_for_each_init(
-            || rng.clone(),
-            |rng, proof| proof.verify(rng, ctx, tree_roots),
-        )?;
+        // Get the curve tree root.
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+        self.proofs
+            .par_iter()
+            .try_for_each_init(|| rng.clone(), |rng, proof| proof.verify(rng, ctx, &root))?;
         Ok(())
     }
 
@@ -581,10 +611,34 @@ impl<
         ctx: &[u8],
         tree_roots: &impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
+        // Get the curve tree root.
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
         for proof in &self.proofs {
-            proof.verify(rng, ctx, tree_roots)?;
+            proof.verify(rng, ctx, &root)?;
         }
         Ok(())
+    }
+
+    /// Get the number of proofs in the batch.
+    pub fn len(&self) -> usize {
+        self.proofs.len()
+    }
+
+    /// Get the total amount of all proofs in the batch.
+    pub fn total_amount(&self, asset_id: AssetId) -> Balance {
+        let mut total: Balance = 0;
+        for proof in &self.proofs {
+            if proof.asset_id == asset_id {
+                total = total.saturating_add(proof.amount);
+            }
+        }
+        total
     }
 }
 
