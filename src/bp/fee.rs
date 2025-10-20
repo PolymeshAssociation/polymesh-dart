@@ -777,7 +777,7 @@ impl<
     ) -> Result<Self, Error> {
         let ctx = batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
         let fee_payment =
-            FeeAccountPaymentProof::new(rng, account, &ctx, account_state, amount, tree_lookup)?;
+            FeeAccountPaymentProof::new(rng, account, &ctx.0, account_state, amount, tree_lookup)?;
 
         Ok(Self {
             fee_payment,
@@ -792,11 +792,11 @@ impl<
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
         let ctx = self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
-        self.fee_payment.verify(rng, &ctx, tree_roots)
+        self.fee_payment.verify(rng, &ctx.0, tree_roots)
     }
 
     /// Get the fee payment ctx for this batch of proofs.
-    pub fn fee_payment_ctx(&self) -> Vec<u8> {
+    pub fn fee_payment_ctx(&self) -> ProofHash {
         self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX)
     }
 }

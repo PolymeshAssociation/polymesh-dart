@@ -1,4 +1,4 @@
-use ark_std::{collections::BTreeMap, vec::Vec};
+use ark_std::collections::BTreeMap;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -55,12 +55,14 @@ impl<T: DartLimits> BatchedProofs<T> {
         self.proofs.len()
     }
 
+    /// Hash the batched proofs.
     pub fn hash(&self) -> ProofHash {
         ProofHash(blake2_256(self))
     }
 
-    pub fn ctx(&self, ctx: &[u8]) -> Vec<u8> {
-        (ctx, self.hash()).encode()
+    /// Hash the batched proofs with a context.
+    pub fn ctx(&self, ctx: &[u8]) -> ProofHash {
+        ProofHash(blake2_256(&(ctx, self)))
     }
 }
 
