@@ -10,7 +10,7 @@ use bounded_collections::BoundedVec;
 use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use polymesh_dart_bp::fee_account as bp_fee_account;
 
@@ -285,7 +285,6 @@ pub struct FeeAccountRegistrationProof {
     pub asset_id: AssetId,
     pub amount: Balance,
     pub account_state_commitment: FeeAccountStateCommitment,
-    pub nullifier: FeeAccountStateNullifier,
 
     proof: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
 }
@@ -302,7 +301,6 @@ impl FeeAccountRegistrationProof {
         let pk = account.public;
         let account_state = FeeAccountAssetState::new(rng, account, asset_id, balance)?;
         let (bp_state, commitment) = account_state.bp_current_state(account)?;
-        let nullifier = account_state.current_state.nullifier()?;
         let gens = dart_gens();
         let proof = bp_fee_account::RegTxnProof::new(
             rng,
@@ -318,7 +316,6 @@ impl FeeAccountRegistrationProof {
                 asset_id,
                 amount: balance,
                 account_state_commitment: FeeAccountStateCommitment::from_affine(commitment.0)?,
-                nullifier,
 
                 proof: WrappedCanonical::wrap(&proof)?,
             },
@@ -356,14 +353,22 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
         registrations: &[(&AccountKeyPair, AssetId, Balance)],
         identity: &[u8],
     ) -> Result<(Self, Vec<FeeAccountAssetState>), Error> {
+        // Generate random seeds for each proof generation.
+        let seeds = (0..registrations.len())
+            .map(|_| {
+                let mut seed = [0u8; 32];
+                rng.fill_bytes(&mut seed);
+                seed
+            })
+            .collect::<Vec<_>>();
+
         let proofs_and_states = registrations
-            .par_iter()
-            .map_init(
-                || rng.clone(),
-                |rng, (account, asset_id, balance)| {
-                    FeeAccountRegistrationProof::new(rng, account, *asset_id, *balance, identity)
-                },
-            )
+            .into_par_iter()
+            .zip(seeds)
+            .map(|((account, asset_id, balance), seed)| {
+                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)
+            })
             .collect::<Result<Vec<_>, Error>>()?;
 
         let mut proofs = BoundedVec::with_bounded_capacity(registrations.len());
@@ -390,8 +395,11 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
         let mut states = Vec::with_capacity(registrations.len());
 
         for (account, asset_id, balance) in registrations {
+            let mut seed = [0u8; 32];
+            rng.fill_bytes(&mut seed);
+            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
             let (proof, state) =
-                FeeAccountRegistrationProof::new(rng, account, *asset_id, *balance, identity)?;
+                FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)?;
             proofs
                 .try_push(proof)
                 .map_err(|_| Error::TooManyAccountAssetRegProofs)?;
@@ -554,7 +562,56 @@ impl<
         >,
 > BatchedFeeAccountTopupProof<T, C>
 {
-    /// Generate a new batched fee account topup proof.
+    /// Generate a new batched fee account topups proof.
+    #[cfg(feature = "parallel")]
+    pub fn new<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        rng: &mut R,
+        topups: &mut [(&AccountKeyPair, Balance, FeeAccountAssetState)],
+        ctx: &[u8],
+        tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C> + Send + Sync,
+    ) -> Result<Self, Error> {
+        // Generate random seeds for each proof generation.
+        let seeds = (0..topups.len())
+            .map(|_| {
+                let mut seed = [0u8; 32];
+                rng.fill_bytes(&mut seed);
+                seed
+            })
+            .collect::<Vec<_>>();
+
+        let root_block = tree_lookup.get_block_number()?;
+
+        let proofs_vec = topups
+            .par_iter_mut()
+            .zip(seeds)
+            .map(|((account, amount, account_state), seed)| {
+                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                FeeAccountTopupProof::new(
+                    &mut rng,
+                    account,
+                    account_state,
+                    *amount,
+                    ctx,
+                    &tree_lookup,
+                )
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let mut proofs = BoundedVec::with_bounded_capacity(topups.len());
+        for proof in proofs_vec {
+            proofs
+                .try_push(proof)
+                .map_err(|_| Error::TooManyBatchedProofs)?;
+        }
+
+        Ok(Self {
+            root_block: try_block_number(root_block)?,
+            proofs,
+        })
+    }
+
+    /// Generate a new batched fee account topups proof.
+    #[cfg(not(feature = "parallel"))]
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         topups: &mut [(&AccountKeyPair, Balance, FeeAccountAssetState)],
@@ -564,11 +621,9 @@ impl<
         let root_block = tree_lookup.get_block_number()?;
 
         let mut proofs = BoundedVec::with_bounded_capacity(topups.len());
-        let mut account_states = Vec::with_capacity(topups.len());
         for (account, amount, account_state) in topups.iter_mut() {
             let proof =
                 FeeAccountTopupProof::new(rng, account, account_state, *amount, ctx, tree_lookup)?;
-            account_states.push(account_state.clone());
             proofs
                 .try_push(proof)
                 .map_err(|_| Error::TooManyBatchedProofs)?;
