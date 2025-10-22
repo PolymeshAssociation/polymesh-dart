@@ -730,6 +730,8 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     enforce_constraints_for_randomness_relations(prover, vars);
 
     // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
+    // This could be modified to subtract the nullifier as a public input but it doesn't change the
+    // overall proof cost
     let t_r_leaf = SchnorrCommitment::new(
         &account_comm_key.as_gens_with_blinding(pc_gens.B_blinding),
         vec![

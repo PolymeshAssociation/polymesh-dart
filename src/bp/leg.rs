@@ -366,6 +366,7 @@ impl<
     ) -> Result<Self, Error> {
         let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id as LeafIndex)?;
         let asset_comm_params = get_asset_commitment_parameters();
+        let root = asset_tree.root()?.root_node()?;
 
         let proof = bp_leg::SettlementTxnProof::new(
             rng,
@@ -374,6 +375,7 @@ impl<
             leg_enc_rand.decode()?,
             asset_path,
             asset_data,
+            &root,
             ctx,
             asset_tree.params(),
             asset_comm_params,

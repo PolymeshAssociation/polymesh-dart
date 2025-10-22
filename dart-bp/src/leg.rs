@@ -5,7 +5,7 @@ use crate::util::{
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
     verify_given_verification_tuples,
 };
-use crate::{Error, add_to_transcript, error::Result};
+use crate::{Error, ROOT_LABEL, add_to_transcript, error::Result};
 use crate::{LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
@@ -625,6 +625,7 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
+        tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -641,6 +642,7 @@ impl<
             leg_enc_rand,
             leaf_path,
             asset_data,
+            tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -658,6 +660,7 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
+        tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -679,6 +682,8 @@ impl<
 
         add_to_transcript!(
             odd_prover.transcript(),
+            ROOT_LABEL,
+            tree_root,
             LEG_ENC_LABEL,
             leg_enc,
             NONCE_LABEL,
@@ -1178,6 +1183,8 @@ impl<
 
         add_to_transcript!(
             odd_verifier.transcript(),
+            ROOT_LABEL,
+            tree_root,
             LEG_ENC_LABEL,
             leg_enc,
             NONCE_LABEL,
@@ -1891,6 +1898,8 @@ pub mod tests {
         // Venue gets the leaf path from the tree
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
+        let root = asset_tree.root_node();
+
         let proof = SettlementTxnProof::new(
             &mut rng,
             leg.clone(),
@@ -1898,6 +1907,7 @@ pub mod tests {
             leg_enc_rand.clone(),
             path,
             asset_data.clone(),
+            &root,
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -1909,9 +1919,6 @@ pub mod tests {
         let prover_time = clock.elapsed();
 
         let clock = Instant::now();
-
-        // Verifier gets the root of the tree
-        let root = asset_tree.root_node();
 
         proof
             .verify(
@@ -2232,6 +2239,7 @@ pub mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
+            let root = asset_trees[i].root_node();
             let proof = SettlementTxnProof::new(
                 &mut rng,
                 legs[i].clone(),
@@ -2239,6 +2247,7 @@ pub mod tests {
                 leg_enc_rands[i].clone(),
                 paths[i].clone(),
                 asset_data_vec[i].clone(),
+                &root,
                 &nonces[i],
                 &asset_tree_params,
                 &asset_comm_params,
@@ -2431,6 +2440,8 @@ pub mod tests {
 
             let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
+            let root = asset_tree.root_node();
+
             let proof = SettlementTxnProof::new(
                 &mut rng,
                 leg.clone(),
@@ -2438,6 +2449,7 @@ pub mod tests {
                 leg_enc_rand.clone(),
                 path,
                 asset_data.clone(),
+                &root,
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -2445,8 +2457,6 @@ pub mod tests {
                 enc_gen,
             )
             .unwrap();
-
-            let root = asset_tree.root_node();
 
             assert!(
                 proof
@@ -2502,6 +2512,7 @@ pub mod tests {
                 leg_enc_rand.clone(),
                 path,
                 asset_data.clone(),
+                &root,
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -2546,6 +2557,7 @@ pub mod tests {
                 leg_enc_rand.clone(),
                 path,
                 asset_data.clone(),
+                &root,
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,

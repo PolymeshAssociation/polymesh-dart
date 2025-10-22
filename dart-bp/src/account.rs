@@ -6204,6 +6204,7 @@ pub mod tests {
             leg_enc_rand.clone(),
             asset_path.clone(),
             asset_data,
+            &asset_tree_root,
             nonce,
             &asset_tree_params,
             &asset_comm_params,
