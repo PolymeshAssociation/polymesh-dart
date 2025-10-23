@@ -1,3 +1,8 @@
+---
+layout: default
+title: Appendix
+---
+
 ## Appendix
 
 ### Constraints for refreshing $\rho$ and $s$

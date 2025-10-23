@@ -6,3 +6,7 @@ Cargo.lock
 .idea
 *.dat
 *.db
+
+# Jekyll/Ruby
+dart-bp/docs/.bundle/
+dart-bp/docs/vendor/
