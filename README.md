@@ -17,6 +17,15 @@ Key features:
 - Regulatory compliance mechanisms with auditors and mediators
 - Fee payment systems for confidential transactions
 
+## Documentation
+
+### DART Bulletproofs Technical Specification
+
+The complete technical specification for the Bulletproofs-based DART implementation is available:
+
+- **📘 [Online HTML Documentation](https://polymeshassociation.github.io/dart/)** - Interactive docs with rendered LaTeX math
+- **📄 [PDF Specification](https://polymeshassociation.github.io/dart/dart-bp-specification.pdf)** - Complete spec as a single PDF
+
 ## Architecture
 
 The library is organized around several key components:
