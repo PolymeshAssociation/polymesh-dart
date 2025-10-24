@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KaTeX Math Rendering Test</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/contrib/auto-render.min.js"
+          onload="renderMathInElement(document.body, {delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false},
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false}
+          ]});"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+    .success { border-color: #28a745; background-color: #d4edda; }
+    .info { border-color: #17a2b8; background-color: #d1ecf1; }
+  </style>
+</head>
+<body>
+  <h1>KaTeX Math Rendering Test</h1>
+  <p>This page tests if KaTeX can render the LaTeX math expressions from your DART-BP documentation.</p>
+
+  <div class="test-section success">
+    <h3>✅ Test 1: Basic Math Expressions</h3>
+    <p>Inline math: $\mathbb{G}_p$ and $\mathbb{G}_q$</p>
+    <p>Display math:</p>
+    $$
+    C = r.G + \sum_{i=1}^n w_i.G_i
+    $$
+  </div>
+
+  <div class="test-section success">
+    <h3>✅ Test 2: Complex Expressions from Docs</h3>
+    <p>From account registration:</p>
+    $$
+    State_0 = sk.G_{Aff} + asset\_id.G_3 + \rho.G_4 + \rho^2.G_5 + s.G_6 + id.G_7
+    $$
+    <p>Sigma protocol:</p>
+    $$
+    e.C + T \stackrel{?}{=} s_r.G + \sum_{i=1}^n s_i.G_i
+    $$
+  </div>
+
+  <div class="test-section info">
+    <h3>ℹ️ How This Works</h3>
+    <ol>
+      <li>KaTeX JavaScript loads from CDN</li>
+      <li>Auto-render script scans for $...$ and $$...$$ delimiters</li>
+      <li>Converts LaTeX to beautiful HTML/CSS math rendering</li>
+      <li>Result: Fast, accessible math that works in all browsers</li>
+    </ol>
+  </div>
+
+  <div class="test-section success">
+    <h3>✅ Test 3: More Complex Math</h3>
+    <p>Chaum-Pedersen proof:</p>
+    $$
+    e.C_A + T_A \stackrel{?}{=} s_{A,r}.G_A + \sum_{i=1}^k s_i.G_i + \sum_{j=k+1}^m s_j.G_j
+    $$
+    <p>Twisted ElGamal:</p>
+    $$
+    C = (C_1, C_2, C_3) \quad \text{where} \quad C_1 = r.EK_1, \quad C_2 = r.EK_2 \quad \text{and} \quad C_3 = M + r.G
+    $$
+  </div>
+
+  <p><strong>Result:</strong> If you can see properly rendered mathematical expressions above (not raw LaTeX code), then KaTeX is working correctly and your GitHub Pages setup will render the math beautifully!</p>
+
+  <p><a href="https://github.com/PolymeshAssociation/polymesh-dart/tree/main/dart-bp/docs">View source docs on GitHub</a></p>
+</body>
+</html>

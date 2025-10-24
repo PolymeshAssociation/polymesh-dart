@@ -1,0 +1,29 @@
+title: DART-BP Math Documentation
+description: Mathematical foundations for DART-BP implementation
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  math_engine: mathjax
+  math_engine_opts:
+    preview: true
+
+# GitHub Pages
+repository: PolymeshAssociation/polymesh-dart
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor/
+  - .bundle/
+  - .sass-cache/
+  - .jekyll-cache/
+  - gemfiles/
+
+# Include files
+include:
+  - _pages

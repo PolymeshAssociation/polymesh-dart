@@ -80,7 +80,7 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
     pub resp_pk: PokDiscreteLog<G>,
     /// Called `uppercase Omega` in the report
     pub encrypted_randomness: Option<EncryptedRandomness<G, CHUNK_BITS, NUM_CHUNKS>>,
-    pub proof: Option<R1CSProof<G>>,
+    pub proof: R1CSProof<G>,
 }
 
 const REG_TXN_LABEL: &'static [u8; 12] = b"registration";
@@ -116,8 +116,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         T: Option<(G, G, G)>,
     ) -> Result<(Self, G)> {
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
-        let (mut proof, initial_nullifier) = Self::new_with_given_prover(
+        Self::new_with_given_transcript(
             rng,
             pk,
             account,
@@ -129,16 +128,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             poseidon_config,
             T,
-            &mut prover,
-        )?;
-
-        let r1cs_proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
-        proof.proof = Some(r1cs_proof);
-
-        Ok((proof, initial_nullifier))
+            transcript,
+        )
     }
 
-    pub fn new_with_given_prover<R: CryptoRngCore>(
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
         account: &AccountState<G>,
@@ -151,7 +145,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
-        prover: &mut Prover<MerlinTranscript, G>,
+        mut transcript: MerlinTranscript,
     ) -> Result<(Self, G)> {
         let _ = Self::CHECK_CHUNK_BITS;
         ensure_correct_registration_state(account)?;
@@ -163,9 +157,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // 4. Knowledge of randomness
         // 5. if T is provided, prove that randomness is encrypted correctly for pk_T
 
-        let mut transcript_ref = prover.transcript();
         add_to_transcript!(
-            transcript_ref,
+            transcript,
             NONCE_LABEL,
             nonce,
             ASSET_ID_LABEL,
@@ -204,7 +197,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
             &reduced_acc_comm,
-            &mut transcript_ref,
+            &mut transcript,
         )?;
 
         // For proving initial_nullifier
@@ -213,7 +206,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         init_null_protocol.challenge_contribution(
             &account_comm_key.rho_gen(),
             &initial_nullifier,
-            &mut transcript_ref,
+            &mut transcript,
         )?;
 
         // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
@@ -260,7 +253,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 eph_proto[i].challenge_contribution(
                     &enc_key_gen,
                     &ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
+                    &mut transcript,
                 )?;
 
                 enc_proto.push(PokPedersenCommitmentProtocol::init(
@@ -275,7 +268,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     pk_T,
                     enc_gen,
                     &ciphertexts[i].encrypted,
-                    &mut transcript_ref,
+                    &mut transcript,
                 )?;
             }
 
@@ -292,6 +285,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             None
         };
 
+        let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
+
         // NOTE: We can save 2 group elements in total by committing all variables (including chunks) in
         // a single commitment. It complicates the implementation a bit
 
@@ -302,7 +297,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &leaf_level_bp_gens,
         );
         Self::enforce_constraints(
-            prover,
+            &mut prover,
             account.asset_id,
             counter,
             vars,
@@ -337,7 +332,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 for (i, var) in vars.into_iter().enumerate() {
                     let chunk = mem::take(&mut s_chunks_as_u64[i]);
                     // chunk is zeroized in range_proof
-                    range_proof(prover, var.into(), Some(chunk), CHUNK_BITS)?;
+                    range_proof(&mut prover, var.into(), Some(chunk), CHUNK_BITS)?;
                 }
                 (Some(comm_s_bp), Some(com_s_bp_blinding))
             } else {
@@ -404,7 +399,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             };
 
         let prover_challenge =
-            prover.transcript().challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+            transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let resp_comm = comm_protocol.gen_proof(&prover_challenge);
         let resp_initial_nullifier = init_null_protocol.gen_proof(&prover_challenge);
@@ -444,7 +439,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             let resp_comm_s_chunks_bp = t_comm_s_chunks_bp.response(&wits, &prover_challenge)?;
             Zeroize::zeroize(&mut wits);
 
-            // Responses for the witness for chunk is already generated by sigma protocol for account commitment
+            // Responses for the witness for randomness is already generated by sigma protocol for account commitment
             let resp_combined_s = combined_s_proto
                 .unwrap()
                 .gen_partial1_proof(&prover_challenge);
@@ -462,55 +457,23 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             None
         };
 
-        Ok((Self {
-            resp_acc_comm: resp_comm,
-            resp_initial_nullifier,
-            comm_rho_bp,
-            t_comm_rho_bp: t_comm_rho_bp.t,
-            resp_comm_rho_bp,
-            resp_pk,
-            encrypted_randomness,
-            proof: None,
-        }, initial_nullifier))
+        let proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
+
+        Ok((
+            Self {
+                resp_acc_comm: resp_comm,
+                resp_initial_nullifier,
+                t_comm_rho_bp: t_comm_rho_bp.t,
+                resp_comm_rho_bp,
+                resp_pk,
+                comm_rho_bp,
+                encrypted_randomness,
+                proof,
+            },
+            initial_nullifier,
+        ))
     }
 
-    // pub fn new_with_given_prover<R: CryptoRngCore>(
-    //     rng: &mut R,
-    //     pk: G,
-    //     account: &AccountState<G>,
-    //     account_commitment: AccountStateCommitment<G>,
-    //     counter: NullifierSkGenCounter,
-    //     nonce: &[u8],
-    //     account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    //     leaf_level_pc_gens: &PedersenGens<G>,
-    //     leaf_level_bp_gens: &BulletproofGens<G>,
-    //     // poseidon_config: &PoseidonConfig<G::ScalarField>,
-    //     poseidon_config: &Poseidon2Params<G::ScalarField>,
-    //     T: Option<(G, G, G)>,
-    //     mut prover: Prover<MerlinTranscript, G>,
-    // ) -> Result<(Self, G)> {
-    //     let (mut proof, initial_nullifier) = Self::prove(
-    //         rng,
-    //         pk,
-    //         account,
-    //         account_commitment,
-    //         counter,
-    //         nonce,
-    //         account_comm_key,
-    //         leaf_level_pc_gens,
-    //         leaf_level_bp_gens,
-    //         poseidon_config,
-    //         T,
-    //         &mut prover,
-    //     )?;
-    //
-    //     let r1cs_proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
-    //     proof.proof = Some(r1cs_proof);
-    //
-    //     Ok((proof, initial_nullifier))
-    // }
-
-    /// Create a new verifier and verify the given proof
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
@@ -527,9 +490,48 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        self.verify_with_given_transcript(
+            rng,
+            id,
+            pk,
+            asset_id,
+            account_commitment,
+            counter,
+            initial_nullifier,
+            nonce,
+            account_comm_key,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            poseidon_config,
+            T,
+            verifier_transcript,
+            rmc,
+        )
+    }
+
+    pub fn verify_with_given_transcript<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        id: G::ScalarField,
+        pk: &G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        counter: NullifierSkGenCounter,
+        initial_nullifier: G,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        // poseidon_config: &PoseidonConfig<G::ScalarField>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+        verifier_transcript: MerlinTranscript,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        let tuple = self.verify_and_return_tuples(
+        let tuple = self.verify_except_bp_with_given_transcript(
             id,
             pk,
             asset_id,
@@ -543,6 +545,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             poseidon_config,
             T,
             rng,
+            verifier_transcript,
             rmc.as_deref_mut(),
         )?;
 
@@ -556,7 +559,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
     }
 
-    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+    pub fn verify_except_bp<R: CryptoRngCore>(
         &self,
         id: G::ScalarField,
         pk: &G,
@@ -574,8 +577,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
         let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut verifier = Verifier::new(verifier_transcript);
-        self.verify_sigma_protocols_and_enforce_constraints(
+        self.verify_except_bp_with_given_transcript(
             id,
             pk,
             asset_id,
@@ -588,18 +590,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             poseidon_config,
             T,
-            &mut verifier,
+            rng,
+            verifier_transcript,
             rmc,
-        )?;
-
-        let proof = self.proof.as_ref().ok_or_else(|| {
-            Error::ProofVerificationError("R1CS proof is missing".to_string())
-        })?;
-        let tuple = verifier.verification_scalars_and_points_with_rng(proof, rng)?;
-        Ok(tuple)
+        )
     }
 
-    pub fn verify_sigma_protocols_and_enforce_constraints(
+    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
         &self,
         id: G::ScalarField,
         pk: &G,
@@ -613,9 +610,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
-        verifier: &mut Verifier<MerlinTranscript, G>,
+        rng: &mut R,
+        mut verifier_transcript: MerlinTranscript,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
-    ) -> Result<()> {
+    ) -> Result<VerificationTuple<G>> {
         let _ = Self::CHECK_CHUNK_BITS;
         if T.is_none() ^ self.encrypted_randomness.is_none() {
             return Err(Error::PkTAndEncryptedRandomnessInconsistent);
@@ -635,9 +633,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             }
         }
 
-        let mut transcript_ref = verifier.transcript();
         add_to_transcript!(
-            transcript_ref,
+            verifier_transcript,
             NONCE_LABEL,
             nonce,
             ASSET_ID_LABEL,
@@ -661,13 +658,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
             &reduced_acc_comm,
-            &mut transcript_ref,
+            &mut verifier_transcript,
         )?;
 
         self.resp_initial_nullifier.challenge_contribution(
             &account_comm_key.rho_gen(),
             &initial_nullifier,
-            &mut transcript_ref,
+            &mut verifier_transcript,
         )?;
 
         // Take challenge contribution of ciphertext of each chunk
@@ -677,25 +674,27 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 enc_rand.resp_eph_pk[i].challenge_contribution(
                     enc_key_gen,
                     &enc_rand.ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
+                    &mut verifier_transcript,
                 )?;
                 enc_rand.resp_encrypted[i].challenge_contribution(
                     pk_T,
                     enc_gen,
                     &enc_rand.ciphertexts[i].encrypted,
-                    &mut transcript_ref,
+                    &mut verifier_transcript,
                 )?;
             }
         }
 
+        let mut verifier = Verifier::new(verifier_transcript);
+
         let vars = verifier.commit_vec(3, self.comm_rho_bp);
-        Self::enforce_constraints(verifier, asset_id, counter, vars, poseidon_config)?;
+        Self::enforce_constraints(&mut verifier, asset_id, counter, vars, poseidon_config)?;
 
         // Check if each chunk is in range
         if let Some(enc_rand) = &self.encrypted_randomness {
             let mut vars = verifier.commit_vec(NUM_CHUNKS, enc_rand.comm_s_chunks_bp);
             for _ in 0..NUM_CHUNKS {
-                range_proof(verifier, vars.remove(0).into(), None, CHUNK_BITS)?;
+                range_proof(&mut verifier, vars.remove(0).into(), None, CHUNK_BITS)?;
             }
         }
 
@@ -924,7 +923,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             }
         }
 
-        Ok(())
+        let tuple = verifier.verification_scalars_and_points_with_rng(&self.proof, rng)?;
+        Ok(tuple)
     }
 
     fn enforce_constraints<CS: ConstraintSystem<G::ScalarField>>(
@@ -2219,7 +2219,7 @@ pub mod tests {
         // Can be done in parallel
         for i in 0..batch_size {
             let tuple = proofs_without_pk_T[i]
-                .verify_and_return_tuples(
+                .verify_except_bp(
                     ids[i],
                     &pks[i],
                     asset_ids[i],
@@ -2250,14 +2250,14 @@ pub mod tests {
         let batch_verifier_time = clock.elapsed();
 
         println!(
-            "For {batch_size} proofs without pk_T, verifier time = {:?}, batch verifier time {:?} and proof size {}",
-            verifier_time, batch_verifier_time, proofs_without_pk_T.compressed_size()
+            "For {batch_size} proofs without pk_T, verifier time = {:?}, batch verifier time {:?}",
+            verifier_time, batch_verifier_time
         );
 
         // Now create proofs with pk_T
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
-        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
 
         for i in 0..batch_size {
             let (reg_proof, nullifier) = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
@@ -2311,7 +2311,7 @@ pub mod tests {
         // Can be done in parallel
         for i in 0..batch_size {
             let tuple = proofs_with_pk_T[i]
-                .verify_and_return_tuples(
+                .verify_except_bp(
                     ids[i],
                     &pks[i],
                     asset_ids[i],
@@ -2342,8 +2342,8 @@ pub mod tests {
         let batch_verifier_time_with_pk_T = clock.elapsed();
 
         println!(
-            "For {batch_size} proofs with pk_T, verifier time = {:?}, batch verifier time {:?} and proof size {}",
-            verifier_time_with_pk_T, batch_verifier_time_with_pk_T, proofs_with_pk_T.compressed_size()
+            "For {batch_size} proofs with pk_T, verifier time = {:?}, batch verifier time {:?}",
+            verifier_time_with_pk_T, batch_verifier_time_with_pk_T
         );
 
         // Test batch verification with RandomizedMultChecker for proofs without pk_T
@@ -2355,7 +2355,7 @@ pub mod tests {
         for i in 0..batch_size {
             tuples.push(
                 proofs_without_pk_T[i]
-                    .verify_and_return_tuples(
+                    .verify_except_bp(
                         ids[i],
                         &pks[i],
                         asset_ids[i],
@@ -2395,7 +2395,7 @@ pub mod tests {
         for i in 0..batch_size {
             tuples.push(
                 proofs_with_pk_T[i]
-                    .verify_and_return_tuples(
+                    .verify_except_bp(
                         ids[i],
                         &pks[i],
                         asset_ids[i],
@@ -2433,303 +2433,6 @@ pub mod tests {
             "For {batch_size} proofs with pk_T, RandomizedMultChecker verifier time = {:?}",
             rmc_verifier_time_with_pk_T
         );
-    }
-
-    #[test]
-    fn combined_registration() {
-        let mut rng = rand::thread_rng();
-
-        // Setup begins
-        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
-
-        // Create public params (generators, etc)
-        let account_tree_params =
-            SelRerandParameters::<PallasParameters, VestaParameters>::new(
-                NUM_GENS as u32,
-                NUM_GENS as u32,
-            )
-            .unwrap();
-
-        let account_comm_key = setup_comm_key(b"testing");
-
-        let poseidon_params = test_params_for_poseidon2();
-        let nullifier_gen_counter = 1;
-
-        let batch_size = 5;
-        let asset_ids = (0..batch_size)
-            .map(|i| (i + 1) as AssetId)
-            .collect::<Vec<AssetId>>();
-        let nonces: Vec<Vec<u8>> = (0..batch_size)
-            .map(|i| format!("test_nonce_{}", i).into_bytes())
-            .collect();
-
-        let mut ids = vec![];
-        let mut pks = vec![];
-        let mut accounts = vec![];
-        let mut account_comms = vec![];
-
-        // Create accounts
-        for i in 0..batch_size {
-            // Create unique keys and account for each proof
-            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let id = Fr::rand(&mut rng);
-            ids.push(id);
-
-            let account = AccountState::new(
-                &mut rng,
-                id,
-                sk_i.0,
-                asset_ids[i],
-                nullifier_gen_counter,
-                poseidon_params.clone(),
-            )
-            .unwrap();
-            accounts.push(account);
-
-            let account_comm = accounts[i].commit(account_comm_key.clone()).unwrap();
-            account_comms.push(account_comm);
-
-            pks.push(pk_i.0);
-        }
-
-        // Combined proving without pk_T
-        let clock = Instant::now();
-        let transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens, transcript);
-
-        let mut proofs_without_pk_T = vec![];
-        let mut nullifiers_without_pk_T = vec![];
-        for i in 0..batch_size {
-            let (proof, nullifier) = RegTxnProof::<_, 48, 6>::new_with_given_prover(
-                &mut rng,
-                pks[i],
-                &accounts[i],
-                account_comms[i].clone(),
-                nullifier_gen_counter,
-                &nonces[i],
-                account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
-                &poseidon_params,
-                None,
-                &mut prover,
-            )
-            .unwrap();
-            proofs_without_pk_T.push(proof);
-            nullifiers_without_pk_T.push(nullifier);
-        }
-
-        let r1cs_proof_without_pk_T = prover
-            .prove_with_rng(&account_tree_params.even_parameters.bp_gens, &mut rng)
-            .unwrap();
-
-        let proving_time_without_pk_T = clock.elapsed();
-
-        let clock = Instant::now();
-        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut verifier = Verifier::new(verifier_transcript);
-
-        for i in 0..batch_size {
-            proofs_without_pk_T[i]
-                .verify_sigma_protocols_and_enforce_constraints(
-                    ids[i],
-                    &pks[i],
-                    asset_ids[i],
-                    &account_comms[i],
-                    nullifier_gen_counter,
-                    nullifiers_without_pk_T[i],
-                    &nonces[i],
-                    account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
-                    &poseidon_params,
-                    None,
-                    &mut verifier,
-                    None,
-                )
-                .unwrap();
-        }
-
-        let tuple_without_pk_T = verifier
-            .verification_scalars_and_points_with_rng(&r1cs_proof_without_pk_T, &mut rng)
-            .unwrap();
-
-        // Verify the tuple
-        verify_given_verification_tuple(
-            tuple_without_pk_T,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-        )
-        .unwrap();
-
-        let verification_time_without_pk_T = clock.elapsed();
-
-        // Combined verification with RandomizedMultChecker without pk_T
-        let clock = Instant::now();
-        let mut rmc_without_pk_T = RandomizedMultChecker::new(Fr::rand(&mut rng));
-        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut verifier = Verifier::new(verifier_transcript);
-
-        for i in 0..batch_size {
-            proofs_without_pk_T[i]
-                .verify_sigma_protocols_and_enforce_constraints(
-                    ids[i],
-                    &pks[i],
-                    asset_ids[i],
-                    &account_comms[i],
-                    nullifier_gen_counter,
-                    nullifiers_without_pk_T[i],
-                    &nonces[i],
-                    account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
-                    &poseidon_params,
-                    None,
-                    &mut verifier,
-                    Some(&mut rmc_without_pk_T),
-                )
-                .unwrap();
-        }
-
-        let tuple_rmc_without_pk_T = verifier
-            .verification_scalars_and_points_with_rng(&r1cs_proof_without_pk_T, &mut rng)
-            .unwrap();
-
-        add_verification_tuples_to_rmc(
-            vec![tuple_rmc_without_pk_T],
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-            &mut rmc_without_pk_T,
-        )
-        .unwrap();
-        assert!(rmc_without_pk_T.verify());
-        let rmc_verification_time_without_pk_T = clock.elapsed();
-
-        // Now create proofs with pk_T
-        let enc_key_gen = PallasA::rand(&mut rng);
-        let enc_gen = PallasA::rand(&mut rng);
-        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
-
-        let clock = Instant::now();
-        let transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens, transcript);
-
-        let mut proofs_with_pk_T = vec![];
-        let mut nullifiers_with_pk_T = vec![];
-        for i in 0..batch_size {
-            let (proof, nullifier) = RegTxnProof::<_, 48, 6>::new_with_given_prover(
-                &mut rng,
-                pks[i],
-                &accounts[i],
-                account_comms[i].clone(),
-                nullifier_gen_counter,
-                &nonces[i],
-                account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
-                &poseidon_params,
-                Some((pk_T.0, enc_key_gen, enc_gen)),
-                &mut prover,
-            )
-            .unwrap();
-            proofs_with_pk_T.push(proof);
-            nullifiers_with_pk_T.push(nullifier);
-        }
-
-        let r1cs_proof_with_pk_T = prover
-            .prove_with_rng(&account_tree_params.even_parameters.bp_gens, &mut rng)
-            .unwrap();
-
-        let proving_time_with_pk_T = clock.elapsed();
-
-        let clock = Instant::now();
-        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut verifier = Verifier::new(verifier_transcript);
-
-        for i in 0..batch_size {
-            proofs_with_pk_T[i]
-                .verify_sigma_protocols_and_enforce_constraints(
-                    ids[i],
-                    &pks[i],
-                    asset_ids[i],
-                    &account_comms[i],
-                    nullifier_gen_counter,
-                    nullifiers_with_pk_T[i],
-                    &nonces[i],
-                    account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
-                    &poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
-                    &mut verifier,
-                    None,
-                )
-                .unwrap();
-        }
-
-        let tuple_with_pk_T = verifier
-            .verification_scalars_and_points_with_rng(&r1cs_proof_with_pk_T, &mut rng)
-            .unwrap();
-
-        // Verify the tuple
-        verify_given_verification_tuple(
-            tuple_with_pk_T,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-        )
-        .unwrap();
-
-        let verification_time_with_pk_T = clock.elapsed();
-
-        // Combined verification with RandomizedMultChecker with pk_T
-        let clock = Instant::now();
-        let mut rmc_with_pk_T = RandomizedMultChecker::new(Fr::rand(&mut rng));
-        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut verifier = Verifier::new(verifier_transcript);
-
-        for i in 0..batch_size {
-            proofs_with_pk_T[i]
-                .verify_sigma_protocols_and_enforce_constraints(
-                    ids[i],
-                    &pks[i],
-                    asset_ids[i],
-                    &account_comms[i],
-                    nullifier_gen_counter,
-                    nullifiers_with_pk_T[i],
-                    &nonces[i],
-                    account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
-                    &poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
-                    &mut verifier,
-                    Some(&mut rmc_with_pk_T),
-                )
-                .unwrap();
-        }
-
-        let tuple_rmc_with_pk_T = verifier
-            .verification_scalars_and_points_with_rng(&r1cs_proof_with_pk_T, &mut rng)
-            .unwrap();
-
-        add_verification_tuples_to_rmc(
-            vec![tuple_rmc_with_pk_T],
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
-            &mut rmc_with_pk_T,
-        )
-        .unwrap();
-        assert!(rmc_with_pk_T.verify());
-        let rmc_verification_time_with_pk_T = clock.elapsed();
-
-        println!("Combined registration proving time without pk_T = {:?}", proving_time_without_pk_T);
-        println!("Combined registration verification time without pk_T = {:?}", verification_time_without_pk_T);
-        println!("Combined registration RMC verification time without pk_T = {:?}", rmc_verification_time_without_pk_T);
-        println!("Combined proof size without pk_T = {} bytes", r1cs_proof_without_pk_T.compressed_size() + proofs_without_pk_T.compressed_size());
-        println!("Combined registration proving time with pk_T = {:?}", proving_time_with_pk_T);
-        println!("Combined registration verification time with pk_T = {:?}", verification_time_with_pk_T);
-        println!("Combined registration RMC verification time with pk_T = {:?}", rmc_verification_time_with_pk_T);
-        println!("Combined proof size with pk_T = {} bytes", r1cs_proof_with_pk_T.compressed_size() + proofs_with_pk_T.compressed_size());
     }
 
     #[cfg(feature = "ignore_prover_input_sanitation")]

@@ -1,4 +1,7 @@
-# Appendix
+---
+layout: default
+title: Appendix
+---
 
 ## Appendix
 

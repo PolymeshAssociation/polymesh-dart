@@ -7,10 +7,6 @@ Cargo.lock
 *.dat
 *.db
 
-# Documentation builds
+# Jekyll/Ruby
 dart-bp/docs/.bundle/
 dart-bp/docs/vendor/
-dart-bp/docs/combined.md
-dart-bp/docs/dart-bp-specification.pdf
-dart-bp/docs/*.bak
-dart-bp/docs/*.bak2

@@ -1,12 +1,9 @@
-name: Deploy Documentation to Pages
+name: Deploy Jekyll site to Pages
 
 on:
   push:
-    branches: ["main", "katex"]
-    paths: 
-      - "dart-bp/docs/**"
-      - "dart-bp/src/**"
-      - ".github/workflows/deploy-docs.yml"
+    branches: ["main"]
+    paths: ["dart-bp/docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -25,38 +22,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Install PDF dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic
-
-      - name: Build HTML documentation
-        run: |
-          RUSTDOCFLAGS="--html-in-header dart-bp/docs/katex-header.html" cargo doc --no-deps -p dart-bp-docs
-        env:
-          CARGO_TERM_COLOR: always
-
-      - name: Build PDF specification
-        run: |
-          cd dart-bp/docs
-          ./build-pdf.sh ../../target/doc
-          echo "✓ PDF generated at target/doc/dart-bp-specification.pdf"
-          ls -lh ../../target/doc/dart-bp-specification.pdf
-
-      - name: Add root redirect
-        run: |
-          echo '<meta http-equiv="refresh" content="0; url=dart_bp_docs/index.html">' > target/doc/index.html
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+          bundler-cache: true
+          working-directory: ./dart-bp/docs
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
+      - name: Build with Jekyll
+        run: |
+          cd dart-bp/docs
+          bundle exec jekyll build --baseurl ""
+        env:
+          JEKYLL_ENV: production
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./target/doc
+          path: ./dart-bp/docs/_site
 
   deploy:
     environment:
