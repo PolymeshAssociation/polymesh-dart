@@ -702,12 +702,13 @@ macro_rules! impl_curve_tree_with_backend {
             $($async_fn)* fn _get_odd_x_coord_children_batch(
                 &self,
                 parent: NodeLocation<L>,
+                block_number: Option<BlockNumber>,
                 delta: &Affine<C::P1>,
             ) -> Result<Vec<[<C::P1 as ark_ec::CurveConfig>::BaseField; L]>, Error> {
                 let mut batch_x_coord_children = Vec::with_capacity(M);
                 for tree_index in 0..M {
                     let x_coord_children = self
-                        ._get_odd_x_coord_children(tree_index as TreeIndex, parent, delta)
+                        ._get_odd_x_coord_children(tree_index as TreeIndex, parent, block_number, delta)
                         $($await)*?;
                     batch_x_coord_children.push(x_coord_children);
                 }
@@ -718,12 +719,13 @@ macro_rules! impl_curve_tree_with_backend {
                 &self,
                 tree_index: TreeIndex,
                 parent: NodeLocation<L>,
+                block_number: Option<BlockNumber>,
                 delta: &Affine<C::P1>,
             ) -> Result<[<C::P1 as ark_ec::CurveConfig>::BaseField; L], Error> {
                 let mut x_coord_children = [<C::P1 as ark_ec::CurveConfig>::BaseField::zero(); L];
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
-                    let x_coord = match self.backend.get_inner_node(child, None)$($await)*? {
+                    let x_coord = match self.backend.get_inner_node(child, block_number)$($await)*? {
                         Some(node) => match node.decompress()? {
                             Inner::Odd(commitments) => {
                                 Some((commitments[tree_index as usize] + delta).into_affine().x)
@@ -747,12 +749,13 @@ macro_rules! impl_curve_tree_with_backend {
             $($async_fn)* fn _get_even_x_coord_children_batch(
                 &self,
                 parent: NodeLocation<L>,
+                block_number: Option<BlockNumber>,
                 delta: &Affine<C::P0>,
             ) -> Result<Vec<[<C::P0 as ark_ec::CurveConfig>::BaseField; L]>, Error> {
                 let mut batch_x_coord_children = Vec::with_capacity(M);
                 for tree_index in 0..M {
                     let x_coord_children = self
-                        ._get_even_x_coord_children(tree_index as TreeIndex, parent, delta)
+                        ._get_even_x_coord_children(tree_index as TreeIndex, parent, block_number, delta)
                         $($await)*?;
                     batch_x_coord_children.push(x_coord_children);
                 }
@@ -763,15 +766,16 @@ macro_rules! impl_curve_tree_with_backend {
                 &self,
                 tree_index: TreeIndex,
                 parent: NodeLocation<L>,
+                block_number: Option<BlockNumber>,
                 delta: &Affine<C::P0>,
             ) -> Result<[<C::P0 as ark_ec::CurveConfig>::BaseField; L], Error> {
                 let mut x_coord_children = [<C::P0 as ark_ec::CurveConfig>::BaseField::zero(); L];
                 for idx in 0..L {
                     let child = parent.child(idx as ChildIndex)?;
                     let commitment = if let NodeLocation::Leaf(leaf_index) = child {
-                        self.backend.get_leaf(leaf_index, None)$($await)*?.and_then(|leaf| leaf.decompress().ok())
+                        self.backend.get_leaf(leaf_index, block_number)$($await)*?.and_then(|leaf| leaf.decompress().ok())
                     } else {
-                        match self.backend.get_inner_node(child, None)$($await)*? {
+                        match self.backend.get_inner_node(child, block_number)$($await)*? {
                             Some(node) => match node.decompress()? {
                                 Inner::Even(commitments) => Some(commitments[tree_index as usize]),
                                 Inner::Odd(_) => {
@@ -799,7 +803,7 @@ macro_rules! impl_curve_tree_with_backend {
                     Ok(root)
                 } else {
                     // Fallback to slow build if not found in storage.
-                    let root = self.inner_slow_build_root()$($await)*?;
+                    let root = self.inner_slow_build_root(None)$($await)*?;
 
                     let height = self.height()$($await)*;
                     Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
@@ -809,26 +813,27 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn root_node(
                 &self,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
-                self.inner_slow_build_root()$($await)*
+                self.inner_slow_build_root(None)$($await)*
             }
 
             $($async_fn)* fn inner_slow_build_root(
                 &self,
+                block_number: Option<BlockNumber>,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 let params = self.parameters();
                 let root = NodeLocation::<L>::root(self.height()$($await)*);
-                match self.backend.get_inner_node(root, None)$($await)*? {
+                match self.backend.get_inner_node(root, block_number)$($await)*? {
                     Some(node) => match node.decompress()? {
                         Inner::Even(commitments) => Ok(Root::Even(RootNode {
                             commitments: commitments.clone(),
                             x_coord_children: self
-                                ._get_odd_x_coord_children_batch(root, &params.odd_parameters.delta)
+                                ._get_odd_x_coord_children_batch(root, block_number, &params.odd_parameters.delta)
                                 $($await)*?,
                         })),
                         Inner::Odd(commitments) => Ok(Root::Odd(RootNode {
                             commitments: commitments.clone(),
                             x_coord_children: self
-                                ._get_even_x_coord_children_batch(root, &params.even_parameters.delta)
+                                ._get_even_x_coord_children_batch(root, block_number, &params.even_parameters.delta)
                                 $($await)*?,
                         })),
                     }
@@ -899,6 +904,7 @@ macro_rules! impl_curve_tree_with_backend {
                                     ._get_odd_x_coord_children(
                                         tree_index,
                                         parent_location,
+                                        block_number,
                                         &params.odd_parameters.delta,
                                     )
                                     $($await)*?,
@@ -912,6 +918,7 @@ macro_rules! impl_curve_tree_with_backend {
                                     ._get_even_x_coord_children(
                                         tree_index,
                                         parent_location,
+                                        block_number,
                                         &params.even_parameters.delta,
                                     )
                                     $($await)*?,
