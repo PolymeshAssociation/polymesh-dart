@@ -14,7 +14,7 @@ use bulletproofs::r1cs::batch_verify;
 use bulletproofs::r1cs::{
     ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
     add_verification_tuple_to_rmc, add_verification_tuples_to_rmc as add_vts_to_rmc,
-    verify_given_verification_tuple,
+    batch_verify_with_rng, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
@@ -31,6 +31,22 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
+
+/// Re-seed an RNG to generate a new non-shared RNG.
+///
+/// This is useful when using the `parallel` feature to ensure that different threads have different RNGs.
+pub fn reseed_rng<R: RngCore + CryptoRng>(rng: &mut R) -> ChaChaRng {
+    let mut buf = [0_u8; 32];
+    rng.fill_bytes(&mut buf);
+    ChaChaRng::from_seed(buf)
+}
+
+/// Generate two ChaChaRngs (for even and odd levels) from a given RNG
+pub fn generate_even_odd_rngs<R: RngCore + CryptoRng>(rng: &mut R) -> (ChaChaRng, ChaChaRng) {
+    let rng_even = reseed_rng(rng);
+    let rng_odd = reseed_rng(rng);
+    (rng_even, rng_odd)
+}
 
 #[macro_export]
 macro_rules! add_to_transcript {
@@ -303,13 +319,7 @@ pub fn prove_with_rng<
     tree_params: &SelRerandParameters<G0, G1>,
     rng: &mut R,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
-    // Generate 2 new rngs from the given one
-    let mut seed_even = [0_u8; 32];
-    rng.fill_bytes(&mut seed_even);
-    let mut seed_odd = [0_u8; 32];
-    rng.fill_bytes(&mut seed_odd);
-    let mut rng_even = ChaChaRng::from_seed(seed_even);
-    let mut rng_odd = ChaChaRng::from_seed(seed_odd);
+    let (mut rng_even, mut rng_odd) = generate_even_odd_rngs(rng);
 
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
@@ -608,6 +618,62 @@ pub fn batch_verify_bp<
             odd_tuples,
             &tree_params.odd_parameters.pc_gens,
             &tree_params.odd_parameters.bp_gens,
+        ),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+pub fn batch_verify_bp_with_rng<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_tuples: Vec<VerificationTuple<Affine<G0>>>,
+    odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
+    tree_params: &SelRerandParameters<G0, G1>,
+    rng: &mut R,
+) -> Result<()> {
+    let (mut rng_even, mut rng_odd) = generate_even_odd_rngs(rng);
+
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            batch_verify_with_rng(
+                even_tuples,
+                &tree_params.even_parameters.pc_gens,
+                &tree_params.even_parameters.bp_gens,
+                &mut rng_even,
+            )
+        },
+        || {
+            batch_verify_with_rng(
+                odd_tuples,
+                &tree_params.odd_parameters.pc_gens,
+                &tree_params.odd_parameters.bp_gens,
+                &mut rng_odd,
+            )
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        batch_verify_with_rng(
+            even_tuples,
+            &tree_params.even_parameters.pc_gens,
+            &tree_params.even_parameters.bp_gens,
+            &mut rng_even,
+        ),
+        batch_verify_with_rng(
+            odd_tuples,
+            &tree_params.odd_parameters.pc_gens,
+            &tree_params.odd_parameters.bp_gens,
+            &mut rng_odd,
         ),
     );
 
