@@ -1034,7 +1034,7 @@ impl DartTestingDb {
     }
 
     // Settlement operations
-    pub fn create_settlement_verify_proof<R: RngCore + CryptoRng>(
+    pub fn create_settlement_verify_proof<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &mut self,
         rng: &mut R,
         settlement: SettlementProof<()>,

@@ -574,7 +574,7 @@ impl AccountAssetRegistrationProof {
     }
 
     /// Verify this registration proof inside a batch of proofs.
-    pub fn batched_verify<R: RngCore + CryptoRng>(
+    pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
         &self,
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,

@@ -1,23 +1,27 @@
-use core::marker::PhantomData;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, Encode, MaxEncodedLen};
-use curve_tree_relations::curve_tree::Root;
 use scale_info::TypeInfo;
 
-use ark_ec::CurveConfig;
+use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
     format,
     string::{String, ToString},
     vec::Vec,
 };
+use bulletproofs::r1cs::VerificationTuple;
+use curve_tree_relations::curve_tree::Root;
+
 use blake2::Blake2b512;
 use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
+use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
 use polymesh_dart_common::{LegId, MediatorId};
 
@@ -227,7 +231,7 @@ impl LegBuilder {
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
-    _marker: PhantomData<T>,
+    _marker: core::marker::PhantomData<T>,
 }
 
 impl<T: DartLimits> SettlementBuilder<T> {
@@ -235,7 +239,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
         Self {
             memo: memo.to_vec(),
             legs: Vec::new(),
-            _marker: PhantomData,
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -304,6 +308,32 @@ impl<
         SettlementRef(blake2_256(self))
     }
 
+    #[cfg(feature = "parallel")]
+    pub fn verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        // Get the curve tree root.
+        let root = asset_tree
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for settlement proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+        let memo = &*self.memo;
+        self.legs.par_iter().enumerate().try_for_each_init(
+            || rng.clone(),
+            |rng, (idx, leg)| {
+                let ctx = (memo, idx as u8).encode();
+                leg.verify(&ctx, &root, rng)
+            },
+        )?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "parallel"))]
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
@@ -317,11 +347,90 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
-        let params = asset_tree.params();
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            leg.verify(&ctx, &root, params, rng)?;
+            leg.verify(&ctx, &root, rng)?;
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "parallel")]
+    pub fn batched_verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        let batch_size = self.legs.len();
+        if batch_size < 2 {
+            return self.verify(asset_tree, rng);
+        }
+
+        // Get the curve tree root.
+        let root = asset_tree
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for settlement proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+        let memo = &*self.memo;
+
+        let tuples = self
+            .legs
+            .par_iter()
+            .enumerate()
+            .map_init(
+                || rng.clone(),
+                |rng, (idx, leg)| {
+                    let ctx = (memo, idx as u8).encode();
+                    leg.batched_verify(&ctx, &root, rng)
+                },
+            )
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+        for (even, odd) in tuples {
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        let batch_size = self.legs.len();
+        if batch_size < 2 {
+            return self.verify(asset_tree, rng);
+        }
+
+        // Get the curve tree root.
+        let root = asset_tree
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for settlement proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+        for (idx, leg) in self.legs.iter().enumerate() {
+            let ctx = (&self.memo, idx as u8).encode();
+            let (even, odd) = leg.batched_verify(&ctx, &root, rng)?;
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+
         Ok(())
     }
 }
@@ -410,7 +519,6 @@ impl<
         &self,
         ctx: &[u8],
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
-        params: &CurveTreeParameters<C>,
         rng: &mut R,
     ) -> Result<(), Error> {
         let asset_comm_params = get_asset_commitment_parameters();
@@ -422,13 +530,44 @@ impl<
             leg_enc.clone(),
             &root,
             ctx,
-            params,
+            C::parameters(),
             asset_comm_params,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             None,
         )?;
         Ok(())
+    }
+
+    /// Verify this leg proof inside a batch of proofs.
+    pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        rng: &mut R,
+    ) -> Result<
+        (
+            VerificationTuple<Affine<C::P0>>,
+            VerificationTuple<Affine<C::P1>>,
+        ),
+        Error,
+    > {
+        let asset_comm_params = get_asset_commitment_parameters();
+        let leg_enc = self.leg_enc.decode()?;
+        log::debug!("Verify leg: {:?}", leg_enc);
+        let proof = self.proof.decode()?;
+        let tuples = proof.verify_except_bp(
+            leg_enc.clone(),
+            &root,
+            ctx,
+            C::parameters(),
+            asset_comm_params,
+            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
+            rng,
+            None,
+        )?;
+        Ok(tuples)
     }
 }
 

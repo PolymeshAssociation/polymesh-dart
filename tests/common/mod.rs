@@ -3,7 +3,9 @@
 use anyhow::{Context, Result, anyhow};
 use ark_std::rand;
 use codec::{Decode, Encode};
+use polymesh_dart_bp::util::reseed_rng;
 use polymesh_dart_common::{MediatorId, SETTLEMENT_MAX_LEGS};
+use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore};
 
 use std::{
@@ -23,6 +25,11 @@ pub fn scale_encode_and_decode_test<T: Encode + Decode>(value: &T) -> Result<T> 
     let buf = value.encode();
     let decoded_value = T::decode(&mut buf.as_slice()).context("Failed to decode value")?;
     Ok(decoded_value)
+}
+
+pub fn new_rng() -> ChaCha20Rng {
+    let mut rng = rand::thread_rng();
+    reseed_rng(&mut rng)
 }
 
 /// A fake "Substrate" signer address for testing purposes.
@@ -1511,7 +1518,7 @@ impl DartChainState {
         }
 
         // Verify the proof for the account and asset.
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         proof
             .verify(caller.ctx(), self.account_tree.parameters(), &mut rng)
             .with_context(|| {
@@ -1550,7 +1557,7 @@ impl DartChainState {
         let nullifier = proof.nullifier();
         self.ensure_nullifier_unique(&nullifier)?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the minting proof.
         proof
             .verify(caller.ctx(), &self.account_tree, &mut rng)
@@ -1581,7 +1588,7 @@ impl DartChainState {
             ));
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // verify the settlement proof.
         proof
             .verify(&self.asset_tree, &mut rng)
@@ -1647,7 +1654,7 @@ impl DartChainState {
             .get_mut(&settlement_ref)
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the sender affirmation proof and update the settlement status.
         settlement.sender_affirmation(&proof, &self.account_tree, &mut rng)?;
 
@@ -1681,7 +1688,7 @@ impl DartChainState {
             .get_mut(&settlement_ref)
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the receiver affirmation proof and update the settlement status.
         settlement.receiver_affirmation(&proof, &self.account_tree, &mut rng)?;
 
@@ -1740,7 +1747,7 @@ impl DartChainState {
             .get_mut(&settlement_ref)
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the sender counter update proof and update the settlement status.
         settlement.sender_counter_update(&proof, &self.account_tree, &mut rng)?;
 
@@ -1778,7 +1785,7 @@ impl DartChainState {
             .get_mut(&settlement_ref)
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the sender reversal proof and update the settlement status.
         settlement.sender_revert(&proof, &self.account_tree, &mut rng)?;
 
@@ -1812,7 +1819,7 @@ impl DartChainState {
             .get_mut(&settlement_ref)
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = new_rng();
         // Verify the receiver claim proof and update the settlement status.
         settlement.receiver_claim(&proof, &self.account_tree, &mut rng)?;
 

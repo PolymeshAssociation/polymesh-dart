@@ -3,7 +3,9 @@ use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use ark_ec::short_weierstrass::Affine;
 use ark_std::vec::Vec;
+use bulletproofs::r1cs::VerificationTuple;
 use curve_tree_relations::curve_tree::Root;
 
 use bounded_collections::BoundedVec;
@@ -13,6 +15,7 @@ use scale_info::TypeInfo;
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use polymesh_dart_bp::fee_account as bp_fee_account;
+use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 
 use super::encode::*;
 use super::*;
@@ -538,6 +541,36 @@ impl<
         )?;
         Ok(())
     }
+
+    /// Verify this fee account topup proof inside a batch of proofs.
+    pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
+    ) -> Result<
+        (
+            VerificationTuple<Affine<C::P0>>,
+            VerificationTuple<Affine<C::P1>>,
+        ),
+        Error,
+    > {
+        let proof = self.proof.decode()?;
+        let tuples = proof.verify_except_bp(
+            self.account.get_affine()?,
+            self.asset_id,
+            self.amount,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
+            &root,
+            ctx,
+            C::parameters(),
+            dart_gens().account_comm_key(),
+            rng,
+            None,
+        )?;
+        Ok(tuples)
+    }
 }
 
 /// A batch of Fee account topup proofs.
@@ -677,6 +710,86 @@ impl<
         for proof in &self.proofs {
             proof.verify(rng, ctx, &root)?;
         }
+        Ok(())
+    }
+
+    /// Verify the batched fee account topup proofs.
+    #[cfg(feature = "parallel")]
+    pub fn batched_verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        tree_roots: &(
+             impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C> + Send + Sync
+         ),
+    ) -> Result<(), Error> {
+        let batch_size = self.proofs.len();
+        if batch_size < 2 {
+            return self.verify(rng, ctx, tree_roots);
+        }
+
+        // Get the curve tree root.
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+
+        let tuples = self
+            .proofs
+            .par_iter()
+            .map_init(
+                || rng.clone(),
+                |rng, proof| proof.batched_verify(rng, ctx, &root),
+            )
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+        for (even, odd) in tuples {
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+
+        Ok(())
+    }
+
+    /// Verify the batched fee account topup proofs.
+    #[cfg(not(feature = "parallel"))]
+    pub fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        tree_roots: &impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
+    ) -> Result<(), Error> {
+        let batch_size = self.proofs.len();
+        if batch_size < 2 {
+            return self.verify(rng, ctx, tree_roots);
+        }
+
+        // Get the curve tree root.
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+
+        let mut even_tuples = Vec::with_capacity(batch_size);
+        let mut odd_tuples = Vec::with_capacity(batch_size);
+        for proof in &self.proofs {
+            let (even, odd) = proof.batched_verify(rng, ctx, &root)?;
+            even_tuples.push(even);
+            odd_tuples.push(odd);
+        }
+
+        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+
         Ok(())
     }
 

@@ -8,6 +8,7 @@ license = "GPL-3.0"
 polymesh-dart = { workspace = true, default-features = false, features = [
     "backend_bp",
 ] }
+polymesh-dart-bp = { workspace = true, default-features = false }
 polymesh-dart-common = { workspace = true, default-features = false }
 
 # common dependencies

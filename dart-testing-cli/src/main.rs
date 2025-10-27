@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dart_testing_cli::*;
 use polymesh_dart::*;
+use polymesh_dart_bp::util::reseed_rng;
 use rand::thread_rng;
 
 #[derive(Parser)]
@@ -311,6 +312,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut db = DartTestingDb::new(&cli.database)?;
     let mut rng = thread_rng();
+    let mut rng = reseed_rng(&mut rng);
 
     match cli.command {
         Commands::Init => {
