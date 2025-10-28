@@ -334,6 +334,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 
 /// Encryption key registration proof for auditors and mediators.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T))]
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 
