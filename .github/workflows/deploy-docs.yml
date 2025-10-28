@@ -28,10 +28,34 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Install PDF dependencies
+      - name: Setup LaTeX
+        uses: teatimeguest/setup-texlive-action@v3
+        with:
+          packages: |
+            scheme-basic
+            xetex
+            latex-fonts-recommended
+            latex-recommended
+            latex-extra
+            collection-science
+
+      - name: Cache Pandoc
+        uses: actions/cache@v4
+        id: cache-pandoc
+        with:
+          path: ~/.local/bin/pandoc
+          key: pandoc-${{ runner.os }}-3.1.9
+
+      - name: Install Pandoc
+        if: steps.cache-pandoc.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic texlive-science
+          mkdir -p ~/.local/bin
+          wget -q https://github.com/jgm/pandoc/releases/download/3.1.9/pandoc-3.1.9-1-amd64.deb
+          sudo dpkg -i pandoc-3.1.9-1-amd64.deb
+          rm pandoc-3.1.9-1-amd64.deb
+        
+      - name: Add Pandoc to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Build HTML documentation
         run: |
