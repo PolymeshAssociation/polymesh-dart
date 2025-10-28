@@ -28,11 +28,6 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Setup Pandoc
-        uses: pandoc/actions/setup@v1.1.1
-        with:
-          version: 3.1.9
-
       - name: Build HTML documentation
         run: |
           cd dart-bp
@@ -44,6 +39,7 @@ jobs:
         uses: xu-cheng/texlive-action@v3
         with:
           run: |
+            apk add --no-cache pandoc
             cd dart-bp/docs
             ./build-pdf.sh
 
