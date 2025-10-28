@@ -28,34 +28,10 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Setup LaTeX
-        uses: teatimeguest/setup-texlive-action@v3
+      - name: Setup Pandoc
+        uses: pandoc/actions/setup@v1.1.1
         with:
-          packages: |
-            scheme-basic
-            xetex
-            latex-fonts-recommended
-            latex-recommended
-            latex-extra
-            collection-science
-
-      - name: Cache Pandoc
-        uses: actions/cache@v4
-        id: cache-pandoc
-        with:
-          path: ~/.local/bin/pandoc
-          key: pandoc-${{ runner.os }}-3.1.9
-
-      - name: Install Pandoc
-        if: steps.cache-pandoc.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.local/bin
-          wget -q https://github.com/jgm/pandoc/releases/download/3.1.9/pandoc-3.1.9-1-amd64.deb
-          sudo dpkg -i pandoc-3.1.9-1-amd64.deb
-          rm pandoc-3.1.9-1-amd64.deb
-        
-      - name: Add Pandoc to PATH
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+          version: 3.1.9
 
       - name: Build HTML documentation
         run: |
@@ -64,14 +40,18 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
 
-      - name: Build PDF specification
+      - name: Build PDF with TeXLive
+        uses: xu-cheng/texlive-action@v3
+        with:
+          run: |
+            cd dart-bp/docs
+            ./build-pdf.sh
+
+      - name: Copy PDF to doc directory
         run: |
-          cd dart-bp
-          make pdf
-          # Copy PDF to doc directory
-          cp docs/dart-bp-specification.pdf ../target/doc/
+          cp dart-bp/docs/dart-bp-specification.pdf target/doc/
           echo "✓ PDF generated at target/doc/dart-bp-specification.pdf"
-          ls -lh ../target/doc/dart-bp-specification.pdf
+          ls -lh target/doc/dart-bp-specification.pdf
 
       - name: Add root redirect
         run: |
