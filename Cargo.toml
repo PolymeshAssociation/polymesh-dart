@@ -5,6 +5,7 @@ edition = "2024"
 description = "Polymesh DART assets."
 authors = ["Polymesh Labs"]
 license = "GPL-3.0"
+repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
 members = ["dart-bp", "dart-testing-cli", "dart-common"]

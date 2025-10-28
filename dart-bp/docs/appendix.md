@@ -1,13 +1,10 @@
----
-layout: default
-title: Appendix
----
+# Appendix
 
 ## Appendix
 
 ### Constraints for refreshing $\rho$ and $s$
 Once $\rho, \rho_i, \rho_{i+1}, s_i, s_{i+1}$ are committed in Bulletproof, we get circuit variables for each one of them. Then we enforce multiplication relations among these variables.
-```
+```text
 These variables are guaranteed to have these values
 var_rho = \rho
 var_rho_i = \rho_i
@@ -31,7 +28,7 @@ var_s_i_plus_1 == var_s_i_plus_1_
 
 ### Constraints for range proof
 To prove that a value $v$ is of $n$ bits, i.e. $v \in [0, 2^n-1)$, decompose $v$ into bits and prove that each bit is indeed a bit, i.e. 0 or 1 and the appopriate linear combination of the bits is the original value $v$.
-```
+```text
 // bits is an array bits of v in little-endian representation.
 bits = decompose(v)
 // This will be set to different powers of 2 during execution of the loop
@@ -52,6 +49,9 @@ for bit in bits {
   
   m = m * 2
 }
+
+// Enforce v = 0
+v == 0
 ```
 
 ------------------------

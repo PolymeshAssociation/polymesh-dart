@@ -1,6 +1,43 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(non_snake_case)]
 
+/// # P-DART Mathematical Documentation
+///
+/// This module contains the mathematical documentation for the DART (Decentralized, Anonymous
+/// and Regulation-Friendly Tokenization) protocol implemented with Bulletproofs.
+///
+/// For detailed information, please refer to the [P-DART paper](https://assets.polymesh.network/P-DART-v1.pdf).
+#[doc = include_str!("../docs/index.md")]
+pub mod documentation {
+    /// Notation, Prerequisites and System Model
+    #[doc = include_str!("../docs/1.md")]
+    pub mod notation {}
+
+    /// Account Registration
+    #[doc = include_str!("../docs/2.md")]
+    pub mod account_registration {}
+
+    /// Asset Minting
+    #[doc = include_str!("../docs/3.md")]
+    pub mod asset_minting {}
+
+    /// Settlement
+    #[doc = include_str!("../docs/4.md")]
+    pub mod settlements {}
+
+    /// Sender/Receiver Affirmations
+    #[doc = include_str!("../docs/5.md")]
+    pub mod affirmations {}
+
+    /// Fee System
+    #[doc = include_str!("../docs/6.md")]
+    pub mod fee_system {}
+
+    /// Appendix
+    #[doc = include_str!("../docs/appendix.md")]
+    pub mod appendix {}
+}
+
 pub const NONCE_LABEL: &'static [u8; 5] = b"nonce";
 pub const ASSET_ID_LABEL: &'static [u8; 8] = b"asset_id";
 pub const ACCOUNT_COMMITMENT_LABEL: &'static [u8; 18] = b"account_commitment";
