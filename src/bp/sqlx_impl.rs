@@ -3,7 +3,8 @@ use sqlx::{Database, Decode, Encode, Type, encode::IsNull};
 
 use super::{
     AccountPublicKey, AccountSecretKey, AccountStateCommitment, AccountStateNullifier,
-    EncryptionPublicKey, EncryptionSecretKey, SettlementRef,
+    EncryptionPublicKey, EncryptionSecretKey, FeeAccountStateCommitment, FeeAccountStateNullifier,
+    SettlementRef,
 };
 
 // SettlementRef is stored as a BLOB in the database
@@ -266,6 +267,85 @@ where
 }
 
 impl<'r, DB: Database> Encode<'r, DB> for AccountStateNullifier
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Encode<'r, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut DB::ArgumentBuffer<'r>,
+    ) -> Result<IsNull, Box<dyn core::error::Error + 'static + Send + Sync>> {
+        let value = codec::Encode::encode(self);
+        Encode::<'r, DB>::encode(value, buf)
+    }
+}
+
+// FeeAccountStateCommitment is stored as a BLOB in the database
+
+impl<DB: Database> Type<DB> for FeeAccountStateCommitment
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Type<DB>,
+{
+    fn type_info() -> DB::TypeInfo {
+        <Vec<u8> as Type<DB>>::type_info()
+    }
+}
+
+impl<'r, DB: Database> Decode<'r, DB> for FeeAccountStateCommitment
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Decode<'r, DB>,
+{
+    fn decode(
+        value: DB::ValueRef<'r>,
+    ) -> Result<FeeAccountStateCommitment, Box<dyn core::error::Error + 'static + Send + Sync>>
+    {
+        let value = <Vec<u8> as Decode<DB>>::decode(value)?;
+        Ok(codec::Decode::decode(&mut &value[..])?)
+    }
+}
+
+impl<'r, DB: Database> Encode<'r, DB> for FeeAccountStateCommitment
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Encode<'r, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut DB::ArgumentBuffer<'r>,
+    ) -> Result<IsNull, Box<dyn core::error::Error + 'static + Send + Sync>> {
+        let value = codec::Encode::encode(self);
+        Encode::<'r, DB>::encode(value, buf)
+    }
+}
+
+// FeeAccountStateNullifier is stored as a BLOB in the database
+
+impl<DB: Database> Type<DB> for FeeAccountStateNullifier
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Type<DB>,
+{
+    fn type_info() -> DB::TypeInfo {
+        <Vec<u8> as Type<DB>>::type_info()
+    }
+}
+
+impl<'r, DB: Database> Decode<'r, DB> for FeeAccountStateNullifier
+where
+    // Make sure BLOBs are supported by the database
+    Vec<u8>: Decode<'r, DB>,
+{
+    fn decode(
+        value: DB::ValueRef<'r>,
+    ) -> Result<FeeAccountStateNullifier, Box<dyn core::error::Error + 'static + Send + Sync>> {
+        let value = <Vec<u8> as Decode<DB>>::decode(value)?;
+        Ok(codec::Decode::decode(&mut &value[..])?)
+    }
+}
+
+impl<'r, DB: Database> Encode<'r, DB> for FeeAccountStateNullifier
 where
     // Make sure BLOBs are supported by the database
     Vec<u8>: Encode<'r, DB>,
