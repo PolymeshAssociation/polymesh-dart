@@ -1,6 +1,4 @@
 use core::marker::PhantomData;
-#[cfg(feature = "std")]
-use std::collections::HashMap;
 
 use ark_ec::AffineRepr;
 pub use ark_ec::CurveConfig;
@@ -522,19 +520,17 @@ impl<
 }
 
 /// Represents a tree of asset states in the Dart BP protocol.
-#[cfg(feature = "std")]
 pub struct AssetCurveTree {
     pub tree: CurveTreeWithBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
-    assets: HashMap<AssetId, (LeafIndex, AssetState)>,
+    assets: BTreeMap<AssetId, (LeafIndex, AssetState)>,
 }
 
-#[cfg(feature = "std")]
 impl AssetCurveTree {
     /// Creates a new instance of `AssetCurveTree` with the specified parameters.
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             tree: CurveTreeWithBackend::new(ASSET_TREE_HEIGHT)?,
-            assets: HashMap::new(),
+            assets: BTreeMap::new(),
         })
     }
 
@@ -551,7 +547,7 @@ impl AssetCurveTree {
         let leaf = CompressedLeafValue::from_affine(asset_data.commitment)?;
 
         // Update or insert the asset state.
-        use std::collections::hash_map::Entry;
+        use ark_std::collections::btree_map::Entry;
         match self.assets.entry(asset_id) {
             Entry::Occupied(mut entry) => {
                 let (index, existing_state) = entry.get_mut();
@@ -600,7 +596,6 @@ impl AssetCurveTree {
     }
 }
 
-#[cfg(feature = "std")]
 impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &AssetCurveTree {
     fn get_block_root(
         &self,
