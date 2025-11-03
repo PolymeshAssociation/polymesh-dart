@@ -215,6 +215,11 @@ std = [
     "zeroize/std",
 ]
 
+# Turn on this feature for faster proof verification.
+verifier_parallel = [
+ "polymesh-dart-bp?/verifier_parallel",
+]
+
 asm = ["polymesh-dart-bp?/asm"]
 parallel = ["rayon", "polymesh-dart-bp?/parallel"]
 

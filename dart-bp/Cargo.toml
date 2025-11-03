@@ -74,10 +74,14 @@ std = [
 	"once_cell/std"
 ]
 
+# Turn on this feature for faster proof verification.
+verifier_parallel = [
+	"ark-ec/parallel",
+]
+
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
 parallel = [
 	"rayon",
-	"ark-ec/parallel",
 	"ark-ff/parallel",
 	"ark-std/parallel",
 	"bulletproofs/parallel",
