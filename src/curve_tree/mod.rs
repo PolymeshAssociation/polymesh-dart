@@ -161,6 +161,25 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
     }
 }
 
+#[cfg(not(feature = "parallel"))]
+fn get_pallas_and_vesta_layer_parameters() -> (
+    SingleLayerParameters<PallasParameters>,
+    SingleLayerParameters<VestaParameters>,
+) {
+    (get_pallas_layer_parameters().clone(), get_vesta_layer_parameters().clone())
+}
+
+#[cfg(feature = "parallel")]
+fn get_pallas_and_vesta_layer_parameters() -> (
+    SingleLayerParameters<PallasParameters>,
+    SingleLayerParameters<VestaParameters>,
+) {
+    rayon::join(
+        || get_pallas_layer_parameters().clone(),
+        || get_vesta_layer_parameters().clone(),
+    )
+}
+
 pub trait CurveTreeConfig:
     Clone
     + Copy
@@ -217,9 +236,10 @@ impl CurveTreeConfig for AssetTreeConfig {
     type P1 = PallasParameters;
 
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandParameters {
-            even_parameters: get_vesta_layer_parameters().clone(),
-            odd_parameters: get_pallas_layer_parameters().clone(),
+            even_parameters: vesta_params,
+            odd_parameters: pallas_params,
         }
     }
 
@@ -243,9 +263,10 @@ impl CurveTreeConfig for AccountTreeConfig {
     type P1 = VestaParameters;
 
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandParameters {
-            odd_parameters: get_vesta_layer_parameters().clone(),
-            even_parameters: get_pallas_layer_parameters().clone(),
+            odd_parameters: vesta_params,
+            even_parameters: pallas_params,
         }
     }
 
@@ -269,9 +290,10 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     type P1 = VestaParameters;
 
     fn build_parameters() -> SelRerandParameters<Self::P0, Self::P1> {
+        let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandParameters {
-            odd_parameters: get_vesta_layer_parameters().clone(),
-            even_parameters: get_pallas_layer_parameters().clone(),
+            odd_parameters: vesta_params,
+            even_parameters: pallas_params,
         }
     }
 
