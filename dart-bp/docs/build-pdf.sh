@@ -76,8 +76,8 @@ pandoc "$SCRIPT_DIR/combined.md" \
   -V geometry:a4paper \
   -V geometry:left=0.2in \
   -V geometry:right=0.2in \
-  -V geometry:top=1in \
-  -V geometry:bottom=1in
+  -V geometry:top=.7in \
+  -V geometry:bottom=.7in
 
 if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
   echo "✓ PDF generated successfully: $OUTPUT_FILE"
