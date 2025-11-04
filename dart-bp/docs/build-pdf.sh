@@ -35,6 +35,8 @@ header-includes: |
   \fancyhead[L]{DART Specification}
   \fancyhead[R]{\thepage}
   \fancyfoot[C]{}
+  \allowdisplaybreaks
+  \setlength{\emergencystretch}{3em}
 ---
 
 \newpage
@@ -72,7 +74,10 @@ pandoc "$SCRIPT_DIR/combined.md" \
   --number-sections \
   -V linkcolor:blue \
   -V geometry:a4paper \
-  -V geometry:margin=1in
+  -V geometry:left=0.2in \
+  -V geometry:right=0.2in \
+  -V geometry:top=1in \
+  -V geometry:bottom=1in
 
 if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
   echo "✓ PDF generated successfully: $OUTPUT_FILE"
