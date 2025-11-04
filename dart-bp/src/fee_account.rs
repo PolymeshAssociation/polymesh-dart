@@ -1,9 +1,8 @@
 use crate::account::AccountCommitmentKeyTrait;
 use crate::error::*;
 use crate::util::{
-    add_verification_tuples_to_rmc, get_verification_tuples_with_rng, initialize_curve_tree_prover,
-    initialize_curve_tree_prover_with_given_transcripts, initialize_curve_tree_verifier,
-    initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
+    BPProof, add_verification_tuples_to_rmc, get_verification_tuples_with_rng,
+    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng,
     verify_given_verification_tuples,
 };
 use crate::{
@@ -18,7 +17,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, R1CSProof, VerificationTuple};
+use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
@@ -149,7 +148,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
     ) -> Result<Self> {
-        let transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         Self::new_with_given_transcript(
             rng,
             pk,
@@ -157,7 +156,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             account_commitment,
             nonce,
             account_comm_key,
-            transcript,
+            &mut transcript,
         )
     }
 
@@ -168,7 +167,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        mut transcript: MerlinTranscript,
+        mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         add_to_transcript!(
             transcript,
@@ -240,7 +239,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
     ) -> Result<()> {
-        let transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         self.verify_with_given_transcript(
             pk,
             balance,
@@ -248,7 +247,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             account_commitment,
             nonce,
             account_comm_key,
-            transcript,
+            &mut transcript,
         )
     }
 
@@ -260,7 +259,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_commitment: &FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        mut transcript: MerlinTranscript,
+        mut transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         add_to_transcript!(
             transcript,
@@ -324,8 +323,7 @@ pub struct FeeAccountTopupTxnProof<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub even_proof: R1CSProof<Affine<G0>>,
-    pub odd_proof: R1CSProof<Affine<G1>>,
+    pub r1cs_proof: Option<BPProof<G0, G1>>,
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
@@ -370,8 +368,15 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             pk,
             increase_bal_by,
@@ -383,12 +388,22 @@ impl<
             nonce,
             account_tree_params,
             account_comm_key,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
@@ -400,18 +415,17 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_correct_account_state(account, updated_account, increase_bal_by, false)?;
 
-        let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
-            initialize_curve_tree_prover_with_given_transcripts(
-                rng,
-                leaf_path,
+        let (re_randomized_path, mut rerandomization) = leaf_path
+            .select_and_rerandomize_prover_gadget(
+                even_prover,
+                odd_prover,
                 account_tree_params,
-                even_transcript,
-                odd_transcript,
+                rng,
             );
 
         let mut transcript = even_prover.transcript();
@@ -493,7 +507,7 @@ impl<
         // Range proof on new balance to ensure it's non-negative.
         let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
         range_proof(
-            &mut even_prover,
+            even_prover,
             new_bal_var.into(),
             Some(updated_account.balance),
             FEE_BALANCE_BITS.into(),
@@ -552,13 +566,9 @@ impl<
         // Response for witness will already be generated in sigma protocol for the new account commitment
         let resp_bp = t_bp.gen_partial2_proof(&challenge);
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
-
         Ok((
             Self {
-                odd_proof,
-                even_proof,
+                r1cs_proof: None,
                 re_randomized_path,
                 t_r_leaf: t_r_leaf.t,
                 t_acc_new: t_acc_new.t,
@@ -585,44 +595,6 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
-        rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
-    ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            pk,
-            asset_id,
-            increase_bal_by,
-            updated_account_commitment,
-            nullifier,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        pk: Affine<G0>,
-        asset_id: AssetId,
-        increase_bal_by: Balance,
-        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        root: &Root<L, 1, G0, G1>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
@@ -632,7 +604,8 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             pk,
             asset_id,
             increase_bal_by,
@@ -643,8 +616,6 @@ impl<
             account_tree_params,
             account_comm_key,
             rng,
-            even_transcript,
-            odd_transcript,
             rmc_0,
         )?;
 
@@ -664,9 +635,9 @@ impl<
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
-        issuer_pk: Affine<G0>,
+        pk: Affine<G0>,
         asset_id: AssetId,
         increase_bal_by: Balance,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
@@ -679,9 +650,11 @@ impl<
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            issuer_pk,
+        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        self.verify_sigma_protocols_and_enforce_constraints(
+            pk,
             asset_id,
             increase_bal_by,
             updated_account_commitment,
@@ -690,15 +663,25 @@ impl<
             nonce,
             account_tree_params,
             account_comm_key,
-            rng,
-            even_transcript,
-            odd_transcript,
+            &mut even_verifier,
+            &mut odd_verifier,
             rmc,
+        )?;
+        let r1cs_proof = self
+            .r1cs_proof
+            .as_ref()
+            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
+
+        get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
         )
     }
 
-    /// Verifies the proof except for final Bulletproof verification with given transcripts
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples_with_given_verifier<R: CryptoRngCore>(
         &self,
         pk: Affine<G0>,
         asset_id: AssetId,
@@ -710,10 +693,53 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
-        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        mut even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+        mut odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        self.verify_sigma_protocols_and_enforce_constraints(
+            pk,
+            asset_id,
+            increase_bal_by,
+            updated_account_commitment,
+            nullifier,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            &mut even_verifier,
+            &mut odd_verifier,
+            rmc,
+        )?;
+        let r1cs_proof = self
+            .r1cs_proof
+            .as_ref()
+            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
+
+        get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
+        )
+    }
+
+    pub fn verify_sigma_protocols_and_enforce_constraints(
+        &self,
+        pk: Affine<G0>,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
         if self.resp_leaf.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 4,
@@ -727,13 +753,13 @@ impl<
             ));
         }
 
-        let (mut even_verifier, odd_verifier) =
-            initialize_curve_tree_verifier_with_given_transcripts(
-                &self.re_randomized_path,
+        let _ = self
+            .re_randomized_path
+            .select_and_rerandomize_verifier_gadget(
                 root,
-                account_tree_params,
-                even_transcript,
-                odd_transcript,
+                even_verifier,
+                odd_verifier,
+                &account_tree_params,
             );
 
         let mut transcript = even_verifier.transcript();
@@ -772,7 +798,7 @@ impl<
         let new_bal_var = even_verifier.commit(self.comm_new_bal);
 
         range_proof(
-            &mut even_verifier,
+            even_verifier,
             new_bal_var.into(),
             None,
             FEE_BALANCE_BITS.into(),
@@ -885,14 +911,7 @@ impl<
                 }
             }
         }
-
-        get_verification_tuples_with_rng(
-            even_verifier,
-            odd_verifier,
-            &self.even_proof,
-            &self.odd_proof,
-            rng,
-        )
+        Ok(())
     }
 
     fn leaf_gens(
@@ -1156,7 +1175,7 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_except_bp(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             asset_id,
             fee_amount,
             updated_account_commitment,
@@ -1182,7 +1201,7 @@ impl<
     }
 
     /// Verifies the proof except for Bulletproof final verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         asset_id: AssetId,
         fee_amount: Balance,
@@ -1946,7 +1965,7 @@ pub mod tests {
         // let res = cfg_into_iter!(0..batch_size)
         //     .map(|i| {
         //         let mut rng_ = rand::thread_rng();
-        //         proofs[i].verify_except_bp(
+        //         proofs[i].verify_and_return_tuples(
         //             asset_id,
         //             fee_amount,
         //             updated_account_comms[i],
@@ -1969,7 +1988,7 @@ pub mod tests {
         // These can also be done in parallel
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     asset_id,
                     fee_amount,
                     updated_account_comms[i],
@@ -2003,7 +2022,7 @@ pub mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     asset_id,
                     fee_amount,
                     updated_account_comms[i],

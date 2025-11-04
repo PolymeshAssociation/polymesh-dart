@@ -8,13 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${1:-$SCRIPT_DIR}"
 OUTPUT_FILE="$OUTPUT_DIR/dart-bp-specification.pdf"
 
-echo "Building DART Bulletproofs Specification PDF..."
+echo "Building P-DART Bulletproofs Specification PDF..."
 echo "Output: $OUTPUT_FILE"
 
 # Combine all markdown files in order
 cat > "$SCRIPT_DIR/combined.md" << 'EOF'
 ---
-title: "P-DART: Bulletproofs-based Anonymous Regulated Transactions"
+title: "P-DART: Polymesh's extension of DART using Bulletproofs"
 subtitle: "Technical Specification"
 author: "Polymesh Association"
 date: \today

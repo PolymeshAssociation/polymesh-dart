@@ -584,7 +584,7 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
-        Ok(proof.verify_except_bp(
+        Ok(proof.verify_and_return_tuples(
             id,
             &self.account.get_affine()?,
             self.asset_id,

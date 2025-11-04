@@ -2,6 +2,8 @@
 
 This documentation contains the mathematical description for the zero knowledge proof of [P-DART](https://assets.polymesh.network/P-DART-v1.pdf), implemented with Bulletproofs.
 
+**[Specification as PDF](../../dart-bp-specification.pdf)** - Some of the LaTeX does not render well in HTML so checkout the PDF as it has the proper rendering for everything.
+
 ## Table of Contents
 
 1. **[Notation, Prerequisites and System Model](notation/index.html)**

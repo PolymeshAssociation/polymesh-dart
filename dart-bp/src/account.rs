@@ -6,14 +6,12 @@ use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{
-    add_verification_tuples_to_rmc, bp_gens_for_vec_commitment,
-    enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change,
-    enforce_constraints_for_randomness_relations,
-    generate_schnorr_responses_for_common_state_change,
-    generate_schnorr_t_values_for_balance_change,
-    generate_schnorr_t_values_for_common_state_change,
-    take_challenge_contrib_of_schnorr_t_values_for_balance_change,
-    verify_schnorr_for_balance_change, verify_schnorr_for_common_state_change,
+    BPProof, add_verification_tuples_to_rmc, bp_gens_for_vec_commitment,
+    enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
+    enforce_constraints_for_randomness_relations, generate_sigma_responses_for_common_state_change,
+    generate_sigma_t_values_for_balance_change, generate_sigma_t_values_for_common_state_change,
+    take_challenge_contrib_of_sigma_t_values_for_balance_change, verify_sigma_for_balance_change,
+    verify_sigma_for_common_state_change,
 };
 use crate::util::{
     enforce_balance_change_prover, enforce_balance_change_verifier,
@@ -344,6 +342,29 @@ where
         }
         let mut new_state = self.clone();
         new_state.counter -= decrease_counter_by;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    /// This assumes that an asset either does not have a mediator or mediator cannot reject.
+    /// The chain should not allow mediator to reject else a new kind of reverse call has to be
+    /// supported
+    pub fn get_state_for_irreversible_send(&self, amount: u64) -> Result<Self> {
+        if amount > self.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        let mut new_state = self.clone();
+        new_state.balance -= amount;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    /// This assumes that an asset either does not have a mediator or mediator cannot reject.
+    /// The chain should not allow mediator to reject else a new kind of reverse call has to be
+    /// supported
+    pub fn get_state_for_irreversible_receive(&self, amount: u64) -> Result<Self> {
+        let mut new_state = self.clone();
+        new_state.balance += amount;
         new_state.refresh_randomness_for_state_change();
         Ok(new_state)
     }
@@ -899,12 +920,14 @@ impl<
 
 //       Txn type           |    Balance change    |   Counter change
 //       ----------------------------------------------------------------
-//          Affirm_s        |         -v           |      1         |
+//          Affirm_s        |        -v            |      1         |
 //          Affirm_r        |         0            |      1         |
-//          Claim_r         |         +v           |      -1        |
-//          CntUpd_s        |         0            |      -1        |
-//          Reverse_s       |        +v            |      -1        |
-//          Reverse_r       |         0            |      -1        |
+//          Claim_r         |        +v            |     -1         |
+//          CntUpd_s        |         0            |     -1         |
+//          Reverse_s       |        +v            |     -1         |
+//          Reverse_r       |         0            |     -1         |
+//          Irr_Affirm_s    |        -v            |      0         |
+//          Irr_Affirm_r    |        +v            |      0         |
 
 /// Proof for variables that change during each account state transition
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -915,8 +938,9 @@ pub struct CommonStateChangeProof<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub even_proof: R1CSProof<Affine<G0>>,
-    pub odd_proof: R1CSProof<Affine<G1>>,
+    /// When this is None, external [`R1CSProof`] will be used and [`CommonStateChangeProof`] only
+    /// contains proof for the sigma protocols and enforces the Bulletproof constraints.
+    pub r1cs_proof: Option<BPProof<G0, G1>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
@@ -1001,13 +1025,15 @@ pub struct StateChangeVerifier<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
-    pub odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    /// When these 2 are None, external `Verifier`s are being used and `StateChangeVerifier` only
+    /// verifies the sigma protocols and enforces the Bulletproof constraints.
+    pub even_verifier: Option<Verifier<MerlinTranscript, Affine<G0>>>,
+    pub odd_verifier: Option<Verifier<MerlinTranscript, Affine<G1>>>,
     pub prover_is_sender: bool,
     /// Balance can increase, decrease or not change at all
     pub has_balance_decreased: Option<bool>,
-    /// Counter can increase or decrease
-    pub has_counter_decreased: bool,
+    /// Counter can increase, decrease or not change at all
+    pub has_counter_decreased: Option<bool>,
 }
 
 impl<
@@ -1038,8 +1064,14 @@ impl<
     ) -> Result<Self> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            transcript_even,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, transcript_odd);
 
-        Self::init_with_given_transcripts(
+        let mut prover = Self::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -1055,12 +1087,38 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            transcript_even,
-            transcript_odd,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+        prover.even_prover = Some(even_prover);
+        prover.odd_prover = Some(odd_prover);
+        Ok(prover)
     }
 
-    pub fn init_with_given_transcripts<R: CryptoRngCore>(
+    pub fn gen_proof<R: CryptoRngCore>(
+        mut self,
+        rng: &mut R,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        challenge: &F0,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
+    ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
+        let even_prover = self.even_prover.take().unwrap();
+        let odd_prover = self.odd_prover.take().unwrap();
+
+        let mut proof = self.generate_sigma_responses(account, updated_account, challenge)?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+        Ok(proof)
+    }
+
+    pub fn init_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
@@ -1076,18 +1134,17 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        transcript_even: MerlinTranscript,
-        transcript_odd: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<Self> {
         ensure_same_accounts(account, updated_account, has_balance_changed)?;
 
-        let (mut even_prover, odd_prover, re_randomized_path, leaf_rerandomization) =
-            initialize_curve_tree_prover_with_given_transcripts(
-                rng,
-                leaf_path,
+        let (re_randomized_path, leaf_rerandomization) = leaf_path
+            .select_and_rerandomize_prover_gadget(
+                even_prover,
+                odd_prover,
                 account_tree_params,
-                transcript_even,
-                transcript_odd,
+                rng,
             );
 
         add_to_transcript!(
@@ -1134,7 +1191,7 @@ impl<
             t_leg_asset_id,
             t_leg_pk,
             t_bp_randomness_relations,
-        ) = generate_schnorr_t_values_for_common_state_change(
+        ) = generate_sigma_t_values_for_common_state_change(
             rng,
             account.asset_id,
             &leg_enc,
@@ -1154,7 +1211,7 @@ impl<
             asset_id_blinding,
             r_pk,
             r_4,
-            &mut even_prover,
+            even_prover,
             &account_comm_key,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -1176,8 +1233,8 @@ impl<
         Zeroize::zeroize(&mut new_randomness_blinding);
 
         Ok(Self {
-            even_prover: Some(even_prover),
-            odd_prover: Some(odd_prover),
+            even_prover: None,
+            odd_prover: None,
             re_randomized_path,
             leaf_rerandomization,
             nullifier,
@@ -1195,13 +1252,11 @@ impl<
         })
     }
 
-    pub fn gen_proof<R: CryptoRngCore>(
+    pub fn generate_sigma_responses(
         mut self,
-        rng: &mut R,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
-        account_tree_params: &'a SelRerandParameters<G0, G1>,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
         let (
             resp_leaf,
@@ -1210,7 +1265,7 @@ impl<
             resp_leg_asset_id,
             resp_leg_pk,
             resp_bp_randomness_relations,
-        ) = generate_schnorr_responses_for_common_state_change(
+        ) = generate_sigma_responses_for_common_state_change(
             account,
             updated_account,
             self.leaf_rerandomization,
@@ -1227,14 +1282,8 @@ impl<
         Zeroize::zeroize(&mut self.leaf_rerandomization);
         Zeroize::zeroize(&mut self.comm_bp_blinding);
 
-        let even_prover = self.even_prover.take().unwrap();
-        let odd_prover = self.odd_prover.take().unwrap();
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
-
         Ok(CommonStateChangeProof {
-            even_proof,
-            odd_proof,
+            r1cs_proof: None,
             re_randomized_path: self.re_randomized_path.clone(),
             t_r_leaf: self.t_r_leaf.t,
             t_acc_new: self.t_acc_new.t,
@@ -1283,7 +1332,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         let mut transcript = even_prover.transcript();
 
         let mut amount_blinding = F0::rand(rng);
-        let (t_comm_bp_bal, t_leg_amount) = generate_schnorr_t_values_for_balance_change(
+        let (t_comm_bp_bal, t_leg_amount) = generate_sigma_t_values_for_balance_change(
             rng,
             amount,
             ct_amount,
@@ -1342,6 +1391,7 @@ impl<
 {
     /// Takes challenge contributions from all relevant subprotocols
     /// `has_balance_decreased` is None when balance doesn't change
+    /// `has_counter_decreased` is None when counter doesn't change
     pub fn init(
         proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         leg_enc: &LegEncryption<Affine<G0>>,
@@ -1351,7 +1401,7 @@ impl<
         nonce: &[u8],
         prover_is_sender: bool,
         has_balance_decreased: Option<bool>,
-        has_counter_decreased: bool,
+        has_counter_decreased: Option<bool>,
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
@@ -1359,8 +1409,10 @@ impl<
     ) -> Result<Self> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
 
-        Self::init_with_given_transcripts(
+        let mut verifier = Self::init_with_given_verifier(
             proof,
             leg_enc,
             root,
@@ -1374,94 +1426,12 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            transcript_even,
-            transcript_odd,
-        )
-    }
-
-    pub fn init_with_given_transcripts(
-        proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
-        leg_enc: &LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        prover_is_sender: bool,
-        has_balance_decreased: Option<bool>,
-        has_counter_decreased: bool,
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        transcript_even: MerlinTranscript,
-        transcript_odd: MerlinTranscript,
-    ) -> Result<Self> {
-        if proof.resp_leaf.len() != (NUM_GENERATORS + 1) {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                NUM_GENERATORS + 1,
-                proof.resp_leaf.len(),
-            ));
-        }
-        let expected_num_resps = 2 + has_balance_decreased.is_some() as usize;
-        if proof.resp_acc_new.responses.len() != expected_num_resps {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                expected_num_resps,
-                proof.resp_acc_new.responses.len(),
-            ));
-        }
-        if proof.resp_bp_randomness_relations.responses.len() != 1 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                1,
-                proof.resp_bp_randomness_relations.responses.len(),
-            ));
-        }
-        let (mut even_verifier, odd_verifier) =
-            initialize_curve_tree_verifier_with_given_transcripts(
-                &proof.re_randomized_path,
-                root,
-                account_tree_params,
-                transcript_even,
-                transcript_odd,
-            );
-
-        add_to_transcript!(
-            even_verifier.transcript(),
-            ROOT_LABEL,
-            root,
-            RE_RANDOMIZED_PATH_LABEL,
-            proof.re_randomized_path,
-            NONCE_LABEL,
-            nonce,
-            LEG_ENC_LABEL,
-            leg_enc,
-            UPDATED_ACCOUNT_COMMITMENT_LABEL,
-            updated_account_commitment
-        );
-
-        enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change(
-            leg_enc,
-            prover_is_sender,
-            &nullifier,
-            proof.comm_bp_randomness_relations,
-            &proof.t_r_leaf,
-            &proof.t_acc_new,
-            &proof.t_bp_randomness_relations,
-            &proof.resp_null,
-            &proof.resp_leg_asset_id,
-            &proof.resp_leg_pk,
             &mut even_verifier,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
+            &mut odd_verifier,
         )?;
-
-        Ok(Self {
-            even_verifier,
-            odd_verifier,
-            prover_is_sender,
-            has_balance_decreased,
-            has_counter_decreased,
-        })
+        verifier.even_verifier = Some(even_verifier);
+        verifier.odd_verifier = Some(odd_verifier);
+        Ok(verifier)
     }
 
     /// Enforce Bulletproofs constraints for balance change and takes challenge contributions from balance change related subprotocols
@@ -1472,27 +1442,15 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<()> {
-        if let Some(has_balance_decreased) = self.has_balance_decreased {
-            enforce_balance_change_verifier(
-                proof.comm_bp_bal,
-                has_balance_decreased,
-                &mut self.even_verifier,
-            )?;
-        } else {
-            return Err(Error::ProofVerificationError("`has_balance_decreased` wasn't set but still trying to take challenge contribution".into()));
-        }
-
-        let mut verifier_transcript = self.even_verifier.transcript();
-
-        take_challenge_contrib_of_schnorr_t_values_for_balance_change(
+        let mut even_verifier = self.even_verifier.take().unwrap();
+        self.init_balance_change_verification(
+            proof,
             ct_amount,
-            &proof.t_comm_bp_bal,
-            &proof.resp_leg_amount,
             enc_key_gen,
             enc_gen,
-            &mut verifier_transcript,
+            &mut even_verifier,
         )?;
-
+        self.even_verifier = Some(even_verifier);
         Ok(())
     }
 
@@ -1519,7 +1477,7 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_except_bp(
+        let (even_tuple, odd_tuple) = self.verify_sigma_protocols_and_return_tuples(
             common_state_change_proof,
             balance_change_proof,
             challenge,
@@ -1547,8 +1505,8 @@ impl<
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
-        self,
+    pub fn verify_sigma_protocols_and_return_tuples<R: CryptoRngCore>(
+        mut self,
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
@@ -1560,12 +1518,174 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        let even_verifier = self.even_verifier.take().unwrap();
+        let odd_verifier = self.odd_verifier.take().unwrap();
+
+        self.verify_sigma_protocols(
+            common_state_change_proof,
+            balance_change_proof,
+            challenge,
+            leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )?;
+
+        let r1cs_proof = common_state_change_proof
+            .r1cs_proof
+            .as_ref()
+            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
+
+        get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
+        )
+    }
+
+    pub fn init_with_given_verifier(
+        proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
+        leg_enc: &LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        prover_is_sender: bool,
+        has_balance_decreased: Option<bool>,
+        has_counter_decreased: Option<bool>,
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+    ) -> Result<Self> {
+        if proof.resp_leaf.len() != (NUM_GENERATORS + 1) {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                NUM_GENERATORS + 1,
+                proof.resp_leaf.len(),
+            ));
+        }
+        let expected_num_resps = 2 + has_balance_decreased.is_some() as usize;
+        if proof.resp_acc_new.responses.len() != expected_num_resps {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                expected_num_resps,
+                proof.resp_acc_new.responses.len(),
+            ));
+        }
+        if proof.resp_bp_randomness_relations.responses.len() != 1 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                1,
+                proof.resp_bp_randomness_relations.responses.len(),
+            ));
+        }
+
+        let _ = proof
+            .re_randomized_path
+            .select_and_rerandomize_verifier_gadget(
+                root,
+                even_verifier,
+                odd_verifier,
+                account_tree_params,
+            );
+
+        add_to_transcript!(
+            even_verifier.transcript(),
+            ROOT_LABEL,
+            root,
+            RE_RANDOMIZED_PATH_LABEL,
+            proof.re_randomized_path,
+            NONCE_LABEL,
+            nonce,
+            LEG_ENC_LABEL,
+            leg_enc,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            updated_account_commitment
+        );
+
+        enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
+            leg_enc,
+            prover_is_sender,
+            &nullifier,
+            proof.comm_bp_randomness_relations,
+            &proof.t_r_leaf,
+            &proof.t_acc_new,
+            &proof.t_bp_randomness_relations,
+            &proof.resp_null,
+            &proof.resp_leg_asset_id,
+            &proof.resp_leg_pk,
+            even_verifier,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+        )?;
+        // External `Verifier`s will be used to verify this
+        Ok(Self {
+            even_verifier: None,
+            odd_verifier: None,
+            prover_is_sender,
+            has_counter_decreased,
+            has_balance_decreased,
+        })
+    }
+
+    pub fn init_balance_change_verification(
+        &mut self,
+        proof: &BalanceChangeProof<F0, G0>,
+        ct_amount: &Affine<G0>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+    ) -> Result<()> {
+        if let Some(has_balance_decreased) = self.has_balance_decreased {
+            enforce_balance_change_verifier(
+                proof.comm_bp_bal,
+                has_balance_decreased,
+                even_verifier,
+            )?;
+        } else {
+            return Err(Error::ProofVerificationError("`has_balance_decreased` wasn't set but still trying to take challenge contribution".into()));
+        }
+
+        let mut verifier_transcript = even_verifier.transcript();
+
+        take_challenge_contrib_of_sigma_t_values_for_balance_change(
+            ct_amount,
+            &proof.t_comm_bp_bal,
+            &proof.resp_leg_amount,
+            enc_key_gen,
+            enc_gen,
+            &mut verifier_transcript,
+        )?;
+        Ok(())
+    }
+
+    pub fn verify_sigma_protocols(
+        self,
+        common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
+        balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
+        challenge: &F0,
+        leg_enc: &LegEncryption<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         let bp_gens = &account_tree_params.even_parameters.bp_gens;
 
-        verify_schnorr_for_common_state_change(
+        verify_sigma_for_common_state_change(
             leg_enc,
             self.prover_is_sender,
             self.has_counter_decreased,
@@ -1595,7 +1715,7 @@ impl<
         )?;
 
         if let Some(balance_change_proof) = balance_change_proof {
-            verify_schnorr_for_balance_change(
+            verify_sigma_for_balance_change(
                 &leg_enc,
                 &balance_change_proof.resp_leg_amount,
                 &balance_change_proof.comm_bp_bal,
@@ -1611,14 +1731,7 @@ impl<
                 rmc.as_deref_mut(),
             )?;
         }
-
-        get_verification_tuples_with_rng(
-            self.even_verifier,
-            self.odd_verifier,
-            &common_state_change_proof.even_proof,
-            &common_state_change_proof.odd_proof,
-            rng,
-        )
+        Ok(())
     }
 }
 
@@ -1661,7 +1774,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             amount,
             leg_enc,
@@ -1676,12 +1796,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -1692,12 +1822,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -1712,7 +1842,7 @@ impl<
 
         let ct_amount = leg_enc.ct_amount;
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -1728,11 +1858,10 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
 
-        let mut even_prover = common_prover.even_prover.take().unwrap();
         let balance_change_prover = BalanceChangeProver::init(
             rng,
             amount,
@@ -1743,7 +1872,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             true,
-            &mut even_prover,
+            even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -1756,15 +1885,8 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         let balance_proof = balance_change_prover.gen_proof(&challenge)?;
 
@@ -1789,15 +1911,17 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
+        mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
     ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -1807,14 +1931,24 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
+            rng,
+            rmc_0,
+        )?;
+
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -1826,46 +1960,11 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -1874,13 +1973,11 @@ impl<
             nonce,
             true,
             Some(true),
-            false,
+            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
@@ -1892,10 +1989,12 @@ impl<
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
@@ -1911,9 +2010,8 @@ impl<
         )
     }
 
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
         &self,
-        rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1923,43 +2021,55 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
-        mut rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let rmc_0 = match rmc.as_mut() {
-            Some((rmc_0, _)) => Some(&mut **rmc_0),
-            None => None,
-        };
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
-            leg_enc,
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
             root,
             updated_account_commitment,
             nullifier,
             nonce,
+            true,
+            Some(true),
+            Some(false),
             account_tree_params,
-            account_comm_key,
+            &account_comm_key,
             enc_key_gen,
             enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc_0,
+            even_verifier,
+            odd_verifier,
         )?;
 
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
-        }
+        verifier.init_balance_change_verification(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )
     }
 }
 
@@ -1999,7 +2109,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -2013,12 +2130,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
@@ -2028,12 +2155,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -2045,7 +2172,7 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -2061,27 +2188,18 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
 
         let nullifier = common_prover.nullifier;
-
-        let mut even_prover = common_prover.even_prover.take().unwrap();
 
         let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         Ok((Self { common_proof }, nullifier))
     }
@@ -2098,78 +2216,6 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
-    ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        rng: &mut R,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
@@ -2180,7 +2226,7 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -2191,8 +2237,6 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
-            even_transcript,
-            odd_transcript,
             rmc_0,
         )?;
 
@@ -2208,7 +2252,8 @@ impl<
         }
     }
 
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -2220,11 +2265,9 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -2233,21 +2276,21 @@ impl<
             nonce,
             false,
             None,
-            false,
+            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             None,
             &challenge,
@@ -2259,6 +2302,58 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
+        )
+    }
+
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            false,
+            None,
+            Some(false),
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            None,
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
             rmc,
         )
     }
@@ -2303,7 +2398,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             amount,
             leg_enc,
@@ -2318,12 +2420,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -2334,12 +2446,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -2354,7 +2466,7 @@ impl<
 
         let ct_amount = leg_enc.ct_amount;
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -2370,11 +2482,9 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
-
-        let mut even_prover = common_prover.even_prover.take().unwrap();
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
@@ -2386,7 +2496,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             false,
-            &mut even_prover,
+            even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -2399,15 +2509,8 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         let balance_proof = balance_change_prover.gen_proof(&challenge)?;
 
@@ -2432,78 +2535,6 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
-    ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        rng: &mut R,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
@@ -2513,7 +2544,8 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -2524,8 +2556,6 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
-            even_transcript,
-            odd_transcript,
             rmc_0,
         )?;
 
@@ -2541,7 +2571,8 @@ impl<
         }
     }
 
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -2553,13 +2584,11 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -2568,13 +2597,11 @@ impl<
             nonce,
             false,
             Some(false),
-            true,
+            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
@@ -2586,10 +2613,12 @@ impl<
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
@@ -2601,6 +2630,68 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
+        )
+    }
+
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            false,
+            Some(false),
+            Some(true),
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        verifier.init_balance_change_verification(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
             rmc,
         )
     }
@@ -2643,7 +2734,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -2657,12 +2755,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
@@ -2672,12 +2780,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -2689,7 +2797,7 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -2705,27 +2813,18 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
 
         let nullifier = common_prover.nullifier;
-
-        let mut even_prover = common_prover.even_prover.take().unwrap();
 
         let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         Ok((Self { common_proof }, nullifier))
     }
@@ -2742,78 +2841,6 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
-    ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        rng: &mut R,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
@@ -2824,7 +2851,7 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -2835,8 +2862,6 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
-            even_transcript,
-            odd_transcript,
             rmc_0,
         )?;
 
@@ -2852,7 +2877,8 @@ impl<
         }
     }
 
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -2864,11 +2890,9 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -2877,21 +2901,21 @@ impl<
             nonce,
             true,
             None,
-            true,
+            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             None,
             &challenge,
@@ -2903,6 +2927,58 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
+            rmc,
+        )
+    }
+
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            true,
+            None,
+            Some(true),
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            None,
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
             rmc,
         )
     }
@@ -2947,7 +3023,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             amount,
             leg_enc,
@@ -2962,12 +3045,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -2978,12 +3071,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -2998,7 +3091,7 @@ impl<
 
         let ct_amount = leg_enc.ct_amount;
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -3014,11 +3107,10 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
 
-        let mut even_prover = common_prover.even_prover.take().unwrap();
         let balance_change_prover = BalanceChangeProver::init(
             rng,
             amount,
@@ -3029,7 +3121,7 @@ impl<
             common_prover.new_balance_blinding,
             common_prover.r_3,
             false,
-            &mut even_prover,
+            even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
             enc_key_gen,
@@ -3042,15 +3134,8 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         let balance_proof = balance_change_prover.gen_proof(&challenge)?;
 
@@ -3075,15 +3160,17 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
+        mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
     ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -3093,14 +3180,24 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
+            rng,
+            rmc_0,
+        )?;
+
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -3112,46 +3209,11 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
 
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -3160,13 +3222,11 @@ impl<
             nonce,
             true,
             Some(false),
-            true,
+            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
@@ -3178,10 +3238,12 @@ impl<
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
@@ -3197,9 +3259,8 @@ impl<
         )
     }
 
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
         &self,
-        rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -3209,44 +3270,55 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
-        mut rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let rmc_0 = match rmc.as_mut() {
-            Some((rmc_0, _)) => Some(&mut **rmc_0),
-            None => None,
-        };
+        let ct_amount = leg_enc.ct_amount;
 
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
-            leg_enc,
+        let mut verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
             root,
             updated_account_commitment,
             nullifier,
             nonce,
+            true,
+            Some(false),
+            Some(true),
             account_tree_params,
-            account_comm_key,
+            &account_comm_key,
             enc_key_gen,
             enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc_0,
+            even_verifier,
+            odd_verifier,
         )?;
 
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
-        }
+        verifier.init_balance_change_verification(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )
     }
 }
 
@@ -3287,7 +3359,14 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -3301,12 +3380,22 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
@@ -3316,12 +3405,12 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
@@ -3333,7 +3422,7 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
-        let mut common_prover = CommonStateChangeProver::init_with_given_transcripts(
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
             leg_enc,
             leg_enc_rand,
@@ -3349,27 +3438,18 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
+            even_prover,
+            odd_prover,
         )?;
 
         let nullifier = common_prover.nullifier;
-
-        let mut even_prover = common_prover.even_prover.take().unwrap();
 
         let challenge = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        common_prover.even_prover = Some(even_prover);
-
-        let common_proof = common_prover.gen_proof(
-            rng,
-            account,
-            updated_account,
-            &challenge,
-            account_tree_params,
-        )?;
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
 
         Ok((Self { common_proof }, nullifier))
     }
@@ -3386,15 +3466,17 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
+        mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
     ) -> Result<()> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_with_given_transcript(
-            rng,
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -3404,14 +3486,24 @@ impl<
             account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
+            rng,
+            rmc_0,
+        )?;
+
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -3425,42 +3517,7 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        self.verify_except_bp_with_given_transcript(
-            leg_enc,
-            root,
-            updated_account_commitment,
-            nullifier,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            even_transcript,
-            odd_transcript,
-            rmc,
-        )
-    }
-
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        root: &Root<L, 1, G0, G1>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let mut verifier = StateChangeVerifier::init_with_given_transcripts(
+        let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             &leg_enc,
             root,
@@ -3469,21 +3526,21 @@ impl<
             nonce,
             false,
             None,
-            true,
+            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
         )?;
 
         let challenge = verifier
             .even_verifier
+            .as_mut()
+            .unwrap()
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        verifier.verify_except_bp(
+        verifier.verify_sigma_protocols_and_return_tuples(
             &self.common_proof,
             None,
             &challenge,
@@ -3499,7 +3556,223 @@ impl<
         )
     }
 
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            false,
+            None,
+            Some(true),
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            None,
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )
+    }
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct IrreversibleAffirmAsSenderTxnProof<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> {
+    pub common_proof: CommonStateChangeProof<L, F0, F1, G0, G1>,
+    pub balance_proof: BalanceChangeProof<F0, G0>,
+}
+
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> IrreversibleAffirmAsSenderTxnProof<L, F0, F1, G0, G1>
+{
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        amount: Balance,
+        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+    ) -> Result<(Self, Affine<G0>)> {
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
+            rng,
+            amount,
+            leg_enc,
+            leg_enc_rand,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
+    }
+
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
+        rng: &mut R,
+        amount: Balance,
+        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
+    ) -> Result<(Self, Affine<G0>)> {
+        // Need to prove that:
+        // 1. sk is same in both old and new account commitment
+        // 2. asset-id is same in both old and new account commitment
+        // 3. old balance - new balance = amount.
+        // 4. amount and asset id are the same as the ones committed in leg
+        // 5. new counter = old counter
+        // 6. initial rho is same in both old and new commitments
+        // 7. nullifier is created from current_rho in old account commitment so this should be proven equal with other usages of current_rho.
+        // 8. randomness in new account commitment is square of randomness in old account commitment
+        // 9. pk in leg has the sk in account commitment
+
+        let ct_amount = leg_enc.ct_amount;
+
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
+            rng,
+            leg_enc,
+            leg_enc_rand,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            root,
+            nonce,
+            true,
+            true,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_prover,
+            odd_prover,
+        )?;
+
+        let balance_change_prover = BalanceChangeProver::init(
+            rng,
+            amount,
+            &ct_amount,
+            account,
+            updated_account,
+            common_prover.old_balance_blinding,
+            common_prover.new_balance_blinding,
+            common_prover.r_3,
+            true,
+            even_prover,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        let nullifier = common_prover.nullifier;
+
+        let challenge = even_prover
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
+
+        let balance_proof = balance_change_prover.gen_proof(&challenge)?;
+
+        Ok((
+            Self {
+                common_proof,
+                balance_proof,
+            },
+            nullifier,
+        ))
+    }
+
+    pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -3511,8 +3784,6 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
@@ -3522,7 +3793,8 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             root,
             updated_account_commitment,
@@ -3533,8 +3805,6 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
-            even_transcript,
-            odd_transcript,
             rmc_0,
         )?;
 
@@ -3548,6 +3818,468 @@ impl<
             ),
             None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
         }
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            true,
+            Some(true),
+            None,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        let challenge = verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols_and_return_tuples(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            rmc,
+        )
+    }
+
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            true,
+            Some(true),
+            None,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        verifier.init_balance_change_verification(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )
+    }
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct IrreversibleAffirmAsReceiverTxnProof<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> {
+    pub common_proof: CommonStateChangeProof<L, F0, F1, G0, G1>,
+    pub balance_proof: BalanceChangeProof<F0, G0>,
+}
+
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> IrreversibleAffirmAsReceiverTxnProof<L, F0, F1, G0, G1>
+{
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        amount: Balance,
+        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+    ) -> Result<(Self, Affine<G0>)> {
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let (mut proof, nullifier) = Self::new_with_given_prover(
+            rng,
+            amount,
+            leg_enc,
+            leg_enc_rand,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, rng)?;
+
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
+    }
+
+    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
+        rng: &mut R,
+        amount: Balance,
+        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
+    ) -> Result<(Self, Affine<G0>)> {
+        // Need to prove that:
+        // 1. sk is same in both old and new account commitment
+        // 2. asset-id is same in both old and new account commitment
+        // 3. old balance - new balance = amount.
+        // 4. amount and asset id are the same as the ones committed in leg
+        // 5. new counter = old counter
+        // 6. initial rho is same in both old and new commitments
+        // 7. nullifier is created from current_rho in old account commitment so this should be proven equal with other usages of current_rho.
+        // 8. randomness in new account commitment is square of randomness in old account commitment
+        // 9. pk in leg has the sk in account commitment
+
+        let ct_amount = leg_enc.ct_amount;
+
+        let common_prover = CommonStateChangeProver::init_with_given_prover(
+            rng,
+            leg_enc,
+            leg_enc_rand,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            root,
+            nonce,
+            false,
+            true,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_prover,
+            odd_prover,
+        )?;
+
+        let balance_change_prover = BalanceChangeProver::init(
+            rng,
+            amount,
+            &ct_amount,
+            account,
+            updated_account,
+            common_prover.old_balance_blinding,
+            common_prover.new_balance_blinding,
+            common_prover.r_3,
+            false,
+            even_prover,
+            &account_tree_params.even_parameters.pc_gens,
+            &account_tree_params.even_parameters.bp_gens,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        let nullifier = common_prover.nullifier;
+
+        let challenge = even_prover
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        let common_proof =
+            common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
+
+        let balance_proof = balance_change_prover.gen_proof(&challenge)?;
+
+        Ok((
+            Self {
+                common_proof,
+                balance_proof,
+            },
+            nullifier,
+        ))
+    }
+
+    pub fn verify<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
+    ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
+            leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            rmc_0,
+        )?;
+
+        match rmc {
+            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
+            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
+        }
+    }
+
+    /// Verifies the proof except for final Bulletproof verification
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            false,
+            Some(false),
+            None,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+        )?;
+
+        let challenge = verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols_and_return_tuples(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rng,
+            rmc,
+        )
+    }
+
+    pub fn enforce_constraints_and_verify_only_sigma_protocols(
+        &self,
+        leg_enc: LegEncryption<Affine<G0>>,
+        root: &Root<L, 1, G0, G1>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<()> {
+        let ct_amount = leg_enc.ct_amount;
+
+        let mut verifier = StateChangeVerifier::init_with_given_verifier(
+            &self.common_proof,
+            &leg_enc,
+            root,
+            updated_account_commitment,
+            nullifier,
+            nonce,
+            false,
+            Some(false),
+            None,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+            odd_verifier,
+        )?;
+
+        verifier.init_balance_change_verification(
+            &self.balance_proof,
+            &ct_amount,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )?;
+
+        let challenge = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        verifier.verify_sigma_protocols(
+            &self.common_proof,
+            Some(&self.balance_proof),
+            &challenge,
+            &leg_enc,
+            updated_account_commitment,
+            nullifier,
+            account_tree_params,
+            &account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            rmc,
+        )
     }
 }
 
@@ -4426,7 +5158,10 @@ pub mod tests {
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::keygen_sig;
     use crate::leg::tests::setup_keys;
-    use crate::leg::{AssetCommitmentParams, AssetData, Leg, SettlementTxnProof};
+    use crate::leg::{
+        AssetCommitmentParams, AssetData, Leg, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL,
+        SettlementTxnProof,
+    };
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_serialize::CanonicalSerialize;
     use ark_std::UniformRand;
@@ -4760,128 +5495,6 @@ pub mod tests {
         println!(
             "total prover time = {:?}, total verifier time = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             prover_time, verifier_time, verifier_time_rmc
-        );
-    }
-
-    #[test]
-    fn send_txn_with_external_transcript() {
-        use dock_crypto_utils::transcript::MerlinTranscript;
-
-        let mut rng = rand::thread_rng();
-
-        // Setup begins
-        const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 512;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens::<NUM_GENS, L>(b"testing");
-
-        // All parties generate their keys
-        let (
-            ((sk_s, pk_s), (_sk_s_e, pk_s_e)),
-            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
-            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
-
-        let asset_id = 1;
-        let amount = 100;
-
-        let (_, leg_enc, leg_enc_rand) = setup_leg(
-            &mut rng,
-            pk_s.0,
-            pk_r.0,
-            pk_a_e.0,
-            amount,
-            asset_id,
-            pk_s_e.0,
-            pk_r_e.0,
-            enc_key_gen,
-            enc_gen,
-        );
-
-        // Sender account
-        let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
-        // Assume that account had some balance. Either got it as the issuer or from another transfer
-        account.balance = 200;
-
-        let account_tree = get_tree_with_account_comm::<L>(
-            &account,
-            account_comm_key.clone(),
-            &account_tree_params,
-        )
-        .unwrap();
-
-        // Setup ends. Sender and verifier interaction begins below
-
-        let nonce = b"test-nonce";
-
-        let clock = Instant::now();
-
-        let updated_account = account.get_state_for_send(amount).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-
-        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
-
-        let root = account_tree.root_node();
-
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-
-        let (proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_transcript(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
-        .unwrap();
-
-        let prover_time = clock.elapsed();
-
-        let clock = Instant::now();
-
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-
-        proof
-            .verify_with_given_transcript(
-                &mut rng,
-                leg_enc,
-                &root,
-                updated_account_comm,
-                nullifier,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
-                even_transcript,
-                odd_transcript,
-                None,
-            )
-            .unwrap();
-
-        let verifier_time = clock.elapsed();
-
-        log::info!(
-            "[ext transcript] total proof size = {}",
-            proof.compressed_size()
-        );
-        log::info!(
-            "[ext transcript] total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
         );
     }
 
@@ -5820,7 +6433,7 @@ pub mod tests {
         // These can also be done in parallel
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     updated_account_comms[i],
@@ -5857,7 +6470,7 @@ pub mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     updated_account_comms[i],
@@ -5889,6 +6502,224 @@ pub mod tests {
         println!(
             "For {batch_size} send txn proofs, batch verifier_rmc time {:?}",
             batch_verifier_rmc_time
+        );
+    }
+
+    #[test]
+    fn combined_send_txn_proofs() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 16; // minimum sufficient power of 2 (for height 4 curve tree)
+        const L: usize = 1024;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<NUM_GENS, L>(b"testing");
+
+        let asset_id = 1;
+        let amount = 100;
+        let batch_size = 10;
+
+        let mut accounts = Vec::with_capacity(batch_size);
+        let mut updated_accounts = Vec::with_capacity(batch_size);
+        let mut updated_account_comms = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+
+        // Generate keys for all parties
+        let all_keys: Vec<_> = (0..batch_size)
+            .map(|_| setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen))
+            .collect();
+
+        // Create accounts and legs
+        let mut account_comms = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let ((sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
+            let ((_sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
+            let ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)) = &all_keys[i].2;
+
+            let (leg, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+
+            // Create sender account
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s.clone(), id);
+            account.balance = 200; // Ensure sufficient balance
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            accounts.push(account);
+            account_comms.push(account_comm);
+        }
+
+        let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(3),
+        );
+
+        for i in 0..batch_size {
+            let updated_account = accounts[i].get_state_for_send(amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+
+            updated_accounts.push(updated_account);
+            updated_account_comms.push(updated_account_comm);
+            paths.push(path);
+        }
+
+        let root = account_tree.root_node();
+
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("combined_send_nonce_{}", i).into_bytes())
+            .collect();
+
+        let clock = Instant::now();
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        let mut nullifiers = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_prover(
+                &mut rng,
+                amount,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )
+            .unwrap();
+            proofs.push(proof);
+            nullifiers.push(nullifier);
+        }
+
+        let (even_bp, odd_bp) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, &mut rng).unwrap();
+        let proving_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+
+        for i in 0..batch_size {
+            proofs[i]
+                .enforce_constraints_and_verify_only_sigma_protocols(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    None,
+                )
+                .unwrap();
+        }
+
+        verify_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        for i in 0..batch_size {
+            proofs[i]
+                .enforce_constraints_and_verify_only_sigma_protocols(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+        }
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let rmc_verification_time = clock.elapsed();
+
+        println!("Combined send proving time = {:?}", proving_time);
+        println!("Combined send verification time = {:?}", verification_time);
+        println!(
+            "Combined send RMC verification time = {:?}",
+            rmc_verification_time
+        );
+        println!(
+            "Combined send proof size = {} bytes",
+            even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
         );
     }
 
@@ -6030,7 +6861,7 @@ pub mod tests {
         // These can also be done in parallel
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     updated_account_comms[i],
@@ -6067,7 +6898,7 @@ pub mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     updated_account_comms[i],
@@ -6099,6 +6930,226 @@ pub mod tests {
         println!(
             "For {batch_size} receive txn proofs, batch verifier_rmc time {:?}",
             batch_verifier_rmc_time
+        );
+    }
+
+    #[test]
+    fn combined_receive_txn_proofs() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 15;
+        const L: usize = 1024;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<NUM_GENS, L>(b"testing");
+
+        let asset_id = 1;
+        let amount = 100;
+        let batch_size = 5;
+
+        let mut accounts = Vec::with_capacity(batch_size);
+        let mut updated_accounts = Vec::with_capacity(batch_size);
+        let mut updated_account_comms = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+
+        // Generate keys for all parties
+        let all_keys: Vec<_> = (0..batch_size)
+            .map(|_| setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen))
+            .collect();
+
+        // Create accounts and legs
+        let mut account_comms = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let ((_sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
+            let ((sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
+            let ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)) = &all_keys[i].2;
+
+            let (leg, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+
+            // Create receiver account
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r.clone(), id);
+            account.balance = 200; // Ensure some initial balance
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+            accounts.push(account);
+            account_comms.push(account_comm);
+        }
+
+        let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(3),
+        );
+
+        for i in 0..batch_size {
+            let updated_account = accounts[i].get_state_for_receive();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+
+            updated_accounts.push(updated_account);
+            updated_account_comms.push(updated_account_comm);
+            paths.push(path);
+        }
+
+        let root = account_tree.root_node();
+
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("combined_receive_nonce_{}", i).into_bytes())
+            .collect();
+
+        let clock = Instant::now();
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript,
+        );
+        let mut odd_prover =
+            Prover::new(&account_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        let mut nullifiers = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let (proof, nullifier) = AffirmAsReceiverTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )
+            .unwrap();
+            proofs.push(proof);
+            nullifiers.push(nullifier);
+        }
+
+        let (even_bp, odd_bp) =
+            prove_with_rng(even_prover, odd_prover, &account_tree_params, &mut rng).unwrap();
+        let proving_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+
+        for i in 0..batch_size {
+            proofs[i]
+                .enforce_constraints_and_verify_only_sigma_protocols(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    None,
+                )
+                .unwrap();
+        }
+
+        verify_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        for i in 0..batch_size {
+            proofs[i]
+                .enforce_constraints_and_verify_only_sigma_protocols(
+                    leg_encs[i].clone(),
+                    &root,
+                    updated_account_comms[i],
+                    nullifiers[i],
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+        }
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let rmc_verification_time = clock.elapsed();
+
+        println!("Combined receive proving time = {:?}", proving_time);
+        println!(
+            "Combined receive verification time = {:?}",
+            verification_time
+        );
+        println!(
+            "Combined receive RMC verification time = {:?}",
+            rmc_verification_time
+        );
+        println!(
+            "Combined receive proof size = {} bytes",
+            even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
         );
     }
 
@@ -6142,12 +7193,12 @@ pub mod tests {
 
         // Create asset tree with the asset commitment
         let set = vec![asset_data.commitment];
-        let asset_tree = curve_tree_relations::curve_tree::CurveTree::<
-            L,
-            1,
-            ark_vesta::VestaConfig,
-            ark_pallas::PallasConfig,
-        >::from_leaves(&set, &asset_tree_params, Some(1));
+        let asset_tree =
+            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(1),
+            );
 
         // Get asset tree path
         let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0);
@@ -6182,13 +7233,27 @@ pub mod tests {
         let account_tree_root = account_tree.root_node();
 
         // Prepare updated account states
-        let updated_sender_account = sender_account.get_state_for_send(amount).unwrap();
+        let updated_sender_account = sender_account
+            .get_state_for_irreversible_send(amount)
+            .unwrap();
+        assert_eq!(
+            updated_sender_account.balance,
+            sender_account.balance - amount
+        );
+        assert_eq!(updated_sender_account.counter, sender_account.counter);
         let updated_sender_account_comm = updated_sender_account
             .commit(account_comm_key.clone())
             .unwrap();
         let sender_path = account_tree.get_path_to_leaf_for_proof(0, 0);
 
-        let updated_receiver_account = receiver_account.get_state_for_receive();
+        let updated_receiver_account = receiver_account
+            .get_state_for_irreversible_receive(amount)
+            .unwrap();
+        assert_eq!(
+            updated_receiver_account.balance,
+            receiver_account.balance + amount
+        );
+        assert_eq!(updated_receiver_account.counter, receiver_account.counter);
         let updated_receiver_account_comm = updated_receiver_account
             .commit(account_comm_key.clone())
             .unwrap();
@@ -6213,7 +7278,7 @@ pub mod tests {
         )
         .unwrap();
 
-        let (sender_proof, sender_nullifier) = AffirmAsSenderTxnProof::new(
+        let (sender_proof, sender_nullifier) = IrreversibleAffirmAsSenderTxnProof::new(
             &mut rng,
             amount,
             leg_enc.clone(),
@@ -6231,8 +7296,9 @@ pub mod tests {
         )
         .unwrap();
 
-        let (receiver_proof, receiver_nullifier) = AffirmAsReceiverTxnProof::new(
+        let (receiver_proof, receiver_nullifier) = IrreversibleAffirmAsReceiverTxnProof::new(
             &mut rng,
+            amount,
             leg_enc.clone(),
             leg_enc_rand.clone(),
             &receiver_account,
@@ -6252,7 +7318,7 @@ pub mod tests {
 
         // All 3 can be verified in parallel
         let (settlement_even, settlement_odd) = settlement_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &asset_tree_root,
                 nonce,
@@ -6266,7 +7332,7 @@ pub mod tests {
             .unwrap();
 
         let (sender_even, sender_odd) = sender_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &account_tree_root,
                 updated_sender_account_comm,
@@ -6282,7 +7348,7 @@ pub mod tests {
             .unwrap();
 
         let (receiver_even, receiver_odd) = receiver_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &account_tree_root,
                 updated_receiver_account_comm,
@@ -6311,7 +7377,7 @@ pub mod tests {
         let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
 
         let (settlement_even, settlement_odd) = settlement_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &asset_tree_root,
                 nonce,
@@ -6325,7 +7391,7 @@ pub mod tests {
             .unwrap();
 
         let (sender_even, sender_odd) = sender_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &account_tree_root,
                 updated_sender_account_comm,
@@ -6341,7 +7407,7 @@ pub mod tests {
             .unwrap();
 
         let (receiver_even, receiver_odd) = receiver_proof
-            .verify_except_bp(
+            .verify_and_return_tuples(
                 leg_enc.clone(),
                 &account_tree_root,
                 updated_receiver_account_comm,
@@ -6374,6 +7440,2317 @@ pub mod tests {
         println!(
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             verifier_time, verifier_rmc_time
+        );
+    }
+
+    #[test]
+    fn swap_settlement() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 2;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<NUM_GENS, L>(b"testing");
+
+        let asset_tree_params = SelRerandParameters {
+            even_parameters: account_tree_params.odd_parameters.clone(),
+            odd_parameters: account_tree_params.even_parameters.clone(),
+        };
+
+        let asset_comm_params = AssetCommitmentParams::new(
+            b"asset-comm-params",
+            1,
+            &asset_tree_params.even_parameters.bp_gens,
+        );
+
+        // Setup keys for sender, receiver, and auditor
+        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        // Two different asset-ids for swap
+        let asset_id_1 = 1;
+        let asset_id_2 = 2;
+        let amount_1 = 100;
+        let amount_2 = 200;
+
+        let keys = vec![(true, pk_a_e.0)];
+        let asset_data_1 = AssetData::new(
+            asset_id_1,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.delta,
+        )
+        .unwrap();
+        let asset_data_2 = AssetData::new(
+            asset_id_2,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.delta,
+        )
+        .unwrap();
+
+        let set = vec![asset_data_1.commitment, asset_data_2.commitment];
+        let asset_tree =
+            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(2),
+            );
+        let asset_path_1 = asset_tree.get_path_to_leaf_for_proof(0, 0);
+        let asset_path_2 = asset_tree.get_path_to_leaf_for_proof(1, 0);
+        let asset_tree_root = asset_tree.root_node();
+
+        // Create two legs for swap
+        let leg_1 = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount_1, asset_id_1).unwrap();
+        let (leg_enc_1, leg_enc_rand_1) = leg_1
+            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+        let leg_2 = Leg::new(pk_r.0, pk_s.0, keys.clone(), amount_2, asset_id_2).unwrap();
+        let (leg_enc_2, leg_enc_rand_2) = leg_2
+            .encrypt::<_, Blake2b512>(&mut rng, pk_r_e.0, pk_s_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+
+        // Alice has accounts for both assets
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_s.clone(), alice_id);
+        alice_account_1.balance = 200;
+        let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut alice_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_s.clone(), alice_id);
+        alice_account_2.balance = 50;
+        let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Bob has accounts for both assets
+        let bob_id = PallasFr::rand(&mut rng);
+        let (mut bob_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_r.clone(), bob_id);
+        bob_account_1.balance = 50;
+        let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_r, bob_id);
+        bob_account_2.balance = 300;
+        let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Account tree for all four accounts
+        let account_comms = vec![
+            alice_account_comm_1.0,
+            alice_account_comm_2.0,
+            bob_account_comm_1.0,
+            bob_account_comm_2.0,
+        ];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(4),
+        );
+        let account_tree_root = account_tree.root_node();
+
+        // Prepare updated account states
+        let updated_alice_account_1 = alice_account_1.get_state_for_send(amount_1).unwrap();
+        let updated_alice_account_comm_1 = updated_alice_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_1 = account_tree.get_path_to_leaf_for_proof(0, 0);
+
+        let updated_alice_account_2 = alice_account_2.get_state_for_receive();
+        let updated_alice_account_comm_2 = updated_alice_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_2 = account_tree.get_path_to_leaf_for_proof(1, 0);
+
+        let updated_bob_account_1 = bob_account_1.get_state_for_receive();
+        let updated_bob_account_comm_1 = updated_bob_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_1 = account_tree.get_path_to_leaf_for_proof(2, 0);
+
+        let updated_bob_account_2 = bob_account_2.get_state_for_send(amount_2).unwrap();
+        let updated_bob_account_comm_2 = updated_bob_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_2 = account_tree.get_path_to_leaf_for_proof(3, 0);
+
+        let nonce = b"swap_settlement_nonce_txn_id_1";
+
+        // Combined settlement proofs for both legs
+        let clock = Instant::now();
+        let even_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let odd_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_prover_settlement = Prover::new(
+            &asset_tree_params.even_parameters.pc_gens,
+            even_transcript_settlement,
+        );
+        let mut odd_prover_settlement = Prover::new(
+            &asset_tree_params.odd_parameters.pc_gens,
+            odd_transcript_settlement,
+        );
+
+        let settlement_proof_1 = SettlementTxnProof::new_with_given_prover(
+            &mut rng,
+            leg_1.clone(),
+            leg_enc_1.clone(),
+            leg_enc_rand_1.clone(),
+            asset_path_1.clone(),
+            asset_data_1,
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_settlement,
+            &mut odd_prover_settlement,
+        )
+        .unwrap();
+
+        let settlement_proof_2 = SettlementTxnProof::new_with_given_prover(
+            &mut rng,
+            leg_2.clone(),
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            asset_path_2.clone(),
+            asset_data_2,
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_settlement,
+            &mut odd_prover_settlement,
+        )
+        .unwrap();
+
+        let (settlement_even_bp, settlement_odd_bp) = prove_with_rng(
+            even_prover_settlement,
+            odd_prover_settlement,
+            &asset_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let settlement_proving_time = clock.elapsed();
+
+        // Verify settlement proofs (both legs)
+        let clock = Instant::now();
+
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut settlement_even_verifier = Verifier::new(transcript_even);
+        let mut settlement_odd_verifier = Verifier::new(transcript_odd);
+
+        settlement_proof_1
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_1.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        settlement_proof_2
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_2.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            settlement_even_verifier,
+            settlement_odd_verifier,
+            &settlement_even_bp,
+            &settlement_odd_bp,
+            &asset_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let settlement_verification_time = clock.elapsed();
+
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+
+        // Verify settlement proofs (both legs)
+        let clock = Instant::now();
+
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut settlement_even_verifier = Verifier::new(transcript_even);
+        let mut settlement_odd_verifier = Verifier::new(transcript_odd);
+
+        settlement_proof_1
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_1.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        settlement_proof_2
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_2.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            settlement_even_verifier,
+            settlement_odd_verifier,
+            &settlement_even_bp,
+            &settlement_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &asset_tree_params,
+            &mut rmc_1,
+            &mut rmc_0,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let settlement_verification_time_rmc = clock.elapsed();
+
+        // Combined alice proofs for both legs (alice sends in leg1, receives in leg2)
+        let clock = Instant::now();
+        let even_transcript_alice = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_alice = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_alice = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_alice,
+        );
+        let mut odd_prover_alice = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_alice,
+        );
+
+        // Alice proof for leg1 (sending asset1)
+        let (alice_proof_leg1, alice_nullifier_leg1) =
+            AffirmAsSenderTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_1,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &alice_account_1,
+                &updated_alice_account_1,
+                updated_alice_account_comm_1,
+                alice_path_1.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        // Alice proof for leg2 (receiving asset2)
+        let (alice_proof_leg2, alice_nullifier_leg2) =
+            AffirmAsReceiverTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &alice_account_2,
+                &updated_alice_account_2,
+                updated_alice_account_comm_2,
+                alice_path_2.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_even_bp, alice_odd_bp) = prove_with_rng(
+            even_prover_alice,
+            odd_prover_alice,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let alice_proving_time = clock.elapsed();
+
+        // Combined bob proofs for both legs (bob receives leg1, sends leg2)
+        let clock = Instant::now();
+        let even_transcript_bob = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_bob = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_bob = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_bob,
+        );
+        let mut odd_prover_bob = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_bob,
+        );
+
+        // Bob proof for leg1 (receiving asset1)
+        let (bob_proof_leg1, bob_nullifier_leg1) = AffirmAsReceiverTxnProof::new_with_given_prover(
+            &mut rng,
+            leg_enc_1.clone(),
+            leg_enc_rand_1.clone(),
+            &bob_account_1,
+            &updated_bob_account_1,
+            updated_bob_account_comm_1,
+            bob_path_1.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_bob,
+            &mut odd_prover_bob,
+        )
+        .unwrap();
+
+        // Bob proof for leg2 (sending asset2)
+        let (bob_proof_leg2, bob_nullifier_leg2) = AffirmAsSenderTxnProof::new_with_given_prover(
+            &mut rng,
+            amount_2,
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            &bob_account_2,
+            &updated_bob_account_2,
+            updated_bob_account_comm_2,
+            bob_path_2.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_bob,
+            &mut odd_prover_bob,
+        )
+        .unwrap();
+
+        let (bob_even_bp, bob_odd_bp) = prove_with_rng(
+            even_prover_bob,
+            odd_prover_bob,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let bob_proving_time = clock.elapsed();
+
+        // Verify alice proofs (both legs)
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        alice_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let alice_verification_time = clock.elapsed();
+
+        // Verify bob proofs (both legs)
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        bob_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let bob_verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        alice_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let alice_verification_time_rmc = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        bob_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let bob_verification_time_rmc = clock.elapsed();
+
+        // Counter update proofs
+        // Alice: ClaimReceivedTxnProof for alice_account_2 (receiving leg2), SenderCounterUpdateTxnProof for alice_account_1 (sending leg1)
+        // Bob: ClaimReceivedTxnProof for bob_account_1 (receiving leg1), SenderCounterUpdateTxnProof for bob_account_2 (sending leg2)
+
+        // Alice updates
+        let updated_alice_account_3 = updated_alice_account_2
+            .get_state_for_claiming_received(amount_2)
+            .unwrap();
+        let updated_alice_account_comm_3 = updated_alice_account_3
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        let updated_alice_account_4 = updated_alice_account_1
+            .get_state_for_decreasing_counter(None)
+            .unwrap();
+        let updated_alice_account_comm_4 = updated_alice_account_4
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        // Bob updates
+        let updated_bob_account_3 = updated_bob_account_1
+            .get_state_for_claiming_received(amount_1)
+            .unwrap();
+        let updated_bob_account_comm_3 = updated_bob_account_3
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        let updated_bob_account_4 = updated_bob_account_2
+            .get_state_for_decreasing_counter(None)
+            .unwrap();
+        let updated_bob_account_comm_4 = updated_bob_account_4
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        // In practice, existing tree will be updated
+        let account_comms = vec![
+            alice_account_comm_1.0,
+            alice_account_comm_2.0,
+            bob_account_comm_1.0,
+            bob_account_comm_2.0,
+            updated_alice_account_comm_1.0,
+            updated_alice_account_comm_2.0,
+            updated_bob_account_comm_1.0,
+            updated_bob_account_comm_2.0,
+        ];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(4),
+        );
+        let account_tree_root = account_tree.root_node();
+
+        let alice_1_path = account_tree.get_path_to_leaf_for_proof(4, 0);
+        let alice_2_path = account_tree.get_path_to_leaf_for_proof(5, 0);
+        let bob_1_path = account_tree.get_path_to_leaf_for_proof(6, 0);
+        let bob_2_path = account_tree.get_path_to_leaf_for_proof(7, 0);
+
+        // Counter update proofs
+        // Alice counter update proving
+        let clock = Instant::now();
+
+        // Alice counter updates with her own provers
+        let even_transcript_alice = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_alice = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_alice = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_alice,
+        );
+        let mut odd_prover_alice = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_alice,
+        );
+
+        let (alice_counter_update_proof, alice_cu_nullifier) =
+            SenderCounterUpdateTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &updated_alice_account_1,
+                &updated_alice_account_4,
+                updated_alice_account_comm_4,
+                alice_1_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_claim_proof, alice_claim_nullifier) =
+            ClaimReceivedTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_2,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &updated_alice_account_2,
+                &updated_alice_account_3,
+                updated_alice_account_comm_3,
+                alice_2_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_even_bp, alice_odd_bp) = prove_with_rng(
+            even_prover_alice,
+            odd_prover_alice,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        let alice_counter_update_proving_time = clock.elapsed();
+
+        // Bob counter update proving
+        let clock = Instant::now();
+
+        // Bob counter updates with his own provers
+        let even_transcript_bob = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_bob = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_bob = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_bob,
+        );
+        let mut odd_prover_bob = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_bob,
+        );
+
+        let (bob_claim_proof, bob_claim_nullifier) = ClaimReceivedTxnProof::new_with_given_prover(
+            &mut rng,
+            amount_1,
+            leg_enc_1.clone(),
+            leg_enc_rand_1.clone(),
+            &updated_bob_account_1,
+            &updated_bob_account_3,
+            updated_bob_account_comm_3,
+            bob_1_path,
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_bob,
+            &mut odd_prover_bob,
+        )
+        .unwrap();
+
+        let (bob_counter_update_proof, bob_cu_nullifier) =
+            SenderCounterUpdateTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &updated_bob_account_2,
+                &updated_bob_account_4,
+                updated_bob_account_comm_4,
+                bob_2_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_bob,
+                &mut odd_prover_bob,
+            )
+            .unwrap();
+
+        let (bob_even_bp, bob_odd_bp) = prove_with_rng(
+            even_prover_bob,
+            odd_prover_bob,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        let bob_counter_update_proving_time = clock.elapsed();
+
+        // Verify counter update proofs
+        // Alice counter update verification
+        let clock = Instant::now();
+
+        // Verify Alice counter update proofs
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_counter_update_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_4,
+                alice_cu_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        alice_claim_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_3,
+                alice_claim_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        let alice_counter_update_verification_time = clock.elapsed();
+
+        // Bob counter update verification
+        let clock = Instant::now();
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        // Verify Bob counter update proofs
+        bob_claim_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_3,
+                bob_claim_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        bob_counter_update_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_4,
+                bob_cu_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        let bob_counter_update_verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_counter_update_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_4,
+                alice_cu_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        alice_claim_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_3,
+                alice_claim_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let alice_counter_update_verification_time_rmc = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        // Verify Bob counter update proofs
+        bob_claim_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_3,
+                bob_claim_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        bob_counter_update_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_4,
+                bob_cu_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let bob_counter_update_verification_time_rmc = clock.elapsed();
+
+        let settlement_proof_size = settlement_even_bp.compressed_size()
+            + settlement_odd_bp.compressed_size()
+            + settlement_proof_1.compressed_size()
+            + settlement_proof_2.compressed_size();
+        let alice_affirmation_proof_size = alice_even_bp.compressed_size()
+            + alice_odd_bp.compressed_size()
+            + alice_proof_leg1.compressed_size()
+            + alice_proof_leg2.compressed_size();
+        let alice_counter_update_proof_size = alice_even_bp.compressed_size()
+            + alice_odd_bp.compressed_size()
+            + alice_claim_proof.compressed_size()
+            + alice_counter_update_proof.compressed_size();
+        let bob_affirmation_proof_size = bob_even_bp.compressed_size()
+            + bob_odd_bp.compressed_size()
+            + bob_proof_leg1.compressed_size()
+            + bob_proof_leg2.compressed_size();
+        let bob_counter_update_proof_size = bob_even_bp.compressed_size()
+            + bob_odd_bp.compressed_size()
+            + bob_claim_proof.compressed_size()
+            + bob_counter_update_proof.compressed_size();
+
+        println!(
+            "Settlement proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            settlement_proving_time,
+            settlement_verification_time,
+            settlement_verification_time_rmc,
+            settlement_proof_size
+        );
+        println!(
+            "Alice affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            alice_proving_time,
+            alice_verification_time,
+            alice_verification_time_rmc,
+            alice_affirmation_proof_size
+        );
+        println!(
+            "Alice counter update proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            alice_counter_update_proving_time,
+            alice_counter_update_verification_time,
+            alice_counter_update_verification_time_rmc,
+            alice_counter_update_proof_size
+        );
+        println!(
+            "Bob affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            bob_proving_time,
+            bob_verification_time,
+            bob_verification_time_rmc,
+            bob_affirmation_proof_size
+        );
+        println!(
+            "Bob counter update proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            bob_counter_update_proving_time,
+            bob_counter_update_verification_time,
+            bob_counter_update_verification_time_rmc,
+            bob_counter_update_proof_size
+        );
+    }
+
+    #[test]
+    fn reverse_settlement() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 2;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<NUM_GENS, L>(b"testing");
+
+        // Setup keys for sender, receiver, and auditor
+        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        // Two different asset-ids for swap
+        let asset_id_1 = 1;
+        let asset_id_2 = 2;
+        let amount_1 = 100;
+        let amount_2 = 200;
+
+        let keys = vec![(true, pk_a_e.0)];
+        // Create two legs for swap
+        let leg_1 = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount_1, asset_id_1).unwrap();
+        let (leg_enc_1, leg_enc_rand_1) = leg_1
+            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+        let leg_2 = Leg::new(pk_r.0, pk_s.0, keys.clone(), amount_2, asset_id_2).unwrap();
+        let (leg_enc_2, leg_enc_rand_2) = leg_2
+            .encrypt::<_, Blake2b512>(&mut rng, pk_r_e.0, pk_s_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+
+        // Alice has accounts for both assets
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_s.clone(), alice_id);
+        alice_account_1.balance = 500;
+        alice_account_1.counter = 1;
+        let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut alice_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_s.clone(), alice_id);
+        alice_account_2.balance = 50;
+        alice_account_2.counter = 1;
+        let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Bob has accounts for both assets
+        let bob_id = PallasFr::rand(&mut rng);
+        let (mut bob_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_r.clone(), bob_id);
+        bob_account_1.balance = 500;
+        bob_account_1.counter = 1;
+        let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_r.clone(), bob_id);
+        bob_account_2.balance = 50;
+        bob_account_2.counter = 1;
+        let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Account tree for all four accounts
+        let account_comms = vec![
+            alice_account_comm_1.0,
+            alice_account_comm_2.0,
+            bob_account_comm_1.0,
+            bob_account_comm_2.0,
+        ];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(4),
+        );
+        let account_tree_root = account_tree.root_node();
+
+        // Prepare updated account states
+        let updated_alice_account_1 = alice_account_1
+            .get_state_for_reversing_send(amount_1)
+            .unwrap();
+        let updated_alice_account_comm_1 = updated_alice_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_1 = account_tree.get_path_to_leaf_for_proof(0, 0);
+
+        let updated_alice_account_2 = alice_account_2
+            .get_state_for_decreasing_counter(None)
+            .unwrap();
+        let updated_alice_account_comm_2 = updated_alice_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_2 = account_tree.get_path_to_leaf_for_proof(1, 0);
+
+        let updated_bob_account_1 = bob_account_1
+            .get_state_for_decreasing_counter(None)
+            .unwrap();
+        let updated_bob_account_comm_1 = updated_bob_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_1 = account_tree.get_path_to_leaf_for_proof(2, 0);
+
+        let updated_bob_account_2 = bob_account_2
+            .get_state_for_reversing_send(amount_2)
+            .unwrap();
+        let updated_bob_account_comm_2 = updated_bob_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_2 = account_tree.get_path_to_leaf_for_proof(3, 0);
+
+        let nonce = b"reverse_settlement_nonce_txn_id_1";
+
+        // Combined alice proofs for both legs (alice reverses send in leg1, reverses receive in leg2)
+        let clock = Instant::now();
+        let even_transcript_alice = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_alice = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_alice = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_alice,
+        );
+        let mut odd_prover_alice = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_alice,
+        );
+
+        // Alice proof for leg1 (reverse sending asset1)
+        let (alice_proof_leg1, alice_nullifier_leg1) =
+            SenderReverseTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_1,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &alice_account_1,
+                &updated_alice_account_1,
+                updated_alice_account_comm_1,
+                alice_path_1.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        // Alice proof for leg2 (reverse receiving asset2)
+        let (alice_proof_leg2, alice_nullifier_leg2) =
+            ReceiverCounterUpdateTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &alice_account_2,
+                &updated_alice_account_2,
+                updated_alice_account_comm_2,
+                alice_path_2.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_even_bp, alice_odd_bp) = prove_with_rng(
+            even_prover_alice,
+            odd_prover_alice,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let alice_proving_time = clock.elapsed();
+
+        // Combined bob proofs for both legs (bob reverses receive in leg1, reverses send in leg2)
+        let clock = Instant::now();
+        let even_transcript_bob = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_bob = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_bob = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_bob,
+        );
+        let mut odd_prover_bob = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_bob,
+        );
+
+        // Bob proof for leg1 (reverse receiving asset1)
+        let (bob_proof_leg1, bob_nullifier_leg1) =
+            ReceiverCounterUpdateTxnProof::new_with_given_prover(
+                &mut rng,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &bob_account_1,
+                &updated_bob_account_1,
+                updated_bob_account_comm_1,
+                bob_path_1.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_bob,
+                &mut odd_prover_bob,
+            )
+            .unwrap();
+
+        // Bob proof for leg2 (reverse sending asset2)
+        let (bob_proof_leg2, bob_nullifier_leg2) = SenderReverseTxnProof::new_with_given_prover(
+            &mut rng,
+            amount_2,
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            &bob_account_2,
+            &updated_bob_account_2,
+            updated_bob_account_comm_2,
+            bob_path_2.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_bob,
+            &mut odd_prover_bob,
+        )
+        .unwrap();
+
+        let (bob_even_bp, bob_odd_bp) = prove_with_rng(
+            even_prover_bob,
+            odd_prover_bob,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let bob_proving_time = clock.elapsed();
+
+        // Verify alice proofs (both legs)
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        alice_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let alice_verification_time = clock.elapsed();
+
+        // Verify bob proofs (both legs)
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        bob_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        verify_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let bob_verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        alice_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let alice_verification_time_rmc = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_proof_leg1
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_nullifier_leg1,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        bob_proof_leg2
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_nullifier_leg2,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let bob_verification_time_rmc = clock.elapsed();
+
+        let alice_affirmation_proof_size = alice_even_bp.compressed_size()
+            + alice_odd_bp.compressed_size()
+            + alice_proof_leg1.compressed_size()
+            + alice_proof_leg2.compressed_size();
+
+        let bob_affirmation_proof_size = bob_even_bp.compressed_size()
+            + bob_odd_bp.compressed_size()
+            + bob_proof_leg1.compressed_size()
+            + bob_proof_leg2.compressed_size();
+
+        println!(
+            "Alice reversing proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            alice_proving_time,
+            alice_verification_time,
+            alice_verification_time_rmc,
+            alice_affirmation_proof_size
+        );
+        println!(
+            "Bob reversing proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            bob_proving_time,
+            bob_verification_time,
+            bob_verification_time_rmc,
+            bob_affirmation_proof_size
+        );
+    }
+
+    #[test]
+    fn single_shot_swap() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 2;
+        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+            setup_gens::<NUM_GENS, L>(b"testing");
+
+        let asset_tree_params = SelRerandParameters {
+            even_parameters: account_tree_params.odd_parameters.clone(),
+            odd_parameters: account_tree_params.even_parameters.clone(),
+        };
+
+        let asset_comm_params = AssetCommitmentParams::new(
+            b"asset-comm-params",
+            1,
+            &asset_tree_params.even_parameters.bp_gens,
+        );
+
+        // Setup keys for sender, receiver, and auditor
+        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        // Two different asset-ids for swap
+        let asset_id_1 = 1;
+        let asset_id_2 = 2;
+        let amount_1 = 100;
+        let amount_2 = 200;
+
+        let keys = vec![(true, pk_a_e.0)];
+        let asset_data_1 = AssetData::new(
+            asset_id_1,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.delta,
+        )
+        .unwrap();
+        let asset_data_2 = AssetData::new(
+            asset_id_2,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.delta,
+        )
+        .unwrap();
+
+        let set = vec![asset_data_1.commitment, asset_data_2.commitment];
+        let asset_tree =
+            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(2),
+            );
+        let asset_path_1 = asset_tree.get_path_to_leaf_for_proof(0, 0);
+        let asset_path_2 = asset_tree.get_path_to_leaf_for_proof(1, 0);
+        let asset_tree_root = asset_tree.root_node();
+
+        // Create two legs for swap
+        let leg_1 = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount_1, asset_id_1).unwrap();
+        let (leg_enc_1, leg_enc_rand_1) = leg_1
+            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+        let leg_2 = Leg::new(pk_r.0, pk_s.0, keys.clone(), amount_2, asset_id_2).unwrap();
+        let (leg_enc_2, leg_enc_rand_2) = leg_2
+            .encrypt::<_, Blake2b512>(&mut rng, pk_r_e.0, pk_s_e.0, enc_key_gen, enc_gen)
+            .unwrap();
+
+        // Alice has accounts for both assets
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_s.clone(), alice_id);
+        alice_account_1.balance = 200;
+        let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut alice_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_s.clone(), alice_id);
+        alice_account_2.balance = 50;
+        let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Bob has accounts for both assets
+        let bob_id = PallasFr::rand(&mut rng);
+        let (mut bob_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_r.clone(), bob_id);
+        bob_account_1.balance = 50;
+        let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
+
+        let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_r.clone(), bob_id);
+        bob_account_2.balance = 300;
+        let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
+
+        // Account tree for all four accounts
+        let account_comms = vec![
+            alice_account_comm_1.0,
+            alice_account_comm_2.0,
+            bob_account_comm_1.0,
+            bob_account_comm_2.0,
+        ];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(4),
+        );
+        let account_tree_root = account_tree.root_node();
+
+        // Prepare updated account states for irreversible swap (no counter changes)
+        let updated_alice_account_1 = alice_account_1
+            .get_state_for_irreversible_send(amount_1)
+            .unwrap();
+        assert_eq!(
+            updated_alice_account_1.balance,
+            alice_account_1.balance - amount_1
+        );
+        assert_eq!(updated_alice_account_1.counter, alice_account_1.counter);
+        let updated_alice_account_comm_1 = updated_alice_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_1 = account_tree.get_path_to_leaf_for_proof(0, 0);
+
+        let updated_alice_account_2 = alice_account_2
+            .get_state_for_irreversible_receive(amount_2)
+            .unwrap();
+        assert_eq!(
+            updated_alice_account_2.balance,
+            alice_account_2.balance + amount_2
+        );
+        assert_eq!(updated_alice_account_2.counter, alice_account_2.counter);
+        let updated_alice_account_comm_2 = updated_alice_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let alice_path_2 = account_tree.get_path_to_leaf_for_proof(1, 0);
+
+        let updated_bob_account_1 = bob_account_1
+            .get_state_for_irreversible_receive(amount_1)
+            .unwrap();
+        assert_eq!(
+            updated_bob_account_1.balance,
+            bob_account_1.balance + amount_1
+        );
+        assert_eq!(updated_bob_account_1.counter, bob_account_1.counter);
+        let updated_bob_account_comm_1 = updated_bob_account_1
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_1 = account_tree.get_path_to_leaf_for_proof(2, 0);
+
+        let updated_bob_account_2 = bob_account_2
+            .get_state_for_irreversible_send(amount_2)
+            .unwrap();
+        assert_eq!(
+            updated_bob_account_2.balance,
+            bob_account_2.balance - amount_2
+        );
+        assert_eq!(updated_bob_account_2.counter, bob_account_2.counter);
+        let updated_bob_account_comm_2 = updated_bob_account_2
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let bob_path_2 = account_tree.get_path_to_leaf_for_proof(3, 0);
+
+        let nonce = b"single_shot_swap_nonce_txn_id_1";
+
+        // Combined settlement proofs for both legs
+        let even_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let odd_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_prover_settlement = Prover::new(
+            &asset_tree_params.even_parameters.pc_gens,
+            even_transcript_settlement,
+        );
+        let mut odd_prover_settlement = Prover::new(
+            &asset_tree_params.odd_parameters.pc_gens,
+            odd_transcript_settlement,
+        );
+
+        let settlement_proof_1 = SettlementTxnProof::new_with_given_prover(
+            &mut rng,
+            leg_1.clone(),
+            leg_enc_1.clone(),
+            leg_enc_rand_1.clone(),
+            asset_path_1.clone(),
+            asset_data_1,
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_settlement,
+            &mut odd_prover_settlement,
+        )
+        .unwrap();
+
+        let settlement_proof_2 = SettlementTxnProof::new_with_given_prover(
+            &mut rng,
+            leg_2.clone(),
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            asset_path_2.clone(),
+            asset_data_2,
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_settlement,
+            &mut odd_prover_settlement,
+        )
+        .unwrap();
+
+        let (settlement_even_bp, settlement_odd_bp) = prove_with_rng(
+            even_prover_settlement,
+            odd_prover_settlement,
+            &asset_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Combined proofs for Alice (sending in leg1, receiving in leg2)
+        let even_transcript_alice = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_alice = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_alice = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_alice,
+        );
+        let mut odd_prover_alice = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_alice,
+        );
+
+        let (alice_sender_proof, alice_sender_nullifier) =
+            IrreversibleAffirmAsSenderTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_1,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &alice_account_1,
+                &updated_alice_account_1,
+                updated_alice_account_comm_1,
+                alice_path_1.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_receiver_proof, alice_receiver_nullifier) =
+            IrreversibleAffirmAsReceiverTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_2,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &alice_account_2,
+                &updated_alice_account_2,
+                updated_alice_account_comm_2,
+                alice_path_2.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_alice,
+                &mut odd_prover_alice,
+            )
+            .unwrap();
+
+        let (alice_even_bp, alice_odd_bp) = prove_with_rng(
+            even_prover_alice,
+            odd_prover_alice,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Combined proofs for Bob (receiving in leg1, sending in leg2)
+        let even_transcript_bob = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript_bob = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover_bob = Prover::new(
+            &account_tree_params.even_parameters.pc_gens,
+            even_transcript_bob,
+        );
+        let mut odd_prover_bob = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens,
+            odd_transcript_bob,
+        );
+
+        let (bob_receiver_proof, bob_receiver_nullifier) =
+            IrreversibleAffirmAsReceiverTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_1,
+                leg_enc_1.clone(),
+                leg_enc_rand_1.clone(),
+                &bob_account_1,
+                &updated_bob_account_1,
+                updated_bob_account_comm_1,
+                bob_path_1.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_bob,
+                &mut odd_prover_bob,
+            )
+            .unwrap();
+
+        let (bob_sender_proof, bob_sender_nullifier) =
+            IrreversibleAffirmAsSenderTxnProof::new_with_given_prover(
+                &mut rng,
+                amount_2,
+                leg_enc_2.clone(),
+                leg_enc_rand_2.clone(),
+                &bob_account_2,
+                &updated_bob_account_2,
+                updated_bob_account_comm_2,
+                bob_path_2.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover_bob,
+                &mut odd_prover_bob,
+            )
+            .unwrap();
+
+        let (bob_even_bp, bob_odd_bp) = prove_with_rng(
+            even_prover_bob,
+            odd_prover_bob,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify all proofs
+        let clock = Instant::now();
+
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut settlement_even_verifier = Verifier::new(transcript_even);
+        let mut settlement_odd_verifier = Verifier::new(transcript_odd);
+
+        settlement_proof_1
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_1.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        settlement_proof_2
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_2.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        let (even_tuple_legs, odd_tuple_legs) = get_verification_tuples_with_rng(
+            settlement_even_verifier,
+            settlement_odd_verifier,
+            &settlement_even_bp,
+            &settlement_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify Alice proofs
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_sender_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        alice_receiver_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        let (even_tuple_alice, odd_tuple_alice) = get_verification_tuples_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify Bob proofs
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_receiver_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        bob_sender_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                None,
+            )
+            .unwrap();
+
+        let (even_tuple_bob, odd_tuple_bob) = get_verification_tuples_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        verify_given_verification_tuples(even_tuple_legs, odd_tuple_legs, &asset_tree_params)
+            .unwrap();
+
+        let even_tuples = vec![even_tuple_alice, even_tuple_bob];
+        let odd_tuples = vec![odd_tuple_alice, odd_tuple_bob];
+
+        batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut settlement_even_verifier = Verifier::new(transcript_even);
+        let mut settlement_odd_verifier = Verifier::new(transcript_odd);
+
+        settlement_proof_1
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_1.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        settlement_proof_2
+            .verify_sigma_protocols_and_enforce_constraints(
+                leg_enc_2.clone(),
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut settlement_even_verifier,
+                &mut settlement_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_legs, odd_tuple_legs) = get_verification_tuples_with_rng(
+            settlement_even_verifier,
+            settlement_odd_verifier,
+            &settlement_even_bp,
+            &settlement_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify Alice proofs
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut alice_even_verifier = Verifier::new(transcript_even);
+        let mut alice_odd_verifier = Verifier::new(transcript_odd);
+
+        alice_sender_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_1,
+                alice_sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        alice_receiver_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_alice_account_comm_2,
+                alice_receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut alice_even_verifier,
+                &mut alice_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_alice, odd_tuple_alice) = get_verification_tuples_with_rng(
+            alice_even_verifier,
+            alice_odd_verifier,
+            &alice_even_bp,
+            &alice_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify Bob proofs
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut bob_even_verifier = Verifier::new(transcript_even);
+        let mut bob_odd_verifier = Verifier::new(transcript_odd);
+
+        bob_receiver_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_1.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_1,
+                bob_receiver_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        bob_sender_proof
+            .enforce_constraints_and_verify_only_sigma_protocols(
+                leg_enc_2.clone(),
+                &account_tree_root,
+                updated_bob_account_comm_2,
+                bob_sender_nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+                &mut bob_even_verifier,
+                &mut bob_odd_verifier,
+                Some(&mut rmc_0),
+            )
+            .unwrap();
+
+        let (even_tuple_bob, odd_tuple_bob) = get_verification_tuples_with_rng(
+            bob_even_verifier,
+            bob_odd_verifier,
+            &bob_even_bp,
+            &bob_odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_to_rmc(
+            even_tuple_legs,
+            odd_tuple_legs,
+            &asset_tree_params,
+            &mut rmc_1,
+            &mut rmc_0,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_alice, even_tuple_bob],
+            vec![odd_tuple_alice, odd_tuple_bob],
+            &account_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+
+        let verifier_time_rmc = clock.elapsed();
+
+        println!(
+            "verifier time {:?}, verifier time (with RandomizedMultChecker) = {:?}",
+            verifier_time, verifier_time_rmc
         );
     }
 

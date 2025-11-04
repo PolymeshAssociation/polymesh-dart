@@ -54,7 +54,7 @@ name = "fee_account_proofs"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel"]
+default = ["std", "asm"]
 
 no_std = []
 

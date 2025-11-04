@@ -5,7 +5,7 @@ use crate::{AssetId, BALANCE_BITS, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{format, vec, vec::Vec};
@@ -58,6 +58,15 @@ macro_rules! add_to_transcript {
         )*
         buf.clear()
     };
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct BPProof<
+    G0: SWCurveConfig + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
+> {
+    pub even_proof: R1CSProof<Affine<G0>>,
+    pub odd_proof: R1CSProof<Affine<G1>>,
 }
 
 /// Creates two new transcripts and two new provers, one for even level and one for odd.
@@ -737,8 +746,8 @@ pub fn add_verification_tuples_batches_to_rmc<
     Ok(())
 }
 
-/// Generate commitment to randomness (Schnorr step 1) for state change excluding changes related to amount and balances
-pub fn generate_schnorr_t_values_for_common_state_change<
+/// Generate commitment to randomness (Sigma protocol step 1) for state change excluding changes related to amount and balances
+pub fn generate_sigma_t_values_for_common_state_change<
     R: RngCore,
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0> + Copy,
@@ -920,8 +929,8 @@ pub fn generate_schnorr_t_values_for_common_state_change<
     ))
 }
 
-/// Generate commitment to randomness (Schnorr step 1) for state change just related to amount and balances
-pub fn generate_schnorr_t_values_for_balance_change<
+/// Generate commitment to randomness (Sigma protocol step 1) for state change just related to amount and balances
+pub fn generate_sigma_t_values_for_balance_change<
     R: RngCore,
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
@@ -986,8 +995,8 @@ pub fn generate_schnorr_t_values_for_balance_change<
     Ok((t_comm_bp_bal, t_leg_amount))
 }
 
-/// Generate responses (Schnorr step 3) for state change excluding changes related to amount and balances
-pub fn generate_schnorr_responses_for_common_state_change<
+/// Generate responses (Sigma protocol step 3) for state change excluding changes related to amount and balances
+pub fn generate_sigma_responses_for_common_state_change<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
@@ -1053,7 +1062,7 @@ pub fn generate_schnorr_responses_for_common_state_change<
     ))
 }
 
-pub fn enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_common_state_change<
+pub fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change<
     G0: SWCurveConfig + Copy,
 >(
     leg_enc: &LegEncryption<Affine<G0>>,
@@ -1106,7 +1115,7 @@ pub fn enforce_constraints_and_take_challenge_contrib_of_schnorr_t_values_for_co
     Ok(())
 }
 
-pub fn take_challenge_contrib_of_schnorr_t_values_for_balance_change<G0: SWCurveConfig + Copy>(
+pub fn take_challenge_contrib_of_sigma_t_values_for_balance_change<G0: SWCurveConfig + Copy>(
     ct_amount: &Affine<G0>,
     t_comm_bp_bal: &Affine<G0>,
     resp_leg_amount: &Partial1PokPedersenCommitment<Affine<G0>>,
@@ -1124,10 +1133,10 @@ pub fn take_challenge_contrib_of_schnorr_t_values_for_balance_change<G0: SWCurve
     Ok(())
 }
 
-pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
+pub fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
     is_sender: bool,
-    has_counter_decreased: bool,
+    has_counter_decreased: Option<bool>,
     has_balance_changed: bool,
     nullifier: &Affine<G0>,
     re_randomized_leaf: &Affine<G0>,
@@ -1172,13 +1181,19 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
         }
     }
 
-    let y = if has_counter_decreased {
-        updated_account_commitment.into_group() + account_comm_key.counter_gen()
+    let y = if let Some(has_counter_decreased) = has_counter_decreased {
+        if has_counter_decreased {
+            updated_account_commitment.into_group() + account_comm_key.counter_gen()
+        } else {
+            updated_account_commitment.into_group() - account_comm_key.counter_gen()
+        }
     } else {
-        updated_account_commitment.into_group() - account_comm_key.counter_gen()
+        updated_account_commitment.into_group()
     };
     let mut missing_resps = BTreeMap::new();
     missing_resps.insert(0, resp_leaf.0[0]);
+    // If balance didn't change, then resp_leaf would contain the response for witness `balance`
+    // else response is present in `resp_acc_new`
     if !has_balance_changed {
         missing_resps.insert(1, resp_leaf.0[1]);
     }
@@ -1313,7 +1328,7 @@ pub fn verify_schnorr_for_common_state_change<G0: SWCurveConfig + Copy>(
     Ok(())
 }
 
-pub fn verify_schnorr_for_balance_change<G0: SWCurveConfig + Copy>(
+pub fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
     leg_enc: &LegEncryption<Affine<G0>>,
     resp_leg_amount: &Partial1PokPedersenCommitment<Affine<G0>>,
     comm_bp_bal: &Affine<G0>,

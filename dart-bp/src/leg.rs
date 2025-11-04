@@ -1,8 +1,6 @@
 use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
-    add_verification_tuples_to_rmc, get_verification_tuples_with_rng,
-    initialize_curve_tree_prover_with_given_transcripts,
-    initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng,
+    BPProof, add_verification_tuples_to_rmc, get_verification_tuples_with_rng, prove_with_rng,
     verify_given_verification_tuples,
 };
 use crate::{Error, ROOT_LABEL, add_to_transcript, error::Result};
@@ -17,11 +15,12 @@ use ark_std::UniformRand;
 use ark_std::format;
 use ark_std::iter;
 use ark_std::ops::Neg;
+use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use bulletproofs::r1cs::{
-    ConstraintSystem, LinearCombination, R1CSProof, Variable, VerificationTuple,
+    ConstraintSystem, LinearCombination, Prover, Variable, VerificationTuple, Verifier,
 };
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -591,8 +590,9 @@ pub struct SettlementTxnProof<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub even_proof: R1CSProof<Affine<G1>>,
-    pub odd_proof: R1CSProof<Affine<G0>>,
+    /// When this is None, external [`R1CSProof`] will be used and [`SettlementTxnProof`] only
+    /// contains proof for the sigma protocols and enforces the Bulletproof constraints.
+    pub r1cs_proof: Option<BPProof<G1, G0>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G1, G0>,
     /// Commitment to randomness and response for proving knowledge of amount in twisted Elgamal encryption of amount.
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
@@ -635,7 +635,10 @@ impl<
     ) -> Result<Self> {
         let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-        Self::new_with_given_transcript(
+        let mut even_prover =
+            Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
+        let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
+        let mut proof = Self::new_with_given_prover(
             rng,
             leg,
             leg_enc,
@@ -648,12 +651,21 @@ impl<
             asset_comm_params,
             enc_key_gen,
             enc_gen,
-            even_transcript,
-            odd_transcript,
-        )
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
+
+        let (even_proof, odd_proof) =
+            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
+
+        proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+        Ok(proof)
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
         leg: Leg<Affine<G0>>,
         leg_enc: LegEncryption<Affine<G0>>,
@@ -667,18 +679,13 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        even_transcript: MerlinTranscript,
-        odd_transcript: MerlinTranscript,
+        even_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
+        odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<Self> {
         ensure_proper_leg_creation(&leg, &leg_enc, &asset_data)?;
-        let (mut even_prover, mut odd_prover, re_randomized_path, mut re_randomization_of_leaf) =
-            initialize_curve_tree_prover_with_given_transcripts(
-                rng,
-                leaf_path,
-                tree_parameters,
-                even_transcript,
-                odd_transcript,
-            );
+        // TODO: This is suboptimal if the same root is being used since the same children (of root) are being allocated each time this is called.
+        let (re_randomized_path, mut re_randomization_of_leaf) = leaf_path
+            .select_and_rerandomize_prover_gadget(even_prover, odd_prover, tree_parameters, rng);
 
         add_to_transcript!(
             odd_prover.transcript(),
@@ -728,7 +735,7 @@ impl<
             .map(|_| F0::rand(rng))
             .collect::<Vec<_>>();
         let re_randomized_points = prove_naive(
-            &mut even_prover,
+            even_prover,
             asset_data_points,
             &rerandomized_leaf,
             re_randomization_of_leaf,
@@ -801,7 +808,7 @@ impl<
             comm_r_i_blinding,
             &tree_parameters.odd_parameters.bp_gens,
         );
-        Self::enforce_constraints(&mut odd_prover, Some(leg.amount), vars)?;
+        Self::enforce_constraints(odd_prover, Some(leg.amount), vars)?;
 
         Zeroize::zeroize(&mut wits);
 
@@ -1013,12 +1020,8 @@ impl<
         // Response for witnesses will already be generated in sigma protocol for above relation of asset_id and for Bulletproof
         let resp_asset_id_enc = t_asset_id_enc.gen_partial_proof();
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
-
         Ok(Self {
-            even_proof,
-            odd_proof,
+            r1cs_proof: None,
             re_randomized_path,
             resp_amount_enc,
             resp_asset_id_enc,
@@ -1042,41 +1045,6 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G1>>,
-            &mut RandomizedMultChecker<Affine<G0>>,
-        )>,
-    ) -> Result<()> {
-        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-
-        self.verify_with_given_transcript(
-            leg_enc,
-            tree_root,
-            nonce,
-            tree_parameters,
-            asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            &mut transcript_even,
-            &mut transcript_odd,
-            rmc,
-        )
-    }
-
-    pub fn verify_with_given_transcript<R: CryptoRngCore>(
-        &self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
-        nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
-        asset_comm_params: &AssetCommitmentParams<G0, G1>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        transcript_even: &mut MerlinTranscript,
-        transcript_odd: &mut MerlinTranscript,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G1>>,
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -1086,7 +1054,7 @@ impl<
             Some((_, rmc_0)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_except_bp_with_given_transcript(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
             tree_root,
             nonce,
@@ -1095,8 +1063,6 @@ impl<
             enc_key_gen,
             enc_gen,
             rng,
-            transcript_even,
-            transcript_odd,
             rmc_0,
         )?;
 
@@ -1109,7 +1075,7 @@ impl<
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_except_bp<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         tree_root: &Root<L, 1, G1, G0>,
@@ -1121,10 +1087,11 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
-        let mut transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let mut transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
-
-        self.verify_except_bp_with_given_transcript(
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+        self.verify_sigma_protocols_and_enforce_constraints(
             leg_enc,
             tree_root,
             nonce,
@@ -1132,14 +1099,25 @@ impl<
             asset_comm_params,
             enc_key_gen,
             enc_gen,
-            rng,
-            &mut transcript_even,
-            &mut transcript_odd,
+            &mut even_verifier,
+            &mut odd_verifier,
             rmc,
+        )?;
+
+        let r1cs_proof = self
+            .r1cs_proof
+            .as_ref()
+            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
+        get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
         )
     }
 
-    pub fn verify_except_bp_with_given_transcript<R: CryptoRngCore>(
+    pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         tree_root: &Root<L, 1, G1, G0>,
@@ -1148,11 +1126,10 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        rng: &mut R,
-        transcript_even: &mut MerlinTranscript,
-        transcript_odd: &mut MerlinTranscript,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
+        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
+    ) -> Result<()> {
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(
                 asset_comm_params.comm_key.len(),
@@ -1172,13 +1149,14 @@ impl<
             ));
         }
 
-        let (mut even_verifier, mut odd_verifier) =
-            initialize_curve_tree_verifier_with_given_transcripts(
-                &self.re_randomized_path,
+        // TODO: This is suboptimal if the same root is being used since the same children (of root) are being allocated each time this is called.
+        let _ = self
+            .re_randomized_path
+            .select_and_rerandomize_verifier_gadget(
                 tree_root,
-                tree_parameters,
-                transcript_even.clone(),
-                transcript_odd.clone(),
+                even_verifier,
+                odd_verifier,
+                &tree_parameters,
             );
 
         add_to_transcript!(
@@ -1196,14 +1174,14 @@ impl<
         let rerandomized_leaf = self.re_randomized_path.get_rerandomized_leaf();
 
         verify_naive(
-            &mut even_verifier,
+            even_verifier,
             rerandomized_leaf,
             self.re_randomized_points.clone(),
             &tree_parameters.odd_parameters,
         )?;
 
         let vars = odd_verifier.commit_vec(8, self.comm_r_i_amount);
-        Self::enforce_constraints(&mut odd_verifier, None, vars)?;
+        Self::enforce_constraints(odd_verifier, None, vars)?;
 
         let mut transcript = odd_verifier.transcript();
 
@@ -1448,14 +1426,7 @@ impl<
                 }
             }
         }
-
-        get_verification_tuples_with_rng(
-            even_verifier,
-            odd_verifier,
-            &self.even_proof,
-            &self.odd_proof,
-            rng,
-        )
+        Ok(())
     }
 
     pub(crate) fn enforce_constraints<CS: ConstraintSystem<F0>>(
@@ -1520,7 +1491,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         nonce: &[u8],
         enc_gen: G,
     ) -> Result<Self> {
-        let transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
         Self::new_with_given_transcript(
             rng,
             leg_enc,
@@ -1530,7 +1501,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             index_in_asset_data,
             nonce,
             enc_gen,
-            transcript,
+            &mut transcript,
         )
     }
 
@@ -1543,7 +1514,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         index_in_asset_data: usize,
         nonce: &[u8],
         enc_gen: G,
-        mut transcript: MerlinTranscript,
+        mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         ensure_correct_index(&leg_enc, index_in_asset_data)?;
 
@@ -1594,14 +1565,14 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         enc_gen: G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        let transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
         self.verify_with_given_transcript(
             leg_enc,
             accept,
             index_in_asset_data,
             nonce,
             enc_gen,
-            transcript,
+            &mut transcript,
             rmc,
         )
     }
@@ -1613,7 +1584,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         index_in_asset_data: usize,
         nonce: &[u8],
         enc_gen: G,
-        mut transcript: MerlinTranscript,
+        mut transcript: &mut MerlinTranscript,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         if index_in_asset_data >= leg_enc.eph_pk_auds_meds.len() {
@@ -1749,12 +1720,17 @@ pub mod tests {
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-    use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
+    use crate::util::{
+        add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
+        prove_with_rng, verify_rmc, verify_with_rng,
+    };
     use ark_ec::VariableBaseMSM;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use bulletproofs::r1cs::{Prover, Verifier};
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
+    use dock_crypto_utils::transcript::MerlinTranscript;
     use rand_core::CryptoRngCore;
     use std::time::Instant;
 
@@ -2168,8 +2144,8 @@ pub mod tests {
         );
 
         // Account signing (affirmation) keys
-        let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
-        let (_sk_r, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
 
         // Encryption keys
         let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -2186,9 +2162,8 @@ pub mod tests {
         keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
         keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
 
-        // Create multiple assets instead with same accounts
         let mut asset_data_vec = Vec::with_capacity(batch_size);
-        let mut asset_trees = Vec::with_capacity(batch_size);
+        let mut commitments = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
             let asset_id = (i + 1) as u32;
             let asset_data = AssetData::new(
@@ -2199,16 +2174,15 @@ pub mod tests {
             )
             .unwrap();
 
-            let set = vec![asset_data.commitment];
-            let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-                &set,
-                &asset_tree_params,
-                Some(2),
-            );
-
+            commitments.push(asset_data.commitment);
             asset_data_vec.push(asset_data);
-            asset_trees.push(asset_tree);
         }
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &commitments,
+            &asset_tree_params,
+            Some(2),
+        );
 
         let amount = 100;
         let nonces: Vec<Vec<u8>> = (0..batch_size)
@@ -2228,7 +2202,7 @@ pub mod tests {
                 .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
                 .unwrap();
 
-            let path = asset_trees[i].get_path_to_leaf_for_proof(0, 0);
+            let path = asset_tree.get_path_to_leaf_for_proof(i, 0);
 
             legs.push(leg);
             leg_encs.push(leg_enc);
@@ -2236,10 +2210,10 @@ pub mod tests {
             paths.push(path);
         }
 
+        let root = asset_tree.root_node();
         let mut proofs = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let root = asset_trees[i].root_node();
             let proof = SettlementTxnProof::new(
                 &mut rng,
                 legs[i].clone(),
@@ -2261,8 +2235,8 @@ pub mod tests {
 
         let clock = Instant::now();
 
+        let root = asset_tree.root_node();
         for i in 0..batch_size {
-            let root = asset_trees[i].root_node();
             proofs[i]
                 .verify(
                     &mut rng,
@@ -2287,9 +2261,8 @@ pub mod tests {
 
         // These can also be done in parallel
         for i in 0..batch_size {
-            let root = asset_trees[i].root_node();
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     &nonces[i],
@@ -2322,10 +2295,10 @@ pub mod tests {
         let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
         let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
 
+        let root = asset_tree.root_node();
         for i in 0..batch_size {
-            let root = asset_trees[i].root_node();
             let (even, odd) = proofs[i]
-                .verify_except_bp(
+                .verify_and_return_tuples(
                     leg_encs[i].clone(),
                     &root,
                     &nonces[i],
@@ -2355,6 +2328,231 @@ pub mod tests {
         println!(
             "For {batch_size} leg verification proofs, batch_verifier_rmc_time time {:?}",
             batch_verifier_rmc_time
+        );
+    }
+
+    #[test]
+    fn combined_leg_verification() {
+        let mut rng = rand::thread_rng();
+
+        // Setup begins
+        const NUM_GENS: usize = 1 << 15; // increased for combined proofs
+        const L: usize = 64;
+
+        // Create public params (generators, etc)
+        let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+
+        let sig_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen = PallasA::rand(&mut rng);
+
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let num_auditors = 2;
+        let num_mediators = 3;
+
+        let batch_size = 5;
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors + num_mediators,
+            &asset_tree_params.even_parameters.bp_gens,
+        );
+
+        // Account signing (affirmation) keys
+        let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+
+        // Encryption keys
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+
+        let mut keys = Vec::with_capacity((num_auditors + num_mediators) as usize);
+        keys.extend(keys_auditor.iter().map(|(_, k)| (true, k.0)).into_iter());
+        keys.extend(keys_mediator.iter().map(|(_, k)| (false, k.0)).into_iter());
+
+        let mut asset_data_vec = Vec::with_capacity(batch_size);
+        let mut commitments = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let asset_id = (i + 1) as u32;
+            let asset_data = AssetData::new(
+                asset_id,
+                keys.clone(),
+                &asset_comm_params,
+                asset_tree_params.odd_parameters.delta,
+            )
+            .unwrap();
+
+            commitments.push(asset_data.commitment);
+            asset_data_vec.push(asset_data);
+        }
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &commitments,
+            &asset_tree_params,
+            Some(2),
+        );
+
+        let amount = 100;
+        let nonces: Vec<Vec<u8>> = (0..batch_size)
+            .map(|i| format!("batch_leg_nonce_{}", i).into_bytes())
+            .collect();
+
+        let mut legs = Vec::with_capacity(batch_size);
+        let mut leg_encs = Vec::with_capacity(batch_size);
+        let mut leg_enc_rands = Vec::with_capacity(batch_size);
+        let mut paths = Vec::with_capacity(batch_size);
+
+        // Create legs for each asset
+        for i in 0..batch_size {
+            let asset_id = (i + 1) as u32;
+            let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, asset_id).unwrap();
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+                .unwrap();
+
+            let path = asset_tree.get_path_to_leaf_for_proof(i, 0);
+
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+            paths.push(path);
+        }
+
+        let root = asset_tree.root_node();
+
+        let clock = Instant::now();
+        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_prover =
+            Prover::new(&asset_tree_params.even_parameters.pc_gens, even_transcript);
+        let mut odd_prover = Prover::new(&asset_tree_params.odd_parameters.pc_gens, odd_transcript);
+
+        let mut proofs = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let proof = SettlementTxnProof::new_with_given_prover(
+                &mut rng,
+                legs[i].clone(),
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                paths[i].clone(),
+                asset_data_vec[i].clone(),
+                &root,
+                &nonces[i],
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )
+            .unwrap();
+            proofs.push(proof);
+        }
+
+        let (even_bp, odd_bp) =
+            prove_with_rng(even_prover, odd_prover, &asset_tree_params, &mut rng).unwrap();
+        let proving_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+
+        for i in 0..batch_size {
+            proofs[i]
+                .verify_sigma_protocols_and_enforce_constraints(
+                    leg_encs[i].clone(),
+                    &root,
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    None,
+                )
+                .unwrap();
+        }
+
+        verify_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &asset_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+        let verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+
+        let root = asset_tree.root_node();
+        for i in 0..batch_size {
+            proofs[i]
+                .verify_sigma_protocols_and_enforce_constraints(
+                    leg_encs[i].clone(),
+                    &root,
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_verifier,
+                    &mut odd_verifier,
+                    Some(&mut rmc_1),
+                )
+                .unwrap();
+        }
+
+        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            &mut rng,
+        )
+        .unwrap();
+
+        add_verification_tuples_batches_to_rmc(
+            vec![even_tuple_rmc],
+            vec![odd_tuple_rmc],
+            &asset_tree_params,
+            &mut rmc_0,
+            &mut rmc_1,
+        )
+        .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let rmc_verification_time = clock.elapsed();
+
+        println!("Combined leg proving time = {:?}", proving_time);
+        println!("Combined leg verification time = {:?}", verification_time);
+        println!(
+            "Combined leg RMC verification time = {:?}",
+            rmc_verification_time
+        );
+        println!(
+            "Combined proof size = {} bytes",
+            even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
         );
     }
 

@@ -556,7 +556,7 @@ impl<
         Error,
     > {
         let proof = self.proof.decode()?;
-        let tuples = proof.verify_except_bp(
+        let tuples = proof.verify_and_return_tuples(
             self.account.get_affine()?,
             self.asset_id,
             self.amount,

@@ -556,7 +556,7 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.proof.decode()?;
-        let tuples = proof.verify_except_bp(
+        let tuples = proof.verify_and_return_tuples(
             leg_enc.clone(),
             &root,
             ctx,
