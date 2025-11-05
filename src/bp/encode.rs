@@ -259,6 +259,15 @@ impl core::fmt::Debug for CompressedAffine {
     }
 }
 
+/// FromStr for CompressedAffine
+impl core::str::FromStr for CompressedAffine {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_str(s)
+    }
+}
+
 impl CompressedAffine {
     pub fn zero<P0: SWCurveConfig>() -> Self {
         let affine = Affine::<P0>::zero();
@@ -271,6 +280,11 @@ impl CompressedAffine {
         let mut point = [0u8; ARK_EC_POINT_SIZE];
         hex::decode_to_slice(&s[offset..], &mut point[..]).map_err(|_| Error::HexDecodeError)?;
         Ok(Self(point))
+    }
+
+    /// Converts the compressed point to a hex string.
+    pub fn to_string(&self) -> String {
+        format!("{}", hex::encode(&self.0[..]))
     }
 
     /// Returns the underlying byte array.

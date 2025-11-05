@@ -40,10 +40,24 @@ use crate::*;
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct EncryptionPublicKey(CompressedAffine);
 
+/// FromStr for EncryptionPublicKey
+impl core::str::FromStr for EncryptionPublicKey {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(CompressedAffine::from_str(s)?))
+    }
+}
+
 impl EncryptionPublicKey {
     /// Creates a `EncryptionPublicKey` from a hex string.
     pub fn from_str(s: &str) -> Result<Self, Error> {
         Ok(Self(CompressedAffine::from_str(s)?))
+    }
+
+    /// Converts a `AccountPublicKey` to a hex string.
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
     }
 
     /// Creates a `EncryptionPublicKey` from an affine point.
@@ -120,10 +134,24 @@ impl EncryptionKeyPair {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountPublicKey(CompressedAffine);
 
+/// FromStr for AccountPublicKey
+impl core::str::FromStr for AccountPublicKey {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(CompressedAffine::from_str(s)?))
+    }
+}
+
 impl AccountPublicKey {
     /// Creates a `AccountPublicKey` from a hex string.
     pub fn from_str(s: &str) -> Result<Self, Error> {
         Ok(Self(CompressedAffine::from_str(s)?))
+    }
+
+    /// Converts a `AccountPublicKey` to a hex string.
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
     }
 
     /// Creates a `AccountPublicKey` from an affine point.

@@ -166,7 +166,10 @@ fn get_pallas_and_vesta_layer_parameters() -> (
     SingleLayerParameters<PallasParameters>,
     SingleLayerParameters<VestaParameters>,
 ) {
-    (get_pallas_layer_parameters().clone(), get_vesta_layer_parameters().clone())
+    (
+        get_pallas_layer_parameters().clone(),
+        get_vesta_layer_parameters().clone(),
+    )
 }
 
 #[cfg(feature = "parallel")]

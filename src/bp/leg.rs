@@ -29,7 +29,7 @@ use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
 
-/// The settlement reference is it the hash of the settlement creation proof.
+/// The settlement reference is the hash of the settlement creation proof.
 #[derive(
     Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
 )]
@@ -37,6 +37,18 @@ use crate::*;
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
 pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
+
+/// FromStr for SettlementRef from hex string.
+impl core::str::FromStr for SettlementRef {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let offset = if s.starts_with("0x") { 2 } else { 0 };
+        let mut buf = [0u8; 32];
+        hex::decode_to_slice(&s[offset..], &mut buf[..])?;
+        Ok(SettlementRef(buf))
+    }
+}
 
 #[derive(
     Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
