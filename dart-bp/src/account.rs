@@ -9691,11 +9691,8 @@ pub mod tests {
         )
         .unwrap();
 
-        verify_given_verification_tuples(even_tuple_legs, odd_tuple_legs, &asset_tree_params)
-            .unwrap();
-
-        let even_tuples = vec![even_tuple_alice, even_tuple_bob];
-        let odd_tuples = vec![odd_tuple_alice, odd_tuple_bob];
+        let even_tuples = vec![odd_tuple_legs, even_tuple_alice, even_tuple_bob];
+        let odd_tuples = vec![even_tuple_legs, odd_tuple_alice, odd_tuple_bob];
 
         batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
 
