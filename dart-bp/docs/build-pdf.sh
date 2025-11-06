@@ -39,14 +39,10 @@ header-includes: |
   \setlength{\emergencystretch}{3em}
 ---
 
-\newpage
-\tableofcontents
-\newpage
-
 EOF
 
 # Append all markdown files in order
-for file in index.md 1.md 2.md 3.md 4.md 5.md 6.md appendix.md; do
+for file in 1.md 2.md 3.md 4.md 5.md 6.md appendix.md; do
   if [ -f "$SCRIPT_DIR/$file" ]; then
     echo "" >> "$SCRIPT_DIR/combined.md"
     echo "<!-- Source: $file -->" >> "$SCRIPT_DIR/combined.md"

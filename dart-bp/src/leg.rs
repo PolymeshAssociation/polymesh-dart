@@ -44,10 +44,10 @@ use schnorr_pok::partial::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub const SETTLE_TXN_ODD_LABEL: &[u8; 24] = b"settlement-txn-odd-level";
-pub const SETTLE_TXN_EVEN_LABEL: &[u8; 25] = b"settlement-txn-even-level";
-pub const SETTLE_TXN_CHALLENGE_LABEL: &[u8; 24] = b"settlement-txn-challenge";
-pub const SETTLE_TXN_INSTANCE_LABEL: &[u8; 29] = b"settlement-txn-extra-instance";
+pub const LEG_TXN_ODD_LABEL: &[u8; 17] = b"leg-txn-odd-level";
+pub const LEG_TXN_EVEN_LABEL: &[u8; 18] = b"leg-txn-even-level";
+pub const LEG_TXN_CHALLENGE_LABEL: &[u8; 17] = b"leg-txn-challenge";
+pub const LEG_TXN_INSTANCE_LABEL: &[u8; 22] = b"leg-txn-extra-instance";
 pub const INDEX_IN_ASSET_DATA_LABEL: &'static [u8; 19] = b"index_in_asset_data";
 
 pub const SK_EPH_GEN_LABEL: &[u8; 20] = b"ephemeral-secret-key";
@@ -141,7 +141,7 @@ impl<
             ));
         }
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
-        // but that pushes asset id into the other group which makes the settlement txn proof quite expensive
+        // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive
         let points = Self::points(id, &keys, params);
         let x_coords = points
             .into_iter()
@@ -581,16 +581,16 @@ pub struct RespEphemeralPublicKey<G: SWCurveConfig> {
     pub r_4: PartialPokDiscreteLog<Affine<G>>,
 }
 
-/// This is the proof for settlement creation. Report section 5.1.5
+/// This is the proof for a single leg creation. Report section 5.1.5
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct SettlementTxnProof<
+pub struct LegCreationProof<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    /// When this is None, external [`R1CSProof`] will be used and [`SettlementTxnProof`] only
+    /// When this is None, external [`R1CSProof`] will be used and [`LegCreationProof`] only
     /// contains proof for the sigma protocols and enforces the Bulletproof constraints.
     pub r1cs_proof: Option<BPProof<G1, G0>>,
     pub re_randomized_path: SelectAndRerandomizePath<L, G1, G0>,
@@ -616,7 +616,7 @@ impl<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> SettlementTxnProof<L, F0, F1, G0, G1>
+> LegCreationProof<L, F0, F1, G0, G1>
 {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
@@ -633,8 +633,8 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<Self> {
-        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover =
             Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
         let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
@@ -961,7 +961,7 @@ impl<
             &mut transcript,
         )?;
 
-        let challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<F0>(LEG_TXN_CHALLENGE_LABEL);
 
         let mut wits = [
             comm_r_i_blinding,
@@ -1087,8 +1087,8 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G1>>, VerificationTuple<Affine<G0>>)> {
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
         let mut odd_verifier = Verifier::new(transcript_odd);
         self.verify_sigma_protocols_and_enforce_constraints(
@@ -1251,7 +1251,7 @@ impl<
             &mut transcript,
         )?;
 
-        let challenge = transcript.challenge_scalar::<F0>(SETTLE_TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<F0>(LEG_TXN_CHALLENGE_LABEL);
 
         match rmc.as_mut() {
             Some(rmc) => {
@@ -1876,7 +1876,7 @@ pub mod tests {
 
         let root = asset_tree.root_node();
 
-        let proof = SettlementTxnProof::new(
+        let proof = LegCreationProof::new(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -2214,7 +2214,7 @@ pub mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let proof = SettlementTxnProof::new(
+            let proof = LegCreationProof::new(
                 &mut rng,
                 legs[i].clone(),
                 leg_encs[i].clone(),
@@ -2432,15 +2432,15 @@ pub mod tests {
         let root = asset_tree.root_node();
 
         let clock = Instant::now();
-        let even_transcript = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover =
             Prover::new(&asset_tree_params.even_parameters.pc_gens, even_transcript);
         let mut odd_prover = Prover::new(&asset_tree_params.odd_parameters.pc_gens, odd_transcript);
 
         let mut proofs = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let proof = SettlementTxnProof::new_with_given_prover(
+            let proof = LegCreationProof::new_with_given_prover(
                 &mut rng,
                 legs[i].clone(),
                 leg_encs[i].clone(),
@@ -2465,8 +2465,8 @@ pub mod tests {
         let proving_time = clock.elapsed();
 
         let clock = Instant::now();
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
         let mut odd_verifier = Verifier::new(transcript_odd);
 
@@ -2499,8 +2499,8 @@ pub mod tests {
         let verification_time = clock.elapsed();
 
         let clock = Instant::now();
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
         let mut odd_verifier = Verifier::new(transcript_odd);
         let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
@@ -2640,7 +2640,7 @@ pub mod tests {
 
             let root = asset_tree.root_node();
 
-            let proof = SettlementTxnProof::new(
+            let proof = LegCreationProof::new(
                 &mut rng,
                 leg.clone(),
                 leg_enc.clone(),
@@ -2703,7 +2703,7 @@ pub mod tests {
 
             let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
-            let proof = SettlementTxnProof::new(
+            let proof = LegCreationProof::new(
                 &mut rng,
                 leg_with_diff_keys.clone(),
                 leg_enc.clone(),
@@ -2748,7 +2748,7 @@ pub mod tests {
 
             let path = asset_tree.get_path_to_leaf_for_proof(0, 0);
 
-            let proof = SettlementTxnProof::new(
+            let proof = LegCreationProof::new(
                 &mut rng,
                 leg_with_diff_roles.clone(),
                 leg_enc.clone(),

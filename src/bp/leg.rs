@@ -447,7 +447,7 @@ impl<
     }
 }
 
-type BPSettlementTxnProof<C> = bp_leg::SettlementTxnProof<
+type BPSettlementTxnProof<C> = bp_leg::LegCreationProof<
     ASSET_TREE_L,
     <C as CurveTreeConfig>::F1,
     <C as CurveTreeConfig>::F0,
@@ -489,7 +489,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let root = asset_tree.root()?.root_node()?;
 
-        let proof = bp_leg::SettlementTxnProof::new(
+        let proof = bp_leg::LegCreationProof::new(
             rng,
             leg,
             leg_enc.decode()?,

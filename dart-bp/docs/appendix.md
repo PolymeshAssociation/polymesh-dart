@@ -1,8 +1,8 @@
 # Appendix
 
-## Appendix
+## R1CS Constraints
 
-### Constraints for refreshing $\rho$ and $s$
+### For refreshing $\rho$ and $s$
 Once $\rho, \rho_i, \rho_{i+1}, s_i, s_{i+1}$ are committed in Bulletproof, we get circuit variables for each one of them. Then we enforce multiplication relations among these variables.
 ```text
 These variables are guaranteed to have these values
@@ -18,15 +18,15 @@ var_rho_i_plus_1_ <- var_rho * var_rho_i
 // Assign circuit variable var_s_i_plus_1_ to the product of var_s_i and var_s_i
 var_s_i_plus_1_ <- var_s_i * var_s_i
 
-// Enforce that values of var_rho_i_plus_1 and var_s_i_plus_1_ are same
-var_rho_i_plus_1 == var_s_i_plus_1_
+// Enforce that values of var_rho_i_plus_1 and var_rho_i_plus_1_ are same
+var_rho_i_plus_1 == var_rho_i_plus_1_
 
 // Enforce that values of var_s_i_plus_1 and var_s_i_plus_1_ are same
 var_s_i_plus_1 == var_s_i_plus_1_
 ```
 
 
-### Constraints for range proof
+### For range proof
 To prove that a value $v$ is of $n$ bits, i.e. $v \in [0, 2^n-1)$, decompose $v$ into bits and prove that each bit is indeed a bit, i.e. 0 or 1 and the appopriate linear combination of the bits is the original value $v$.
 ```text
 // bits is an array bits of v in little-endian representation.
@@ -34,7 +34,7 @@ bits = decompose(v)
 // This will be set to different powers of 2 during execution of the loop
 m = 1
 for bit in bits {
-  // Allocate circuit varaibles a and b and assign them values 1-bit and bit
+  // Allocate circuit variables a and b and assign them values 1-bit and bit
   a <- 1 - bit
   b <- bit
   
@@ -55,6 +55,3 @@ v == 0
 ```
 
 ------------------------
-
-[1]: https://eprint.iacr.org/2024/1647
-[2]: https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf

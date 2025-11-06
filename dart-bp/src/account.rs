@@ -3702,6 +3702,12 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if account.counter != updated_account.counter {
+            return Err(Error::ProofGenerationError(
+                "counter mismatch between old and new account states".to_string(),
+            ));
+        }
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id is same in both old and new account commitment
@@ -4039,6 +4045,12 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if account.counter != updated_account.counter {
+            return Err(Error::ProofGenerationError(
+                "counter mismatch between old and new account states".to_string(),
+            ));
+        }
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
         // 2. asset-id is same in both old and new account commitment
@@ -5159,8 +5171,8 @@ pub mod tests {
     use crate::keys::keygen_sig;
     use crate::leg::tests::setup_keys;
     use crate::leg::{
-        AssetCommitmentParams, AssetData, Leg, SETTLE_TXN_EVEN_LABEL, SETTLE_TXN_ODD_LABEL,
-        SettlementTxnProof,
+        AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, Leg,
+        LegCreationProof, MEDIATOR_TXN_LABEL, MediatorTxnProof,
     };
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_serialize::CanonicalSerialize;
@@ -7262,7 +7274,7 @@ pub mod tests {
         let nonce = b"single_shot_settlement_nonce_txn_id_1";
 
         // Create all three proofs
-        let settlement_proof = SettlementTxnProof::new(
+        let settlement_proof = LegCreationProof::new(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -7465,7 +7477,7 @@ pub mod tests {
         );
 
         // Setup keys for sender, receiver, and auditor
-        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+        let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (sk_m_e, pk_m_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         // Two different asset-ids for swap
@@ -7474,7 +7486,8 @@ pub mod tests {
         let amount_1 = 100;
         let amount_2 = 200;
 
-        let keys = vec![(true, pk_a_e.0)];
+        // Both assets have same mediator
+        let keys = vec![(false, pk_m_e.0)];
         let asset_data_1 = AssetData::new(
             asset_id_1,
             keys.clone(),
@@ -7574,8 +7587,8 @@ pub mod tests {
 
         // Combined settlement proofs for both legs
         let clock = Instant::now();
-        let even_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let odd_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let even_transcript_settlement = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let odd_transcript_settlement = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover_settlement = Prover::new(
             &asset_tree_params.even_parameters.pc_gens,
             even_transcript_settlement,
@@ -7585,7 +7598,7 @@ pub mod tests {
             odd_transcript_settlement,
         );
 
-        let settlement_proof_1 = SettlementTxnProof::new_with_given_prover(
+        let settlement_proof_1 = LegCreationProof::new_with_given_prover(
             &mut rng,
             leg_1.clone(),
             leg_enc_1.clone(),
@@ -7603,7 +7616,7 @@ pub mod tests {
         )
         .unwrap();
 
-        let settlement_proof_2 = SettlementTxnProof::new_with_given_prover(
+        let settlement_proof_2 = LegCreationProof::new_with_given_prover(
             &mut rng,
             leg_2.clone(),
             leg_enc_2.clone(),
@@ -7633,8 +7646,8 @@ pub mod tests {
         // Verify settlement proofs (both legs)
         let clock = Instant::now();
 
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut settlement_even_verifier = Verifier::new(transcript_even);
         let mut settlement_odd_verifier = Verifier::new(transcript_odd);
 
@@ -7685,8 +7698,8 @@ pub mod tests {
         // Verify settlement proofs (both legs)
         let clock = Instant::now();
 
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut settlement_even_verifier = Verifier::new(transcript_even);
         let mut settlement_odd_verifier = Verifier::new(transcript_odd);
 
@@ -7740,6 +7753,107 @@ pub mod tests {
         verify_rmc(&rmc_0, &rmc_1).unwrap();
 
         let settlement_verification_time_rmc = clock.elapsed();
+
+        // Mediator affirms both legs with a single proof
+        let clock = Instant::now();
+        let accept = true;
+        // Mediator is at index 0 in both assets
+        let index_in_asset_data = 0;
+
+        // This could be made a bit faster and shorter if prover was willing to prove that same secret
+        // key is used. But this might not be the setting in practice.
+
+        // Create shared transcript for mediator proof covering both legs
+        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+
+        let med_proof_1 = MediatorTxnProof::new_with_given_transcript(
+            &mut rng,
+            leg_enc_1.clone(),
+            asset_id_1,
+            sk_m_e.0,
+            accept,
+            index_in_asset_data,
+            nonce,
+            enc_gen,
+            &mut transcript,
+        )
+        .unwrap();
+
+        let med_proof_2 = MediatorTxnProof::new_with_given_transcript(
+            &mut rng,
+            leg_enc_2.clone(),
+            asset_id_2,
+            sk_m_e.0,
+            accept,
+            index_in_asset_data,
+            nonce,
+            enc_gen,
+            &mut transcript,
+        )
+        .unwrap();
+
+        let mediator_proving_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+
+        med_proof_1
+            .verify_with_given_transcript(
+                leg_enc_1.clone(),
+                accept,
+                index_in_asset_data,
+                nonce,
+                enc_gen,
+                &mut transcript,
+                None,
+            )
+            .unwrap();
+
+        med_proof_2
+            .verify_with_given_transcript(
+                leg_enc_2.clone(),
+                accept,
+                index_in_asset_data,
+                nonce,
+                enc_gen,
+                &mut transcript,
+                None,
+            )
+            .unwrap();
+
+        let mediator_verification_time = clock.elapsed();
+
+        let clock = Instant::now();
+        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
+        let mut rmc_med = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+
+        med_proof_1
+            .verify_with_given_transcript(
+                leg_enc_1.clone(),
+                accept,
+                index_in_asset_data,
+                nonce,
+                enc_gen,
+                &mut transcript,
+                Some(&mut rmc_med),
+            )
+            .unwrap();
+
+        med_proof_2
+            .verify_with_given_transcript(
+                leg_enc_2.clone(),
+                accept,
+                index_in_asset_data,
+                nonce,
+                enc_gen,
+                &mut transcript,
+                Some(&mut rmc_med),
+            )
+            .unwrap();
+
+        assert!(rmc_med.verify());
+
+        let mediator_verification_time_rmc = clock.elapsed();
 
         // Combined alice proofs for both legs (alice sends in leg1, receives in leg2)
         let clock = Instant::now();
@@ -8539,6 +8653,7 @@ pub mod tests {
             + settlement_odd_bp.compressed_size()
             + settlement_proof_1.compressed_size()
             + settlement_proof_2.compressed_size();
+        let mediator_proof_size = med_proof_1.compressed_size() + med_proof_2.compressed_size();
         let alice_affirmation_proof_size = alice_even_bp.compressed_size()
             + alice_odd_bp.compressed_size()
             + alice_proof_leg1.compressed_size()
@@ -8562,6 +8677,13 @@ pub mod tests {
             settlement_verification_time,
             settlement_verification_time_rmc,
             settlement_proof_size
+        );
+        println!(
+            "Mediator affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
+            mediator_proving_time,
+            mediator_verification_time,
+            mediator_verification_time_rmc,
+            mediator_proof_size
         );
         println!(
             "Alice affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
@@ -9245,8 +9367,8 @@ pub mod tests {
         let nonce = b"single_shot_swap_nonce_txn_id_1";
 
         // Combined settlement proofs for both legs
-        let even_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let odd_transcript_settlement = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let even_transcript_settlement = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let odd_transcript_settlement = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover_settlement = Prover::new(
             &asset_tree_params.even_parameters.pc_gens,
             even_transcript_settlement,
@@ -9256,7 +9378,7 @@ pub mod tests {
             odd_transcript_settlement,
         );
 
-        let settlement_proof_1 = SettlementTxnProof::new_with_given_prover(
+        let settlement_proof_1 = LegCreationProof::new_with_given_prover(
             &mut rng,
             leg_1.clone(),
             leg_enc_1.clone(),
@@ -9274,7 +9396,7 @@ pub mod tests {
         )
         .unwrap();
 
-        let settlement_proof_2 = SettlementTxnProof::new_with_given_prover(
+        let settlement_proof_2 = LegCreationProof::new_with_given_prover(
             &mut rng,
             leg_2.clone(),
             leg_enc_2.clone(),
@@ -9427,8 +9549,8 @@ pub mod tests {
         // Verify all proofs
         let clock = Instant::now();
 
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut settlement_even_verifier = Verifier::new(transcript_even);
         let mut settlement_odd_verifier = Verifier::new(transcript_odd);
 
@@ -9584,8 +9706,8 @@ pub mod tests {
         let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
         let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
 
-        let transcript_even = MerlinTranscript::new(SETTLE_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(SETTLE_TXN_ODD_LABEL);
+        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut settlement_even_verifier = Verifier::new(transcript_even);
         let mut settlement_odd_verifier = Verifier::new(transcript_odd);
 
@@ -9726,18 +9848,9 @@ pub mod tests {
         )
         .unwrap();
 
-        add_verification_tuples_to_rmc(
-            even_tuple_legs,
-            odd_tuple_legs,
-            &asset_tree_params,
-            &mut rmc_1,
-            &mut rmc_0,
-        )
-        .unwrap();
-
         add_verification_tuples_batches_to_rmc(
-            vec![even_tuple_alice, even_tuple_bob],
-            vec![odd_tuple_alice, odd_tuple_bob],
+            vec![odd_tuple_legs, even_tuple_alice, even_tuple_bob],
+            vec![even_tuple_legs, odd_tuple_alice, odd_tuple_bob],
             &account_tree_params,
             &mut rmc_0,
             &mut rmc_1,
@@ -10389,6 +10502,253 @@ pub mod tests {
                         leg_enc,
                         &root,
                         updated_account_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn incorrect_updates_in_single_shot_settlement() {
+            // Test malicious updates in single shot settlement (irreversible send/receive)
+            // These proofs should fail because balance or counter updates are incorrect
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 512;
+            let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+                setup_gens::<NUM_GENS, L>(b"testing");
+
+            let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), (_, (_, pk_a_e))) =
+                setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1;
+            let amount = 100;
+
+            let (_, leg_enc, leg_enc_rand) = setup_leg(
+                &mut rng,
+                pk_s.0,
+                pk_r.0,
+                pk_a_e.0,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            // Create sender account
+            let sender_id = PallasFr::rand(&mut rng);
+            let (mut sender_account, _, _) =
+                new_account(&mut rng, asset_id, sk_s.clone(), sender_id);
+            sender_account.balance = 200; // Ensure sufficient balance
+            sender_account.counter = 5; // Set non-zero counter for testing
+            let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+
+            // Create receiver account
+            let receiver_id = PallasFr::rand(&mut rng);
+            let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, receiver_id);
+            receiver_account.balance = 150; // Some initial balance
+            receiver_account.counter = 3; // Set non-zero counter for testing
+            let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
+
+            // Create the account tree with both accounts
+            let account_comms = vec![sender_account_comm.0, receiver_account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &account_comms,
+                &account_tree_params,
+                Some(2),
+            );
+
+            let account_tree_root = account_tree.root_node();
+            let sender_path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let receiver_path = account_tree.get_path_to_leaf_for_proof(1, 0);
+
+            let nonce = b"test-nonce";
+
+            // Sender trying to decrease balance less than amount
+            // Should decrease by 100, but only decreases by 50
+            let mut malicious_sender_account = sender_account
+                .get_state_for_irreversible_send(amount)
+                .unwrap();
+            malicious_sender_account.balance += 50;
+
+            let malicious_sender_comm = malicious_sender_account
+                .commit(account_comm_key.clone())
+                .unwrap();
+
+            let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &sender_account,
+                &malicious_sender_account,
+                malicious_sender_comm,
+                sender_path.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &account_tree_root,
+                        malicious_sender_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+
+            // Receiver trying to increase balance more than amount
+            // Should increase by 100, but increases by 150
+            let mut malicious_receiver_account = receiver_account
+                .get_state_for_irreversible_receive(amount)
+                .unwrap();
+            malicious_receiver_account.balance += 50;
+
+            let malicious_receiver_comm = malicious_receiver_account
+                .commit(account_comm_key.clone())
+                .unwrap();
+
+            let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &receiver_account,
+                &malicious_receiver_account,
+                malicious_receiver_comm,
+                receiver_path.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &account_tree_root,
+                        malicious_receiver_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+
+            // Sender trying to decrease counter
+            let mut malicious_sender_account = sender_account
+                .get_state_for_irreversible_send(amount)
+                .unwrap();
+            malicious_sender_account.counter -= 1;
+
+            let malicious_sender_comm = malicious_sender_account
+                .commit(account_comm_key.clone())
+                .unwrap();
+
+            let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &sender_account,
+                &malicious_sender_account,
+                malicious_sender_comm,
+                sender_path.clone(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &account_tree_root,
+                        malicious_sender_comm,
+                        nullifier,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+
+            // Receiver trying to decrease counter
+            let mut malicious_receiver_account = receiver_account
+                .get_state_for_irreversible_receive(amount)
+                .unwrap();
+            malicious_receiver_account.counter -= 1;
+
+            let malicious_receiver_comm = malicious_receiver_account
+                .commit(account_comm_key.clone())
+                .unwrap();
+
+            let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &receiver_account,
+                &malicious_receiver_account,
+                malicious_receiver_comm,
+                receiver_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc,
+                        &account_tree_root,
+                        malicious_receiver_comm,
                         nullifier,
                         nonce,
                         &account_tree_params,
