@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ark_ec::AffineRepr;
 use ark_ec::{models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::vec::Vec;
+use ark_std::{format, string::String, vec::Vec};
 
 use crate::*;
 

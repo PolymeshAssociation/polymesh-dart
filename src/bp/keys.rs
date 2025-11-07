@@ -5,7 +5,7 @@ use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::vec::Vec;
+use ark_std::{string::String, vec::Vec};
 
 use blake2::Blake2s256;
 use bounded_collections::BoundedVec;
