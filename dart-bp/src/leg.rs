@@ -33,7 +33,9 @@ use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE};
+use polymesh_dart_common::{
+    ASSET_TREE_M, AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE,
+};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -625,7 +627,7 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
-        tree_root: &Root<L, 1, G1, G0>,
+        tree_root: &Root<L, ASSET_TREE_M, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -672,7 +674,7 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
-        tree_root: &Root<L, 1, G1, G0>,
+        tree_root: &Root<L, ASSET_TREE_M, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -1038,7 +1040,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        tree_root: &Root<L, ASSET_TREE_M, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -1078,7 +1080,7 @@ impl<
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        tree_root: &Root<L, ASSET_TREE_M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1120,7 +1122,7 @@ impl<
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        tree_root: &Root<L, ASSET_TREE_M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1854,11 +1856,12 @@ pub mod tests {
         assert_eq!(expected_commitment, asset_data.commitment.into_group());
 
         let set = vec![asset_data.commitment];
-        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-            &set,
-            &asset_tree_params,
-            Some(2),
-        );
+        let asset_tree =
+            CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(2),
+            );
 
         let amount = 100;
 
@@ -2178,11 +2181,12 @@ pub mod tests {
             asset_data_vec.push(asset_data);
         }
 
-        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-            &commitments,
-            &asset_tree_params,
-            Some(2),
-        );
+        let asset_tree =
+            CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+                &commitments,
+                &asset_tree_params,
+                Some(2),
+            );
 
         let amount = 100;
         let nonces: Vec<Vec<u8>> = (0..batch_size)
@@ -2397,11 +2401,12 @@ pub mod tests {
             asset_data_vec.push(asset_data);
         }
 
-        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-            &commitments,
-            &asset_tree_params,
-            Some(2),
-        );
+        let asset_tree =
+            CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+                &commitments,
+                &asset_tree_params,
+                Some(2),
+            );
 
         let amount = 100;
         let nonces: Vec<Vec<u8>> = (0..batch_size)
@@ -2620,11 +2625,12 @@ pub mod tests {
             .unwrap();
 
             let set = vec![asset_data.commitment];
-            let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-                &set,
-                &asset_tree_params,
-                Some(2),
-            );
+            let asset_tree =
+                CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+                    &set,
+                    &asset_tree_params,
+                    Some(2),
+                );
 
             let amount = 100;
             let nonce = b"test-nonce";

@@ -5183,6 +5183,7 @@ pub mod tests {
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
+    use polymesh_dart_common::ASSET_TREE_M;
     use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
@@ -7208,12 +7209,12 @@ pub mod tests {
 
         // Create asset tree with the asset commitment
         let set = vec![asset_data.commitment];
-        let asset_tree =
-            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
-                &set,
-                &asset_tree_params,
-                Some(1),
-            );
+        let asset_tree = CurveTree::<
+            L,
+            ASSET_TREE_M,
+            ark_vesta::VestaConfig,
+            ark_pallas::PallasConfig,
+        >::from_leaves(&set, &asset_tree_params, Some(1));
 
         // Get asset tree path
         let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0);
@@ -7507,12 +7508,12 @@ pub mod tests {
         .unwrap();
 
         let set = vec![asset_data_1.commitment, asset_data_2.commitment];
-        let asset_tree =
-            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
-                &set,
-                &asset_tree_params,
-                Some(2),
-            );
+        let asset_tree = CurveTree::<
+            L,
+            ASSET_TREE_M,
+            ark_vesta::VestaConfig,
+            ark_pallas::PallasConfig,
+        >::from_leaves(&set, &asset_tree_params, Some(2));
         let asset_path_1 = asset_tree.get_path_to_leaf_for_proof(0, 0);
         let asset_path_2 = asset_tree.get_path_to_leaf_for_proof(1, 0);
         let asset_tree_root = asset_tree.root_node();
@@ -9260,12 +9261,12 @@ pub mod tests {
         .unwrap();
 
         let set = vec![asset_data_1.commitment, asset_data_2.commitment];
-        let asset_tree =
-            CurveTree::<L, 1, ark_vesta::VestaConfig, ark_pallas::PallasConfig>::from_leaves(
-                &set,
-                &asset_tree_params,
-                Some(2),
-            );
+        let asset_tree = CurveTree::<
+            L,
+            ASSET_TREE_M,
+            ark_vesta::VestaConfig,
+            ark_pallas::PallasConfig,
+        >::from_leaves(&set, &asset_tree_params, Some(2));
         let asset_path_1 = asset_tree.get_path_to_leaf_for_proof(0, 0);
         let asset_path_2 = asset_tree.get_path_to_leaf_for_proof(1, 0);
         let asset_tree_root = asset_tree.root_node();

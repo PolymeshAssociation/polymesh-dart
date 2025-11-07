@@ -155,7 +155,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         &self,
         location: NodeLocation<ASSET_TREE_L>,
         _block_number: Option<BlockNumber>,
-    ) -> Result<Option<CompressedInner<1, AssetTreeConfig>>, Self::Error> {
+    ) -> Result<Option<CompressedInner<ASSET_TREE_M, AssetTreeConfig>>, Self::Error> {
         let mut stmt = self
             .db
             .prepare("SELECT node_data FROM asset_inner_nodes WHERE location = ?1")?;
@@ -177,7 +177,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn set_inner_node(
         &mut self,
         location: NodeLocation<ASSET_TREE_L>,
-        new_node: CompressedInner<1, AssetTreeConfig>,
+        new_node: CompressedInner<ASSET_TREE_M, AssetTreeConfig>,
     ) -> Result<(), Self::Error> {
         // Encode the location and node data
         let location_bytes = location.encode();
@@ -195,7 +195,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
 
 pub type AssetCurveTreeType = CurveTreeWithBackend<
     ASSET_TREE_L,
-    1,
+    ASSET_TREE_M,
     AssetTreeConfig,
     AssetCurveTreeSqliteStorage,
     anyhow::Error,
@@ -516,7 +516,7 @@ impl AssetRootHistory {
     pub fn add_root(
         &mut self,
         block: BlockNumber,
-        root: &CompressedCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>,
+        root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     ) -> Result<()> {
         let root_bytes = root.encode();
         let mut stmt = self
@@ -527,11 +527,11 @@ impl AssetRootHistory {
     }
 }
 
-impl ValidateCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig> for &AssetRootHistory {
+impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &AssetRootHistory {
     fn get_block_root(
         &self,
         block: BlockNumber,
-    ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>> {
+    ) -> Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>> {
         let mut stmt = self
             .db
             .prepare("SELECT root_data FROM asset_root_history WHERE block_number = ?1")
