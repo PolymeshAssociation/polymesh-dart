@@ -1,5 +1,5 @@
-use ark_std::ops::Neg;
 use ark_std::collections::{BTreeMap, BTreeSet};
+use ark_std::ops::Neg;
 // use ark_crypto_primitives::crh::poseidon::TwoToOneCRH;
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
@@ -4592,8 +4592,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // 6. sum of amounts in pending receive txns equals the given public value
         // 7. nullifier is created from current_rho of account commitment
 
-        // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare. 
-        // If its not possible then do a membership proof. Prover could hide the commitment by randomizing it with a new blinding (C' = C + B.r') 
+        // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare.
+        // If its not possible then do a membership proof. Prover could hide the commitment by randomizing it with a new blinding (C' = C + B.r')
 
         // Prover has to prove relations of this form for each leg:
         // For sender leg: C_{s, 1} - pk = g * r_{1, i}
@@ -4693,11 +4693,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         }
 
         // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is sender. \sum{v} is the total sent amount in the legs
-        let t_sent_amount =
-            (!sender_in_leg_indices.is_empty()).then(|| PokDiscreteLogProtocol::init(sum_r_3_sent, G::ScalarField::rand(rng), &enc_key_gen));
+        let t_sent_amount = (!sender_in_leg_indices.is_empty()).then(|| {
+            PokDiscreteLogProtocol::init(sum_r_3_sent, G::ScalarField::rand(rng), &enc_key_gen)
+        });
         // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is receiver. \sum{v} is the total received amount in the legs
-        let t_recv_amount =
-            (!receiver_in_leg_indices.is_empty()).then(|| PokDiscreteLogProtocol::init(sum_r_3_recv, G::ScalarField::rand(rng), &enc_key_gen));
+        let t_recv_amount = (!receiver_in_leg_indices.is_empty()).then(|| {
+            PokDiscreteLogProtocol::init(sum_r_3_recv, G::ScalarField::rand(rng), &enc_key_gen)
+        });
 
         t_acc.challenge_contribution(&mut transcript)?;
         t_null.challenge_contribution(
@@ -4707,8 +4709,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         )?;
         t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
-        t_pk_send.as_ref().map(|t| transcript.append(b"t_pk_send", t));
-        t_pk_recv.as_ref().map(|t| transcript.append(b"t_pk_recv", t));
+        t_pk_send
+            .as_ref()
+            .map(|t| transcript.append(b"t_pk_send", t));
+        t_pk_recv
+            .as_ref()
+            .map(|t| transcript.append(b"t_pk_recv", t));
         transcript.append(b"t_asset_id", &t_asset_id);
 
         if let Some(t) = &t_sent_amount {
@@ -4931,31 +4937,29 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             bases_at.push(y);
         }
 
-        self.pk_send.as_ref().map(|t| transcript.append(b"t_pk_send", &t.0));
-        self.pk_recv.as_ref().map(|t| transcript.append(b"t_pk_recv", &t.0));
+        self.pk_send
+            .as_ref()
+            .map(|t| transcript.append(b"t_pk_send", &t.0));
+        self.pk_recv
+            .as_ref()
+            .map(|t| transcript.append(b"t_pk_recv", &t.0));
         transcript.append(b"t_asset_id", &self.asset_id.0);
 
         let y_total_send = if let Some(resp) = &self.resp_sent_amount {
-            let y_total_send =
-                (enc_total_send - (enc_gen * G::ScalarField::from(pending_sent_amount))).into_affine();
-            resp.challenge_contribution(
-                &enc_key_gen,
-                &y_total_send,
-                &mut transcript,
-            )?;
+            let y_total_send = (enc_total_send
+                - (enc_gen * G::ScalarField::from(pending_sent_amount)))
+            .into_affine();
+            resp.challenge_contribution(&enc_key_gen, &y_total_send, &mut transcript)?;
             Some(y_total_send)
         } else {
             None
         };
 
         let y_total_recv = if let Some(resp) = &self.resp_recv_amount {
-            let y_total_recv =
-                (enc_total_recv - (enc_gen * G::ScalarField::from(pending_recv_amount))).into_affine();
-            resp.challenge_contribution(
-                &enc_key_gen,
-                &y_total_recv,
-                &mut transcript,
-            )?;
+            let y_total_recv = (enc_total_recv
+                - (enc_gen * G::ScalarField::from(pending_recv_amount)))
+            .into_affine();
+            resp.challenge_contribution(&enc_key_gen, &y_total_recv, &mut transcript)?;
             Some(y_total_recv)
         } else {
             None
@@ -5045,18 +5049,16 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         bases_at.push(enc_key_gen);
         challenge_powers.push(-self.asset_id.1);
-        if self.asset_id.0.into_group().neg() != G::Group::msm_unchecked(&bases_at, &challenge_powers) {
+        if self.asset_id.0.into_group().neg()
+            != G::Group::msm_unchecked(&bases_at, &challenge_powers)
+        {
             return Err(Error::ProofVerificationError(
                 "Asset ID verification failed".to_string(),
             ));
         }
 
         if let Some(resp) = &self.resp_sent_amount {
-            if !resp.verify(
-                &y_total_send.unwrap(),
-                &enc_key_gen,
-                &challenge,
-            ) {
+            if !resp.verify(&y_total_send.unwrap(), &enc_key_gen, &challenge) {
                 return Err(Error::ProofVerificationError(
                     "resp_sent_amount verification failed".to_string(),
                 ));
@@ -5064,11 +5066,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         }
 
         if let Some(resp) = &self.resp_recv_amount {
-            if !resp.verify(
-                &y_total_recv.unwrap(),
-                &enc_key_gen,
-                &challenge,
-            ) {
+            if !resp.verify(&y_total_recv.unwrap(), &enc_key_gen, &challenge) {
                 return Err(Error::ProofVerificationError(
                     "resp_recv_amount verification failed".to_string(),
                 ));
