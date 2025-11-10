@@ -241,6 +241,7 @@ impl AccountKeyPair {
 
 /// The pair of public keys for an account: the encryption public key and the account public key.
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
