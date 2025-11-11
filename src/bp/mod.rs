@@ -2,8 +2,8 @@ use codec::{Decode, Encode};
 
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::{
-    PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
+    PrimeField,
 };
 use ark_serialize::CanonicalSerialize;
 
@@ -12,11 +12,8 @@ use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use digest::Digest;
 
-use polymesh_dart_bp::{
-    account::AccountCommitmentKeyTrait,
-    poseidon_impls::poseidon_2::{
-        Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
-    },
+use polymesh_dart_bp::poseidon_impls::poseidon_2::{
+    params::pallas::get_poseidon2_params_for_2_1_hashing, Poseidon2Params,
 };
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MAX_BATCHED_PROOFS,
@@ -47,11 +44,11 @@ pub use keys::*;
 
 mod fee;
 pub use fee::*;
-
+use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use crate::curve_tree::{
-    AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
-    CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
-    get_asset_commitment_parameters, get_asset_curve_tree_parameters,
+    get_asset_commitment_parameters, get_asset_curve_tree_parameters, AccountTreeConfig, AssetTreeConfig, CompressedLeafValue,
+    CurveTreeConfig, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
+    FeeAccountTreeConfig, ValidateCurveTreeRoot,
 };
 use crate::*;
 

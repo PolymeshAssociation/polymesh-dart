@@ -11,7 +11,7 @@ use bounded_collections::BoundedBTreeSet;
 use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account as bp_account;
-
+use polymesh_dart_bp::account::mint::MintTxnProof;
 use super::*;
 use crate::*;
 
@@ -95,7 +95,7 @@ impl<T: DartLimits> AssetState<T> {
     }
 }
 
-type BPMintTxnProof<C> = bp_account::MintTxnProof<
+type BPMintTxnProof<C> = MintTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
     <C as CurveTreeConfig>::F1,
@@ -146,7 +146,7 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_account::MintTxnProof::new(
+        let (proof, nullifier) = MintTxnProof::new(
             rng,
             pk.get_affine()?,
             amount,

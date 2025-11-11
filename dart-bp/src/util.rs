@@ -1,4 +1,4 @@
-use crate::account::{AccountCommitmentKeyTrait, AccountState};
+use crate::account::state::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
 use crate::leg::LegEncryption;
 use crate::{AssetId, BALANCE_BITS, Balance};

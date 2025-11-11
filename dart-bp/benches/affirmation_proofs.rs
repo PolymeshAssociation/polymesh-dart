@@ -4,9 +4,8 @@ use blake2::Blake2b512;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::account::{
-    AccountCommitmentKeyTrait, AccountState, AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof,
-};
+use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
+use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;

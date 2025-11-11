@@ -1717,7 +1717,7 @@ fn ensure_correct_index<G: AffineRepr>(
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::account::AccountCommitmentKeyTrait;
+    use crate::account::state::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::setup_comm_key;
     use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
     use crate::util::{

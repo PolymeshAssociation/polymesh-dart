@@ -1,5 +1,6 @@
 use crate::TXN_CHALLENGE_LABEL;
-use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::account::state::AccountStateCommitment;
+use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
 use crate::error::*;
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
