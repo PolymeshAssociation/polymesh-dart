@@ -1453,12 +1453,13 @@ pub fn add_slice_to_transcript<T: CanonicalSerialize>(
     label: &'static [u8],
     slice: &[T],
 ) -> Result<()> {
-    transcript.append(label, &slice.len().to_le_bytes());
+    let l = slice.len() as u32;
+    transcript.append(label, &l.to_le_bytes());
 
     let mut buf = vec![];
     for (i, item) in slice.iter().enumerate() {
         // Write the index and then the item
-        buf.extend_from_slice(&i.to_le_bytes());
+        buf.extend_from_slice(&(i as u32).to_le_bytes());
         item.serialize_compressed(&mut buf)?;
         transcript.append(label, &buf);
         buf.clear()
