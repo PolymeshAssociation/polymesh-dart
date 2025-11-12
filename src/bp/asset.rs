@@ -10,10 +10,10 @@ use ark_std::vec::Vec;
 use bounded_collections::BoundedBTreeSet;
 use rand_core::{CryptoRng, RngCore};
 
-use polymesh_dart_bp::account as bp_account;
-use polymesh_dart_bp::account::mint::MintTxnProof;
 use super::*;
 use crate::*;
+use polymesh_dart_bp::account as bp_account;
+use polymesh_dart_bp::account::mint::MintTxnProof;
 
 /// Represents the state of an asset in the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo)]

@@ -12,10 +12,8 @@ use ark_std::vec::Vec;
 use bounded_collections::BoundedVec;
 use rand_core::{CryptoRng, RngCore};
 
-use polymesh_dart_bp::{
-    account as bp_account, account_registration, leg as bp_leg,
-};
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
+use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::*;
