@@ -256,8 +256,12 @@ impl<T: DartLimits> SettlementBuilder<T> {
     }
 
     pub fn leg(mut self, leg: LegBuilder) -> Self {
-        self.legs.push(leg);
+        self.add_leg(leg);
         self
+    }
+
+    pub fn add_leg(&mut self, leg: LegBuilder) {
+        self.legs.push(leg);
     }
 
     pub fn encrypt_and_prove<
