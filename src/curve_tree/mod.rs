@@ -499,7 +499,7 @@ impl<
     ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
         Ok(self
             .tree
-            .get_path_and_root(leaf_index)
+            .get_path_and_root(leaf_index, None)
             .map_err(|_| Error::LeafIndexNotFound(leaf_index))?)
     }
 }

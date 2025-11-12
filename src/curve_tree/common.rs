@@ -1234,8 +1234,13 @@ macro_rules! impl_curve_tree_with_backend {
             pub $($async_fn)* fn get_path_and_root(
                 &self,
                 leaf_index: LeafIndex,
+                block_number: Option<BlockNumber>,
             ) -> Result<LeafPathAndRoot<L, M, C>, Error> {
-                let block_number = self.get_block_number()$($await)*?;
+                let block_number = if let Some(block_number) = block_number {
+                    block_number
+                } else {
+                    self.get_block_number()$($await)*?
+                };
                 // Get the leaf and path for the given leaf index.
                 let leaf = self
                     .get_leaf(leaf_index, Some(block_number))

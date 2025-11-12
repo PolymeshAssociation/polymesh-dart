@@ -9,7 +9,6 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
-    collections::BTreeMap,
     format,
     string::{String, ToString},
     vec::Vec,
@@ -240,13 +239,11 @@ impl LegBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Encode, Decode)]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
-    paths: BTreeMap<LeafIndex, CurveTreePath<ASSET_TREE_L, AssetTreeConfig>>,
-    block_number: BlockNumber,
-    root: Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>>,
+    paths: Option<MultiLeafPathAndRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>>,
     _marker: core::marker::PhantomData<T>,
 }
 
@@ -260,12 +257,15 @@ impl<T: DartLimits> SettlementBuilder<T> {
         block_number: BlockNumber,
         root: Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>>,
     ) -> Self {
+        let paths = if let Some(root) = root {
+            Some(MultiLeafPathAndRoot::new_root(block_number, root))
+        } else {
+            None
+        };
         Self {
             memo: memo.to_vec(),
             legs: Vec::new(),
-            paths: BTreeMap::new(),
-            block_number,
-            root,
+            paths,
             _marker: core::marker::PhantomData,
         }
     }
@@ -279,16 +279,19 @@ impl<T: DartLimits> SettlementBuilder<T> {
     }
 
     pub fn block(&self) -> BlockNumber {
-        self.block_number
+        self.paths.as_ref().map(|p| p.block_number()).unwrap_or(0)
     }
 
     pub fn add_path(
         &mut self,
         asset_id: AssetId,
         path: CurveTreePath<ASSET_TREE_L, AssetTreeConfig>,
-    ) {
-        let leaf_index = asset_id as LeafIndex;
-        self.paths.insert(leaf_index, path);
+    ) -> Result<(), Error> {
+        if let Some(paths) = &mut self.paths {
+            paths.push_path(asset_id as LeafIndex, path)
+        } else {
+            Err(Error::CurveTreeRootNotFound)
+        }
     }
 
     pub fn leg(mut self, leg: LegBuilder) -> Self {
@@ -304,10 +307,11 @@ impl<T: DartLimits> SettlementBuilder<T> {
         self,
         rng: &mut R,
     ) -> Result<SettlementProof<T, AssetTreeConfig>, Error> {
-        if self.root.is_none() {
-            return Err(Error::CurveTreeRootNotFound);
+        if let Some(paths) = &self.paths {
+            self.encrypt_and_prove(rng, paths)
+        } else {
+            Err(Error::CurveTreeRootNotFound)
         }
-        self.encrypt_and_prove(rng, &self)
     }
 
     pub fn encrypt_and_prove<
@@ -344,47 +348,6 @@ impl<T: DartLimits> SettlementBuilder<T> {
             root_block: try_block_number(root_block)?,
             legs,
         })
-    }
-}
-
-impl<T: DartLimits> CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>
-    for SettlementBuilder<T>
-{
-    fn get_path_to_leaf_index(
-        &self,
-        leaf_index: LeafIndex,
-    ) -> Result<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>, Error> {
-        if let Some(path) = self.paths.get(&leaf_index) {
-            Ok(path.clone())
-        } else {
-            Err(Error::LeafIndexNotFound(leaf_index))
-        }
-    }
-
-    fn get_path_to_leaf(
-        &self,
-        _leaf: CompressedLeafValue<AssetTreeConfig>,
-    ) -> Result<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>, Error> {
-        // Unsupported.
-        Err(Error::LeafNotFound)
-    }
-
-    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
-        AssetTreeConfig::parameters()
-    }
-
-    fn get_block_number(&self) -> Result<BlockNumber, Error> {
-        Ok(self.block_number)
-    }
-
-    fn root(
-        &self,
-    ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
-        if let Some(root) = &self.root {
-            Ok(root.clone())
-        } else {
-            Err(Error::CurveTreeRootNotFound)
-        }
     }
 }
 

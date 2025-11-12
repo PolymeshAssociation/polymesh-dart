@@ -17,18 +17,59 @@ use crate::{
 };
 
 #[derive(Clone, Encode, Decode)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
-    pub paths: Vec<LeafPathAndRoot<L, M, C>>,
+    paths: BTreeMap<LeafIndex, WrappedCanonical<CurveTreePath<L, C>>>,
+    block_number: BlockNumber,
+    root: CompressedCurveTreeRoot<L, M, C>,
 }
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L, M, C> {
     pub fn new() -> Self {
-        Self { paths: Vec::new() }
+        Self {
+            paths: BTreeMap::new(),
+            block_number: 0,
+            root: CompressedCurveTreeRoot::default(),
+        }
     }
 
-    pub fn first(&self) -> Option<&LeafPathAndRoot<L, M, C>> {
-        self.paths.first()
+    pub fn new_root(block_number: BlockNumber, root: CompressedCurveTreeRoot<L, M, C>) -> Self {
+        Self {
+            paths: BTreeMap::new(),
+            block_number,
+            root,
+        }
+    }
+
+    pub fn from_paths(leaf_paths: Vec<LeafPathAndRoot<L, M, C>>) -> Result<Self, Error> {
+        let mut paths = Self::new();
+        for path in leaf_paths {
+            paths.push_path_and_root(path)?;
+        }
+        Ok(paths)
+    }
+
+    pub fn block_number(&self) -> BlockNumber {
+        self.block_number
+    }
+
+    pub fn push_path_and_root(&mut self, leaf_path: LeafPathAndRoot<L, M, C>) -> Result<(), Error> {
+        if self.paths.len() == 0 {
+            self.block_number = leaf_path.block_number;
+            self.root = leaf_path.root()?;
+        }
+        self.paths.insert(leaf_path.leaf_index, leaf_path.path);
+
+        Ok(())
+    }
+
+    pub fn push_path(
+        &mut self,
+        leaf_index: LeafIndex,
+        path: CurveTreePath<L, C>,
+    ) -> Result<(), Error> {
+        self.paths
+            .insert(leaf_index, WrappedCanonical::wrap(&path)?);
+        Ok(())
     }
 }
 
@@ -36,20 +77,18 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     for MultiLeafPathAndRoot<L, M, C>
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
-        for leaf_path in &self.paths {
-            if leaf_path.leaf_index == leaf_index {
-                return leaf_path.get_path();
-            }
+        if let Some(leaf_path) = self.paths.get(&leaf_index) {
+            leaf_path.decode()
+        } else {
+            Err(Error::LeafIndexNotFound(leaf_index))
         }
-        Err(Error::LeafIndexNotFound(leaf_index))
     }
 
-    fn get_path_to_leaf(&self, leaf: CompressedLeafValue<C>) -> Result<CurveTreePath<L, C>, Error> {
-        for leaf_path in &self.paths {
-            if leaf_path.leaf == leaf {
-                return leaf_path.get_path();
-            }
-        }
+    fn get_path_to_leaf(
+        &self,
+        _leaf: CompressedLeafValue<C>,
+    ) -> Result<CurveTreePath<L, C>, Error> {
+        // Not supported.
         Err(Error::LeafNotFound)
     }
 
@@ -58,15 +97,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
     }
 
     fn root(&self) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-        self.first()
-            .ok_or_else(|| Error::CurveTreeRootNotFound)?
-            .root()
+        Ok(self.root.clone())
     }
 
     fn get_block_number(&self) -> Result<BlockNumber, Error> {
-        self.first()
-            .ok_or_else(|| Error::CurveTreeRootNotFound)?
-            .get_block_number()
+        Ok(self.block_number)
     }
 }
 
