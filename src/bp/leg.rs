@@ -9,6 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
+    collections::BTreeMap,
     format,
     string::{String, ToString},
     vec::Vec,
@@ -209,7 +210,7 @@ impl LegBuilder {
                 P1 = PallasParameters,
             >,
     >(
-        self,
+        &self,
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
@@ -239,20 +240,55 @@ impl LegBuilder {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone)]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
+    paths: BTreeMap<LeafIndex, CurveTreePath<ASSET_TREE_L, AssetTreeConfig>>,
+    block_number: BlockNumber,
+    root: Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>>,
     _marker: core::marker::PhantomData<T>,
 }
 
 impl<T: DartLimits> SettlementBuilder<T> {
     pub fn new(memo: &[u8]) -> Self {
+        Self::new_full(memo, 0, None)
+    }
+
+    pub fn new_full(
+        memo: &[u8],
+        block_number: BlockNumber,
+        root: Option<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>>,
+    ) -> Self {
         Self {
             memo: memo.to_vec(),
             legs: Vec::new(),
+            paths: BTreeMap::new(),
+            block_number,
+            root,
             _marker: core::marker::PhantomData,
         }
+    }
+
+    pub fn new_root(
+        memo: &[u8],
+        block_number: BlockNumber,
+        root: CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
+    ) -> Self {
+        Self::new_full(memo, block_number, Some(root))
+    }
+
+    pub fn block(&self) -> BlockNumber {
+        self.block_number
+    }
+
+    pub fn add_path(
+        &mut self,
+        asset_id: AssetId,
+        path: CurveTreePath<ASSET_TREE_L, AssetTreeConfig>,
+    ) {
+        let leaf_index = asset_id as LeafIndex;
+        self.paths.insert(leaf_index, path);
     }
 
     pub fn leg(mut self, leg: LegBuilder) -> Self {
@@ -264,6 +300,16 @@ impl<T: DartLimits> SettlementBuilder<T> {
         self.legs.push(leg);
     }
 
+    pub fn build<R: RngCore + CryptoRng>(
+        self,
+        rng: &mut R,
+    ) -> Result<SettlementProof<T, AssetTreeConfig>, Error> {
+        if self.root.is_none() {
+            return Err(Error::CurveTreeRootNotFound);
+        }
+        self.encrypt_and_prove(rng, &self)
+    }
+
     pub fn encrypt_and_prove<
         R: RngCore + CryptoRng,
         C: CurveTreeConfig<
@@ -273,11 +319,11 @@ impl<T: DartLimits> SettlementBuilder<T> {
                 P1 = PallasParameters,
             >,
     >(
-        self,
+        &self,
         rng: &mut R,
         asset_tree: impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<SettlementProof<T, C>, Error> {
-        let memo = BoundedVec::try_from(self.memo)
+        let memo = BoundedVec::try_from(self.memo.clone())
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         // TODO: need to collect all asset leaf paths based on the `root_block` number.
         // To avoid getting paths based on different roots if a new block is produced during proof generation.
@@ -285,7 +331,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
 
         let mut legs = Vec::with_capacity(self.legs.len());
 
-        for (idx, leg_builder) in self.legs.into_iter().enumerate() {
+        for (idx, leg_builder) in self.legs.iter().enumerate() {
             let ctx = (&memo, idx as u8).encode();
             let leg_proof = leg_builder.encrypt_and_prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
@@ -298,6 +344,47 @@ impl<T: DartLimits> SettlementBuilder<T> {
             root_block: try_block_number(root_block)?,
             legs,
         })
+    }
+}
+
+impl<T: DartLimits> CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>
+    for SettlementBuilder<T>
+{
+    fn get_path_to_leaf_index(
+        &self,
+        leaf_index: LeafIndex,
+    ) -> Result<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>, Error> {
+        if let Some(path) = self.paths.get(&leaf_index) {
+            Ok(path.clone())
+        } else {
+            Err(Error::LeafIndexNotFound(leaf_index))
+        }
+    }
+
+    fn get_path_to_leaf(
+        &self,
+        _leaf: CompressedLeafValue<AssetTreeConfig>,
+    ) -> Result<CurveTreePath<ASSET_TREE_L, AssetTreeConfig>, Error> {
+        // Unsupported.
+        Err(Error::LeafNotFound)
+    }
+
+    fn params(&self) -> &CurveTreeParameters<AssetTreeConfig> {
+        AssetTreeConfig::parameters()
+    }
+
+    fn get_block_number(&self) -> Result<BlockNumber, Error> {
+        Ok(self.block_number)
+    }
+
+    fn root(
+        &self,
+    ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Error> {
+        if let Some(root) = &self.root {
+            Ok(root.clone())
+        } else {
+            Err(Error::CurveTreeRootNotFound)
+        }
     }
 }
 

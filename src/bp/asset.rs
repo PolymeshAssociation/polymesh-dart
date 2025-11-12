@@ -12,7 +12,6 @@ use rand_core::{CryptoRng, RngCore};
 
 use super::*;
 use crate::*;
-use polymesh_dart_bp::account as bp_account;
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
 /// Represents the state of an asset in the Dart BP protocol.
