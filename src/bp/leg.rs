@@ -778,7 +778,7 @@ impl LegEncrypted {
         keys: &EncryptionKeyPair,
         key_index: Option<usize>,
         max_asset_id: Option<AssetId>,
-    ) -> Result<(Leg, usize), Error> {
+    ) -> Result<(Leg, LegRole), Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let leg_enc = self.decode()?;
         let (key_index, (sender, receiver, asset_id, amount)) = if let Some(key_index) = key_index {
@@ -815,6 +815,12 @@ impl LegEncrypted {
                 }
             }
         };
+
+        let leg_role = if leg_enc.eph_pk_auds_meds[key_index].0 {
+            LegRole::Auditor(key_index as u8)
+        } else {
+            LegRole::Mediator(key_index as u8)
+        };
         Ok((
             Leg {
                 sender: AccountPublicKey::from_affine(sender)?,
@@ -822,7 +828,7 @@ impl LegEncrypted {
                 asset_id,
                 amount,
             },
-            key_index,
+            leg_role,
         ))
     }
 
@@ -863,6 +869,24 @@ impl LegEncrypted {
         Ok((randomness, leg_enc, is_sender))
     }
 
+    /// Try to decrypt the leg as either sender or receiver.
+    ///
+    /// Auditors and mediators should use `try_decrypt_with_key` instead.
+    pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
+        // TODO: optimize to avoid decoding leg encryption twice.
+        if let Ok(leg) = self.decrypt(LegRole::Sender, keys) {
+            Some((leg, LegRole::Sender))
+        } else if let Ok(leg) = self.decrypt(LegRole::Receiver, keys) {
+            Some((leg, LegRole::Receiver))
+        } else {
+            None
+        }
+    }
+
+    /// Decrypt the leg using the provided role and account keys.  Only use this if the role is known.
+    ///
+    /// Senders/receivers should use `try_decrypt` instead.
+    /// Auditors/mediators should use `try_decrypt_with_key` instead.
     pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
