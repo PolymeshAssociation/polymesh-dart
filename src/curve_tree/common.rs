@@ -231,6 +231,14 @@ impl<const L: usize> NodeLocation<L> {
             })),
         }
     }
+
+    /// Returns true if the children are leaf nodes.
+    pub fn child_is_leaf(&self) -> bool {
+        match self {
+            Self::Odd(NodePosition { level: 1, .. }) => true,
+            _ => false,
+        }
+    }
 }
 
 pub fn update_inner_node<
@@ -723,9 +731,10 @@ macro_rules! impl_curve_tree_with_backend {
                 delta: &Affine<C::P1>,
             ) -> Result<[<C::P1 as ark_ec::CurveConfig>::BaseField; L], Error> {
                 let mut x_coord_children = [<C::P1 as ark_ec::CurveConfig>::BaseField::zero(); L];
-                for idx in 0..L {
+                let child_nodes = self.backend.get_inner_node_children(parent, block_number)$($await)*?;
+                for (idx, node) in child_nodes.into_iter().enumerate() {
                     let child = parent.child(idx as ChildIndex)?;
-                    let x_coord = match self.backend.get_inner_node(child, block_number)$($await)*? {
+                    let x_coord = match node {
                         Some(node) => match node.decompress()? {
                             Inner::Odd(commitments) => {
                                 Some((commitments[tree_index as usize] + delta).into_affine().x)
@@ -770,12 +779,20 @@ macro_rules! impl_curve_tree_with_backend {
                 delta: &Affine<C::P0>,
             ) -> Result<[<C::P0 as ark_ec::CurveConfig>::BaseField; L], Error> {
                 let mut x_coord_children = [<C::P0 as ark_ec::CurveConfig>::BaseField::zero(); L];
-                for idx in 0..L {
-                    let child = parent.child(idx as ChildIndex)?;
-                    let commitment = if let NodeLocation::Leaf(leaf_index) = child {
-                        self.backend.get_leaf(leaf_index, block_number)$($await)*?.and_then(|leaf| leaf.decompress().ok())
-                    } else {
-                        match self.backend.get_inner_node(child, block_number)$($await)*? {
+                if parent.child_is_leaf() {
+                    for idx in 0..L {
+                        let child = parent.child(idx as ChildIndex)?;
+                        let leaf_index = child.index();
+                        let commitment = self.backend.get_leaf(leaf_index, block_number)$($await)*?.and_then(|leaf| leaf.decompress().ok());
+                        if let Some(commitment) = commitment {
+                            x_coord_children[idx] = (commitment + delta).into_affine().x;
+                        }
+                    }
+                } else {
+                    let child_nodes = self.backend.get_inner_node_children(parent, block_number)$($await)*?;
+                    for (idx, node) in child_nodes.into_iter().enumerate() {
+                        let child = parent.child(idx as ChildIndex)?;
+                        let commitment = match node {
                             Some(node) => match node.decompress()? {
                                 Inner::Even(commitments) => Some(commitments[tree_index as usize]),
                                 Inner::Odd(_) => {
@@ -787,10 +804,10 @@ macro_rules! impl_curve_tree_with_backend {
                                 }
                             }
                             None => None,
+                        };
+                        if let Some(commitment) = commitment {
+                            x_coord_children[idx] = (commitment + delta).into_affine().x;
                         }
-                    };
-                    if let Some(commitment) = commitment {
-                        x_coord_children[idx] = (commitment + delta).into_affine().x;
                     }
                 }
                 Ok(x_coord_children)

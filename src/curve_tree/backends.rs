@@ -8,7 +8,7 @@ use codec::{Decode, Encode};
 
 use super::common::*;
 use crate::{
-    BlockNumber, LeafIndex, NodeLevel, WrappedCanonical,
+    BlockNumber, ChildIndex, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
         CompressedCurveTreeRoot, CurveTreeConfig, CurveTreeLookup, CurveTreeParameters,
         CurveTreePath, CurveTreeUpdater, DefaultCurveTreeUpdater,
@@ -228,6 +228,20 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
         block_number: Option<BlockNumber>,
     ) -> Result<Option<CompressedInner<M, C>>, Self::Error>;
 
+    fn get_inner_node_children(
+        &self,
+        parent: NodeLocation<L>,
+        block_number: Option<BlockNumber>,
+    ) -> Result<Vec<Option<CompressedInner<M, C>>>, Self::Error> {
+        let mut children = Vec::with_capacity(L);
+        for idx in 0..L {
+            let child = parent.child(idx as ChildIndex)?;
+            let node = self.get_inner_node(child, block_number)?;
+            children.push(node);
+        }
+        Ok(children)
+    }
+
     fn set_inner_node(
         &mut self,
         _location: NodeLocation<L>,
@@ -238,7 +252,9 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 }
 
 #[cfg(feature = "async_tree")]
-pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: Sized {
+pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>:
+    Sized + Send + Sync
+{
     type Error: From<crate::Error>;
     type Updater: CurveTreeUpdater<L, M, C>;
 
@@ -322,6 +338,25 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
         location: NodeLocation<L>,
         block_number: Option<BlockNumber>,
     ) -> impl Future<Output = Result<Option<CompressedInner<M, C>>, Self::Error>> + Send;
+
+    fn get_inner_node_children(
+        &self,
+        parent: NodeLocation<L>,
+        block_number: Option<BlockNumber>,
+    ) -> impl Future<Output = Result<Vec<Option<CompressedInner<M, C>>>, Self::Error>> + Send
+    where
+        Self: Sync,
+    {
+        async move {
+            let mut children = Vec::with_capacity(L);
+            for idx in 0..L {
+                let child = parent.child(idx as ChildIndex)?;
+                let node = self.get_inner_node(child, block_number).await?;
+                children.push(node);
+            }
+            Ok(children)
+        }
+    }
 
     fn set_inner_node(
         &mut self,
