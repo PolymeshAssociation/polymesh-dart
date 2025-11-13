@@ -176,6 +176,13 @@ impl Leg {
 }
 
 /// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
+///
+/// This builder type is different from the `Leg` type, which represents the decrypted leg details.
+/// The `Leg` type doesn't hold the sender/receiver encryption keys that are needed to encrypt the leg
+/// and generate the proof.
+///
+/// The leg builder holds the necessary information to create a leg, encrypt it, and generate the proof.
+/// It is used as part of the settlement building process.
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
