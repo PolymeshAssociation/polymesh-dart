@@ -27,7 +27,7 @@ var_s_i_plus_1 == var_s_i_plus_1_
 
 
 ### For range proof
-To prove that a value $v$ is of $n$ bits, i.e. $v \in [0, 2^n-1)$, decompose $v$ into bits and prove that each bit is indeed a bit, i.e. 0 or 1 and the appopriate linear combination of the bits is the original value $v$.
+To prove that a value $v$ is of $n$ bits, i.e. $v \in [0, 2^n-1)$, decompose $v$ into bits and prove that each bit is indeed a bit, i.e. 0 or 1 and the appropriate linear combination of the bits is the original value $v$.
 ```text
 // bits is an array bits of v in little-endian representation.
 bits = decompose(v)
