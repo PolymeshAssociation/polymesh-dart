@@ -1,3 +1,4 @@
+use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::util::{
     BPProof, add_verification_tuples_to_rmc, get_verification_tuples_with_rng, prove_with_rng,
@@ -31,7 +32,6 @@ use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::concat_slices;
 use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE};
 use rand_core::CryptoRngCore;
@@ -501,7 +501,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     ) -> Result<u64> {
         let asset_id = Self::decrypt_as_group_element_given_r(r_i, self.ct_asset_id, enc_key_gen);
 
-        solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as u64, enc_gen, asset_id)
+        solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
 
@@ -514,7 +514,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     ) -> Result<u64> {
         let amount = Self::decrypt_as_group_element_given_r(r_i, self.ct_amount, enc_key_gen);
 
-        solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
+        solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
 
@@ -534,7 +534,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.eph_pk_auds_meds[key_index].1.3,
         );
 
-        solve_discrete_log_bsgs_alt::<G::Group>(max_asset_id as _, enc_gen, asset_id)
+        solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
     }
 
@@ -554,7 +554,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.eph_pk_auds_meds[key_index].1.2,
         );
 
-        solve_discrete_log_bsgs_alt::<G::Group>(max_amount, enc_gen, amount)
+        solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
 

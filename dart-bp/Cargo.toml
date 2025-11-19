@@ -39,6 +39,7 @@ ark-pallas = { workspace = true, default-features = false, features = ["curve"] 
 rand_chacha = { workspace = true, default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1.21.3", default-features = false, features = ["alloc", "race"] }
+lazy_static = { workspace = true, default-features = false, optional = true }
 
 [dev-dependencies]
 test-log = { workspace = true }
@@ -58,6 +59,8 @@ default = ["std", "asm"]
 
 no_std = []
 
+large_baby_steps = []
+
 std = [
 	"bulletproofs/std",
 	"curve_tree_relations/std",
@@ -71,7 +74,8 @@ std = [
 	#	"equality_across_groups/std",
 	"ark-pallas/std",
 	"hex/std",
-	"once_cell/std"
+	"once_cell/std",
+	"lazy_static"
 ]
 
 # Turn on this feature for faster proof verification.

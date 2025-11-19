@@ -64,6 +64,8 @@ pub mod fee_account;
 pub mod leg;
 pub mod poseidon_impls;
 
+pub mod discrete_log;
+
 pub use error::Error;
 
 pub use polymesh_dart_common::{
