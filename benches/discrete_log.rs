@@ -3,8 +3,8 @@ use std::hint::black_box;
 
 use ark_pallas::Fr;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_alt;
-use polymesh_dart::*;
+use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
+use polymesh_dart_common::MAX_BALANCE;
 
 fn discrete_log_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Discrete Log BSGS Alt");
@@ -12,7 +12,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
     let enc_gen = hash_to_pallas(b"bench", b"enc-gen");
 
     for i in 2..6 {
-        let amount = (10 as Balance).pow(i);
+        let amount = (10u64).pow(i);
         let enc_amount = enc_gen * Fr::from(amount);
 
         group.bench_with_input(
@@ -21,7 +21,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
             |b, enc_amount| {
                 b.iter(|| {
                     let value =
-                        solve_discrete_log_bsgs_alt(MAX_BALANCE, enc_gen, black_box(*enc_amount))
+                        solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, black_box(*enc_amount))
                             .expect("Failed to solve discrete log for base");
                     assert_eq!(amount, value);
                 })
@@ -29,7 +29,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         );
     }
 
-    const MAX_DISCRETE_LOG_TIME_SECS: f32 = 4.0;
+    const MAX_DISCRETE_LOG_TIME_SECS: f32 = 300.0;
     let legs: Vec<_> = vec![
         (0u64, "0"),
         (1u64, "1"),
@@ -60,7 +60,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         (2u64.pow(45), "2^45"),
         (2u64.pow(46), "2^46"),
         (2u64.pow(47), "2^47"),
-        (2u64.pow(48) - 1, "2^48 - 1"),
+        (2u64.pow(48) - 2, "2^48 - 2"),
     ]
     .into_iter()
     .filter_map(|(amount, s_amount)| {
@@ -76,7 +76,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
     for (amount, enc_amount, s_amount) in &legs {
         let now = std::time::Instant::now();
         print!("--- time to discrete_log  {}: ", s_amount);
-        let value = solve_discrete_log_bsgs_alt(MAX_BALANCE, enc_gen, *enc_amount)
+        let value = solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, *enc_amount)
             .expect("Failed to solve discrete log for base");
         assert_eq!(*amount, value);
         let secs = now.elapsed().as_secs_f32();

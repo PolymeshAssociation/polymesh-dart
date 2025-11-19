@@ -180,6 +180,7 @@ default = [
     "serde",
     "utoipa",
     "sqlx",
+    "large_baby_steps",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -202,6 +203,10 @@ backend_bp = [
     "curve_tree_relations",
     "ark-pallas/curve",
     "ark-vesta",
+]
+
+large_baby_steps = [
+    "polymesh-dart-bp/large_baby_steps",
 ]
 
 no_std = ["alloc"]
