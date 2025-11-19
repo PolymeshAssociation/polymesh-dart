@@ -162,6 +162,14 @@ harness = false
 name = "fee_payments"
 harness = false
 
+[[bench]]
+name = "leg_decrypt"
+harness = false
+
+[[bench]]
+name = "discrete_log"
+harness = false
+
 [features]
 default = [
     "std",
