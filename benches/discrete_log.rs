@@ -6,10 +6,23 @@ use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
 use polymesh_dart_common::MAX_BALANCE;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 fn discrete_log_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Discrete Log BSGS Alt");
 
     let enc_gen = hash_to_pallas(b"bench", b"enc-gen");
+
+    // Warm up the Baby Steps cache
+    {
+        let amount = 1_000u64;
+        let enc_amount = enc_gen * Fr::from(amount);
+
+        let value = solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, black_box(enc_amount))
+            .expect("Failed to solve discrete log for base");
+        assert_eq!(amount, value);
+    }
 
     for i in 2..6 {
         let amount = (10u64).pow(i);
@@ -28,6 +41,20 @@ fn discrete_log_benchmark(c: &mut Criterion) {
             },
         );
     }
+
+    eprintln!("--- Verifying discrete log correctness for amounts 0 to 50,000,000 ---");
+    (0..50u64).into_par_iter().for_each(|chunk_idx| {
+        let start = chunk_idx * 1_000_000;
+        let end = start + 1_000_000;
+        for amount in start..end {
+            let enc_amount = enc_gen * Fr::from(amount);
+
+            let value = solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, black_box(enc_amount))
+                .expect("Failed to solve discrete log for base");
+            assert_eq!(amount, value);
+        }
+        eprintln!("Finished verifying amounts {} to {}", start, end - 1);
+    });
 
     const MAX_DISCRETE_LOG_TIME_SECS: f32 = 300.0;
     let legs: Vec<_> = vec![

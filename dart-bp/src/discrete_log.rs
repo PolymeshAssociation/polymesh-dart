@@ -28,6 +28,47 @@ fn bytes_to_group_element<G: AdditiveGroup + CurveGroup>(bytes: &[u8; 32]) -> G 
 }
 
 impl BabyStepsTable {
+    #[cfg(feature = "parallel")]
+    pub fn new<G: AdditiveGroup + CurveGroup>(base: G) -> Option<Self> {
+        use rayon::prelude::*;
+
+        let chunk_count = 32u64;
+        let chunk_size: u64 = MAX_NUM_BABY_STEPS / chunk_count;
+        let chunk_base = base * G::ScalarField::from(chunk_size);
+        let mut starting_point = base;
+        let table = (0..chunk_count)
+            .into_iter()
+            .map(|chunk_idx| {
+                let offset = 2 + chunk_idx * chunk_size;
+                if chunk_idx > 0 {
+                    starting_point = starting_point + chunk_base;
+                }
+                (offset, starting_point)
+            })
+            .par_bridge()
+            .flat_map(|(offset, starting_point)| {
+                let mut points = Vec::new();
+                let mut cur = starting_point;
+                for i in 0..=chunk_size {
+                    cur = cur + base;
+                    let cur_bytes = group_element_to_bytes(&cur)
+                        .expect("Serialization of group element should not fail");
+                    points.push((cur_bytes, offset + i));
+                }
+                points
+            })
+            .collect();
+        starting_point = starting_point + chunk_base - base;
+
+        let base_u32_max = base * G::ScalarField::from(u32::MAX as u64);
+        Some(Self {
+            base_m: group_element_to_bytes(&starting_point)?,
+            base_u32_max: group_element_to_bytes(&base_u32_max)?,
+            table,
+        })
+    }
+
+    #[cfg(not(feature = "parallel"))]
     pub fn new<G: AdditiveGroup + CurveGroup>(base: G) -> Option<Self> {
         let mut table = HashMap::new();
         let base_bytes = group_element_to_bytes(&base)?;
