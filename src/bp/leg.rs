@@ -32,12 +32,16 @@ use crate::*;
 pub mod proofs;
 pub use proofs::*;
 
+pub mod instant;
+pub use instant::*;
+
 /// Counts of the legs and sender/receiver affirmations in a settlement (batched or instant).
 #[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
 pub struct SettlementCounts {
     pub leg_count: u32,
     pub sender_count: u64,
     pub receiver_count: u64,
+    pub mediator_count: u64,
 }
 
 /// The settlement reference is the hash of the settlement creation proof.

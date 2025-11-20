@@ -74,6 +74,7 @@ impl<
             leg_count,
             sender_count,
             receiver_count,
+            mediator_count: 0,
         }
     }
 
