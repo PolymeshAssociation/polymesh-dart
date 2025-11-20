@@ -114,8 +114,7 @@ pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    // proof
-    proof: WrappedCanonical<BPMintTxnProof<C>>,
+    inner: WrappedCanonical<BPMintTxnProof<C>>,
 }
 
 impl<
@@ -167,7 +166,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -186,7 +185,7 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             self.pk.get_affine()?,
             id,

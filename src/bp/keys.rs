@@ -297,7 +297,7 @@ impl AccountKeys {
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
-    proof: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
+    inner: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
 }
 
 impl<T: DartLimits> AccountRegistrationProof<T> {
@@ -332,13 +332,13 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 
         Ok(Self {
             accounts: bounded_accounts,
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     /// Verify the account registration proof.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let pk_refs: Vec<_> = self
             .accounts
             .iter()
@@ -367,7 +367,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 
-    proof: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
+    inner: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
 }
 
 impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
@@ -394,13 +394,13 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
 
         Ok(Self {
             keys: bounded_keys,
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     /// Verify the encryption key registration proof.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let pk_refs: Vec<_> = self
             .keys
             .iter()

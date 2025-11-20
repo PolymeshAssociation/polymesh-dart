@@ -130,7 +130,7 @@ pub struct InstantSenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig>
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
+    inner: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
 }
 
 impl<
@@ -185,7 +185,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -205,7 +205,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -254,7 +254,7 @@ pub struct InstantReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfi
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
+    inner: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
 }
 
 impl<
@@ -309,7 +309,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -329,7 +329,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,

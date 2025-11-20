@@ -540,7 +540,7 @@ type BPSettlementTxnProof<C> = bp_leg::LegCreationProof<
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
 
-    proof: WrappedCanonical<BPSettlementTxnProof<C>>,
+    inner: WrappedCanonical<BPSettlementTxnProof<C>>,
 }
 
 impl<
@@ -583,7 +583,7 @@ impl<
         Ok(Self {
             leg_enc,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -612,7 +612,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.clone(),
@@ -643,7 +643,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let tuples = proof.verify_and_return_tuples(
             leg_enc.clone(),
             &root,

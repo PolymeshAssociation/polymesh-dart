@@ -117,7 +117,7 @@ pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
+    inner: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
 }
 
 impl<
@@ -172,7 +172,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -192,7 +192,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -241,7 +241,7 @@ pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
+    inner: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
 }
 
 impl<
@@ -294,7 +294,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -314,7 +314,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -363,7 +363,7 @@ pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPClaimReceivedTxnProof<C>>,
+    inner: WrappedCanonical<BPClaimReceivedTxnProof<C>>,
 }
 
 impl<
@@ -418,7 +418,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -438,7 +438,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -487,7 +487,7 @@ pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPSenderCounterUpdateTxnProof<C>>,
+    inner: WrappedCanonical<BPSenderCounterUpdateTxnProof<C>>,
 }
 
 impl<
@@ -540,7 +540,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -560,7 +560,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -609,7 +609,7 @@ pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<BPSenderReverseTxnProof<C>>,
+    inner: WrappedCanonical<BPSenderReverseTxnProof<C>>,
 }
 
 impl<
@@ -664,7 +664,7 @@ impl<
             updated_account_state_commitment,
             nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -684,7 +684,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -723,7 +723,7 @@ pub struct MediatorAffirmationProof {
     pub accept: bool,
     pub key_index: MediatorId,
 
-    proof: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
+    inner: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
 }
 
 impl MediatorAffirmationProof {
@@ -753,13 +753,13 @@ impl MediatorAffirmationProof {
             accept,
             key_index,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
     pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             leg_enc.decode()?,
             self.accept,

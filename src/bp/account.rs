@@ -498,7 +498,7 @@ pub struct AccountAssetRegistrationProof {
     pub account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    proof: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
+    inner: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
 
 impl AccountAssetRegistrationProof {
@@ -537,7 +537,7 @@ impl AccountAssetRegistrationProof {
                 account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
                 nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-                proof: WrappedCanonical::wrap(&proof)?,
+                inner: WrappedCanonical::wrap(&proof)?,
             },
             account_state,
         ))
@@ -550,7 +550,7 @@ impl AccountAssetRegistrationProof {
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
         proof.verify(
@@ -579,7 +579,7 @@ impl AccountAssetRegistrationProof {
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<bulletproofs::r1cs::VerificationTuple<PallasA>, Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 

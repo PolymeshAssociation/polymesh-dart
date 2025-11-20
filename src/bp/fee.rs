@@ -289,7 +289,7 @@ pub struct FeeAccountRegistrationProof {
     pub amount: Balance,
     pub account_state_commitment: FeeAccountStateCommitment,
 
-    proof: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
+    inner: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
 }
 
 impl FeeAccountRegistrationProof {
@@ -320,7 +320,7 @@ impl FeeAccountRegistrationProof {
                 amount: balance,
                 account_state_commitment: FeeAccountStateCommitment::from_affine(commitment.0)?,
 
-                proof: WrappedCanonical::wrap(&proof)?,
+                inner: WrappedCanonical::wrap(&proof)?,
             },
             account_state,
         ))
@@ -328,7 +328,7 @@ impl FeeAccountRegistrationProof {
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             &self.account.get_affine()?,
             self.amount,
@@ -465,7 +465,7 @@ pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    proof: WrappedCanonical<BPFeeAccountTopupTxnProof<C>>,
+    inner: WrappedCanonical<BPFeeAccountTopupTxnProof<C>>,
 }
 
 impl<
@@ -514,7 +514,7 @@ impl<
             updated_account_state_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
 
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -525,7 +525,7 @@ impl<
         ctx: &[u8],
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
     ) -> Result<(), Error> {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             self.account.get_affine()?,
             self.asset_id,
@@ -555,7 +555,7 @@ impl<
         ),
         Error,
     > {
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         let tuples = proof.verify_and_return_tuples(
             self.account.get_affine()?,
             self.asset_id,
@@ -828,7 +828,7 @@ pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    proof: WrappedCanonical<BPFeePaymentProof<C>>,
+    inner: WrappedCanonical<BPFeePaymentProof<C>>,
 }
 
 impl<
@@ -875,7 +875,7 @@ impl<
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
-            proof: WrappedCanonical::wrap(&proof)?,
+            inner: WrappedCanonical::wrap(&proof)?,
         })
     }
 
@@ -894,7 +894,7 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
-        let proof = self.proof.decode()?;
+        let proof = self.inner.decode()?;
         proof.verify(
             self.asset_id,
             self.amount,
