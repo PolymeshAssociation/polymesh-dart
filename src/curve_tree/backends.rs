@@ -8,7 +8,7 @@ use codec::{Decode, Encode};
 
 use super::common::*;
 use crate::{
-    BlockNumber, ChildIndex, LeafIndex, NodeLevel, WrappedCanonical,
+    BlockNumber, ChildIndex, CompressedAffine, LeafIndex, NodeLevel, WrappedCanonical,
     curve_tree::{
         CompressedCurveTreeRoot, CurveTreeConfig, CurveTreeLookup, CurveTreeParameters,
         CurveTreePath, CurveTreeUpdater, DefaultCurveTreeUpdater,
@@ -19,6 +19,7 @@ use crate::{
 #[derive(Clone, Encode, Decode)]
 pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     paths: BTreeMap<LeafIndex, WrappedCanonical<CurveTreePath<L, C>>>,
+    leaf_lookup: BTreeMap<CompressedAffine, LeafIndex>,
     block_number: BlockNumber,
     root: CompressedCurveTreeRoot<L, M, C>,
 }
@@ -27,6 +28,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L,
     pub fn new() -> Self {
         Self {
             paths: BTreeMap::new(),
+            leaf_lookup: BTreeMap::new(),
             block_number: 0,
             root: CompressedCurveTreeRoot::default(),
         }
@@ -35,6 +37,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L,
     pub fn new_root(block_number: BlockNumber, root: CompressedCurveTreeRoot<L, M, C>) -> Self {
         Self {
             paths: BTreeMap::new(),
+            leaf_lookup: BTreeMap::new(),
             block_number,
             root,
         }
@@ -57,7 +60,10 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> MultiLeafPathAndRoot<L,
             self.block_number = leaf_path.block_number;
             self.root = leaf_path.root()?;
         }
-        self.paths.insert(leaf_path.leaf_index, leaf_path.path);
+        let leaf_index = leaf_path.leaf_index;
+        let leaf: CompressedAffine = leaf_path.leaf.into();
+        self.paths.insert(leaf_index, leaf_path.path);
+        self.leaf_lookup.insert(leaf, leaf_index);
 
         Ok(())
     }
@@ -88,8 +94,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
         &self,
         _leaf: CompressedLeafValue<C>,
     ) -> Result<CurveTreePath<L, C>, Error> {
-        // Not supported.
-        Err(Error::LeafNotFound)
+        if let Some(leaf_index) = self.leaf_lookup.get(&_leaf.into()) {
+            self.get_path_to_leaf_index(*leaf_index)
+        } else {
+            Err(Error::LeafNotFound)
+        }
     }
 
     fn params(&self) -> &CurveTreeParameters<C> {
