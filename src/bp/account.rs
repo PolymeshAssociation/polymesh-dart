@@ -272,6 +272,26 @@ impl AccountAssetState {
         self.state_change(account, |state| Ok(state.get_state_for_receive()))
     }
 
+    pub fn get_instant_sender_affirm_state(
+        &mut self,
+        account: &AccountKeyPair,
+        amount: Balance,
+    ) -> Result<AccountAssetStateChange, Error> {
+        self.state_change(account, |state| {
+            Ok(state.get_state_for_irreversible_send(amount)?)
+        })
+    }
+
+    pub fn get_instant_receiver_affirm_state(
+        &mut self,
+        account: &AccountKeyPair,
+        amount: Balance,
+    ) -> Result<AccountAssetStateChange, Error> {
+        self.state_change(account, |state| {
+            Ok(state.get_state_for_irreversible_receive(amount)?)
+        })
+    }
+
     pub fn get_state_for_claiming_received(
         &mut self,
         account: &AccountKeyPair,

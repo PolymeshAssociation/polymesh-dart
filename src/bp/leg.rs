@@ -396,6 +396,24 @@ impl<
         SettlementRef(blake2_256(self))
     }
 
+    /// Get leg and sender, receiver and mediator affirmation counts.
+    pub fn count_leg_affirmations(&self) -> Result<SettlementCounts, Error> {
+        let mut leg_count = 0;
+        let mut mediator_count = 0;
+
+        for leg_aff in &self.legs {
+            leg_count += 1;
+            mediator_count += leg_aff.mediator_count()? as u64;
+        }
+
+        Ok(SettlementCounts {
+            leg_count,
+            sender_count: leg_count as u64,
+            receiver_count: leg_count as u64,
+            mediator_count,
+        })
+    }
+
     #[cfg(feature = "parallel")]
     pub fn verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &self,
