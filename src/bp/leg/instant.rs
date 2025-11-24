@@ -61,6 +61,16 @@ impl<
         >,
 > InstantSettlementProof<T, C, A>
 {
+    /// Leg count.
+    pub fn leg_count(&self) -> usize {
+        self.settlement.legs.len()
+    }
+
+    /// Settlement reference.
+    pub fn settlement_ref(&self) -> SettlementRef {
+        self.settlement.settlement_ref()
+    }
+
     /// Get leg and sender, receiver and mediator affirmation counts.
     pub fn count_leg_affirmations(&self) -> SettlementCounts {
         let mut leg_count = 0;

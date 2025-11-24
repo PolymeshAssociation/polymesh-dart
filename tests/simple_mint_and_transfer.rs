@@ -249,6 +249,154 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
     Ok(())
 }
 
+/// Test an instant settlement using an asset that has an auditor.
+#[test]
+fn test_instant_settlement_with_auditor() -> Result<()> {
+    let mut rng = rand::thread_rng();
+
+    // Setup chain state.
+    let mut chain = DartChainState::new()?;
+
+    // Setup an off-chain curve-tree prover.
+    let mut account_tree = DartProverAccountTree::new()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Create some users.
+    let users = chain.create_signers(&["AssetIssuer", "Auditor", "Investor1"])?;
+    let mut issuer = DartUser::new(&users[0]);
+    let mut auditor = DartUser::new(&users[1]);
+    let mut investor1 = DartUser::new(&users[2]);
+
+    // Create account keys and register them for the issuer, auditor, and investor.
+    let issuer_acct = issuer.create_and_register_account(&mut rng, &mut chain, "1")?;
+    let auditor_acct = auditor.create_and_register_account(&mut rng, &mut chain, "1")?;
+    let auditor_enc = auditor_acct.public_keys().enc.clone();
+    let investor1_acct = investor1.create_and_register_account(&mut rng, &mut chain, "1")?;
+
+    eprintln!("Issuer account: {:?}", issuer_acct.public_keys());
+    eprintln!("Auditor account: {:?}", auditor_acct.public_keys());
+    eprintln!("Investor account: {:?}", investor1_acct.public_keys());
+
+    // Create a Dart asset with the issuer as the owner and the auditor as the auditor.
+    let asset_id = issuer.create_asset(&mut chain, &[auditor_enc], &[])?;
+    let asset = chain.get_asset_state(asset_id)?;
+
+    // Initialize account asset state for the issuer and investor.
+    issuer_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+    investor1_acct.initialize_asset(&mut rng, &mut chain, asset_id)?;
+
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // Mint the asset to the issuer's account.
+    issuer_acct.mint_asset(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        asset_id,
+        1000,
+    )?;
+
+    // Create a settlement to transfer some assets from the issuer to the investor.
+    let settlement = SettlementBuilder::new(b"Test")
+        .leg(LegBuilder {
+            sender: issuer_acct.public_keys(),
+            receiver: investor1_acct.public_keys(),
+            asset,
+            amount: 500,
+        })
+        .encrypt_and_prove(&mut rng, chain.asset_tree())?;
+
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    let settlement_ref = settlement.settlement_ref();
+    let leg_ref = LegRef::new(settlement_ref, 0);
+    let leg_enc = settlement.legs[0].leg_enc.clone();
+
+    // The issuer affirms the settlement as the sender.
+    let sender = issuer_acct.instant_sender_affirmation_proof(
+        &mut rng,
+        &leg_enc,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+        asset_id,
+        500,
+    )?;
+
+    // The investor affirms the settlement as the receiver.
+    let receiver = investor1_acct.instant_receiver_affirmation_proof(
+        &mut rng,
+        &leg_enc,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+        asset_id,
+        500,
+    )?;
+
+    // Build the instant settlement proof.
+    let instant_settlement = InstantSettlementProof {
+        settlement,
+        leg_affirmations: vec![InstantSettlementLegAffirmations {
+            sender,
+            receiver,
+            mediators: Default::default(),
+        }]
+        .try_into()
+        .expect("Invalid leg count"),
+    };
+
+    // Submit and execute the instant settlement.
+    let settlement_id = issuer.execute_instant_settlement(&mut chain, instant_settlement)?;
+    let leg_ref = LegRef::new(settlement_id.into(), 0);
+
+    // The auditor decrypts the leg details.
+    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::Auditor(0))?;
+    // Verify the leg details.
+    assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
+    assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+    assert_eq!(leg.asset_id(), asset_id);
+    assert_eq!(leg.amount(), 500);
+
+    // End the block to finalize the new accounts.
+    chain.end_block()?;
+    account_tree.apply_updates(&chain)?;
+
+    // The investor can't claim the assets, since the instant affirmation has already transferred them.
+    let res = investor1_acct.receiver_claims(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+    );
+    assert!(
+        res.is_err(),
+        "Investor should not be able to claim assets from an instant settlement"
+    );
+
+    // The issuer can't update their sender counter, since the instant affirmation has already finalized the settlement.
+    let res = issuer_acct.sender_counter_update(
+        &mut rng,
+        &mut chain,
+        account_tree.prover_account_tree(),
+        &leg_ref,
+    );
+    assert!(
+        res.is_err(),
+        "Issuer should not be able to update sender counter for an instant settlement"
+    );
+
+    // Ensure the settlement is finalized.
+    assert_eq!(
+        chain.get_settlement_status(settlement_id)?,
+        SettlementStatus::Finalized
+    );
+
+    Ok(())
+}
+
 /// Test an atomic swap using two assets created by different asset issuers.
 ///
 /// Steps:

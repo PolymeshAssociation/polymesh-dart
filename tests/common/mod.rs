@@ -119,6 +119,15 @@ impl DartUserAccountInner {
         Ok(())
     }
 
+    pub fn commit_pending_asset_state(&mut self, asset_id: AssetId) -> Result<()> {
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+        asset_state.commit_pending_state()?;
+        Ok(())
+    }
+
     pub fn mint_asset<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -238,6 +247,157 @@ impl DartUserAccountInner {
         log::info!("Receiver affirms");
         chain.receiver_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state()?;
+        Ok(())
+    }
+
+    pub fn instant_sender_affirmation_proof<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        leg_enc: &LegEncrypted,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<InstantSenderAffirmationProof> {
+        log::info!("Sender decrypts the leg");
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys)?;
+
+        if asset_id != leg.asset_id() {
+            return Err(anyhow!(
+                "Asset ID {} does not match leg asset ID {}",
+                asset_id,
+                leg.asset_id()
+            ));
+        }
+        if amount != leg.amount() {
+            return Err(anyhow!(
+                "Amount {} does not match leg amount {}",
+                amount,
+                leg.amount()
+            ));
+        }
+
+        // Get the asset state for the account.
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+
+        // Create the sender affirmation proof.
+        log::info!("Sender generate instant affirmation proof");
+        let proof = InstantSenderAffirmationProof::new(
+            rng,
+            &self.keys.acct,
+            leg_ref,
+            amount,
+            &leg_enc,
+            &leg_enc_rand,
+            asset_state,
+            &account_tree,
+        )?;
+
+        // Try to verify the proof before returning it.
+        let root = account_tree.root()?;
+        let res = proof.verify(leg_enc, &root, rng);
+        log::info!("Verified instant sender affirmation proof: {:?}", res);
+        res?;
+
+        Ok(proof)
+    }
+
+    pub fn instant_receiver_affirmation_proof<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        leg_enc: &LegEncrypted,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<InstantReceiverAffirmationProof> {
+        log::info!("Receiver decrypts the leg");
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys)?;
+
+        if asset_id != leg.asset_id() {
+            return Err(anyhow!(
+                "Asset ID {} does not match leg asset ID {}",
+                asset_id,
+                leg.asset_id()
+            ));
+        }
+        if amount != leg.amount() {
+            return Err(anyhow!(
+                "Amount {} does not match leg amount {}",
+                amount,
+                leg.amount()
+            ));
+        }
+
+        // Get the asset state for the account.
+        let asset_state = self
+            .assets
+            .get_mut(&asset_id)
+            .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
+
+        // Create the receiver affirmation proof.
+        log::info!("Receiver generate instant affirmation proof");
+        let proof = InstantReceiverAffirmationProof::new(
+            rng,
+            &self.keys.acct,
+            leg_ref,
+            amount,
+            &leg_enc,
+            &leg_enc_rand,
+            asset_state,
+            account_tree,
+        )?;
+        Ok(proof)
+    }
+
+    pub fn instant_sender_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let proof = self.instant_sender_affirmation_proof(
+            rng,
+            &leg_enc,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )?;
+        log::info!("Sender instant affirms");
+        chain.instant_sender_affirmation(&self.address, proof)?;
+        self.commit_pending_asset_state(asset_id)?;
+        Ok(())
+    }
+
+    pub fn instant_receiver_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
+        let proof = self.instant_receiver_affirmation_proof(
+            rng,
+            &leg_enc,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )?;
+        log::info!("Receiver instant affirms");
+        chain.instant_receiver_affirmation(&self.address, proof)?;
+        self.commit_pending_asset_state(asset_id)?;
         Ok(())
     }
 
@@ -503,6 +663,82 @@ impl DartUserAccount {
         )
     }
 
+    pub fn instant_sender_affirmation_proof<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        leg_enc: &LegEncrypted,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<InstantSenderAffirmationProof> {
+        self.0.write().unwrap().instant_sender_affirmation_proof(
+            rng,
+            leg_enc,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
+    }
+
+    pub fn instant_receiver_affirmation_proof<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        leg_enc: &LegEncrypted,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<InstantReceiverAffirmationProof> {
+        self.0.write().unwrap().instant_receiver_affirmation_proof(
+            rng,
+            leg_enc,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
+    }
+
+    pub fn instant_sender_affirmation<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        self.0.write().unwrap().instant_sender_affirmation(
+            rng,
+            chain,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
+    }
+
+    pub fn instant_receiver_affirmation<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        chain: &mut DartChainState,
+        account_tree: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        leg_ref: &LegRef,
+        asset_id: AssetId,
+        amount: Balance,
+    ) -> Result<()> {
+        self.0.write().unwrap().instant_receiver_affirmation(
+            rng,
+            chain,
+            account_tree,
+            leg_ref,
+            asset_id,
+            amount,
+        )
+    }
+
     pub fn mediator_affirmation<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
@@ -625,6 +861,14 @@ impl DartUser {
     ) -> Result<SettlementRef> {
         chain.create_settlement(&self.address, proof)
     }
+
+    pub fn execute_instant_settlement(
+        &self,
+        chain: &mut DartChainState,
+        proof: InstantSettlementProof<()>,
+    ) -> Result<SettlementRef> {
+        chain.execute_instant_settlement(&self.address, proof)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -720,6 +964,36 @@ impl DartSettlementLeg {
         Ok(())
     }
 
+    pub fn pending_counts(&self) -> (u64, u64) {
+        let mut pending_affirms = 0;
+        let mut pending_finals = 0;
+        match self.sender {
+            AffirmationStatus::Pending => {
+                pending_affirms += 1;
+            }
+            AffirmationStatus::Affirmed => {
+                pending_finals += 1;
+            }
+            AffirmationStatus::Rejected | AffirmationStatus::Finalized => {}
+        }
+        match self.receiver {
+            AffirmationStatus::Pending => {
+                pending_affirms += 1;
+            }
+            AffirmationStatus::Affirmed => {
+                pending_finals += 1;
+            }
+            AffirmationStatus::Rejected | AffirmationStatus::Finalized => {}
+        }
+        for (_, mediator) in &self.mediators {
+            if mediator == &AffirmationStatus::Pending {
+                pending_affirms += 1;
+            }
+        }
+
+        (pending_affirms, pending_finals)
+    }
+
     pub fn reject(&mut self) -> Result<()> {
         // If the leg is already finalized, we cannot reject it.
         if self.status == AffirmationStatus::Finalized {
@@ -790,6 +1064,48 @@ impl DartSettlementLeg {
         // Update the leg's status.
         self.receiver = AffirmationStatus::Affirmed;
         self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify an instant sender affirmation proof for this leg.
+    pub fn instant_sender_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        proof: &InstantSenderAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        if self.sender != AffirmationStatus::Pending {
+            return Err(anyhow!("Sender has already affirmed this leg"));
+        }
+        // verify the proof.
+        proof
+            .verify(&self.enc, tree_roots, rng)
+            .context("Invalid sender affirmation proof")?;
+
+        // Update the leg's status.
+        self.sender = AffirmationStatus::Finalized;
+
+        Ok(())
+    }
+
+    /// Verify an instant receiver affirmation proof for this leg.
+    pub fn instant_receiver_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        proof: &InstantReceiverAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        if self.receiver != AffirmationStatus::Pending {
+            return Err(anyhow!("Receiver has already affirmed this leg"));
+        }
+        // verify the proof.
+        proof
+            .verify(&self.enc, tree_roots, rng)
+            .context("Invalid receiver affirmation proof")?;
+
+        // Update the leg's status.
+        self.receiver = AffirmationStatus::Finalized;
 
         Ok(())
     }
@@ -923,10 +1239,15 @@ pub struct DartSettlement {
     pub id: SettlementRef,
     pub legs: Vec<DartSettlementLeg>,
     pub status: SettlementStatus,
+    pub pending_affirms: u64,
+    pub pending_finals: u64,
 }
 
 impl DartSettlement {
-    pub fn from_proof(id: SettlementRef, proof: SettlementProof<()>) -> Result<Self> {
+    pub fn from_proof(proof: SettlementProof<()>) -> Result<Self> {
+        let id = proof.settlement_ref();
+        let affirm_counts = proof.count_leg_affirmations()?;
+        let pending_affirms = affirm_counts.total_affirmations();
         let legs = proof
             .legs
             .into_iter()
@@ -949,14 +1270,57 @@ impl DartSettlement {
             id,
             legs,
             status: SettlementStatus::Pending,
+            pending_affirms,
+            pending_finals: 0,
         })
     }
 
     /// Ensure the settlement is in a pending state.
     pub fn ensure_pending(&self) -> Result<()> {
-        if self.status != SettlementStatus::Pending {
+        if self.status != SettlementStatus::Pending && self.pending_affirms > 0 {
             return Err(anyhow!("Settlement is not in a pending state"));
         }
+        Ok(())
+    }
+
+    /// Verify Instant Settlement Leg Affirmations
+    pub fn instant_leg_affirmations<R: RngCore + CryptoRng>(
+        &mut self,
+        proofs: &[InstantSettlementLegAffirmations<(), AccountTreeConfig>],
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        for proof in proofs {
+            let leg_ref = proof.sender.leg_ref;
+            if self.id != leg_ref.settlement_ref() {
+                return Err(anyhow!(
+                    "Leg reference settlement ID does not match this settlement"
+                ));
+            }
+            let leg_id = leg_ref.leg_id() as usize;
+            if leg_id >= self.legs.len() {
+                return Err(anyhow!("Leg index {} out of bounds", leg_id));
+            }
+            let leg = &mut self.legs[leg_id];
+
+            // Verify sender affirmation
+            leg.instant_sender_affirmation(&proof.sender, &tree_roots, rng)?;
+
+            // Verify receiver affirmation
+            leg.instant_receiver_affirmation(&proof.receiver, &tree_roots, rng)?;
+
+            // Verify mediator affirmations
+            for mediator_proof in &proof.mediators {
+                leg.mediator_affirmation(mediator_proof)?;
+            }
+
+            leg.update_status()?;
+        }
+
+        // If all legs are affirmed, update the status of the settlement.
+        self.check_for_updated_status()?;
         Ok(())
     }
 
@@ -996,6 +1360,62 @@ impl DartSettlement {
         }
         let leg = &mut self.legs[leg_id];
         leg.receiver_affirmation(proof, tree_roots, rng)?;
+
+        // If the receiver has affirmed, update the status of the settlement.
+        self.check_for_updated_status()?;
+        Ok(())
+    }
+
+    /// Verify an instant sender affirmation proof for a specific leg in the settlement.
+    pub fn instant_sender_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        proof: &InstantSenderAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        if self.pending_affirms > 1 {
+            return Err(anyhow!(
+                "Instant sender affirmation can only be performed when there is one pending affirmation left"
+            ));
+        }
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.instant_sender_affirmation(proof, tree_roots, rng)?;
+        leg.update_status()?;
+
+        // If the sender has affirmed, update the status of the settlement.
+        self.check_for_updated_status()?;
+        Ok(())
+    }
+
+    /// Verify an instant receiver affirmation proof for a specific leg in the settlement.
+    pub fn instant_receiver_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        proof: &InstantReceiverAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        self.ensure_pending()?;
+
+        if self.pending_affirms > 1 {
+            return Err(anyhow!(
+                "Instant receiver affirmation can only be performed when there is one pending affirmation left"
+            ));
+        }
+
+        let leg_id = proof.leg_ref.leg_id() as usize;
+        if leg_id >= self.legs.len() {
+            return Err(anyhow!("Leg index {} out of bounds", leg_id));
+        }
+        let leg = &mut self.legs[leg_id];
+        leg.instant_receiver_affirmation(proof, tree_roots, rng)?;
+        leg.update_status()?;
 
         // If the receiver has affirmed, update the status of the settlement.
         self.check_for_updated_status()?;
@@ -1096,25 +1516,45 @@ impl DartSettlement {
         Ok(())
     }
 
+    fn update_pending_counts(&mut self) {
+        let mut pending_affirms = 0;
+        let mut pending_finals = 0;
+        for leg in &self.legs {
+            let (affirms, finals) = leg.pending_counts();
+            pending_affirms += affirms;
+            pending_finals += finals;
+        }
+        self.pending_affirms = pending_affirms;
+        self.pending_finals = pending_finals;
+    }
+
     fn check_for_updated_status(&mut self) -> Result<()> {
         match self.status {
             SettlementStatus::Pending => {
-                // If the settlement is pending, check if all legs are affirmed.
-                for leg in &self.legs {
-                    if leg.status != AffirmationStatus::Affirmed {
-                        return Ok(()); // Still pending
-                    }
+                // Update pending counts first.
+                self.update_pending_counts();
+                if self.pending_affirms > 0 {
+                    return Ok(()); // Still pending
                 }
-                // If all legs are affirmed, update the settlement status to executed.
-                self.execute()
+                if self.pending_finals > 0 {
+                    // If there are no pending affirms but there are pending finals, we can execute the settlement.
+                    self.execute()
+                } else {
+                    // If all legs are finalized, update the settlement status to finalized.
+                    self.finalize()
+                }
             }
             SettlementStatus::Executed | SettlementStatus::Rejected => {
-                // If the settlement is in the executed or rejected state,
-                // check if all legs are finalized.
-                for leg in &self.legs {
-                    if leg.status != AffirmationStatus::Finalized {
-                        return Ok(()); // Still not finalized
-                    }
+                // Update pending counts first.
+                self.update_pending_counts();
+                if self.pending_affirms > 0 {
+                    // This state should not happen.
+                    return Err(anyhow!(
+                        "Settlement in Executed or Rejected state cannot have pending affirmations"
+                    ));
+                }
+                if self.pending_finals > 0 {
+                    return Ok(()); // Still pending finalization
                 }
                 // If all legs are finalized, update the settlement status to finalized.
                 self.finalize()
@@ -1595,8 +2035,63 @@ impl DartChainState {
             .context("Invalid settlement proof")?;
 
         // Save the settlement.
-        let settlement_ref = proof.settlement_ref();
-        let settlement = DartSettlement::from_proof(settlement_ref, proof)?;
+        let settlement = DartSettlement::from_proof(proof)?;
+        let settlement_ref = settlement.id;
+        self.settlements.insert(settlement_ref, settlement);
+
+        Ok(settlement_ref)
+    }
+
+    pub fn execute_instant_settlement(
+        &mut self,
+        caller: &SignerAddress,
+        proof: InstantSettlementProof<()>,
+    ) -> Result<SettlementRef> {
+        self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
+        // Ensure the settlement has a valid number of legs.
+        let leg_count = proof.leg_count();
+        if leg_count == 0 || leg_count > SETTLEMENT_MAX_LEGS as usize {
+            return Err(anyhow!(
+                "Settlement must have between 1 and {} legs",
+                SETTLEMENT_MAX_LEGS
+            ));
+        }
+
+        // Ensure leg affirmation refernes are valid.
+        if !proof.check_leg_references() {
+            return Err(anyhow!(
+                "Invalid leg references in instant settlement proof"
+            ));
+        }
+
+        let mut rng = new_rng();
+        // verify the settlement proof.
+        proof
+            .settlement
+            .verify(&self.asset_tree, &mut rng)
+            .context("Invalid settlement proof")?;
+
+        // Create the settlement.
+        let mut settlement = DartSettlement::from_proof(proof.settlement)?;
+        let settlement_ref = settlement.id;
+
+        // Process all instant affirmations.
+        settlement.instant_leg_affirmations(
+            &proof.leg_affirmations,
+            &self.account_tree,
+            &mut rng,
+        )?;
+
+        // Ensure that the settlement executed and finalized.
+        if settlement.status != SettlementStatus::Finalized {
+            return Err(anyhow!("Instant settlement did not finalize as expected"));
+        }
+
+        // Save the settlement.
         self.settlements.insert(settlement_ref, settlement);
 
         Ok(settlement_ref)
@@ -1691,6 +2186,74 @@ impl DartChainState {
         let mut rng = new_rng();
         // Verify the receiver affirmation proof and update the settlement status.
         settlement.receiver_affirmation(&proof, &self.account_tree, &mut rng)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a instant sender affirmation proof for a settlement leg.
+    pub fn instant_sender_affirmation(
+        &mut self,
+        caller: &SignerAddress,
+        proof: InstantSenderAffirmationProof,
+    ) -> Result<()> {
+        self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
+        let settlement_ref = proof.leg_ref.settlement_ref();
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
+
+        let mut rng = new_rng();
+        // Verify the sender affirmation proof and update the settlement status.
+        settlement.instant_sender_affirmation(&proof, &self.account_tree, &mut rng)?;
+
+        // Add the new account state commitment to the account tree.
+        self._add_account_commitment(proof.account_state_commitment())?;
+        self._add_nullifier(nullifier);
+
+        Ok(())
+    }
+
+    /// Verify a instant receiver affirmation proof for a settlement leg.
+    pub fn instant_receiver_affirmation(
+        &mut self,
+        caller: &SignerAddress,
+        proof: InstantReceiverAffirmationProof,
+    ) -> Result<()> {
+        self.ensure_caller(caller)?;
+
+        // Test SCALE encoding of the proof.
+        let proof = scale_encode_and_decode_test(&proof)?;
+
+        let settlement_ref = proof.leg_ref.settlement_ref();
+
+        // Ensure the nullifier is unique.
+        let nullifier = proof.nullifier();
+        self.ensure_nullifier_unique(&nullifier)?;
+
+        // Get the settlement.
+        let settlement = self
+            .settlements
+            .get_mut(&settlement_ref)
+            .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
+
+        let mut rng = new_rng();
+        // Verify the receiver affirmation proof and update the settlement status.
+        settlement.instant_receiver_affirmation(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;

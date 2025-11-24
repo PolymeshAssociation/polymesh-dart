@@ -44,6 +44,12 @@ pub struct SettlementCounts {
     pub mediator_count: u64,
 }
 
+impl SettlementCounts {
+    pub fn total_affirmations(&self) -> u64 {
+        self.sender_count + self.receiver_count + self.mediator_count
+    }
+}
+
 /// The settlement reference is the hash of the settlement creation proof.
 #[derive(
     Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
