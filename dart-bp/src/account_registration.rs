@@ -4,6 +4,7 @@ use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
+use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::bp_gens_for_vec_commitment;
@@ -26,8 +27,10 @@ use curve_tree_relations::curve::curve_check;
 use curve_tree_relations::lookup::Lookup3Bit;
 use curve_tree_relations::range_proof::range_proof;
 use curve_tree_relations::rerandomize::scalar_mult;
+use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::ff::inner_product;
+use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::msm::multiply_field_elems_with_same_group_elem;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -1467,6 +1470,44 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
     powers
 }
 
+/// Generate keypairs and fresh account state for investor from a seed
+pub fn setup_investor<G: AffineRepr, D: FullDigest>(
+    seed: &[u8],
+    id: G::ScalarField, // User can hash its string ID onto the field
+    asset_id: AssetId,
+    counter: NullifierSkGenCounter,
+    j: G,
+    g: G,
+    poseidon_config: Poseidon2Params<G::ScalarField>,
+) -> Result<(
+    (SigKey<G>, VerKey<G>),
+    (DecKey<G>, EncKey<G>),
+    AccountState<G>,
+)> {
+    // For creating secret keys, use seed||asset_id
+    let mut extended_seed = seed.to_vec();
+    extended_seed.extend(asset_id.to_le_bytes().as_slice());
+
+    let sig_sk = hash_to_field::<G::ScalarField, D>(b"Signing key", &extended_seed);
+    let enc_sk = hash_to_field::<G::ScalarField, D>(b"Encryption key", &extended_seed);
+
+    // For creating commitment randomness, use seed||asset_id||counter
+    extended_seed.extend_from_slice(counter.to_le_bytes().as_slice());
+    let randomness = hash_to_field::<G::ScalarField, D>(b"Commitment randomness", &extended_seed);
+
+    let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
+    let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
+    let account = AccountState::new_given_randomness(
+        id,
+        sk.0,
+        asset_id,
+        counter,
+        randomness,
+        poseidon_config,
+    )?;
+    Ok(((sk, vk), (dk, ek), account))
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1487,6 +1528,7 @@ pub mod tests {
     //     fields::fp::{AllocatedFp, FpVar},
     // };
     use ark_std::UniformRand;
+    use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
     use curve_tree_relations::curve_tree::SelRerandParameters;
@@ -1639,6 +1681,85 @@ pub mod tests {
             assert_eq!(account.current_rho, expected_current_rho);
             assert_eq!(account.randomness, expected_randomness);
         }
+    }
+
+    #[test]
+    fn test_setup_investor() {
+        let mut rng = rand::thread_rng();
+
+        let id = Fr::rand(&mut rng);
+        let asset_id = 1;
+        let counter = 1;
+
+        let seed1 = b"test_seed";
+
+        let j = PallasA::rand(&mut rng);
+        let g = PallasA::rand(&mut rng);
+        let params = test_params_for_poseidon2();
+
+        let result1 = setup_investor::<PallasA, Blake2b512>(
+            seed1,
+            id,
+            asset_id,
+            counter,
+            j,
+            g,
+            params.clone(),
+        )
+        .unwrap();
+        let result2 = setup_investor::<PallasA, Blake2b512>(
+            seed1,
+            id,
+            asset_id,
+            counter,
+            j,
+            g,
+            params.clone(),
+        )
+        .unwrap();
+        assert_eq!(result1, result2);
+
+        let seed2 = b"different_seed";
+        let result3 = setup_investor::<PallasA, Blake2b512>(
+            seed2,
+            id,
+            asset_id,
+            counter,
+            j,
+            g,
+            params.clone(),
+        )
+        .unwrap();
+        assert_ne!(result1, result3);
+
+        // seed same but asset id different
+        let result4 = setup_investor::<PallasA, Blake2b512>(
+            seed1,
+            id,
+            asset_id + 1,
+            counter,
+            j,
+            g,
+            params.clone(),
+        )
+        .unwrap();
+        assert_ne!(result1, result4);
+
+        // seed and asset id same but counter different
+        let result5 = setup_investor::<PallasA, Blake2b512>(
+            seed1,
+            id,
+            asset_id,
+            counter + 1,
+            j,
+            g,
+            params.clone(),
+        )
+        .unwrap();
+        // Keys same but randomness different
+        assert_eq!(result1.0, result5.0);
+        assert_eq!(result1.1, result5.1);
+        assert_ne!(result1.2.randomness, result5.2.randomness);
     }
 
     #[test]

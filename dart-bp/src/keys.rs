@@ -54,8 +54,12 @@ pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(
     j: PK,
 ) -> (SigKey<PK>, VerKey<PK>) {
     let s = PK::ScalarField::rand(rng);
-    let p = j * s;
-    (SigKey(s), VerKey(p.into_affine()))
+    keygen_sig_given_sk(s, j)
+}
+
+pub fn keygen_sig_given_sk<PK: AffineRepr>(sk: PK::ScalarField, j: PK) -> (SigKey<PK>, VerKey<PK>) {
+    let p = j * sk;
+    (SigKey(sk), VerKey(p.into_affine()))
 }
 
 // NOTE: Same as above but just in case we need to use a diff. scheme
@@ -64,8 +68,12 @@ pub fn keygen_enc<R: CryptoRngCore, PK: AffineRepr>(
     g: PK,
 ) -> (DecKey<PK>, EncKey<PK>) {
     let s = PK::ScalarField::rand(rng);
-    let p = g * s;
-    (DecKey(s), EncKey(p.into_affine()))
+    keygen_enc_given_sk(s, g)
+}
+
+pub fn keygen_enc_given_sk<PK: AffineRepr>(sk: PK::ScalarField, g: PK) -> (DecKey<PK>, EncKey<PK>) {
+    let p = g * sk;
+    (DecKey(sk), EncKey(p.into_affine()))
 }
 
 const INVESTOR_KEY_REG_TXN_LABEL: &'static [u8; 25] = b"investor-key-registration";

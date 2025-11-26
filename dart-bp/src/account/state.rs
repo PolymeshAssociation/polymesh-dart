@@ -132,6 +132,18 @@ where
         counter: NullifierSkGenCounter,
         poseidon_config: Poseidon2Params<G::ScalarField>,
     ) -> error::Result<Self> {
+        let randomness = G::ScalarField::rand(rng);
+        Self::new_given_randomness(id, sk, asset_id, counter, randomness, poseidon_config)
+    }
+
+    pub fn new_given_randomness(
+        id: G::ScalarField, // User can hash its string ID onto the field
+        sk: G::ScalarField,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        randomness: G::ScalarField,
+        poseidon_config: Poseidon2Params<G::ScalarField>,
+    ) -> error::Result<Self> {
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
@@ -139,7 +151,6 @@ where
         let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config)?;
         let current_rho = rho.square();
 
-        let randomness = G::ScalarField::rand(rng);
         Ok(Self {
             id,
             sk,
