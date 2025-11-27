@@ -8,6 +8,7 @@ pub type BlockNumber = u32;
 pub type LegId = u8;
 pub type MediatorId = u8;
 
+pub type SkGenCounter = u16;
 pub type NullifierSkGenCounter = u16;
 
 pub const BALANCE_BITS: u16 = 48;

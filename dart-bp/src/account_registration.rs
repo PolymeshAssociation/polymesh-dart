@@ -34,7 +34,7 @@ use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::msm::multiply_field_elems_with_same_group_elem;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
+use polymesh_dart_common::{AssetId, NullifierSkGenCounter, SkGenCounter};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -43,7 +43,7 @@ use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
@@ -1470,42 +1470,63 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
     powers
 }
 
-/// Generate keypairs and fresh account state for investor from a seed
-pub fn setup_investor<G: AffineRepr, D: FullDigest>(
-    seed: &[u8],
-    id: G::ScalarField, // User can hash its string ID onto the field
-    asset_id: AssetId,
-    counter: NullifierSkGenCounter,
-    j: G,
-    g: G,
-    poseidon_config: Poseidon2Params<G::ScalarField>,
-) -> Result<(
-    (SigKey<G>, VerKey<G>),
-    (DecKey<G>, EncKey<G>),
-    AccountState<G>,
-)> {
-    // For creating secret keys, use seed||asset_id
-    let mut extended_seed = seed.to_vec();
-    extended_seed.extend(asset_id.to_le_bytes().as_slice());
+const SEPARATOR: &[u8; 2] = b"//";
 
-    let sig_sk = hash_to_field::<G::ScalarField, D>(b"Signing key", &extended_seed);
-    let enc_sk = hash_to_field::<G::ScalarField, D>(b"Encryption key", &extended_seed);
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
+pub struct MasterSeed(Vec<u8>);
 
-    // For creating commitment randomness, use seed||asset_id||counter
-    extended_seed.extend_from_slice(counter.to_le_bytes().as_slice());
-    let randomness = hash_to_field::<G::ScalarField, D>(b"Commitment randomness", &extended_seed);
+impl MasterSeed {
+    pub fn new(seed: Vec<u8>) -> Self {
+        Self(seed)
+    }
 
-    let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
-    let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
-    let account = AccountState::new_given_randomness(
-        id,
-        sk.0,
-        asset_id,
-        counter,
-        randomness,
-        poseidon_config,
-    )?;
-    Ok(((sk, vk), (dk, ek), account))
+    /// Doesn't include asset-id to allow accounts to share secret keys
+    pub fn derive_keys<G: AffineRepr, D: FullDigest>(
+        &self,
+        path: &[u8],
+        counter: SkGenCounter,
+        j: G,
+        g: G,
+    ) -> ((SigKey<G>, VerKey<G>), (DecKey<G>, EncKey<G>)) {
+        // For creating secret keys, use `seed//path//counter`
+        let mut extended_seed = self.0.to_vec();
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend_from_slice(path);
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter.to_le_bytes());
+
+        let sig_sk = hash_to_field::<G::ScalarField, D>(b"Signing key", &extended_seed);
+        let enc_sk = hash_to_field::<G::ScalarField, D>(b"Encryption key", &extended_seed);
+
+        let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
+        let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
+
+        extended_seed.zeroize();
+        ((sk, vk), (dk, ek))
+    }
+
+    pub fn derive_account_randomness<G: AffineRepr, D: FullDigest>(
+        &self,
+        path: &[u8],
+        counter_s: SkGenCounter,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> G::ScalarField {
+        // For creating randomness, use `seed//path//counter_s//asset_id//counter_n`
+        let mut extended_seed = self.0.to_vec();
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend_from_slice(path);
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter_s.to_le_bytes());
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(asset_id.to_le_bytes().as_slice());
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter.to_le_bytes());
+        let randomness =
+            hash_to_field::<G::ScalarField, D>(b"Commitment randomness", &extended_seed);
+        extended_seed.zeroize();
+        randomness
+    }
 }
 
 #[cfg(test)]
@@ -1684,82 +1705,115 @@ pub mod tests {
     }
 
     #[test]
-    fn test_setup_investor() {
+    fn test_deterministic_key_and_randomness_generation() {
         let mut rng = rand::thread_rng();
 
         let id = Fr::rand(&mut rng);
         let asset_id = 1;
-        let counter = 1;
+        let counter_s = 1;
+        let counter_n = 1;
 
-        let seed1 = b"test_seed";
+        let seed1 = MasterSeed::new(b"test_seed".to_vec());
+
+        let seed2 = MasterSeed::new(b"different_seed".to_vec());
 
         let j = PallasA::rand(&mut rng);
         let g = PallasA::rand(&mut rng);
+
         let params = test_params_for_poseidon2();
 
-        let result1 = setup_investor::<PallasA, Blake2b512>(
-            seed1,
-            id,
-            asset_id,
-            counter,
-            j,
-            g,
-            params.clone(),
-        )
-        .unwrap();
-        let result2 = setup_investor::<PallasA, Blake2b512>(
-            seed1,
-            id,
-            asset_id,
-            counter,
-            j,
-            g,
-            params.clone(),
-        )
-        .unwrap();
+        let result1 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
+        let result2 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
         assert_eq!(result1, result2);
 
-        let seed2 = b"different_seed";
-        let result3 = setup_investor::<PallasA, Blake2b512>(
-            seed2,
-            id,
-            asset_id,
-            counter,
-            j,
-            g,
-            params.clone(),
-        )
-        .unwrap();
+        // Same seed, different path
+        let result3 = seed1.derive_keys::<PallasA, Blake2b512>(b"path1", counter_s, j, g);
         assert_ne!(result1, result3);
 
-        // seed same but asset id different
-        let result4 = setup_investor::<PallasA, Blake2b512>(
-            seed1,
-            id,
-            asset_id + 1,
-            counter,
-            j,
-            g,
-            params.clone(),
-        )
-        .unwrap();
+        // Same seed, same path, different counter
+        let result4 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s + 1, j, g);
         assert_ne!(result1, result4);
 
-        // seed and asset id same but counter different
-        let result5 = setup_investor::<PallasA, Blake2b512>(
-            seed1,
-            id,
+        // Different seed, same path and counter
+        let result5 = seed2.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
+        assert_ne!(result1, result5);
+
+        let rand1 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        let rand2 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        assert_eq!(rand1, rand2);
+
+        // Different counter
+        let rand3 = seed2.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path",
+            counter_s,
             asset_id,
-            counter + 1,
-            j,
-            g,
+            counter_n + 1,
+        );
+        assert_ne!(rand1, rand3);
+
+        let rand4 = seed2.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path",
+            counter_s + 1,
+            asset_id,
+            counter_n,
+        );
+        assert_ne!(rand1, rand4);
+
+        let rand5 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path1", counter_s, asset_id, counter_n,
+        );
+        assert_ne!(rand1, rand5);
+
+        let sk1 = result1.0.0.0;
+        let sk2 = result3.0.0.0;
+
+        let account1 = AccountState::<PallasA>::new_given_randomness(
+            id,
+            sk1,
+            asset_id,
+            counter_n,
+            rand1,
             params.clone(),
         )
         .unwrap();
-        // Keys same but randomness different
-        assert_eq!(result1.0, result5.0);
-        assert_eq!(result1.1, result5.1);
-        assert_ne!(result1.2.randomness, result5.2.randomness);
+        let account2 = AccountState::<PallasA>::new_given_randomness(
+            id,
+            sk1,
+            asset_id,
+            counter_n,
+            rand1,
+            params.clone(),
+        )
+        .unwrap();
+        assert_eq!(account1, account2);
+
+        // Different randomness
+        let account3 = AccountState::<PallasA>::new_given_randomness(
+            id,
+            sk1,
+            asset_id,
+            counter_n,
+            rand3,
+            params.clone(),
+        )
+        .unwrap();
+        assert_ne!(account1, account3);
+
+        // Same randomness, different sk
+        let account4 = AccountState::<PallasA>::new_given_randomness(
+            id,
+            sk2,
+            asset_id,
+            counter_n,
+            rand1,
+            params.clone(),
+        )
+        .unwrap();
+        assert_ne!(account1, account4);
     }
 
     #[test]
