@@ -121,6 +121,7 @@ impl AccountStateNullifier {
 
 #[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountStateCommitment(CompressedAffine);
 
 impl AccountStateCommitment {

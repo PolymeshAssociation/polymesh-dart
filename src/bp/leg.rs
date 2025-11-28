@@ -56,7 +56,7 @@ impl SettlementCounts {
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
 pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
 /// FromStr for SettlementRef from hex string.
@@ -130,9 +130,17 @@ impl LegRole {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
+    /// Sender's confidential account.
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
     pub sender: AccountPublicKey,
+    /// Receiver's confidential account.
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
     pub receiver: AccountPublicKey,
+    /// Asset id.
+    #[cfg_attr(feature = "utoipa", schema(example = 1, value_type = u64))]
     pub asset_id: AssetId,
+    /// The amount for the asset in the leg.
+    #[cfg_attr(feature = "utoipa", schema(example = 1000, value_type = u64))]
     pub amount: Balance,
 }
 
@@ -690,7 +698,7 @@ pub type WrappedLegEncryptionRandomness =
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
 pub struct LegEncryptionRandomness(WrappedLegEncryptionRandomness);
 
 impl LegEncryptionRandomness {
@@ -710,7 +718,7 @@ pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
 pub struct LegEncrypted(WrappedLegEncryption);
 
 impl LegEncrypted {
