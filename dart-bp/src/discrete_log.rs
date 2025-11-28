@@ -229,6 +229,7 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
 
 #[cfg(feature = "parallel")]
 fn solve_discrete_log_bsgs_u32<G: AdditiveGroup + CurveGroup>(
+    max: u64,
     baby_steps: &BabyStepsTable,
     target: G,
 ) -> Option<u64> {
@@ -237,11 +238,16 @@ fn solve_discrete_log_bsgs_u32<G: AdditiveGroup + CurveGroup>(
     }
     let base_m: G = baby_steps.base_m();
     let mut cur = target;
+    let mut cur_offset = 0u64;
     const NUM_GIANT_STEPS_U32: u64 =
         (u32::MAX as u64 + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-    for i in 0..NUM_GIANT_STEPS_U32 {
+    for _ in 0..NUM_GIANT_STEPS_U32 {
         if let Some(b) = baby_steps.get(&cur) {
-            return Some(i * MAX_NUM_BABY_STEPS + b);
+            return Some(cur_offset + b);
+        }
+        cur_offset += MAX_NUM_BABY_STEPS;
+        if cur_offset >= max {
+            break;
         }
         cur = cur - base_m;
     }
@@ -268,8 +274,11 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
         None => return solve_discrete_log_brute_force(max, base, target),
     };
     // Use a single thread to check the first 0-u32::MAX range.
-    if let Some(v) = solve_discrete_log_bsgs_u32(&baby_steps, target) {
+    if let Some(v) = solve_discrete_log_bsgs_u32(max, &baby_steps, target) {
         return Some(v);
+    }
+    if max <= u32::MAX as u64 {
+        return None;
     }
     let base_u32_max: G = baby_steps.base_u32_max();
     let mut starting_point = target;
@@ -277,13 +286,17 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
     let chunk_count = (max + CHUNK_SIZE - 1) / CHUNK_SIZE;
     (1..chunk_count)
         .into_iter()
-        .map(|idx| {
+        .filter_map(|idx| {
             let offset = idx * CHUNK_SIZE;
-            starting_point = starting_point - base_u32_max;
-            (offset, starting_point)
+            if offset >= max {
+                None
+            } else {
+                starting_point = starting_point - base_u32_max;
+                Some((offset, starting_point))
+            }
         })
         .par_bridge()
         .find_map_any(|(offset, starting_point)| {
-            solve_discrete_log_bsgs_u32(&baby_steps, starting_point).map(|v| v + offset)
+            solve_discrete_log_bsgs_u32(u64::MAX, &baby_steps, starting_point).map(|v| v + offset)
         })
 }

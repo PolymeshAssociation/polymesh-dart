@@ -95,6 +95,13 @@ impl EncryptionPublicKey {
 )]
 pub struct EncryptionSecretKey(pub(crate) bp_keys::DecKey<PallasA>);
 
+impl EncryptionSecretKey {
+    /// Gets the inner decryption key.
+    pub fn inner(&self) -> &bp_keys::DecKey<PallasA> {
+        &self.0
+    }
+}
+
 /// The encryption key pair, consisting of the public and secret keys.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct EncryptionKeyPair {

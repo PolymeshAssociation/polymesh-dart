@@ -300,7 +300,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
     }
 
     /// Hash `shared_secret` to get `r_i`
-    fn encryption_randomness<D: FullDigest>(mut shared_secret: G) -> Result<(F, F, F, F)> {
+    pub fn encryption_randomness<D: FullDigest>(mut shared_secret: G) -> Result<(F, F, F, F)> {
         let mut shared_secret_bytes = vec![];
         shared_secret.serialize_compressed(&mut shared_secret_bytes)?;
 

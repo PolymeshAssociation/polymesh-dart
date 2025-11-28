@@ -620,19 +620,11 @@ impl<
     }
 
     pub fn mediator_count(&self) -> Result<usize, Error> {
-        self.get_mediator_ids().map(|ids| ids.len())
+        self.leg_enc.mediator_count()
     }
 
     pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
-        let leg_enc = self.leg_enc.decode()?;
-        let mediators = leg_enc
-            .eph_pk_auds_meds
-            .iter()
-            .enumerate()
-            .filter(|(_idx, (is_auditor, _pk))| !is_auditor)
-            .map(|(idx, _)| idx as MediatorId)
-            .collect();
-        Ok(mediators)
+        self.leg_enc.get_mediator_ids()
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -728,6 +720,22 @@ impl LegEncrypted {
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
         self.0.decode()
+    }
+
+    pub fn mediator_count(&self) -> Result<usize, Error> {
+        self.get_mediator_ids().map(|ids| ids.len())
+    }
+
+    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
+        let leg_enc = self.decode()?;
+        let mediators = leg_enc
+            .eph_pk_auds_meds
+            .iter()
+            .enumerate()
+            .filter(|(_idx, (is_auditor, _pk))| !is_auditor)
+            .map(|(idx, _)| idx as MediatorId)
+            .collect();
+        Ok(mediators)
     }
 
     /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
