@@ -1,5 +1,5 @@
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, NUM_GENERATORS, common,
+    common, AccountCommitmentKeyTrait, AccountState, AccountStateCommitment,
 };
 use crate::util::{
     bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -7,9 +7,9 @@ use crate::util::{
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng, verify_with_rng,
 };
 use crate::{
-    ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
-    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
-    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error,
+    add_to_transcript, error, Error, ASSET_ID_LABEL, ID_LABEL, INCREASE_BAL_BY_LABEL,
+    NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
+    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -28,6 +28,7 @@ use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
+use crate::account::state::NUM_GENERATORS;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 
@@ -568,7 +569,7 @@ mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -601,7 +602,7 @@ mod tests {
         assert_eq!(updated_account.randomness, account.randomness.square());
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
         let root = account_tree.root_node();
 

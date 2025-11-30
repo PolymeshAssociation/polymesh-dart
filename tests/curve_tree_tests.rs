@@ -100,7 +100,7 @@ impl<const L: usize> CurveTreeOld<L> {
         &self,
         leaf_index: usize,
     ) -> Result<CurveTreePath<L, AssetTreeConfig>, Error> {
-        Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0))
+        Ok(self.tree.get_path_to_leaf_for_proof(leaf_index, 0)?)
     }
 
     /// Returns the parameters of the curve tree.

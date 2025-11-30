@@ -1,6 +1,5 @@
-use crate::account::NUM_GENERATORS;
 use crate::poseidon_impls::poseidon_2::{Poseidon_hash_2_simple, Poseidon2Params};
-use crate::{Error, error};
+use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, Zero};
@@ -105,6 +104,128 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     }
 }
 
+/// Builder for constructing account state transitions.
+/// Allows combining multiple updates before calling `refresh_randomness_for_state_change` at the end.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AccountStateBuilder<G: AffineRepr> {
+    state: AccountState<G>,
+    // net_counter_change and net_balance_change could be used to allow intermediate negatives when applying multiple updates
+    // net_counter_change: i32,
+    // net_balance_change: i128,
+}
+
+impl<G: AffineRepr> AccountStateBuilder<G> {
+    /// Initialize builder from an existing account state
+    pub fn init(initial_account: AccountState<G>) -> Self {
+        Self {
+            state: initial_account,
+        }
+    }
+
+    /// Update state for minting (increase balance)
+    pub fn update_for_mint(&mut self, amount: u64) -> Result<()> {
+        if amount + self.state.balance > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        }
+        self.state.balance += amount;
+        Ok(())
+    }
+
+    /// Update state for sending (decrease balance, increment counter)
+    pub fn update_for_send(&mut self, amount: u64) -> Result<()> {
+        if amount > self.state.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        self.state.balance -= amount;
+        self.state.counter += 1;
+        Ok(())
+    }
+
+    /// Update state for receiving affirmation (increment counter only)
+    pub fn update_for_receive(&mut self) {
+        self.state.counter += 1;
+    }
+
+    /// Update state for claiming received amount (increase balance, decrement counter)
+    pub fn update_for_claiming_received(&mut self, amount: u64) -> Result<()> {
+        if self.state.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.state.balance > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        }
+        self.state.balance += amount;
+        self.state.counter -= 1;
+        Ok(())
+    }
+
+    /// Update state for reversing a send (increase balance, decrement counter)
+    pub fn update_for_reversing_send(&mut self, amount: u64) -> Result<()> {
+        if self.state.counter == 0 {
+            return Err(Error::ProofOfBalanceError(
+                "Counter must be greater than 0".to_string(),
+            ));
+        }
+        if amount + self.state.balance > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        }
+        self.state.balance += amount;
+        self.state.counter -= 1;
+        Ok(())
+    }
+
+    /// Update state for decreasing counter
+    pub fn update_for_decreasing_counter(
+        &mut self,
+        decrease_counter_by: Option<PendingTxnCounter>,
+    ) -> Result<()> {
+        let decrease_counter_by = decrease_counter_by.unwrap_or(1);
+        if self.state.counter < decrease_counter_by {
+            return Err(Error::ProofOfBalanceError(
+                "Counter cannot be decreased below zero".to_string(),
+            ));
+        }
+        self.state.counter -= decrease_counter_by;
+        Ok(())
+    }
+
+    /// Update state for irreversible send (decrease balance only, no counter change)
+    pub fn update_for_irreversible_send(&mut self, amount: u64) -> Result<()> {
+        if amount > self.state.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        self.state.balance -= amount;
+        Ok(())
+    }
+
+    /// Update state for irreversible receive (increase balance only, no counter change)
+    pub fn update_for_irreversible_receive(&mut self, amount: u64) -> Result<()> {
+        if amount + self.state.balance > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        }
+        self.state.balance += amount;
+        Ok(())
+    }
+
+    /// Finalize the builder by refreshing randomness and returning the new account state
+    pub fn finalize(mut self) -> AccountState<G> {
+        self.state.refresh_randomness_for_state_change();
+        self.state
+    }
+
+    /// Get a reference to the current state (without finalizing)
+    pub fn state(&self) -> &AccountState<G> {
+        &self.state
+    }
+
+    /// Get a mutable reference to the current state (without finalizing)
+    pub fn state_mut(&mut self) -> &mut AccountState<G> {
+        &mut self.state
+    }
+}
+
 #[derive(
     Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
 )]
@@ -120,6 +241,8 @@ pub struct AccountState<G: AffineRepr> {
     pub randomness: G::ScalarField,
 }
 
+// TODO: Add an account state batch abstraction that prevents manual update of field done in tests
+
 impl<G> AccountState<G>
 where
     G: AffineRepr,
@@ -131,7 +254,7 @@ where
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         poseidon_config: Poseidon2Params<G::ScalarField>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         let randomness = G::ScalarField::rand(rng);
         Self::new_given_randomness(id, sk, asset_id, counter, randomness, poseidon_config)
     }
@@ -173,7 +296,7 @@ where
         sk: G::ScalarField,
         asset_id: AssetId,
         pk_T_gen: Affine<G2>,
-    ) -> error::Result<(Self, G2::ScalarField, G2::ScalarField)> {
+    ) -> Result<(Self, G2::ScalarField, G2::ScalarField)> {
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
@@ -211,7 +334,7 @@ where
     pub fn commit(
         &self,
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> error::Result<AccountStateCommitment<G>> {
+    ) -> Result<AccountStateCommitment<G>> {
         let comm = G::Group::msm(
             &account_comm_key.as_gens()[..],
             &[
@@ -229,103 +352,61 @@ where
         Ok(AccountStateCommitment(comm.into_affine()))
     }
 
-    pub fn get_state_for_mint(&self, amount: u64) -> error::Result<Self> {
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_mint(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_mint(amount)?;
+        Ok(builder.finalize())
     }
 
-    pub fn get_state_for_send(&self, amount: u64) -> error::Result<Self> {
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
-        let mut new_state = self.clone();
-        new_state.balance -= amount;
-        new_state.counter += 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_send(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_send(amount)?;
+        Ok(builder.finalize())
     }
 
     pub fn get_state_for_receive(&self) -> Self {
-        let mut new_state = self.clone();
-        new_state.counter += 1;
-        new_state.refresh_randomness_for_state_change();
-        new_state
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_receive();
+        builder.finalize()
     }
 
-    pub fn get_state_for_claiming_received(&self, amount: u64) -> error::Result<Self> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.counter -= 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_claiming_received(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_claiming_received(amount)?;
+        Ok(builder.finalize())
     }
 
-    pub fn get_state_for_reversing_send(&self, amount: u64) -> error::Result<Self> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.counter -= 1;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_reversing_send(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_reversing_send(amount)?;
+        Ok(builder.finalize())
     }
 
     pub fn get_state_for_decreasing_counter(
         &self,
         decrease_counter_by: Option<PendingTxnCounter>,
-    ) -> error::Result<Self> {
-        let decrease_counter_by = decrease_counter_by.unwrap_or(1);
-        if self.counter < decrease_counter_by {
-            return Err(Error::ProofOfBalanceError(
-                "Counter cannot be decreased below zero".to_string(),
-            ));
-        }
-        let mut new_state = self.clone();
-        new_state.counter -= decrease_counter_by;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    ) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_decreasing_counter(decrease_counter_by)?;
+        Ok(builder.finalize())
     }
 
     /// This assumes that an asset either does not have a mediator or mediator cannot reject.
     /// The chain should not allow mediator to reject else a new kind of reverse call has to be
     /// supported
-    pub fn get_state_for_irreversible_send(&self, amount: u64) -> error::Result<Self> {
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
-        let mut new_state = self.clone();
-        new_state.balance -= amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_irreversible_send(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_irreversible_send(amount)?;
+        Ok(builder.finalize())
     }
 
     /// This assumes that an asset either does not have a mediator or mediator cannot reject.
     /// The chain should not allow mediator to reject else a new kind of reverse call has to be
     /// supported
-    pub fn get_state_for_irreversible_receive(&self, amount: u64) -> error::Result<Self> {
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
+    pub fn get_state_for_irreversible_receive(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        builder.update_for_irreversible_receive(amount)?;
+        Ok(builder.finalize())
     }
 
     /// Set rho and commitment randomness to new values. Used as each update to the account state
@@ -356,3 +437,5 @@ where
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
+
+pub const NUM_GENERATORS: usize = 8;

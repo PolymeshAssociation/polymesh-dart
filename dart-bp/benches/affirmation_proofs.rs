@@ -1,4 +1,4 @@
-use ark_pallas::{Affine as PallasA, Fr};
+use ark_pallas::Affine as PallasA;
 use ark_std::UniformRand;
 use blake2::Blake2b512;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -90,7 +90,7 @@ fn create_leg_and_encryption<R: rand_core::CryptoRngCore>(
     pk_a_e: EncKey<PallasA>,
     enc_key_gen: PallasA,
     enc_gen: PallasA,
-) -> (LegEncryption<PallasA>, LegEncryptionRandomness<Fr>) {
+) -> (LegEncryption<PallasA>, LegEncryptionRandomness<PallasFr>) {
     let asset_id = 1;
     let amount = 100;
 
@@ -110,7 +110,7 @@ fn create_account_and_tree<R: rand_core::CryptoRngCore>(
     CurveTree<512, 1, PallasParameters, VestaParameters>,
 ) {
     let asset_id = 1;
-    let id = Fr::rand(rng);
+    let id = PallasFr::rand(rng);
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
     let mut account = AccountState::new(rng, id, sk.0, asset_id, 0, poseidon_config).unwrap();
     account.balance = 200;
@@ -153,7 +153,7 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
     let amount = 100;
     let updated_account = account.get_state_for_send(amount).unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = AffirmAsSenderTxnProof::new(
@@ -222,7 +222,7 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_receive();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
@@ -291,7 +291,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
     let amount = 100;
     let updated_account = account.get_state_for_send(amount).unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = AffirmAsSenderTxnProof::new(
@@ -364,7 +364,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_receive();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new(

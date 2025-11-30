@@ -1540,7 +1540,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 2000;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1572,7 +1572,7 @@ pub mod tests {
         assert_eq!(updated_account.balance, account.balance + increase_bal_by);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
         let root = account_tree.root_node();
 
@@ -1687,8 +1687,8 @@ pub mod tests {
 
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 2000;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
+        const L: usize = 512;
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1703,7 +1703,7 @@ pub mod tests {
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
             &set,
             &account_tree_params,
-            Some(3),
+            Some(4),
         );
 
         let fee_amount = 10;
@@ -1717,7 +1717,7 @@ pub mod tests {
         assert_eq!(updated_account.balance, account.balance - fee_amount);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
         let root = account_tree.root_node();
 
@@ -1842,7 +1842,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS, L>(b"testing");
+        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1877,7 +1877,7 @@ pub mod tests {
                 .unwrap();
             assert_eq!(updated_account.balance, accounts[i].balance - fee_amount);
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-            let path = account_tree.get_path_to_leaf_for_proof(i, 0);
+            let path = account_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
             updated_accounts.push(updated_account);
             updated_account_comms.push(updated_account_comm);
             paths.push(path);
@@ -2079,7 +2079,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
             let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<NUM_GENS, L>(b"testing");
+                setup_gens::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2110,7 +2110,7 @@ pub mod tests {
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
             let (proof, nullifier) = FeeAccountTopupTxnProof::new(
@@ -2156,7 +2156,7 @@ pub mod tests {
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
             let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<NUM_GENS, L>(b"testing");
+                setup_gens::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2182,7 +2182,7 @@ pub mod tests {
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
             let (proof, nullifier) = FeePaymentProof::new(

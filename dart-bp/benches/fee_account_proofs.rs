@@ -5,7 +5,7 @@ use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::account::NUM_GENERATORS;
+use polymesh_dart_bp::account::state::NUM_GENERATORS;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::fee_account::{FeeAccountState, FeeAccountTopupTxnProof, FeePaymentProof};
 use polymesh_dart_bp::keys::{SigKey, keygen_sig};
@@ -109,7 +109,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
         .get_state_for_topup(&mut setup_rng, increase_bal_by)
         .unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = FeeAccountTopupTxnProof::new(
@@ -175,7 +175,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
         .get_state_for_topup(&mut setup_rng, increase_bal_by)
         .unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = FeeAccountTopupTxnProof::new(
@@ -246,7 +246,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
         .get_state_for_payment(&mut setup_rng, fee_amount)
         .unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = FeePaymentProof::new(
@@ -311,7 +311,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
         .get_state_for_payment(&mut setup_rng, fee_amount)
         .unwrap();
     let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-    let path = account_tree.get_path_to_leaf_for_proof(0, 0);
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
     let (proof, nullifier) = FeePaymentProof::new(

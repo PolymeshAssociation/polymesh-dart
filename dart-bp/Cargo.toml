@@ -54,6 +54,10 @@ harness = false
 name = "fee_account_proofs"
 harness = false
 
+[[bench]]
+name = "settlement_proofs"
+harness = false
+
 [features]
 default = ["std", "asm"]
 
@@ -81,6 +85,8 @@ std = [
 # Turn on this feature for faster proof verification.
 verifier_parallel = [
 	"ark-ec/parallel",
+	"bulletproofs/parallel_full",
+	"curve_tree_relations/parallel_full"
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]

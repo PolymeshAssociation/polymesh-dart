@@ -12,11 +12,11 @@ members = ["dart-bp", "dart-testing-cli", "dart-common"]
 
 [patch.crates-io]
 # Curve tree dependencies
-#bulletproofs = { path = "../curve-trees/bulletproofs" }
-#curve_tree_relations = { package = "relations", path = "../curve-trees/relations" }
+bulletproofs = { path = "../curve-trees/bulletproofs" }
+curve_tree_relations = { package = "relations", path = "../curve-trees/relations" }
 # If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
-curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
+#bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
+#curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 
 #dock_crypto_utils = { path = "../crypto/utils" }
 #schnorr_pok = { path = "../crypto/schnorr_pok" }
@@ -87,7 +87,7 @@ curve_tree_relations = { version = "0.1.0", package = "relations", default-featu
 # Dev dependencies
 anyhow = { version = "1.0.98", default-features = false }
 test-log = { version = "0.2.17", default-features = false }
-criterion = { version = "0.3", default-features = false }
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 
 [dependencies]
 polymesh-dart-bp = { workspace = true, default-features = false, optional = true }

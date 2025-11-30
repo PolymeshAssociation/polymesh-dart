@@ -1,6 +1,5 @@
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, NUM_GENERATORS,
-};
+use crate::account::state::NUM_GENERATORS;
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::util::{
     BPProof, add_verification_tuples_to_rmc, enforce_balance_change_prover,
@@ -15,7 +14,7 @@ use crate::util::{
 };
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
-    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error,
+    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -39,6 +38,32 @@ use schnorr_pok::partial::{
 use schnorr_pok::{SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+/// Configuration for a leg in common state change operations (prover side)
+#[derive(Clone)]
+pub struct LegProverConfig<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
+    pub encryption: LegEncryption<Affine<G0>>,
+    pub randomness: LegEncryptionRandomness<F0>,
+    pub is_sender: bool,
+    pub has_balance_changed: bool,
+}
+
+/// Configuration for a leg in common state change operations (verifier side)
+#[derive(Clone)]
+pub struct LegVerifierConfig<G0: SWCurveConfig + Clone + Copy> {
+    pub encryption: LegEncryption<Affine<G0>>,
+    pub is_sender: bool,
+    pub has_balance_decreased: Option<bool>,
+    pub has_counter_decreased: Option<bool>,
+}
+
+/// Configuration for balance change in a single leg
+pub struct BalanceChangeConfig<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
+    pub amount: Balance,
+    pub ct_amount: Affine<G0>,
+    pub r_3: F0,
+    pub has_balance_decreased: bool,
+}
+
 /// Proof for variables that change during each account state transition
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct CommonStateChangeProof<
@@ -51,7 +76,10 @@ pub struct CommonStateChangeProof<
     /// When this is None, external [`R1CSProof`] will be used and [`CommonStateChangeProof`] only
     /// contains proof for the sigma protocols and enforces the Bulletproof constraints.
     pub r1cs_proof: Option<BPProof<G0, G1>>,
-    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    /// When using batched proving (multi-asset state transitions),
+    /// this will be None as the path is computed externally.
+    /// For non-batched proving, this contains the full re-randomized path.
+    pub re_randomized_path: Option<SelectAndRerandomizePath<L, G0, G1>>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -63,9 +91,9 @@ pub struct CommonStateChangeProof<
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of asset-id in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_asset_id: Partial1PokPedersenCommitment<Affine<G0>>,
+    pub resp_leg_asset_id: Vec<Partial1PokPedersenCommitment<Affine<G0>>>,
     /// Commitment to randomness and response for proving knowledge of secret key of the party's public key in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_pk: Partial1PokPedersenCommitment<Affine<G0>>,
+    pub resp_leg_pk: Vec<Partial1PokPedersenCommitment<Affine<G0>>>,
     /// Commitment to initial rho, old and current rho, old and current randomness
     pub comm_bp_randomness_relations: Affine<G0>,
     /// Commitment to randomness for proving knowledge of above 5 values (step 1 of Schnorr)
@@ -81,7 +109,7 @@ pub struct BalanceChangeProof<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0
     pub t_comm_bp_bal: Affine<G0>,
     pub resp_comm_bp_bal: PartialSchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving knowledge of amount in the "leg" using Schnorr protocol (step 1 and 3 of Schnorr).
-    pub resp_leg_amount: Partial1PokPedersenCommitment<Affine<G0>>,
+    pub resp_leg_amount: Vec<Partial1PokPedersenCommitment<Affine<G0>>>,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -98,34 +126,34 @@ pub struct CommonStateChangeProver<
     #[zeroize(skip)]
     pub odd_prover: Option<Prover<'a, MerlinTranscript, Affine<G1>>>,
     #[zeroize(skip)]
-    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    pub re_randomized_path: Option<SelectAndRerandomizePath<L, G0, G1>>,
     pub leaf_rerandomization: F0,
     #[zeroize(skip)]
     pub nullifier: Affine<G0>,
     pub t_r_leaf: SchnorrCommitment<Affine<G0>>,
     pub t_acc_new: SchnorrCommitment<Affine<G0>>,
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
-    pub t_leg_asset_id: PokPedersenCommitmentProtocol<Affine<G0>>,
-    pub t_leg_pk: PokPedersenCommitmentProtocol<Affine<G0>>,
+    pub t_leg_asset_id: Vec<PokPedersenCommitmentProtocol<Affine<G0>>>,
+    pub t_leg_pk: Vec<PokPedersenCommitmentProtocol<Affine<G0>>>,
     #[zeroize(skip)]
     pub comm_bp_randomness_relations: Affine<G0>,
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
-    pub r_3: F0,
+    pub r_3: Vec<F0>,
     pub old_balance_blinding: F0,
     pub new_balance_blinding: F0,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct BalanceChangeProver<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
-    pub amount: Balance,
+    pub amount: Vec<Balance>,
     pub old_balance: Balance,
     pub new_balance: Balance,
     pub comm_bp_bal_blinding: G0::ScalarField,
     #[zeroize(skip)]
     pub comm_bp_bal: Affine<G0>,
     pub t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
-    pub t_leg_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
+    pub t_leg_amount: Vec<PokPedersenCommitmentProtocol<Affine<G0>>>,
 }
 
 pub struct StateChangeVerifier<
@@ -139,11 +167,13 @@ pub struct StateChangeVerifier<
     /// verifies the sigma protocols and enforces the Bulletproof constraints.
     pub even_verifier: Option<Verifier<MerlinTranscript, Affine<G0>>>,
     pub odd_verifier: Option<Verifier<MerlinTranscript, Affine<G1>>>,
-    pub prover_is_sender: bool,
+    pub has_balance_changed: bool,
+    pub prover_is_sender: Vec<bool>,
     /// Balance can increase, decrease or not change at all
-    pub has_balance_decreased: Option<bool>,
+    pub has_balance_decreased: Vec<Option<bool>>,
     /// Counter can increase, decrease or not change at all
-    pub has_counter_decreased: Option<bool>,
+    pub has_counter_decreased: Vec<Option<bool>>,
+    pub re_randomized_leaf: Affine<G0>,
 }
 
 impl<
@@ -157,21 +187,18 @@ impl<
 {
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        legs_with_conf: Vec<LegProverConfig<F0, G0>>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        is_sender: bool,
-        has_balance_changed: bool,
         account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut even_prover = Prover::new(
@@ -183,16 +210,13 @@ impl<
 
         let mut prover = Self::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            legs_with_conf,
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            is_sender,
-            has_balance_changed,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -212,7 +236,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
         account_tree_params: &'a SelRerandParameters<G0, G1>,
-    ) -> error::Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
+    ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
         let even_prover = self.even_prover.take().unwrap();
         let odd_prover = self.odd_prover.take().unwrap();
 
@@ -230,25 +254,20 @@ impl<
 
     pub fn init_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
+        legs_with_conf: Vec<LegProverConfig<F0, G0>>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        is_sender: bool,
-        has_balance_changed: bool,
         account_tree_params: &'a SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
-    ) -> error::Result<Self> {
-        ensure_same_accounts(account, updated_account, has_balance_changed)?;
-
+    ) -> Result<Self> {
         let (re_randomized_path, leaf_rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget(
                 even_prover,
@@ -263,16 +282,108 @@ impl<
             root,
             RE_RANDOMIZED_PATH_LABEL,
             re_randomized_path,
+        );
+
+        Self::init_with_given_prover_inner(
+            rng,
+            legs_with_conf,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_rerandomization,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_prover,
+            Some(re_randomized_path),
+        )
+    }
+
+    /// Creates a new prover when the leaf has already been re-randomized externally.
+    /// This is useful for batched proving when proving multiple paths at once.
+    /// `rerandomized_leaf_and_blinding` - Tuple of (rerandomized_leaf, re_randomization_of_leaf)
+    pub fn init_with_given_prover_with_rerandomized_leaf<R: CryptoRngCore>(
+        rng: &mut R,
+        legs_with_conf: Vec<LegProverConfig<F0, G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_rerandomization: F0,
+        nonce: &[u8],
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+    ) -> Result<Self> {
+        // Note: No re_randomized_path to add to transcript since it was computed externally
+        // The caller is responsible for adding it to the transcript
+        Self::init_with_given_prover_inner(
+            rng,
+            legs_with_conf,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_rerandomization,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_prover,
+            None, // No path since it was computed externally
+        )
+    }
+
+    fn init_with_given_prover_inner<R: CryptoRngCore>(
+        rng: &mut R,
+        legs_with_conf: Vec<LegProverConfig<F0, G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        leaf_rerandomization: F0,
+        nonce: &[u8],
+        account_tree_params: &'a SelRerandParameters<G0, G1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        re_randomized_path: Option<SelectAndRerandomizePath<L, G0, G1>>,
+    ) -> Result<Self> {
+        // has_balance_changed denotes whether the balance changed for any leg. This flag is known to verifier as well
+        let has_balance_changed = legs_with_conf.iter().any(|l| l.has_balance_changed);
+        ensure_same_accounts(account, updated_account, has_balance_changed)?;
+
+        add_to_transcript!(
+            even_prover.transcript(),
             NONCE_LABEL,
             nonce,
-            LEG_ENC_LABEL,
-            leg_enc,
             UPDATED_ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
 
-        let LegEncryptionRandomness(mut r_1, mut r_2, r_3, mut r_4) = leg_enc_rand;
-        let r_pk = if is_sender { r_1 } else { r_2 };
+        let mut leg_enc = Vec::with_capacity(legs_with_conf.len());
+        let mut is_sender = Vec::with_capacity(legs_with_conf.len());
+        let mut r_3 = Vec::with_capacity(legs_with_conf.len());
+        let mut r_4 = Vec::with_capacity(legs_with_conf.len());
+        let mut r_pk = Vec::with_capacity(legs_with_conf.len());
+
+        for leg_conf in legs_with_conf {
+            leg_enc.push(leg_conf.encryption);
+            let LegEncryptionRandomness(mut r_1, mut r_2, r_3_, r_4_) = leg_conf.randomness;
+            r_pk.push(if leg_conf.is_sender { r_1 } else { r_2 });
+            is_sender.push(leg_conf.is_sender);
+            r_3.push(r_3_);
+            r_4.push(r_4_);
+            Zeroize::zeroize(&mut r_1);
+            Zeroize::zeroize(&mut r_2);
+        }
+
+        for l in &leg_enc {
+            add_to_transcript!(even_prover.transcript(), LEG_ENC_LABEL, l);
+        }
 
         let mut id_blinding = F0::rand(rng);
         let mut sk_blinding = F0::rand(rng);
@@ -304,7 +415,7 @@ impl<
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             account.asset_id,
-            &leg_enc,
+            leg_enc,
             account,
             updated_account,
             is_sender,
@@ -329,9 +440,6 @@ impl<
             enc_gen,
         )?;
 
-        Zeroize::zeroize(&mut r_1);
-        Zeroize::zeroize(&mut r_2);
-        Zeroize::zeroize(&mut r_4);
         Zeroize::zeroize(&mut id_blinding);
         Zeroize::zeroize(&mut sk_blinding);
         Zeroize::zeroize(&mut old_counter_blinding);
@@ -367,7 +475,7 @@ impl<
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
-    ) -> error::Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
+    ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
         let (
             resp_leaf,
             resp_acc_new,
@@ -414,26 +522,48 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 {
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
-        amount: Balance,
-        ct_amount: &Affine<G0>,
+        balance_change_config: Vec<BalanceChangeConfig<F0, G0>>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         mut old_balance_blinding: F0,
         mut new_balance_blinding: F0,
-        mut r_3: F0,
-        has_balance_decreased: bool,
         mut even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         pc_gens: &PedersenGens<Affine<G0>>,
         bp_gens: &BulletproofGens<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
+        let mut delta = 0i64;
+        for config in &balance_change_config {
+            if config.has_balance_decreased {
+                delta = delta + (config.amount as i64);
+            } else {
+                delta = delta - (config.amount as i64);
+            }
+        }
+        let (amount, has_balance_decreased) = if delta > 0 {
+            (delta as Balance, true)
+        } else {
+            (-delta as Balance, false)
+        };
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
+
+        let mut amounts = Vec::with_capacity(balance_change_config.len());
+        let mut ct_amounts = Vec::with_capacity(balance_change_config.len());
+        let mut r_3 = Vec::with_capacity(balance_change_config.len());
+        let mut has_balance_decreased = Vec::with_capacity(balance_change_config.len());
+        for config in balance_change_config {
+            amounts.push(config.amount);
+            ct_amounts.push(config.ct_amount);
+            r_3.push(config.r_3);
+            has_balance_decreased.push(config.has_balance_decreased);
+        }
+
         let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
             rng,
             account.balance,
             updated_account.balance,
-            amount,
+            amounts.clone(),
             has_balance_decreased,
             &mut even_prover,
             bp_gens,
@@ -441,11 +571,13 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         let mut transcript = even_prover.transcript();
 
-        let mut amount_blinding = F0::rand(rng);
+        let amount_blinding = (0..amounts.len())
+            .map(|_| F0::rand(rng))
+            .collect::<Vec<_>>();
         let (t_comm_bp_bal, t_leg_amount) = generate_sigma_t_values_for_balance_change(
             rng,
-            amount,
-            ct_amount,
+            amounts.clone(),
+            ct_amounts,
             old_balance_blinding,
             new_balance_blinding,
             amount_blinding,
@@ -459,11 +591,9 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         Zeroize::zeroize(&mut old_balance_blinding);
         Zeroize::zeroize(&mut new_balance_blinding);
-        Zeroize::zeroize(&mut amount_blinding);
-        Zeroize::zeroize(&mut r_3);
 
         Ok(Self {
-            amount,
+            amount: amounts,
             old_balance: account.balance,
             new_balance: updated_account.balance,
             comm_bp_bal_blinding,
@@ -473,10 +603,10 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         })
     }
 
-    pub fn gen_proof(self, challenge: &F0) -> error::Result<BalanceChangeProof<F0, G0>> {
+    pub fn gen_proof(self, challenge: &F0) -> Result<BalanceChangeProof<F0, G0>> {
         let t_comm_bp_bal = self.t_comm_bp_bal.t;
         let (resp_comm_bp_bal, resp_leg_amount) = generate_schnorr_responses_for_balance_change(
-            self.amount,
+            self.amount.clone(),
             self.comm_bp_bal_blinding,
             self.t_comm_bp_bal.clone(),
             self.t_leg_amount.clone(),
@@ -504,19 +634,16 @@ impl<
     /// `has_counter_decreased` is None when counter doesn't change
     pub fn init(
         proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
-        leg_enc: &LegEncryption<Affine<G0>>,
+        legs_with_conf: Vec<LegVerifierConfig<G0>>,
         root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         nonce: &[u8],
-        prover_is_sender: bool,
-        has_balance_decreased: Option<bool>,
-        has_counter_decreased: Option<bool>,
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
@@ -524,14 +651,11 @@ impl<
 
         let mut verifier = Self::init_with_given_verifier(
             proof,
-            leg_enc,
+            legs_with_conf,
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            prover_is_sender,
-            has_balance_decreased,
-            has_counter_decreased,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -545,15 +669,15 @@ impl<
     }
 
     /// Enforce Bulletproofs constraints for balance change and takes challenge contributions from balance change related subprotocols
-    pub fn enforce_constraints_and_take_challenge_contrib_of_balance_change(
+    pub fn init_balance_change_verification(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amount: &Affine<G0>,
+        ct_amount: &[Affine<G0>],
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let mut even_verifier = self.even_verifier.take().unwrap();
-        self.init_balance_change_verification(
+        self.init_balance_change_verification_with_given_verifier(
             proof,
             ct_amount,
             enc_key_gen,
@@ -570,7 +694,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: &LegEncryption<Affine<G0>>,
+        leg_enc: Vec<LegEncryption<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -581,7 +705,7 @@ impl<
             &mut RandomizedMultChecker<Affine<G0>>,
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let rmc_0 = match rmc.as_mut() {
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
@@ -620,7 +744,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: &LegEncryption<Affine<G0>>,
+        leg_enc: Vec<LegEncryption<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -629,7 +753,7 @@ impl<
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> error::Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let even_verifier = self.even_verifier.take().unwrap();
         let odd_verifier = self.odd_verifier.take().unwrap();
 
@@ -663,43 +787,26 @@ impl<
 
     pub fn init_with_given_verifier(
         proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
-        leg_enc: &LegEncryption<Affine<G0>>,
+        legs_with_conf: Vec<LegVerifierConfig<G0>>,
         root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         nonce: &[u8],
-        prover_is_sender: bool,
-        has_balance_decreased: Option<bool>,
-        has_counter_decreased: Option<bool>,
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
-    ) -> error::Result<Self> {
-        if proof.resp_leaf.len() != (NUM_GENERATORS + 1) {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                NUM_GENERATORS + 1,
-                proof.resp_leaf.len(),
-            ));
-        }
-        let expected_num_resps = 2 + has_balance_decreased.is_some() as usize;
-        if proof.resp_acc_new.responses.len() != expected_num_resps {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                expected_num_resps,
-                proof.resp_acc_new.responses.len(),
-            ));
-        }
-        if proof.resp_bp_randomness_relations.responses.len() != 1 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                1,
-                proof.resp_bp_randomness_relations.responses.len(),
-            ));
-        }
-
-        let _ = proof
+    ) -> Result<Self> {
+        let re_randomized_leaf = proof
             .re_randomized_path
+            .as_ref()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "re_randomized_path is None, use batched verification instead".to_string(),
+                )
+            })?
             .select_and_rerandomize_verifier_gadget(
                 root,
                 even_verifier,
@@ -712,18 +819,108 @@ impl<
             ROOT_LABEL,
             root,
             RE_RANDOMIZED_PATH_LABEL,
-            proof.re_randomized_path,
+            proof.re_randomized_path.as_ref().unwrap(),
+        );
+
+        Self::init_with_given_verifier_with_rerandomized_leaf(
+            proof,
+            legs_with_conf,
+            updated_account_commitment,
+            nullifier,
+            re_randomized_leaf,
+            nonce,
+            account_comm_key,
+            enc_key_gen,
+            enc_gen,
+            even_verifier,
+        )
+    }
+
+    /// Initializes verifier when the leaf has already been re-randomized externally.
+    /// This is useful for batched verification when verifying multiple paths at once.
+    /// `rerandomized_leaf` - The re-randomized leaf obtained from external curve tree operations.
+    pub fn init_with_given_verifier_with_rerandomized_leaf(
+        proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
+        legs_with_conf: Vec<LegVerifierConfig<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        re_randomized_leaf: Affine<G0>,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
+    ) -> Result<Self> {
+        if legs_with_conf.is_empty() {
+            return Err(Error::ProofVerificationError(
+                "No legs added to the verifier".to_string(),
+            ));
+        }
+        if legs_with_conf.len() != proof.resp_leg_pk.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "Needed {} leg proofs but got {}",
+                legs_with_conf.len(),
+                proof.resp_leg_pk.len()
+            )));
+        }
+
+        if proof.resp_leaf.len() != (NUM_GENERATORS + 1) {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                NUM_GENERATORS + 1,
+                proof.resp_leaf.len(),
+            ));
+        }
+        let has_balance_changed = legs_with_conf
+            .iter()
+            .any(|l| l.has_balance_decreased.is_some());
+
+        let expected_num_resps = 2 + has_balance_changed as usize;
+        if proof.resp_acc_new.responses.len() != expected_num_resps {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                expected_num_resps,
+                proof.resp_acc_new.responses.len(),
+            ));
+        }
+        if proof.resp_bp_randomness_relations.responses.len() != 1 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                1,
+                proof.resp_bp_randomness_relations.responses.len(),
+            ));
+        }
+        if proof.resp_leg_pk.len() != proof.resp_leg_asset_id.len() {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                proof.resp_leg_pk.len(),
+                proof.resp_leg_asset_id.len(),
+            ));
+        }
+
+        add_to_transcript!(
+            even_verifier.transcript(),
             NONCE_LABEL,
             nonce,
-            LEG_ENC_LABEL,
-            leg_enc,
             UPDATED_ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
 
+        let mut leg_enc = Vec::with_capacity(legs_with_conf.len());
+        let mut prover_is_sender = Vec::with_capacity(legs_with_conf.len());
+        let mut has_counter_decreased = Vec::with_capacity(legs_with_conf.len());
+        let mut has_balance_decreased = Vec::with_capacity(legs_with_conf.len());
+
+        for leg_conf in legs_with_conf {
+            leg_enc.push(leg_conf.encryption);
+            prover_is_sender.push(leg_conf.is_sender);
+            has_balance_decreased.push(leg_conf.has_balance_decreased);
+            has_counter_decreased.push(leg_conf.has_counter_decreased);
+        }
+
+        for leg_enc in &leg_enc {
+            add_to_transcript!(even_verifier.transcript(), LEG_ENC_LABEL, leg_enc,);
+        }
+
         enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
             leg_enc,
-            prover_is_sender,
+            &prover_is_sender,
             &nullifier,
             proof.comm_bp_randomness_relations,
             &proof.t_r_leaf,
@@ -741,21 +938,29 @@ impl<
         Ok(Self {
             even_verifier: None,
             odd_verifier: None,
+            has_balance_changed,
             prover_is_sender,
             has_counter_decreased,
             has_balance_decreased,
+            re_randomized_leaf,
         })
     }
 
-    pub fn init_balance_change_verification(
+    pub fn init_balance_change_verification_with_given_verifier(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amount: &Affine<G0>,
+        ct_amount: &[Affine<G0>],
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-    ) -> error::Result<()> {
-        if let Some(has_balance_decreased) = self.has_balance_decreased {
+    ) -> Result<()> {
+        if self.has_balance_changed {
+            let has_balance_decreased = self
+                .has_balance_decreased
+                .iter()
+                .filter(|b| b.is_some())
+                .map(|b| b.unwrap())
+                .collect::<Vec<_>>();
             enforce_balance_change_verifier(
                 proof.comm_bp_bal,
                 has_balance_decreased,
@@ -783,7 +988,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: &LegEncryption<Affine<G0>>,
+        leg_enc: Vec<LegEncryption<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandParameters<G0, G1>,
@@ -791,19 +996,17 @@ impl<
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let pc_gens = &account_tree_params.even_parameters.pc_gens;
         let bp_gens = &account_tree_params.even_parameters.bp_gens;
 
         verify_sigma_for_common_state_change(
-            leg_enc,
+            &leg_enc,
             self.prover_is_sender,
             self.has_counter_decreased,
             balance_change_proof.is_some(),
             &nullifier,
-            &common_state_change_proof
-                .re_randomized_path
-                .get_rerandomized_leaf(),
+            &self.re_randomized_leaf,
             &updated_account_commitment.0,
             &common_state_change_proof.comm_bp_randomness_relations,
             &common_state_change_proof.t_r_leaf,
@@ -825,8 +1028,16 @@ impl<
         )?;
 
         if let Some(balance_change_proof) = balance_change_proof {
+            // Filter leg_enc to only include legs with balance changes
+            let leg_enc_with_balance_change: Vec<_> = leg_enc
+                .iter()
+                .zip(self.has_balance_decreased.iter())
+                .filter(|(_, has_bal_dec)| has_bal_dec.is_some())
+                .map(|(leg, _)| leg.clone())
+                .collect();
+
             verify_sigma_for_balance_change(
-                &leg_enc,
+                &leg_enc_with_balance_change,
                 &balance_change_proof.resp_leg_amount,
                 &balance_change_proof.comm_bp_bal,
                 &balance_change_proof.t_comm_bp_bal,
@@ -849,7 +1060,7 @@ pub fn ensure_same_accounts<G: AffineRepr>(
     old_state: &AccountState<G>,
     new_state: &AccountState<G>,
     has_balance_changed: bool,
-) -> error::Result<()> {
+) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
         return Ok(());
@@ -910,7 +1121,7 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
     new_state: &AccountState<G>,
     amount: Balance,
     has_balance_decreased: bool,
-) -> error::Result<()> {
+) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
         return Ok(());

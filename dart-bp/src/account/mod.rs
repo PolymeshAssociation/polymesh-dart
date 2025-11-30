@@ -2,6 +2,8 @@ pub mod common;
 pub mod mint;
 pub mod pob;
 pub mod state;
+pub mod state_transition;
+pub mod state_transition_multi;
 #[cfg(test)]
 pub mod tests;
 
@@ -9,9 +11,9 @@ pub mod tests;
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::util::{BPProof, add_verification_tuples_to_rmc};
+use crate::util::{add_verification_tuples_to_rmc, BPProof};
 use crate::util::{prove_with_rng, verify_given_verification_tuples};
-use crate::{Error, TXN_ODD_LABEL, error::Result};
+use crate::{error::Result, Error, TXN_ODD_LABEL};
 use crate::{TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
@@ -20,21 +22,18 @@ use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 pub use common::{
-    BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof, CommonStateChangeProver,
-    StateChangeVerifier,
+    BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof,
+    CommonStateChangeProver, LegProverConfig, LegVerifierConfig, StateChangeVerifier,
 };
+pub use state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier, AccountStateTransitionProof};
+pub use state_transition_multi::MultiAssetStateTransitionProof;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
-pub use state::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-
-pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
-pub const LEGS_LABEL: &'static [u8; 4] = b"legs";
-
-pub const NUM_GENERATORS: usize = 8;
+pub use state::{AccountCommitmentKeyTrait, AccountState, AccountStateBuilder, AccountStateCommitment};
 
 // Consider using https://github.com/jymchng/sosecrets-rs for blindings as well as i know how many times the blinding is needed.
 
@@ -162,16 +161,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc.clone(),
+                randomness: leg_enc_rand,
+                is_sender: true,
+                has_balance_changed: true,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            true,
-            true,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -182,14 +183,16 @@ impl<
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
-            amount,
-            &ct_amount,
+            vec![BalanceChangeConfig {
+                amount,
+                ct_amount,
+                r_3: common_prover.r_3[0],
+                has_balance_decreased: true,
+            }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.r_3,
-            true,
             even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -284,23 +287,25 @@ impl<
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(true),
+                has_counter_decreased: Some(false),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(true),
-            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
         )?;
 
-        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+        verifier.init_balance_change_verification(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
         )?;
@@ -316,7 +321,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -347,14 +352,16 @@ impl<
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(true),
+                has_counter_decreased: Some(false),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(true),
-            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -363,9 +370,9 @@ impl<
             odd_verifier,
         )?;
 
-        verifier.init_balance_change_verification(
+        verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
             even_verifier,
@@ -379,7 +386,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -492,16 +499,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: false,
+                has_balance_changed: false,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            false,
-            false,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -587,14 +596,16 @@ impl<
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(false),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            None,
-            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -612,7 +623,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -641,14 +652,16 @@ impl<
     ) -> Result<()> {
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(false),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            None,
-            Some(false),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -665,7 +678,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -786,16 +799,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: false,
+                has_balance_changed: true,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            false,
-            true,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -806,14 +821,16 @@ impl<
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
-            amount,
-            &ct_amount,
+            vec![BalanceChangeConfig {
+                amount,
+                ct_amount,
+                r_3: common_prover.r_3[0],
+                has_balance_decreased: false,
+            }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.r_3,
-            false,
             even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -908,23 +925,25 @@ impl<
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            Some(false),
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
         )?;
 
-        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+        verifier.init_balance_change_verification(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
         )?;
@@ -940,7 +959,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -971,14 +990,16 @@ impl<
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            Some(false),
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -987,9 +1008,9 @@ impl<
             odd_verifier,
         )?;
 
-        verifier.init_balance_change_verification(
+        verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
             even_verifier,
@@ -1003,7 +1024,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1117,16 +1138,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: true,
+                has_balance_changed: false,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            true,
-            false,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -1212,14 +1235,16 @@ impl<
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            None,
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -1237,7 +1262,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1266,14 +1291,16 @@ impl<
     ) -> Result<()> {
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            None,
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -1290,7 +1317,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1411,16 +1438,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: true,
+                has_balance_changed: true,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            true,
-            true,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -1431,14 +1460,16 @@ impl<
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
-            amount,
-            &ct_amount,
+            vec![BalanceChangeConfig {
+                amount,
+                ct_amount,
+                r_3: common_prover.r_3[0],
+                has_balance_decreased: false,
+            }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.r_3,
-            false,
             even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -1533,23 +1564,25 @@ impl<
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(false),
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
         )?;
 
-        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+        verifier.init_balance_change_verification(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
         )?;
@@ -1565,7 +1598,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1596,14 +1629,16 @@ impl<
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(false),
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -1612,9 +1647,9 @@ impl<
             odd_verifier,
         )?;
 
-        verifier.init_balance_change_verification(
+        verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
             even_verifier,
@@ -1628,7 +1663,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1742,16 +1777,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: false,
+                has_balance_changed: false,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            false,
-            false,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -1837,14 +1874,16 @@ impl<
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            None,
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -1862,7 +1901,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1891,14 +1930,16 @@ impl<
     ) -> Result<()> {
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: None,
+                has_counter_decreased: Some(true),
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            None,
-            Some(true),
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -1915,7 +1956,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2041,16 +2082,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: true,
+                has_balance_changed: true,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            true,
-            true,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -2061,14 +2104,16 @@ impl<
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
-            amount,
-            &ct_amount,
+            vec![BalanceChangeConfig {
+                amount,
+                ct_amount,
+                r_3: common_prover.r_3[0],
+                has_balance_decreased: true,
+            }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.r_3,
-            true,
             even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -2163,23 +2208,25 @@ impl<
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(true),
+                has_counter_decreased: None,
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(true),
-            None,
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
         )?;
 
-        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+        verifier.init_balance_change_verification(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
         )?;
@@ -2195,7 +2242,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2226,14 +2273,16 @@ impl<
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: true,
+                has_balance_decreased: Some(true),
+                has_counter_decreased: None,
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            true,
-            Some(true),
-            None,
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -2242,9 +2291,9 @@ impl<
             odd_verifier,
         )?;
 
-        verifier.init_balance_change_verification(
+        verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
             even_verifier,
@@ -2258,7 +2307,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2384,16 +2433,18 @@ impl<
 
         let common_prover = CommonStateChangeProver::init_with_given_prover(
             rng,
-            leg_enc,
-            leg_enc_rand,
+            vec![LegProverConfig {
+                encryption: leg_enc,
+                randomness: leg_enc_rand,
+                is_sender: false,
+                has_balance_changed: true,
+            }],
             account,
             updated_account,
             updated_account_commitment,
             leaf_path,
             root,
             nonce,
-            false,
-            true,
             account_tree_params,
             account_comm_key,
             enc_key_gen,
@@ -2404,14 +2455,16 @@ impl<
 
         let balance_change_prover = BalanceChangeProver::init(
             rng,
-            amount,
-            &ct_amount,
+            vec![BalanceChangeConfig {
+                amount,
+                ct_amount,
+                r_3: common_prover.r_3[0],
+                has_balance_decreased: false,
+            }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.r_3,
-            false,
             even_prover,
             &account_tree_params.even_parameters.pc_gens,
             &account_tree_params.even_parameters.bp_gens,
@@ -2506,23 +2559,25 @@ impl<
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: None,
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            Some(false),
-            None,
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
             enc_gen,
         )?;
 
-        verifier.enforce_constraints_and_take_challenge_contrib_of_balance_change(
+        verifier.init_balance_change_verification(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
         )?;
@@ -2538,7 +2593,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2569,14 +2624,16 @@ impl<
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
-            &leg_enc,
+            vec![LegVerifierConfig {
+                encryption: leg_enc.clone(),
+                is_sender: false,
+                has_balance_decreased: Some(false),
+                has_counter_decreased: None,
+            }],
             root,
             updated_account_commitment,
             nullifier,
             nonce,
-            false,
-            Some(false),
-            None,
             account_tree_params,
             &account_comm_key,
             enc_key_gen,
@@ -2585,9 +2642,9 @@ impl<
             odd_verifier,
         )?;
 
-        verifier.init_balance_change_verification(
+        verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &ct_amount,
+            &[ct_amount],
             enc_key_gen,
             enc_gen,
             even_verifier,
@@ -2601,7 +2658,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            &leg_enc,
+            vec![leg_enc.clone()],
             updated_account_commitment,
             nullifier,
             account_tree_params,

@@ -1,10 +1,10 @@
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, COUNTER_LABEL, LEGS_LABEL,
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment,
 };
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::{
-    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, Error, ID_LABEL, NONCE_LABEL,
-    PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error,
+    add_to_transcript, error::Result, Error, ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL,
+    ID_LABEL, NONCE_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL,
 };
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{One, Zero};
@@ -46,7 +46,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         Self::new_with_given_transcript(
             rng,
@@ -67,7 +67,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: MerlinTranscript,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         // Need to prove that:
         // 1. sk used in commitment is for the revealed pk
         // 2. nullifier is created from current_rho
@@ -144,7 +144,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         self.verify_with_given_transcript(
             asset_id,
@@ -170,7 +170,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: MerlinTranscript,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -268,7 +268,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         enc_key_gen: G,
         enc_gen: G,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         Self::new_with_given_transcript(
             rng,
@@ -304,7 +304,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         enc_key_gen: G,
         enc_gen: G,
         mut transcript: MerlinTranscript,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         if legs.len() != (sender_in_leg_indices.len() + receiver_in_leg_indices.len()) {
             return Err(Error::ProofGenerationError(
                 "Number of legs and indices for sender and receiver do not match".to_string(),
@@ -523,7 +523,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         enc_key_gen: G,
         enc_gen: G,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         self.verify_with_given_transcript(
             asset_id,
@@ -563,7 +563,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         enc_key_gen: G,
         enc_gen: G,
         mut transcript: MerlinTranscript,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         if legs.len() != counter as usize {
             return Err(Error::ProofGenerationError(
                 "Number of legs and counter do not match".to_string(),
@@ -974,3 +974,6 @@ mod tests {
         );
     }
 }
+
+pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
+pub const LEGS_LABEL: &'static [u8; 4] = b"legs";
