@@ -8,17 +8,21 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::String, vec::Vec};
 
 use blake2::Blake2s256;
+use dock_crypto_utils::hashing_utils::hash_to_field;
+
 use bounded_collections::BoundedVec;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use polymesh_dart_bp::keys as bp_keys;
+use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::encode::*;
 use super::*;
 use crate::*;
+
+pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
 
 /// The encryption public key, which can be shared freely.
 #[derive(
@@ -214,32 +218,51 @@ impl AccountKeyPair {
         })
     }
 
-    /// Initializes a new asset state for the account.
-    pub fn init_asset_state<R: RngCore + CryptoRng>(
+    /// Derives commitment randomness from the account secret key, identity, asset ID, and counter.
+    pub fn derive_account_randomness(
         &self,
-        rng: &mut R,
+        identity: &[u8],
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> PallasScalar {
+        // For creating randomness, use `secret_key//identity//asset_id//counter_n`
+        let mut extended_seed = self.secret.encode();
+        extended_seed.extend(DERIVE_SEPARATOR);
+        extended_seed.extend(identity);
+        extended_seed.extend(DERIVE_SEPARATOR);
+        extended_seed.extend(asset_id.to_le_bytes().as_slice());
+        extended_seed.extend(DERIVE_SEPARATOR);
+        extended_seed.extend(counter.to_le_bytes());
+        let randomness = hash_to_field::<_, Blake2b512>(b"Commitment randomness", &extended_seed);
+        extended_seed.zeroize();
+        randomness
+    }
+
+    /// Initializes a new asset state for the account.
+    pub fn init_asset_state(
+        &self,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<AccountAssetState, Error> {
-        AccountAssetState::new(rng, &self, asset_id, counter, identity)
+        AccountAssetState::new(&self, asset_id, counter, identity)
     }
 
-    pub fn account_state<R: RngCore + CryptoRng>(
+    pub fn account_state(
         &self,
-        rng: &mut R,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<AccountState, Error> {
         let params = poseidon_params();
+        let randomness = self.derive_account_randomness(identity, asset_id, counter);
         let id = hash_identity::<PallasScalar>(identity);
-        let state = BPAccountState::new(
-            rng,
+        let state = BPAccountState::new_given_randomness(
             id,
             self.secret.0.0,
             asset_id,
             counter,
+            randomness,
             params.params.clone(),
         )?;
         Ok(state.try_into()?)
@@ -252,6 +275,42 @@ impl AccountKeyPair {
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
     pub acct: AccountPublicKey,
+}
+
+/// MasterSeed for generating account keys
+#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct MasterSeed(BPMasterSeed);
+
+impl MasterSeed {
+    /// From seed (mnemonic phrase or hex string)
+    pub fn from_seed(seed: &str) -> Self {
+        // If the seed is a hex string, use it directly; otherwise, treat it as a mnemonic phrase.
+        let seed_bytes = if seed.starts_with("0x") {
+            hex::decode(&seed[2..]).unwrap_or_else(|_| seed.as_bytes().to_vec())
+        } else {
+            seed.as_bytes().to_vec()
+        };
+        Self(BPMasterSeed::new(seed_bytes))
+    }
+
+    /// Derives account keys from the master seed, path and index.
+    pub fn derive_account_keys(&self, path: &str) -> Result<AccountKeys, Error> {
+        let enc_key_gen = dart_gens().enc_key_gen();
+        let sig_key_gen = dart_gens().sig_key_gen();
+        let ((acct_sk, acct_pk), (enc_sk, enc_pk)) =
+            self.0
+                .derive_keys::<_, Blake2b512>(path.as_bytes(), 0, enc_key_gen, sig_key_gen);
+        Ok(AccountKeys {
+            enc: EncryptionKeyPair {
+                public: EncryptionPublicKey::from_affine(enc_pk.0)?,
+                secret: EncryptionSecretKey(enc_sk),
+            },
+            acct: AccountKeyPair {
+                public: AccountPublicKey::from_affine(acct_pk.0)?,
+                secret: AccountSecretKey(acct_sk),
+            },
+        })
+    }
 }
 
 /// The pair of key pairs for an account: the encryption key pair and the account key pair.
@@ -277,14 +336,13 @@ impl AccountKeys {
     }
 
     /// Initializes a new asset state for the account.
-    pub fn init_asset_state<R: RngCore + CryptoRng>(
+    pub fn init_asset_state(
         &self,
-        rng: &mut R,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<AccountAssetState, Error> {
-        self.acct.init_asset_state(rng, asset_id, counter, identity)
+        self.acct.init_asset_state(asset_id, counter, identity)
     }
 
     /// Returns the public keys for the account.

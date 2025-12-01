@@ -196,14 +196,13 @@ pub struct AccountAssetState {
 }
 
 impl AccountAssetState {
-    pub fn new<R: RngCore + CryptoRng>(
-        rng: &mut R,
+    pub fn new(
         account: &AccountKeyPair,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<Self, Error> {
-        let current_state = account.account_state(rng, asset_id, counter, identity)?;
+        let current_state = account.account_state(asset_id, counter, identity)?;
         Ok(Self {
             current_state,
             pending_state: None,
@@ -533,7 +532,7 @@ impl AccountAssetRegistrationProof {
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
         let pk = account.public;
-        let account_state = account.init_asset_state(rng, asset_id, counter, identity)?;
+        let account_state = account.init_asset_state(asset_id, counter, identity)?;
         let (bp_state, commitment) = account_state.bp_current_state(account)?;
         let params = poseidon_params();
         let gens = dart_gens();
