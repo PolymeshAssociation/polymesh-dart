@@ -77,7 +77,7 @@ impl BabyStepsTable {
         for i in 2..=MAX_NUM_BABY_STEPS {
             cur = cur + base;
             let cur_bytes = group_element_to_bytes(&cur)?;
-            table.insert(cur_bytes, i);
+            table.insert(cur_bytes, i as u32);
         }
         let base_u32_max = base * G::ScalarField::from(u32::MAX as u64);
         Some(Self {
