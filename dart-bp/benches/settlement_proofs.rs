@@ -13,9 +13,7 @@ use polymesh_dart_bp::account::{
     MultiAssetStateTransitionProof,
 };
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::{
-    AssetCommitmentParams, AssetData, Leg, SettlementCreationProof,
-};
+use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg, SettlementCreationProof};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
 use rand_core::CryptoRngCore;
@@ -249,53 +247,47 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     });
 
     // Benchmark proof verification
-    c.bench_function(
-        "Large settlement proof verification",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
-                proof
-                    .verify(
-                        &mut local_rng,
-                        leg_encs.clone(),
-                        &root,
-                        nonce,
-                        &asset_tree_params,
-                        &asset_comm_params,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .unwrap();
-            });
-        },
-    );
+    c.bench_function("Large settlement proof verification", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
+            proof
+                .verify(
+                    &mut local_rng,
+                    leg_encs.clone(),
+                    &root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+        });
+    });
 
     // Benchmark proof verification with RMC
-    c.bench_function(
-        "Large settlement proof verification with RMC   ",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
-                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
-                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
+    c.bench_function("Large settlement proof verification with RMC   ", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
-                proof
-                    .verify(
-                        &mut local_rng,
-                        leg_encs.clone(),
-                        &root,
-                        nonce,
-                        &asset_tree_params,
-                        &asset_comm_params,
-                        enc_key_gen,
-                        enc_gen,
-                        Some((&mut rmc_1, &mut rmc_0)),
-                    )
-                    .unwrap();
-            });
-        },
-    );
+            proof
+                .verify(
+                    &mut local_rng,
+                    leg_encs.clone(),
+                    &root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+        });
+    });
 }
 
 /// Benchmark for batch settlement verification
@@ -386,16 +378,9 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
 
         // Create legs for this settlement
         for j in 0..num_legs {
-            let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, all_asset_data[j].id)
-                .unwrap();
+            let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, all_asset_data[j].id).unwrap();
             let (leg_enc, leg_enc_rand) = leg
-                .encrypt::<_, Blake2b512>(
-                    &mut rng,
-                    pk_s_e.0,
-                    pk_r_e.0,
-                    enc_key_gen,
-                    enc_gen,
-                )
+                .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
                 .unwrap();
 
             legs.push(leg);
@@ -441,47 +426,44 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
     );
 
     // Benchmark batch verification with RMC
-    c.bench_function(
-        "Batch settlement verification with RMC",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
-                let mut even_tuples = Vec::with_capacity(BATCH_SIZE);
-                let mut odd_tuples = Vec::with_capacity(BATCH_SIZE);
-                let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
-                let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
+    c.bench_function("Batch settlement verification with RMC", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
+            let mut even_tuples = Vec::with_capacity(BATCH_SIZE);
+            let mut odd_tuples = Vec::with_capacity(BATCH_SIZE);
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
 
-                for i in 0..BATCH_SIZE {
-                    let (even, odd) = proofs[i]
-                        .verify_and_return_tuples(
-                            all_leg_encs[i].clone(),
-                            &root,
-                            &nonces[i],
-                            &asset_tree_params,
-                            &asset_comm_params,
-                            enc_key_gen,
-                            enc_gen,
-                            &mut local_rng,
-                            Some(&mut rmc_1),
-                        )
-                        .unwrap();
-                    even_tuples.push(even);
-                    odd_tuples.push(odd);
-                }
+            for i in 0..BATCH_SIZE {
+                let (even, odd) = proofs[i]
+                    .verify_and_return_tuples(
+                        all_leg_encs[i].clone(),
+                        &root,
+                        &nonces[i],
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        &mut local_rng,
+                        Some(&mut rmc_1),
+                    )
+                    .unwrap();
+                even_tuples.push(even);
+                odd_tuples.push(odd);
+            }
 
-                add_verification_tuples_batches_to_rmc(
-                    even_tuples,
-                    odd_tuples,
-                    &asset_tree_params,
-                    &mut rmc_0,
-                    &mut rmc_1,
-                )
-                .unwrap();
+            add_verification_tuples_batches_to_rmc(
+                even_tuples,
+                odd_tuples,
+                &asset_tree_params,
+                &mut rmc_0,
+                &mut rmc_1,
+            )
+            .unwrap();
 
-                verify_rmc(&rmc_0, &rmc_1).unwrap();
-            });
-        },
-    );
+            verify_rmc(&rmc_0, &rmc_1).unwrap();
+        });
+    });
 }
 
 /// Benchmark for large single-shot settlement
@@ -503,8 +485,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     );
 
     // Setup keys for Alice (sender), Bob (receiver), and auditor
-    let ((sk_alice, pk_alice), (_sk_alice_e, pk_alice_e), (sk_bob, pk_bob), (_sk_bob_e, pk_bob_e), (_sk_auditor_e, pk_auditor_e)) =
-        create_keys(&mut rng, &account_comm_key, enc_key_gen);
+    let (
+        (sk_alice, pk_alice),
+        (_sk_alice_e, pk_alice_e),
+        (sk_bob, pk_bob),
+        (_sk_bob_e, pk_bob_e),
+        (_sk_auditor_e, pk_auditor_e),
+    ) = create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
     let num_legs = 16;
     let keys = vec![(true, pk_auditor_e.0)];
@@ -518,7 +505,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             &asset_comm_params,
             asset_tree_params.odd_parameters.delta,
         )
-            .unwrap();
+        .unwrap();
         asset_commitments.push(asset_data.commitment);
         asset_data_vec.push(asset_data);
     }
@@ -526,12 +513,11 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let asset_tree_height = 2;
     let account_tree_height = 3;
 
-    let asset_tree =
-        CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
-            &asset_commitments,
-            &asset_tree_params,
-            Some(asset_tree_height),
-        );
+    let asset_tree = CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+        &asset_commitments,
+        &asset_tree_params,
+        Some(asset_tree_height),
+    );
     let asset_tree_root = asset_tree.root_node();
 
     // Create legs, all with same sender (Alice) and receiver (Bob) but different assets
@@ -590,16 +576,19 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     all_account_comms.extend_from_slice(&alice_account_comms);
     all_account_comms.extend_from_slice(&bob_account_comms);
 
-    let account_tree = CurveTree::<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>::from_leaves(
-        &all_account_comms,
-        &account_tree_params,
-        Some(account_tree_height),
-    );
+    let account_tree =
+        CurveTree::<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>::from_leaves(
+            &all_account_comms,
+            &account_tree_params,
+            Some(account_tree_height),
+        );
     let account_tree_root = account_tree.root_node();
 
     let nonce = b"multi_asset_settlement_bench";
 
-    println!("L={L}, ASSET_TREE_M={ASSET_TREE_M}, ACCOUNT_TREE_M={ACCOUNT_TREE_M}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height} and {num_legs} legs", );
+    println!(
+        "L={L}, ASSET_TREE_M={ASSET_TREE_M}, ACCOUNT_TREE_M={ACCOUNT_TREE_M}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height} and {num_legs} legs",
+    );
 
     let settlement_proof = SettlementCreationProof::new(
         &mut rng,
@@ -615,7 +604,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         enc_key_gen,
         enc_gen,
     )
-        .unwrap();
+    .unwrap();
     let settlement_proof_size = settlement_proof.compressed_size() + leg_encs.compressed_size();
 
     println!("Settlement proof: {settlement_proof_size} bytes");
@@ -638,7 +627,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 enc_key_gen,
                 enc_gen,
             )
-                .unwrap();
+            .unwrap();
         });
     });
 
@@ -663,30 +652,27 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     });
 
     // Benchmark settlement proof verification with RMC
-    c.bench_function(
-        "Multi-asset settlement proof verification with RMC",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
-                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
-                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
+    c.bench_function("Multi-asset settlement proof verification with RMC", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
-                settlement_proof
-                    .verify(
-                        &mut local_rng,
-                        leg_encs.clone(),
-                        &asset_tree_root,
-                        nonce,
-                        &asset_tree_params,
-                        &asset_comm_params,
-                        enc_key_gen,
-                        enc_gen,
-                        Some((&mut rmc_1, &mut rmc_0)),
-                    )
-                    .unwrap();
-            });
-        },
-    );
+            settlement_proof
+                .verify(
+                    &mut local_rng,
+                    leg_encs.clone(),
+                    &asset_tree_root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+        });
+    });
 
     // Create Alice's state transition proofs
     let mut alice_builders = Vec::with_capacity(num_legs);
@@ -699,13 +685,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         alice_updated_comms.push(updated_comm);
 
-        let mut builder = AccountStateTransitionProofBuilder::<
-            L,
-            _,
-            _,
-            PallasParameters,
-            VestaParameters,
-        >::init(alice_accounts[i].clone(), updated_account, updated_comm, nonce);
+        let mut builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                alice_accounts[i].clone(),
+                updated_account,
+                updated_comm,
+                nonce,
+            );
         builder.add_irreversible_send(amount, leg_encs[i].clone(), leg_enc_rands[i].clone());
         alice_builders.push(builder);
     }
@@ -736,7 +722,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         enc_key_gen,
         enc_gen,
     )
-        .unwrap();
+    .unwrap();
     let alice_proof_size = alice_proof.compressed_size();
 
     println!("Sender proof: {alice_proof_size} bytes");
@@ -752,13 +738,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         bob_updated_comms.push(updated_comm);
 
-        let mut builder = AccountStateTransitionProofBuilder::<
-            L,
-            _,
-            _,
-            PallasParameters,
-            VestaParameters,
-        >::init(bob_accounts[i].clone(), updated_account, updated_comm, nonce);
+        let mut builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                bob_accounts[i].clone(),
+                updated_account,
+                updated_comm,
+                nonce,
+            );
         builder.add_irreversible_receive(amount, leg_encs[i].clone(), leg_enc_rands[i].clone());
         bob_builders.push(builder);
     }
@@ -791,189 +777,194 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         enc_key_gen,
         enc_gen,
     )
-        .unwrap();
+    .unwrap();
     let bob_proof_size = bob_proof.compressed_size();
 
     println!("Receiver proof: {bob_proof_size} bytes");
 
-    println!("Total proof size: {} bytes\n", settlement_proof_size + alice_proof_size + bob_proof_size);
+    println!(
+        "Total proof size: {} bytes\n",
+        settlement_proof_size + alice_proof_size + bob_proof_size
+    );
 
     // Benchmark full verification
-    c.bench_function(
-        "Full verification",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
+    c.bench_function("Full verification", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
 
-                // Setup verifiers
-                let mut alice_verifiers = Vec::new();
-                for i in 0..num_legs {
-                    let mut verifier = AccountStateTransitionProofVerifier::<
-                        L,
-                        _,
-                        _,
-                        PallasParameters,
-                        VestaParameters,
-                    >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-                    verifier.add_irreversible_send(leg_encs[i].clone());
-                    alice_verifiers.push(verifier);
-                }
+            // Setup verifiers
+            let mut alice_verifiers = Vec::new();
+            for i in 0..num_legs {
+                let mut verifier = AccountStateTransitionProofVerifier::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    alice_updated_comms[i], alice_nullifiers[i], nonce
+                );
+                verifier.add_irreversible_send(leg_encs[i].clone());
+                alice_verifiers.push(verifier);
+            }
 
-                let mut bob_verifiers = Vec::new();
-                for i in 0..num_legs {
-                    let mut verifier = AccountStateTransitionProofVerifier::<
-                        L,
-                        _,
-                        _,
-                        PallasParameters,
-                        VestaParameters,
-                    >::init(bob_updated_comms[i], bob_nullifiers[i], nonce);
-                    verifier.add_irreversible_receive(leg_encs[i].clone());
-                    bob_verifiers.push(verifier);
-                }
+            let mut bob_verifiers = Vec::new();
+            for i in 0..num_legs {
+                let mut verifier = AccountStateTransitionProofVerifier::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    bob_updated_comms[i], bob_nullifiers[i], nonce
+                );
+                verifier.add_irreversible_receive(leg_encs[i].clone());
+                bob_verifiers.push(verifier);
+            }
 
-                let (settlement_even, settlement_odd) = settlement_proof
-                    .verify_and_return_tuples(
-                        leg_encs.clone(),
-                        &asset_tree_root,
-                        nonce,
-                        &asset_tree_params,
-                        &asset_comm_params,
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        None,
-                    )
-                    .unwrap();
+            let (settlement_even, settlement_odd) = settlement_proof
+                .verify_and_return_tuples(
+                    leg_encs.clone(),
+                    &asset_tree_root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    None,
+                )
+                .unwrap();
 
-                let (alice_even, alice_odd) = alice_proof
-                    .verify_and_return_tuples(
-                        alice_verifiers,
-                        &account_tree_root,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        None,
-                    )
-                    .unwrap();
+            let (alice_even, alice_odd) = alice_proof
+                .verify_and_return_tuples(
+                    alice_verifiers,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    None,
+                )
+                .unwrap();
 
-                let (bob_even, bob_odd) = bob_proof
-                    .verify_and_return_tuples(
-                        bob_verifiers,
-                        &account_tree_root,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        None,
-                    )
-                    .unwrap();
+            let (bob_even, bob_odd) = bob_proof
+                .verify_and_return_tuples(
+                    bob_verifiers,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    None,
+                )
+                .unwrap();
 
-                // Asset tree uses opposite curves than account tree
-                let even_tuples = vec![settlement_odd, alice_even, bob_even];
-                let odd_tuples = vec![settlement_even, alice_odd, bob_odd];
+            // Asset tree uses opposite curves than account tree
+            let even_tuples = vec![settlement_odd, alice_even, bob_even];
+            let odd_tuples = vec![settlement_even, alice_odd, bob_odd];
 
-                batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
-            });
-        },
-    );
+            batch_verify_bp(even_tuples, odd_tuples, &account_tree_params).unwrap();
+        });
+    });
 
     // Benchmark full verification with RMC
-    c.bench_function(
-        "Full verification with RMC",
-        |b| {
-            b.iter(|| {
-                let mut local_rng = rand::thread_rng();
-                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
-                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
+    c.bench_function("Full verification with RMC", |b| {
+        b.iter(|| {
+            let mut local_rng = rand::thread_rng();
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
-                // Setup verifiers
-                let mut alice_verifiers = Vec::new();
-                for i in 0..num_legs {
-                    let mut verifier = AccountStateTransitionProofVerifier::<
-                        L,
-                        _,
-                        _,
-                        PallasParameters,
-                        VestaParameters,
-                    >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-                    verifier.add_irreversible_send(leg_encs[i].clone());
-                    alice_verifiers.push(verifier);
-                }
+            // Setup verifiers
+            let mut alice_verifiers = Vec::new();
+            for i in 0..num_legs {
+                let mut verifier = AccountStateTransitionProofVerifier::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    alice_updated_comms[i], alice_nullifiers[i], nonce
+                );
+                verifier.add_irreversible_send(leg_encs[i].clone());
+                alice_verifiers.push(verifier);
+            }
 
-                let mut bob_verifiers = Vec::new();
-                for i in 0..num_legs {
-                    let mut verifier = AccountStateTransitionProofVerifier::<
-                        L,
-                        _,
-                        _,
-                        PallasParameters,
-                        VestaParameters,
-                    >::init(bob_updated_comms[i], bob_nullifiers[i], nonce);
-                    verifier.add_irreversible_receive(leg_encs[i].clone());
-                    bob_verifiers.push(verifier);
-                }
+            let mut bob_verifiers = Vec::new();
+            for i in 0..num_legs {
+                let mut verifier = AccountStateTransitionProofVerifier::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    bob_updated_comms[i], bob_nullifiers[i], nonce
+                );
+                verifier.add_irreversible_receive(leg_encs[i].clone());
+                bob_verifiers.push(verifier);
+            }
 
-                let (settlement_even, settlement_odd) = settlement_proof
-                    .verify_and_return_tuples(
-                        leg_encs.clone(),
-                        &asset_tree_root,
-                        nonce,
-                        &asset_tree_params,
-                        &asset_comm_params,
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        Some(&mut rmc_0),
-                    )
-                    .unwrap();
-
-                let (alice_even, alice_odd) = alice_proof
-                    .verify_and_return_tuples(
-                        alice_verifiers,
-                        &account_tree_root,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        Some(&mut rmc_0),
-                    )
-                    .unwrap();
-
-                let (bob_even, bob_odd) = bob_proof
-                    .verify_and_return_tuples(
-                        bob_verifiers,
-                        &account_tree_root,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        enc_gen,
-                        &mut local_rng,
-                        Some(&mut rmc_0),
-                    )
-                    .unwrap();
-
-                // Asset tree uses opposite curves than account tree
-                let even_tuples = vec![settlement_odd, alice_even, bob_even];
-                let odd_tuples = vec![settlement_even, alice_odd, bob_odd];
-
-                add_verification_tuples_batches_to_rmc(
-                    even_tuples,
-                    odd_tuples,
-                    &account_tree_params,
-                    &mut rmc_0,
-                    &mut rmc_1,
+            let (settlement_even, settlement_odd) = settlement_proof
+                .verify_and_return_tuples(
+                    leg_encs.clone(),
+                    &asset_tree_root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    Some(&mut rmc_0),
                 )
-                    .unwrap();
+                .unwrap();
 
-                verify_rmc(&rmc_0, &rmc_1).unwrap();
-            });
-        },
-    );
+            let (alice_even, alice_odd) = alice_proof
+                .verify_and_return_tuples(
+                    alice_verifiers,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+
+            let (bob_even, bob_odd) = bob_proof
+                .verify_and_return_tuples(
+                    bob_verifiers,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    &mut local_rng,
+                    Some(&mut rmc_0),
+                )
+                .unwrap();
+
+            // Asset tree uses opposite curves than account tree
+            let even_tuples = vec![settlement_odd, alice_even, bob_even];
+            let odd_tuples = vec![settlement_even, alice_odd, bob_odd];
+
+            add_verification_tuples_batches_to_rmc(
+                even_tuples,
+                odd_tuples,
+                &account_tree_params,
+                &mut rmc_0,
+                &mut rmc_1,
+            )
+            .unwrap();
+
+            verify_rmc(&rmc_0, &rmc_1).unwrap();
+        });
+    });
 }
 
 criterion_group! {

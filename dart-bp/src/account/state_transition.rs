@@ -13,7 +13,7 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::marker::PhantomData;
-use ark_std::vec::Vec;
+use ark_std::{format, string::ToString, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;

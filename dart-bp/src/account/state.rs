@@ -266,7 +266,7 @@ where
         counter: NullifierSkGenCounter,
         randomness: G::ScalarField,
         poseidon_config: Poseidon2Params<G::ScalarField>,
-    ) -> error::Result<Self> {
+    ) -> Result<Self> {
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }

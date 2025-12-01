@@ -11,7 +11,7 @@ use crate::{RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::vec::Vec;
+use ark_std::{format, string::ToString, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizeMultiPath};

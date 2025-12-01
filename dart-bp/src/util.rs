@@ -11,12 +11,16 @@ use ark_std::string::ToString;
 use ark_std::{format, vec, vec::Vec};
 #[cfg(feature = "std")]
 use bulletproofs::r1cs::batch_verify;
-use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Variable, VerificationTuple, Verifier, add_verification_tuple_to_rmc, add_verification_tuples_to_rmc as add_vts_to_rmc, batch_verify_with_rng, verify_given_verification_tuple, LinearCombination};
+use bulletproofs::r1cs::{
+    ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
+    add_verification_tuple_to_rmc, add_verification_tuples_to_rmc as add_vts_to_rmc,
+    batch_verify_with_rng, verify_given_verification_tuple,
+};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use curve_tree_relations::range_proof::{range_proof};
+use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_chacha::ChaChaRng;
@@ -214,11 +218,7 @@ pub fn enforce_balance_change_prover<
     let mut amounts = amount.into_iter().map(|a| F0::from(a)).collect::<Vec<_>>();
     amounts.push(F0::from(old_bal));
     amounts.push(F0::from(new_bal));
-    let (comm_bp_bal, vars) = even_prover.commit_vec(
-        &amounts,
-        comm_bp_bal_blinding,
-        bp_gens,
-    );
+    let (comm_bp_bal, vars) = even_prover.commit_vec(&amounts, comm_bp_bal_blinding, bp_gens);
     enforce_constraints_for_balance_change(
         even_prover,
         vars,
@@ -248,7 +248,9 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
     has_balance_decreased: Vec<bool>,
     new_bal: Option<Balance>,
 ) -> Result<()> {
-    let var_amount = committed_variables.drain(0..has_balance_decreased.len()).collect::<Vec<_>>();
+    let var_amount = committed_variables
+        .drain(0..has_balance_decreased.len())
+        .collect::<Vec<_>>();
     let var_bal_new = committed_variables.pop().unwrap();
     let var_bal_old = committed_variables.pop().unwrap();
     assert!(committed_variables.is_empty());
@@ -286,7 +288,7 @@ pub fn generate_schnorr_responses_for_balance_change<
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_bal_blinding);
     for (i, amount) in amount.into_iter().enumerate() {
-        wits.insert(i+1, F0::from(amount));
+        wits.insert(i + 1, F0::from(amount));
     }
 
     // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
@@ -792,7 +794,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     assert_eq!(leg_enc.len(), is_sender.len());
     assert_eq!(is_sender.len(), r_pk.len());
     assert_eq!(r_4.len(), r_pk.len());
-    
+
     let nullifier = old_account.nullifier(account_comm_key);
 
     let comm_bp_blinding = F0::rand(rng);
@@ -850,31 +852,27 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
 
     let mut t_leg_asset_id = Vec::with_capacity(leg_enc.len());
     let mut t_leg_pk = Vec::with_capacity(leg_enc.len());
-    
+
     for (r_pk, r_4) in r_pk.into_iter().zip(r_4.into_iter()) {
         // Schnorr commitment for proving correctness of asset-id used in leg
-        t_leg_asset_id.push(
-            PokPedersenCommitmentProtocol::init(
-                r_4,
-                F0::rand(rng),
-                &enc_key_gen,
-                F0::from(asset_id),
-                asset_id_blinding,
-                &enc_gen,
-            )
-        );
+        t_leg_asset_id.push(PokPedersenCommitmentProtocol::init(
+            r_4,
+            F0::rand(rng),
+            &enc_key_gen,
+            F0::from(asset_id),
+            asset_id_blinding,
+            &enc_gen,
+        ));
 
         // Schnorr commitment for proving knowledge of secret key of the corresponding party's public key used in leg
-        t_leg_pk.push(
-            PokPedersenCommitmentProtocol::init(
-                r_pk,
-                F0::rand(rng),
-                &enc_key_gen,
-                old_account.sk,
-                sk_blinding,
-                &pk_gen,
-            )
-        );   
+        t_leg_pk.push(PokPedersenCommitmentProtocol::init(
+            r_pk,
+            F0::rand(rng),
+            &enc_key_gen,
+            old_account.sk,
+            sk_blinding,
+            &pk_gen,
+        ));
     }
 
     // Schnorr commitment for proving correctness of Bulletproof commitment
@@ -925,9 +923,9 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                 &leg_enc.ct_r
             },
             &mut transcript,
-        )?;    
+        )?;
     }
-    
+
     t_bp_randomness_relations.challenge_contribution(&mut transcript)?;
     comm_bp_randomness_relations.serialize_compressed(&mut transcript)?;
 
@@ -971,8 +969,8 @@ pub(crate) fn generate_sigma_t_values_for_balance_change<
     assert_eq!(ct_amount.len(), r_3.len());
     let mut gens = bp_gens_for_vec_commitment(2 + amount.len() as u32, bp_gens);
     // Schnorr commitment for proving knowledge of amount, old account balance and new account balance in Bulletproof commitment
-    let mut bases= Vec::with_capacity(3 + amount.len());
-    let mut blindings= Vec::with_capacity(3 + amount.len());
+    let mut bases = Vec::with_capacity(3 + amount.len());
+    let mut blindings = Vec::with_capacity(3 + amount.len());
     bases.push(pc_gens.B_blinding);
     blindings.push(F0::rand(rng));
     for i in 0..amount.len() {
@@ -987,17 +985,19 @@ pub(crate) fn generate_sigma_t_values_for_balance_change<
 
     // Schnorr commitment for proving knowledge of amount used in the leg
     let mut t_leg_amount = Vec::with_capacity(r_3.len());
-    for ((r_3, amount), amount_blinding) in r_3.drain(..).zip(amount.drain(..)).zip(amount_blinding.drain(..)) {
-        t_leg_amount.push(
-            PokPedersenCommitmentProtocol::init(
-                r_3,
-                F0::rand(rng),
-                &enc_key_gen,
-                F0::from(amount),
-                amount_blinding,
-                &enc_gen,
-            )
-        );
+    for ((r_3, amount), amount_blinding) in r_3
+        .drain(..)
+        .zip(amount.drain(..))
+        .zip(amount_blinding.drain(..))
+    {
+        t_leg_amount.push(PokPedersenCommitmentProtocol::init(
+            r_3,
+            F0::rand(rng),
+            &enc_key_gen,
+            F0::from(amount),
+            amount_blinding,
+            &enc_gen,
+        ));
     }
 
     Zeroize::zeroize(&mut old_balance_blinding);
@@ -1077,7 +1077,6 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
         resp_leg_pk.push(r_pk);
     }
 
-
     // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_blinding);
@@ -1150,7 +1149,9 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     Ok(())
 }
 
-pub(crate) fn take_challenge_contrib_of_sigma_t_values_for_balance_change<G0: SWCurveConfig + Copy>(
+pub(crate) fn take_challenge_contrib_of_sigma_t_values_for_balance_change<
+    G0: SWCurveConfig + Copy,
+>(
     ct_amount: &[Affine<G0>],
     t_comm_bp_bal: &Affine<G0>,
     resp_leg_amount: &[Partial1PokPedersenCommitment<Affine<G0>>],
@@ -1454,7 +1455,6 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
                     ));
                 }
             }
-
         }
     }
 
@@ -1472,7 +1472,7 @@ pub(crate) fn enforce_constraints_for_randomness_relations<F: Field, CS: Constra
     let var_rho_i_plus_1 = committed_variables.pop().unwrap();
     let var_rho_i = committed_variables.pop().unwrap();
     let var_rho = committed_variables.pop().unwrap();
-    
+
     let (_, _, var_rho_i_plus_1_) = cs.multiply(var_rho.into(), var_rho_i.into());
     let (_, _, var_s_i_plus_1_) = cs.multiply(var_s_i.into(), var_s_i.into());
     cs.constrain(var_rho_i_plus_1 - var_rho_i_plus_1_);
@@ -1568,8 +1568,13 @@ mod tests {
         let mut verifier = Verifier::new(verifier_transcript);
         let vars = verifier.commit_vec(3, comm);
 
-        if enforce_constraints_for_balance_change(&mut verifier, vars, vec![has_balance_decreased], None)
-            .is_err()
+        if enforce_constraints_for_balance_change(
+            &mut verifier,
+            vars,
+            vec![has_balance_decreased],
+            None,
+        )
+        .is_err()
         {
             return false;
         }
@@ -1670,31 +1675,66 @@ mod tests {
         ));
 
         assert!(prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 100, 40, vec![30, 30], vec![true, true]
+            &pc_gens,
+            &bp_gens,
+            100,
+            40,
+            vec![30, 30],
+            vec![true, true]
         ));
 
         assert!(prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 50, 150, vec![40, 60], vec![false, false]
+            &pc_gens,
+            &bp_gens,
+            50,
+            150,
+            vec![40, 60],
+            vec![false, false]
         ));
 
         assert!(prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 100, 80, vec![30, 10], vec![true, false]
+            &pc_gens,
+            &bp_gens,
+            100,
+            80,
+            vec![30, 10],
+            vec![true, false]
         ));
 
         assert!(prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 80, 100, vec![30, 10], vec![false, true]
+            &pc_gens,
+            &bp_gens,
+            80,
+            100,
+            vec![30, 10],
+            vec![false, true]
         ));
 
         assert!(prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 100, 100, vec![30, 30], vec![true, false]
+            &pc_gens,
+            &bp_gens,
+            100,
+            100,
+            vec![30, 30],
+            vec![true, false]
         ));
 
         assert!(!prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 100, 40, vec![30, 20], vec![true, true]
+            &pc_gens,
+            &bp_gens,
+            100,
+            40,
+            vec![30, 20],
+            vec![true, true]
         ));
 
         assert!(!prove_verify_balance_change_multi(
-            &pc_gens, &bp_gens, 100, 40, vec![30, 30], vec![false, true]
+            &pc_gens,
+            &bp_gens,
+            100,
+            40,
+            vec![30, 30],
+            vec![false, true]
         ));
     }
     fn prove_verify_randomness_relations(

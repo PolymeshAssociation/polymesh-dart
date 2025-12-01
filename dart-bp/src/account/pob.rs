@@ -1,10 +1,8 @@
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::{
-    add_to_transcript, error::Result, Error, ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL,
-    ID_LABEL, NONCE_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL,
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, Error, ID_LABEL, NONCE_LABEL,
+    PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
 };
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{One, Zero};

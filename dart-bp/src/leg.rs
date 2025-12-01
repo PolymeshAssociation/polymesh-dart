@@ -1906,7 +1906,7 @@ impl<
         // TODO: Use common root function
         let mut re_randomized_paths = Vec::with_capacity(leaf_paths.len());
         let mut rerandomized_leaves_and_randomizers = Vec::with_capacity(num_legs);
-        for (i, leaf_path) in leaf_paths.iter().enumerate() {
+        for leaf_path in leaf_paths.iter() {
             let (re_randomized_path, randomizers_of_leaves) = leaf_path
                 .batched_select_and_rerandomize_prover_gadget(
                     even_prover,
@@ -1982,14 +1982,11 @@ impl<
             &mut RandomizedMultChecker<Affine<G0>>,
         )>,
     ) -> Result<()> {
-        use std::time::Instant;
-
         let rmc_0 = match rmc.as_mut() {
             Some((_, rmc_0)) => Some(&mut **rmc_0),
             None => None,
         };
 
-        let clock = Instant::now();
         let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_encs,
             tree_root,
@@ -2001,18 +1998,14 @@ impl<
             rng,
             rmc_0,
         )?;
-        let t0 = clock.elapsed();
 
-        let clock = Instant::now();
         let res = match rmc {
             Some((rmc_1, rmc_0)) => {
                 add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_parameters, rmc_1, rmc_0)
             }
             None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters),
         };
-        let t1 = clock.elapsed();
 
-        println!("verify: t0 = {:?}, t1 = {:?}", t0, t1);
         res
     }
 
@@ -2459,7 +2452,10 @@ pub mod tests {
             index += 1;
         }
 
-        println!("total proof size = {}", proof.compressed_size() + leg_enc.compressed_size());
+        println!(
+            "total proof size = {}",
+            proof.compressed_size() + leg_enc.compressed_size()
+        );
         println!("total prover time = {:?}", prover_time);
         println!(
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",

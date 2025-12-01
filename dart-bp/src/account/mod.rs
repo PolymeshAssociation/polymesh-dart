@@ -11,29 +11,34 @@ pub mod tests;
 // use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 // use ark_crypto_primitives::sponge::{poseidon::PoseidonConfig, Absorb};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::util::{add_verification_tuples_to_rmc, BPProof};
+use crate::util::{BPProof, add_verification_tuples_to_rmc};
 use crate::util::{prove_with_rng, verify_given_verification_tuples};
-use crate::{error::Result, Error, TXN_ODD_LABEL};
+use crate::{Error, TXN_ODD_LABEL, error::Result};
 use crate::{TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::string::ToString;
-use ark_std::vec::Vec;
+use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 pub use common::{
     BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof,
     CommonStateChangeProver, LegProverConfig, LegVerifierConfig, StateChangeVerifier,
 };
-pub use state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier, AccountStateTransitionProof};
-pub use state_transition_multi::MultiAssetStateTransitionProof;
 use curve_tree_relations::curve_tree::{Root, SelRerandParameters};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
-pub use state::{AccountCommitmentKeyTrait, AccountState, AccountStateBuilder, AccountStateCommitment};
+pub use state::{
+    AccountCommitmentKeyTrait, AccountState, AccountStateBuilder, AccountStateCommitment,
+};
+pub use state_transition::{
+    AccountStateTransitionProof, AccountStateTransitionProofBuilder,
+    AccountStateTransitionProofVerifier,
+};
+pub use state_transition_multi::MultiAssetStateTransitionProof;
 
 // Consider using https://github.com/jymchng/sosecrets-rs for blindings as well as i know how many times the blinding is needed.
 

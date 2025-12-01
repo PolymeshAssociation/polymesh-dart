@@ -2078,8 +2078,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
-            let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2155,8 +2154,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 2000;
-            let (account_tree_params, account_comm_key, _, _) =
-                setup_gens::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 

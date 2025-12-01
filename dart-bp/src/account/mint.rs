@@ -1,15 +1,14 @@
-use crate::account::{
-    common, AccountCommitmentKeyTrait, AccountState, AccountStateCommitment,
-};
+use crate::account::state::NUM_GENERATORS;
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, common};
 use crate::util::{
     bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
     initialize_curve_tree_prover_with_given_transcripts,
     initialize_curve_tree_verifier_with_given_transcripts, prove_with_rng, verify_with_rng,
 };
 use crate::{
-    add_to_transcript, error, Error, ASSET_ID_LABEL, ID_LABEL, INCREASE_BAL_BY_LABEL,
-    NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL,
+    ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
+    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -28,7 +27,6 @@ use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
-use crate::account::state::NUM_GENERATORS;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 

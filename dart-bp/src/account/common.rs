@@ -20,7 +20,7 @@ use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::string::ToString;
+use ark_std::{format, string::ToString};
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
