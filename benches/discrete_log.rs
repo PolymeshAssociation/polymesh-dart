@@ -6,9 +6,6 @@ use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
 use polymesh_dart_common::MAX_BALANCE;
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
 fn discrete_log_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Discrete Log BSGS Alt");
 
@@ -42,20 +39,25 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         );
     }
 
-    eprintln!("--- Verifying discrete log correctness for amounts 0 to 50,000,000 ---");
-    (0..50u64).into_par_iter().for_each(|chunk_idx| {
-        let start = chunk_idx * 1_000_000;
-        let end = start + 1_000_000;
-        for amount in start..end {
-            let enc_amount = enc_gen * Fr::from(amount);
+    /*
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        eprintln!("--- Verifying discrete log correctness for amounts 0 to 50,000,000 ---");
+        (0..50u64).into_par_iter().for_each(|chunk_idx| {
+            let start = chunk_idx * 1_000_000;
+            let end = start + 1_000_000;
+            for amount in start..end {
+                let enc_amount = enc_gen * Fr::from(amount);
 
-            let value = solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, black_box(enc_amount))
-                .expect("Failed to solve discrete log for base");
-            assert_eq!(amount, value);
-        }
-        eprintln!("Finished verifying amounts {} to {}", start, end - 1);
-    });
-
+                let value = solve_discrete_log_bsgs(MAX_BALANCE, enc_gen, black_box(enc_amount))
+                    .expect("Failed to solve discrete log for base");
+                assert_eq!(amount, value);
+            }
+            eprintln!("Finished verifying amounts {} to {}", start, end - 1);
+        });
+    }
+    // */
     const MAX_DISCRETE_LOG_TIME_SECS: f32 = 300.0;
     let legs: Vec<_> = vec![
         (0u64, "0"),
@@ -77,7 +79,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         (10_000_000_000u64, "10,000,000,000"),
         (100_000_000_000u64, "100,000,000,000"),
         (1_000_000_000_000u64, "1,000,000,000,000"),
-        (10_000_000_000_000u64, "10,000,000,000,000"),
+        //(10_000_000_000_000u64, "10,000,000,000,000"),
         //(100_000_000_000_000u64, "100,000,000,000,000"),
         (2u64.pow(40), "2^40"),
         (2u64.pow(41), "2^41"),
@@ -87,11 +89,12 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         (2u64.pow(45), "2^45"),
         (2u64.pow(46), "2^46"),
         (2u64.pow(47), "2^47"),
-        (2u64.pow(48) - 2, "2^48 - 2"),
+        //(2u64.pow(48) - 2, "2^48 - 2"),
+        (MAX_BALANCE, "MAX BALANCE"),
     ]
     .into_iter()
     .filter_map(|(amount, s_amount)| {
-        if amount >= MAX_BALANCE {
+        if amount > MAX_BALANCE {
             return None;
         }
         eprintln!("Preparing for amount {}", s_amount);

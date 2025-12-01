@@ -7,14 +7,14 @@ use ark_std::{collections::BTreeMap as HashMap, sync::Arc};
 use std::{collections::HashMap, sync::Arc};
 
 #[cfg(feature = "large_baby_steps")]
-pub const MAX_NUM_BABY_STEPS: u64 = 1 << 19;
+pub const MAX_NUM_BABY_STEPS: u64 = 1 << 21;
 #[cfg(not(feature = "large_baby_steps"))]
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 16;
 
 pub struct BabyStepsTable {
     pub base_m: [u8; 32],
     pub base_u32_max: [u8; 32],
-    pub table: HashMap<[u8; 32], u64>,
+    pub table: HashMap<[u8; 32], u32>,
 }
 
 fn group_element_to_bytes<G: AdditiveGroup + CurveGroup>(elem: &G) -> Option<[u8; 32]> {
@@ -53,7 +53,7 @@ impl BabyStepsTable {
                     cur = cur + base;
                     let cur_bytes = group_element_to_bytes(&cur)
                         .expect("Serialization of group element should not fail");
-                    points.push((cur_bytes, offset + i));
+                    points.push((cur_bytes, (offset + i) as _));
                 }
                 points
             })
@@ -90,7 +90,7 @@ impl BabyStepsTable {
     pub fn get<G: AdditiveGroup + CurveGroup>(&self, target: &G) -> Option<u64> {
         let target_bytes =
             group_element_to_bytes(target).expect("Serialization of group element should not fail");
-        self.table.get(&target_bytes).cloned()
+        self.table.get(&target_bytes).cloned().map(|v| v as u64)
     }
 
     pub fn base_m<G: AdditiveGroup + CurveGroup>(&self) -> G {
