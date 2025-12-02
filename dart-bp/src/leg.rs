@@ -1564,7 +1564,12 @@ impl<
         cs.constrain(var_r_4 - var_r_4_);
 
         // TODO: What if we do range proof outside circuit? Or using another protocol like Bulletproofs++?
-        range_proof(cs, var_amount.into(), amount, BALANCE_BITS.into())?;
+        range_proof(
+            cs,
+            var_amount.into(),
+            amount.map(|a| a as u128),
+            BALANCE_BITS.into(),
+        )?;
         Ok(())
     }
 

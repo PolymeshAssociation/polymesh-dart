@@ -799,20 +799,18 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<Self> {
-        let re_randomized_leaf = proof
-            .re_randomized_path
-            .as_ref()
-            .ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "re_randomized_path is None, use batched verification instead".to_string(),
-                )
-            })?
-            .select_and_rerandomize_verifier_gadget(
-                root,
-                even_verifier,
-                odd_verifier,
-                account_tree_params,
-            );
+        let re_randomized_path = proof.re_randomized_path.as_ref().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "re_randomized_path is None, use batched verification instead".to_string(),
+            )
+        })?;
+        re_randomized_path.select_and_rerandomize_verifier_gadget(
+            root,
+            even_verifier,
+            odd_verifier,
+            account_tree_params,
+        );
+        let re_randomized_leaf = re_randomized_path.get_rerandomized_leaf();
 
         add_to_transcript!(
             even_verifier.transcript(),

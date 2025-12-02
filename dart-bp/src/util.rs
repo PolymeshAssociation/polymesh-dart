@@ -265,7 +265,12 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
 
     cs.constrain(var_bal_old + delta - var_bal_new);
     // new balance does not overflow
-    range_proof(cs, var_bal_new.into(), new_bal, BALANCE_BITS.into())?;
+    range_proof(
+        cs,
+        var_bal_new.into(),
+        new_bal.map(|a| a as u128),
+        BALANCE_BITS.into(),
+    )?;
     Ok(())
 }
 

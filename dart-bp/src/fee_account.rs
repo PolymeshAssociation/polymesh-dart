@@ -509,7 +509,7 @@ impl<
         range_proof(
             even_prover,
             new_bal_var.into(),
-            Some(updated_account.balance),
+            Some(updated_account.balance as u128),
             FEE_BALANCE_BITS.into(),
         )?;
 
@@ -1079,7 +1079,7 @@ impl<
         range_proof(
             &mut even_prover,
             new_bal_var.into(),
-            Some(updated_account.balance),
+            Some(updated_account.balance as u128),
             FEE_BALANCE_BITS.into(),
         )?;
 

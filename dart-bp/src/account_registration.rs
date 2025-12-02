@@ -335,7 +335,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 for (i, var) in vars.into_iter().enumerate() {
                     let chunk = mem::take(&mut s_chunks_as_u64[i]);
                     // chunk is zeroized in range_proof
-                    range_proof(prover, var.into(), Some(chunk), CHUNK_BITS)?;
+                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
                 }
                 (Some(comm_s_bp), Some(com_s_bp_blinding))
             } else {
