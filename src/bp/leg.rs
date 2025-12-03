@@ -59,6 +59,12 @@ impl SettlementCounts {
 #[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
 pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
+impl ark_std::fmt::Display for SettlementRef {
+    fn fmt(&self, f: &mut ark_std::fmt::Formatter<'_>) -> ark_std::fmt::Result {
+        write!(f, "0x{}", hex::encode(&self.0[..]))
+    }
+}
+
 /// FromStr for SettlementRef from hex string.
 impl core::str::FromStr for SettlementRef {
     type Err = hex::FromHexError;
@@ -82,6 +88,12 @@ pub struct LegRef {
     /// The leg ID within the settlement.
     #[cfg_attr(feature = "utoipa", schema(example = 0, value_type = u8))]
     pub leg_id: LegId,
+}
+
+impl ark_std::fmt::Display for LegRef {
+    fn fmt(&self, f: &mut ark_std::fmt::Formatter<'_>) -> ark_std::fmt::Result {
+        write!(f, "{}-{}", self.settlement, self.leg_id)
+    }
 }
 
 impl LegRef {
