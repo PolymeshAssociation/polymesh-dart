@@ -409,6 +409,26 @@ where
         Ok(builder.finalize())
     }
 
+    /// Deposit amount into account (increase balance only, no counter change)
+    pub fn get_state_for_deposit(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        if amount + builder.state.balance > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount + builder.state.balance));
+        }
+        builder.state.balance += amount;
+        Ok(builder.finalize())
+    }
+
+    /// Withdraw amount from account (decrease balance only, no counter change)
+    pub fn get_state_for_withdraw(&self, amount: u64) -> Result<Self> {
+        let mut builder = AccountStateBuilder::init(self.clone());
+        if amount > builder.state.balance {
+            return Err(Error::AmountTooLarge(amount));
+        }
+        builder.state.balance -= amount;
+        Ok(builder.finalize())
+    }
+
     /// Set rho and commitment randomness to new values. Used as each update to the account state
     /// needs these refreshed.
     pub fn refresh_randomness_for_state_change(&mut self) {

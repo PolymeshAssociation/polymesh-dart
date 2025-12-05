@@ -681,50 +681,6 @@ impl<
         )
     }
 
-    pub fn verify_and_return_tuples_with_given_verifier<R: CryptoRngCore>(
-        &self,
-        pk: Affine<G0>,
-        asset_id: AssetId,
-        increase_bal_by: Balance,
-        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
-        nullifier: Affine<G0>,
-        root: &Root<L, 1, G0, G1>,
-        nonce: &[u8],
-        account_tree_params: &SelRerandParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        rng: &mut R,
-        mut even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
-        mut odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.verify_sigma_protocols_and_enforce_constraints(
-            pk,
-            asset_id,
-            increase_bal_by,
-            updated_account_commitment,
-            nullifier,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            &mut even_verifier,
-            &mut odd_verifier,
-            rmc,
-        )?;
-        let r1cs_proof = self
-            .r1cs_proof
-            .as_ref()
-            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
-
-        get_verification_tuples_with_rng(
-            even_verifier,
-            odd_verifier,
-            &r1cs_proof.even_proof,
-            &r1cs_proof.odd_proof,
-            rng,
-        )
-    }
-
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         pk: Affine<G0>,

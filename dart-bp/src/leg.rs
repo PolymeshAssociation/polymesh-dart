@@ -678,7 +678,7 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
-        tree_root: &Root<L, 1, G1, G0>,
+        asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -695,7 +695,7 @@ impl<
         add_to_transcript!(
             odd_prover.transcript(),
             ROOT_LABEL,
-            tree_root,
+            asset_tree_root,
             NONCE_LABEL,
             nonce,
             RE_RANDOMIZED_PATH_LABEL,
@@ -1117,7 +1117,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -1135,7 +1135,7 @@ impl<
         };
         let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -1157,7 +1157,7 @@ impl<
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1172,7 +1172,7 @@ impl<
         let mut odd_verifier = Verifier::new(transcript_odd);
         self.verify_sigma_protocols_and_enforce_constraints(
             leg_enc,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -1199,7 +1199,7 @@ impl<
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
-        tree_root: &Root<L, 1, G1, G0>,
+        asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1218,7 +1218,7 @@ impl<
 
         // TODO: This is suboptimal if the same root is being used since the same children (of root) are being allocated each time this is called.
         let _ = re_randomized_path.select_and_rerandomize_verifier_gadget(
-            tree_root,
+            asset_tree_root,
             even_verifier,
             odd_verifier,
             &tree_parameters,
@@ -1227,7 +1227,7 @@ impl<
         add_to_transcript!(
             odd_verifier.transcript(),
             ROOT_LABEL,
-            tree_root,
+            asset_tree_root,
             NONCE_LABEL,
             nonce,
             RE_RANDOMIZED_PATH_LABEL,
@@ -1808,7 +1808,7 @@ impl<
         leg_enc_rands: Vec<LegEncryptionRandomness<G0::ScalarField>>,
         leaf_paths: Vec<CurveTreeWitnessMultiPath<L, M, G1, G0>>,
         asset_data: Vec<AssetData<F0, F1, G0, G1>>,
-        tree_root: &Root<L, M, G1, G0>,
+        asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
         tree_parameters: &SelRerandParameters<G1, G0>,
@@ -1829,7 +1829,7 @@ impl<
             leg_enc_rands,
             leaf_paths,
             asset_data,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -1862,7 +1862,7 @@ impl<
         leg_enc_rands: Vec<LegEncryptionRandomness<G0::ScalarField>>,
         leaf_paths: Vec<CurveTreeWitnessMultiPath<L, M, G1, G0>>,
         asset_data: Vec<AssetData<F0, F1, G0, G1>>,
-        tree_root: &Root<L, M, G1, G0>,
+        asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1899,7 +1899,7 @@ impl<
         add_to_transcript!(
             odd_prover.transcript(),
             ROOT_LABEL,
-            tree_root,
+            asset_tree_root,
             NONCE_LABEL,
             nonce,
         );
@@ -1976,7 +1976,7 @@ impl<
         &self,
         rng: &mut R,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
-        tree_root: &Root<L, M, G1, G0>,
+        asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1994,7 +1994,7 @@ impl<
 
         let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_encs,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -2017,7 +2017,7 @@ impl<
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
-        tree_root: &Root<L, M, G1, G0>,
+        asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -2033,7 +2033,7 @@ impl<
 
         self.verify_sigma_protocols_and_enforce_constraints(
             leg_encs,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -2060,7 +2060,7 @@ impl<
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
-        tree_root: &Root<L, M, G1, G0>,
+        asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
         tree_parameters: &SelRerandParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -2092,7 +2092,7 @@ impl<
         add_to_transcript!(
             odd_verifier.transcript(),
             ROOT_LABEL,
-            tree_root,
+            asset_tree_root,
             NONCE_LABEL,
             nonce,
         );
@@ -2105,7 +2105,7 @@ impl<
         for re_randomized_path in &self.re_randomized_paths {
             // TODO: Use correct function
             let _ = re_randomized_path.batched_select_and_rerandomize_verifier_gadget(
-                tree_root,
+                asset_tree_root,
                 even_verifier,
                 odd_verifier,
                 &tree_parameters,
@@ -2896,7 +2896,7 @@ pub mod tests {
         let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &commitments,
             &asset_tree_params,
-            Some(2),
+            Some(3),
         );
 
         let amount = 100;

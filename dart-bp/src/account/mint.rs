@@ -1,5 +1,6 @@
+use crate::account::common::{ensure_correct_balance_change, ensure_same_accounts};
 use crate::account::state::NUM_GENERATORS;
-use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, common};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{
     bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
     initialize_curve_tree_prover_with_given_transcripts,
@@ -8,7 +9,7 @@ use crate::util::{
 use crate::{
     ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
     ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
-    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -85,7 +86,7 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    ) -> error::Result<(Self, Affine<G0>)> {
+    ) -> Result<(Self, Affine<G0>)> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
 
@@ -120,9 +121,9 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         transcript_even: MerlinTranscript,
         transcript_odd: MerlinTranscript,
-    ) -> error::Result<(Self, Affine<G0>)> {
-        common::ensure_same_accounts(account, updated_account, true)?;
-        common::ensure_correct_balance_change(account, updated_account, increase_bal_by, false)?;
+    ) -> Result<(Self, Affine<G0>)> {
+        ensure_same_accounts(account, updated_account, true)?;
+        ensure_correct_balance_change(account, updated_account, increase_bal_by, false)?;
         let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
             initialize_curve_tree_prover_with_given_transcripts(
                 rng,
@@ -319,7 +320,7 @@ impl<
         account_tree_params: &SelRerandParameters<G0, G1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
 
@@ -355,7 +356,7 @@ impl<
         rng: &mut R,
         transcript_even: MerlinTranscript,
         transcript_odd: MerlinTranscript,
-    ) -> error::Result<()> {
+    ) -> Result<()> {
         if self.resp_leaf.len() != NUM_GENERATORS - 2 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 NUM_GENERATORS - 2,

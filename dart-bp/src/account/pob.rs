@@ -868,11 +868,8 @@ mod tests {
         let enc_key_gen = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
 
-        let (
-            ((sk, pk), (_, pk_e)),
-            ((_sk_r, pk_other), (_, pk_e_other)),
-            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (((sk, pk), (_, pk_e)), ((_, pk_other), (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
         let num_pending_txns = 20;

@@ -133,6 +133,10 @@ pub enum Error {
     /// Invalid hex string format
     #[error("Invalid hex string format")]
     InvalidHexString,
+
+    /// Different number of encryptions or proofs for auditor keys
+    #[error("Expected {0} but found {1}")]
+    EncryptionOrProofsNotPresentForAllKeys(usize, usize),
 }
 
 impl Error {

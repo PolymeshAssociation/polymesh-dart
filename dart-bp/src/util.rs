@@ -253,7 +253,7 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
         .collect::<Vec<_>>();
     let var_bal_new = committed_variables.pop().unwrap();
     let var_bal_old = committed_variables.pop().unwrap();
-    assert!(committed_variables.is_empty());
+    debug_assert!(committed_variables.is_empty());
     let mut delta = LinearCombination::default();
     for (i, b) in has_balance_decreased.into_iter().enumerate() {
         if b {

@@ -59,7 +59,7 @@ name = "settlement_proofs"
 harness = false
 
 [features]
-default = ["std", "asm"]
+default = ["std", "asm", "parallel"]
 
 no_std = []
 
@@ -84,6 +84,7 @@ std = [
 
 # Turn on this feature for faster proof verification.
 verifier_parallel = [
+	"parallel",
 	"ark-ec/parallel",
 	"bulletproofs/parallel_full",
 	"curve_tree_relations/parallel_full"
