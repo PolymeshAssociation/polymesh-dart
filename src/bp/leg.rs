@@ -56,7 +56,7 @@ impl SettlementCounts {
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct SettlementRef(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
 impl ark_std::fmt::Display for SettlementRef {
@@ -86,7 +86,7 @@ pub struct LegRef {
     /// The settlement reference.
     pub settlement: SettlementRef,
     /// The leg ID within the settlement.
-    #[cfg_attr(feature = "utoipa", schema(example = 0, value_type = u8))]
+    #[cfg_attr(feature = "utoipa", schema(examples(0), value_type = u8))]
     pub leg_id: LegId,
 }
 
@@ -118,22 +118,68 @@ impl LegRef {
 }
 
 #[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-pub enum LegRole {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum LegRoleKind {
     Sender,
     Receiver,
-    Auditor(u8),
-    Mediator(u8),
+    Auditor,
+    Mediator,
 }
 
-impl LegRole {
+impl LegRoleKind {
     pub fn is_sender_or_receiver(&self) -> bool {
-        matches!(self, LegRole::Sender | LegRole::Receiver)
+        matches!(self, Self::Sender | Self::Receiver)
     }
 
     pub fn is_sender(&self) -> bool {
-        matches!(self, LegRole::Sender)
+        matches!(self, Self::Sender)
+    }
+}
+
+#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct LegRole {
+    pub kind: LegRoleKind,
+    pub index: Option<u8>,
+}
+
+impl LegRole {
+    pub fn sender() -> Self {
+        Self {
+            kind: LegRoleKind::Sender,
+            index: None,
+        }
+    }
+
+    pub fn receiver() -> Self {
+        Self {
+            kind: LegRoleKind::Receiver,
+            index: None,
+        }
+    }
+
+    pub fn auditor(index: u8) -> Self {
+        Self {
+            kind: LegRoleKind::Auditor,
+            index: Some(index),
+        }
+    }
+
+    pub fn mediator(index: u8) -> Self {
+        Self {
+            kind: LegRoleKind::Mediator,
+            index: Some(index),
+        }
+    }
+
+    pub fn is_sender_or_receiver(&self) -> bool {
+        self.kind.is_sender_or_receiver()
+    }
+
+    pub fn is_sender(&self) -> bool {
+        self.kind.is_sender()
     }
 }
 
@@ -143,16 +189,16 @@ impl LegRole {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
     /// Sender's confidential account.
-    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
     pub sender: AccountPublicKey,
     /// Receiver's confidential account.
-    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
     pub receiver: AccountPublicKey,
     /// Asset id.
-    #[cfg_attr(feature = "utoipa", schema(example = 1, value_type = u64))]
+    #[cfg_attr(feature = "utoipa", schema(examples(1), value_type = u64))]
     pub asset_id: AssetId,
     /// The amount for the asset in the leg.
-    #[cfg_attr(feature = "utoipa", schema(example = 1000, value_type = u64))]
+    #[cfg_attr(feature = "utoipa", schema(examples(1000), value_type = u64))]
     pub amount: Balance,
 }
 
@@ -702,7 +748,7 @@ pub type WrappedLegEncryptionRandomness =
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct LegEncryptionRandomness(WrappedLegEncryptionRandomness);
 
 impl LegEncryptionRandomness {
@@ -722,7 +768,7 @@ pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000", format = Binary))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct LegEncrypted(WrappedLegEncryption);
 
 impl LegEncrypted {
@@ -795,9 +841,9 @@ impl LegEncrypted {
         };
 
         let leg_role = if leg_enc.eph_pk_auds_meds[key_index].0 {
-            LegRole::Auditor(key_index as u8)
+            LegRole::auditor(key_index as u8)
         } else {
-            LegRole::Mediator(key_index as u8)
+            LegRole::mediator(key_index as u8)
         };
         Ok((
             Leg {
@@ -815,13 +861,13 @@ impl LegEncrypted {
         role: LegRole,
         keys: &EncryptionKeyPair,
     ) -> Result<LegEncryptionRandomness, Error> {
-        let (rand, _leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        let (rand, _leg_enc, _) = self.bp_decrypt_randomness_and_leg(role.kind, keys)?;
         LegEncryptionRandomness::new(rand)
     }
 
     fn bp_decrypt_randomness_and_leg(
         &self,
-        role: LegRole,
+        kind: LegRoleKind,
         keys: &EncryptionKeyPair,
     ) -> Result<
         (
@@ -831,13 +877,13 @@ impl LegEncrypted {
         ),
         Error,
     > {
-        let is_sender = match role {
-            LegRole::Sender => true,
-            LegRole::Receiver => false,
+        let is_sender = match kind {
+            LegRoleKind::Sender => true,
+            LegRoleKind::Receiver => false,
             _ => {
                 return Err(Error::LegDecryptionError(format!(
                     "Invalid role for encryption randomness: {:?}",
-                    role
+                    kind
                 )));
             }
         };
@@ -852,10 +898,10 @@ impl LegEncrypted {
     /// Auditors and mediators should use `try_decrypt_with_key` instead.
     pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
         // TODO: optimize to avoid decoding leg encryption twice.
-        if let Ok(leg) = self.decrypt(LegRole::Sender, keys) {
-            Some((leg, LegRole::Sender))
-        } else if let Ok(leg) = self.decrypt(LegRole::Receiver, keys) {
-            Some((leg, LegRole::Receiver))
+        if let Ok(leg) = self.decrypt(LegRole::sender(), keys) {
+            Some((leg, LegRole::sender()))
+        } else if let Ok(leg) = self.decrypt(LegRole::receiver(), keys) {
+            Some((leg, LegRole::receiver()))
         } else {
             None
         }
@@ -869,8 +915,12 @@ impl LegEncrypted {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
-            LegRole::Sender => {
-                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+            LegRole {
+                kind: LegRoleKind::Sender,
+                ..
+            } => {
+                let (rand, leg_enc, _) =
+                    self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
                 leg_enc.decrypt_given_r_checked(
                     rand,
                     enc_key_gen,
@@ -879,8 +929,12 @@ impl LegEncrypted {
                     true,
                 )?
             }
-            LegRole::Receiver => {
-                let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+            LegRole {
+                kind: LegRoleKind::Receiver,
+                ..
+            } => {
+                let (rand, leg_enc, _) =
+                    self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
                 leg_enc.decrypt_given_r_checked(
                     rand,
                     enc_key_gen,
@@ -889,9 +943,21 @@ impl LegEncrypted {
                     false,
                 )?
             }
-            LegRole::Auditor(idx) | LegRole::Mediator(idx) => {
+            LegRole {
+                kind: LegRoleKind::Auditor,
+                index: Some(idx),
+            }
+            | LegRole {
+                kind: LegRoleKind::Mediator,
+                index: Some(idx),
+            } => {
                 let leg_enc = self.decode()?;
                 leg_enc.decrypt_given_key(&keys.enc.secret.0.0, idx as usize, enc_gen)?
+            }
+            _ => {
+                return Err(Error::LegDecryptionError(
+                    "Invalid role for leg decryption".to_string(),
+                ));
             }
         };
         Ok(Leg {
@@ -909,7 +975,7 @@ impl LegEncrypted {
     ) -> Result<(Leg, LegEncryptionRandomness), Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role, &keys.enc)?;
+        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
         let (sender, receiver, asset_id, amount) = leg_enc.decrypt_given_r_checked(
             rand.clone(),
             enc_key_gen,
@@ -936,7 +1002,7 @@ impl LegEncrypted {
     ) -> Result<(Leg, LegEncryptionRandomness), Error> {
         let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role, keys)?;
+        let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role.kind, keys)?;
         let pk = account_pk.get_affine()?;
         let (sender, receiver, asset_id, amount) =
             leg_enc.decrypt_given_r_checked(rand.clone(), enc_key_gen, enc_gen, pk, is_sender)?;

@@ -242,7 +242,7 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, example = "0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114"))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
 pub struct CompressedAffine(
     #[cfg_attr(feature = "serde", serde(with = "human_hex"))] CompressedPoint,
 );

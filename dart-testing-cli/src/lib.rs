@@ -1105,7 +1105,7 @@ impl DartTestingDb {
             account_name,
             settlement_id,
             leg_index,
-            LegRole::Sender,
+            LegRole::sender(),
             proof_action,
             |account_keys,
              leg_ref,
@@ -1178,7 +1178,7 @@ impl DartTestingDb {
             account_name,
             settlement_id,
             leg_index,
-            LegRole::Sender,
+            LegRole::sender(),
             proof_action,
             |account_keys,
              leg_ref,
@@ -1246,7 +1246,7 @@ impl DartTestingDb {
             account_name,
             settlement_id,
             leg_index,
-            LegRole::Sender,
+            LegRole::sender(),
             proof_action,
             |account_keys,
              leg_ref,
@@ -1321,7 +1321,7 @@ impl DartTestingDb {
             account_name,
             settlement_id,
             leg_index,
-            LegRole::Receiver,
+            LegRole::receiver(),
             proof_action,
             |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
@@ -1397,7 +1397,7 @@ impl DartTestingDb {
             proof
         } else {
             // Decrypt leg
-            let leg = encrypted_leg.decrypt(LegRole::Mediator(0), &account_keys)?;
+            let leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
             MediatorAffirmationProof::new(
@@ -1468,7 +1468,7 @@ impl DartTestingDb {
             account_name,
             settlement_id,
             leg_index,
-            LegRole::Receiver,
+            LegRole::receiver(),
             proof_action,
             |account_keys, leg_ref, leg_enc, leg_enc_rand, leg, asset_state, account_tree, rng| {
                 // Create receiver claim proof

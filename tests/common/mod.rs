@@ -158,7 +158,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys)?;
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::sender(), &self.keys)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -210,7 +210,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::receiver(), &self.keys)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -260,7 +261,7 @@ impl DartUserAccountInner {
         amount: Balance,
     ) -> Result<InstantSenderAffirmationProof> {
         log::info!("Sender decrypts the leg");
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys)?;
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::sender(), &self.keys)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -315,7 +316,8 @@ impl DartUserAccountInner {
         amount: Balance,
     ) -> Result<InstantReceiverAffirmationProof> {
         log::info!("Receiver decrypts the leg");
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::receiver(), &self.keys)?;
 
         if asset_id != leg.asset_id() {
             return Err(anyhow!(
@@ -410,7 +412,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Mediator decrypts the leg");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let leg = leg_enc.decrypt(LegRole::Mediator(0), &self.keys)?;
+        let leg = leg_enc.decrypt(LegRole::mediator(0), &self.keys)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
         // Create the mediator affirmation proof.
@@ -463,7 +465,8 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Receiver decrypts the leg for claim");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Receiver, &self.keys)?;
+        let (leg, leg_enc_rand) =
+            leg_enc.decrypt_with_randomness(LegRole::receiver(), &self.keys)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 
@@ -499,7 +502,7 @@ impl DartUserAccountInner {
         leg_ref: &LegRef,
     ) -> Result<()> {
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys)?;
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::sender(), &self.keys)?;
         let asset_id = leg.asset_id();
 
         // Get the asset state for the account.
@@ -534,7 +537,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Sender decrypts the leg for reversal");
         let leg_enc = chain.get_settlement_leg(leg_ref)?.enc.clone();
-        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::Sender, &self.keys)?;
+        let (leg, leg_enc_rand) = leg_enc.decrypt_with_randomness(LegRole::sender(), &self.keys)?;
         let asset_id = leg.asset_id();
         let amount = leg.amount();
 

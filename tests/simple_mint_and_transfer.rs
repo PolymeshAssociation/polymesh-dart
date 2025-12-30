@@ -213,7 +213,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
     )?;
 
     // The auditor decrypts the leg details.
-    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::Auditor(0))?;
+    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::auditor(0))?;
     // Verify the leg details.
     assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
     assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
@@ -353,7 +353,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
     let leg_ref = LegRef::new(settlement_id.into(), 0);
 
     // The auditor decrypts the leg details.
-    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::Auditor(0))?;
+    let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::auditor(0))?;
     // Verify the leg details.
     assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
     assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
@@ -954,7 +954,7 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
 
     // The issuer tries to affirm the settlement as the receiver, which should fail.
     let leg_enc = chain.get_settlement_leg(&leg_ref)?.enc.clone();
-    let leg_enc_rand = issuer_acct.decrypt_leg_randomness(&chain, &leg_ref, LegRole::Sender)?;
+    let leg_enc_rand = issuer_acct.decrypt_leg_randomness(&chain, &leg_ref, LegRole::sender())?;
 
     // Get the issuer's account state for the asset.
     let mut asset_state = issuer_acct.get_account_asset_state(asset_id)?;

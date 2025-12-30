@@ -28,7 +28,7 @@ fn decrypt_benchmark(c: &mut Criterion) {
             |b, leg_enc| {
                 b.iter(|| {
                     let leg = black_box(leg_enc)
-                        .decrypt(LegRole::Sender, &sender_keys)
+                        .decrypt(LegRole::sender(), &sender_keys)
                         .expect("Failed to decrypt leg");
                     assert_eq!(amount, leg.amount);
                 })
@@ -88,7 +88,7 @@ fn decrypt_benchmark(c: &mut Criterion) {
         let now = std::time::Instant::now();
         print!("--- time to decrypt       {}: ", s_amount);
         let leg = leg_enc
-            .decrypt(LegRole::Sender, &sender_keys)
+            .decrypt(LegRole::sender(), &sender_keys)
             .expect("Failed to decrypt leg");
         assert_eq!(*amount, leg.amount);
         let secs = now.elapsed().as_secs_f32();

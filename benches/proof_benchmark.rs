@@ -234,7 +234,7 @@ fn proof_benchmark(c: &mut Criterion) {
 
     let leg_enc = settlement.legs[0].leg_enc.clone();
     let leg_enc_rand = leg_enc
-        .get_encryption_randomness(LegRole::Sender, &issuer_keys.enc)
+        .get_encryption_randomness(LegRole::sender(), &issuer_keys.enc)
         .expect("Failed to decrypt sender's secret key");
     let leg_ref = LegRef::new(settlement_ref, 0 as _);
 
