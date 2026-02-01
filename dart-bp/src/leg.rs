@@ -25,8 +25,9 @@ use bulletproofs::r1cs::{
 };
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{
-    Root, SelRerandParameters, SelectAndRerandomizeMultiPath, SelectAndRerandomizePath,
+    Root, SelectAndRerandomizeMultiPath, SelectAndRerandomizePath,
 };
+use curve_tree_relations::parameters::SelRerandProofParameters;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::ped_comm_group_elems::{prove_naive, verify_naive};
 use curve_tree_relations::range_proof::range_proof;
@@ -161,7 +162,7 @@ impl<
 
     /// Return 1 point per key and role combined. The idea is to have 1 point per auditor/mediator and the
     /// point should encapsulate all info about that auditor/mediator
-    fn points(
+    pub fn points(
         asset_id: AssetId,
         keys: &[(bool, Affine<G0>)],
         params: &AssetCommitmentParams<G0, G1>,
@@ -631,10 +632,10 @@ impl<
         leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         leaf_path: CurveTreeWitnessPath<L, G1, G0>,
         asset_data: AssetData<F0, F1, G0, G1>,
-        tree_root: &Root<L, 1, G1, G0>,
+        asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -642,8 +643,8 @@ impl<
         let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover =
-            Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
-        let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
+            Prover::new(&tree_parameters.even_parameters.pc_gens(), even_transcript);
+        let mut odd_prover = Prover::new(tree_parameters.odd_parameters.pc_gens(), odd_transcript);
         let mut proof = Self::new_with_given_prover(
             rng,
             leg,
@@ -651,7 +652,7 @@ impl<
             leg_enc_rand,
             leaf_path,
             asset_data,
-            tree_root,
+            asset_tree_root,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -661,8 +662,9 @@ impl<
             &mut odd_prover,
         )?;
 
+        let bp_gens = tree_parameters.bp_gens();
         let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
+            prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -681,7 +683,7 @@ impl<
         asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
         // Rest are public parameters
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -733,7 +735,7 @@ impl<
         rerandomized_leaf_and_blinding: (Affine<G1>, F1),
         asset_data: AssetData<F0, F1, G0, G1>,
         // Rest are public parameters
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -768,7 +770,7 @@ impl<
         rerandomized_leaf: Affine<G1>,
         mut re_randomization_of_leaf: F1,
         asset_data: AssetData<F0, F1, G0, G1>,
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -795,7 +797,7 @@ impl<
             let x_coords = asset_data_points
                 .clone()
                 .into_iter()
-                .map(|p| (tree_parameters.odd_parameters.delta + p).into_affine().x)
+                .map(|p| (tree_parameters.odd_parameters.sl_params.delta + p).into_affine().x)
                 .collect::<Vec<_>>();
             let commitment = G1::msm(
                 &asset_comm_params.comm_key[..num_asset_data_points],
@@ -804,7 +806,7 @@ impl<
             .unwrap();
             assert_eq!(
                 commitment
-                    + (tree_parameters.even_parameters.pc_gens.B_blinding
+                    + (tree_parameters.even_parameters.pc_gens().B_blinding
                         * re_randomization_of_leaf),
                 rerandomized_leaf.into_group()
             );
@@ -829,7 +831,7 @@ impl<
             assert_eq!(
                 re_randomized_points[0].into_group(),
                 (asset_comm_params.j_0 * at)
-                    + (tree_parameters.odd_parameters.pc_gens.B_blinding * blindings_for_points[0])
+                    + (tree_parameters.odd_parameters.pc_gens().B_blinding * blindings_for_points[0])
             );
 
             for i in 0..num_asset_data_keys {
@@ -841,7 +843,7 @@ impl<
                 };
                 assert_eq!(
                     re_randomized_points[i + 1].into_group(),
-                    k + (tree_parameters.odd_parameters.pc_gens.B_blinding
+                    k + (tree_parameters.odd_parameters.pc_gens().B_blinding
                         * blindings_for_points[i + 1])
                 )
             }
@@ -885,7 +887,7 @@ impl<
         let (comm_r_i_amount, vars) = odd_prover.commit_vec(
             &wits,
             comm_r_i_blinding,
-            &tree_parameters.odd_parameters.bp_gens,
+            tree_parameters.odd_parameters.bp_gens(),
         );
         Self::enforce_constraints(odd_prover, Some(leg.amount), vars)?;
 
@@ -919,7 +921,7 @@ impl<
         let aud_role_base = asset_comm_params.j_0.neg();
         let blinding_base = tree_parameters
             .odd_parameters
-            .pc_gens
+            .pc_gens()
             .B_blinding
             .into_group()
             .neg()
@@ -987,7 +989,7 @@ impl<
             &asset_comm_params.j_0,
             blindings_for_points[0],
             F0::rand(rng),
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
+            &tree_parameters.odd_parameters.pc_gens().B_blinding,
         );
         Zeroize::zeroize(&mut asset_id_blinding);
         Zeroize::zeroize(&mut at);
@@ -1035,7 +1037,7 @@ impl<
         )?;
         t_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
+            &tree_parameters.odd_parameters.pc_gens().B_blinding,
             &re_randomized_points[0],
             &mut transcript,
         )?;
@@ -1119,8 +1121,7 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
-        // Rest are public parameters
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1145,11 +1146,22 @@ impl<
             rmc_0,
         )?;
 
+        
         match rmc {
             Some((rmc_1, rmc_0)) => {
-                add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_parameters, rmc_1, rmc_0)
+                add_verification_tuples_to_rmc(
+                    even_tuple,
+                    odd_tuple,
+                    tree_parameters,
+                    rmc_1,
+                    rmc_0,
+                )
             }
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters),
+            None => verify_given_verification_tuples(
+                even_tuple,
+                odd_tuple,
+                tree_parameters,
+            ),
         }
     }
 
@@ -1159,7 +1171,7 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1201,7 +1213,7 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1256,7 +1268,7 @@ impl<
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
         rerandomized_leaf: Affine<G1>,
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1303,7 +1315,7 @@ impl<
         let aud_role_base = asset_comm_params.j_0.neg();
         let blinding_base = tree_parameters
             .odd_parameters
-            .pc_gens
+            .pc_gens()
             .B_blinding
             .into_group()
             .neg()
@@ -1358,7 +1370,7 @@ impl<
         )?;
         self.resp_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
-            &tree_parameters.odd_parameters.pc_gens.B_blinding,
+            &tree_parameters.odd_parameters.pc_gens().B_blinding,
             &self.re_randomized_points[0],
             &mut transcript,
         )?;
@@ -1380,7 +1392,7 @@ impl<
                 self.resp_asset_id.verify_using_randomized_mult_checker(
                     self.re_randomized_points[0],
                     asset_comm_params.j_0,
-                    tree_parameters.odd_parameters.pc_gens.B_blinding,
+                    tree_parameters.odd_parameters.pc_gens().B_blinding,
                     &challenge,
                     rmc,
                 );
@@ -1421,7 +1433,7 @@ impl<
                 if !self.resp_asset_id.verify(
                     &self.re_randomized_points[0],
                     &asset_comm_params.j_0,
-                    &tree_parameters.odd_parameters.pc_gens.B_blinding,
+                    &tree_parameters.odd_parameters.pc_gens().B_blinding,
                     &challenge,
                 ) {
                     return Err(Error::ProofVerificationError(
@@ -1574,11 +1586,11 @@ impl<
     }
 
     pub(crate) fn bp_gens_vec(
-        account_tree_params: &SelRerandParameters<G1, G0>,
+        account_tree_params: &SelRerandProofParameters<G1, G0>,
     ) -> [Affine<G0>; 9] {
-        let mut gens = bp_gens_for_vec_commitment(8, &account_tree_params.odd_parameters.bp_gens);
+        let mut gens = bp_gens_for_vec_commitment(8, account_tree_params.odd_parameters.bp_gens());
         [
-            account_tree_params.odd_parameters.pc_gens.B_blinding,
+            account_tree_params.odd_parameters.pc_gens().B_blinding,
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
@@ -1810,8 +1822,7 @@ impl<
         asset_data: Vec<AssetData<F0, F1, G0, G1>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
-        // Rest are public parameters
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1819,8 +1830,8 @@ impl<
         let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover =
-            Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
-        let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
+            Prover::new(tree_parameters.even_parameters.pc_gens(), even_transcript);
+        let mut odd_prover = Prover::new(tree_parameters.odd_parameters.pc_gens(), odd_transcript);
 
         let mut proof = Self::new_with_given_prover(
             rng,
@@ -1839,8 +1850,9 @@ impl<
             &mut odd_prover,
         )?;
 
+        let bp_gens = tree_parameters.bp_gens();
         let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &tree_parameters, rng)?;
+            prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -1864,7 +1876,7 @@ impl<
         asset_data: Vec<AssetData<F0, F1, G0, G1>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -1978,7 +1990,7 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -2004,11 +2016,22 @@ impl<
             rmc_0,
         )?;
 
+        
         let res = match rmc {
             Some((rmc_1, rmc_0)) => {
-                add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_parameters, rmc_1, rmc_0)
+                add_verification_tuples_to_rmc(
+                    even_tuple,
+                    odd_tuple,
+                    tree_parameters,
+                    rmc_1,
+                    rmc_0,
+                )
             }
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_parameters),
+            None => verify_given_verification_tuples(
+                even_tuple,
+                odd_tuple,
+                tree_parameters,
+            ),
         };
 
         res
@@ -2019,7 +2042,7 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -2062,7 +2085,7 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         nonce: &[u8],
-        tree_parameters: &SelRerandParameters<G1, G0>,
+        tree_parameters: &SelRerandProofParameters<G1, G0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
@@ -2104,12 +2127,12 @@ impl<
         let mut re_randomized_leaves = Vec::with_capacity(leg_encs.len());
         for re_randomized_path in &self.re_randomized_paths {
             // TODO: Use correct function
-            let _ = re_randomized_path.batched_select_and_rerandomize_verifier_gadget(
+            re_randomized_path.batched_select_and_rerandomize_verifier_gadget(
                 asset_tree_root,
                 even_verifier,
                 odd_verifier,
                 &tree_parameters,
-            );
+            )?;
             re_randomized_leaves.append(&mut re_randomized_path.get_rerandomized_leaves());
 
             add_to_transcript!(
@@ -2222,7 +2245,7 @@ pub mod tests {
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{Prover, Verifier};
-    use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
+    use curve_tree_relations::curve_tree::{CurveTree};
     use dock_crypto_utils::transcript::MerlinTranscript;
     use rand_core::CryptoRngCore;
     use std::time::Instant;
@@ -2271,8 +2294,7 @@ pub mod tests {
         // Create public params (generators, etc)
         let label = b"asset-tree-params";
         let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
-                label,
+            SelRerandProofParameters::<VestaParameters, PallasParameters>::new(
                 NUM_GENS as u32,
                 NUM_GENS as u32,
             )
@@ -2283,19 +2305,19 @@ pub mod tests {
         // Called h in report
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-        let num_auditors = 1;
-        let num_mediators = 0;
+        let num_auditors = 2;
+        let num_mediators = 2;
         let asset_id = 1;
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors + num_mediators,
-            &asset_tree_params.even_parameters.bp_gens,
+            &asset_tree_params.even_parameters.bp_gens(),
         );
 
         // Account signing (affirmation) keys
-        let (_sk_s, pk_s) = keygen_sig(&mut rng, sig_key_gen);
-        let (_sk_r, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
 
         // Encryption keys
         let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -2315,7 +2337,7 @@ pub mod tests {
             asset_id,
             keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.delta,
+            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -2337,7 +2359,7 @@ pub mod tests {
 
         let x_coords = points
             .into_iter()
-            .map(|p| (asset_tree_params.odd_parameters.delta + p).into_affine().x)
+            .map(|p| (asset_tree_params.odd_parameters.sl_params.delta + p).into_affine().x)
             .collect::<Vec<_>>();
         let expected_commitment = ark_vesta::Projective::msm(
             &asset_comm_params.comm_key[..(num_auditors + num_mediators + 1) as usize],
@@ -2425,13 +2447,13 @@ pub mod tests {
         verify_rmc(&rmc_0, &rmc_1).unwrap();
         let verifier_time_rmc = clock.elapsed();
 
-        let _r = leg_enc
+        let r = leg_enc
             .get_encryption_randomness::<Blake2b512>(&sk_r_e.0, false)
             .unwrap();
-        assert_eq!(_r.0, leg_enc_rand.0);
-        assert_eq!(_r.1, leg_enc_rand.1);
-        assert_eq!(_r.2, leg_enc_rand.2);
-        assert_eq!(_r.3, leg_enc_rand.3);
+        assert_eq!(r.0, leg_enc_rand.0);
+        assert_eq!(r.1, leg_enc_rand.1);
+        assert_eq!(r.2, leg_enc_rand.2);
+        assert_eq!(r.3, leg_enc_rand.3);
 
         let r = leg_enc
             .get_encryption_randomness::<Blake2b512>(&sk_s_e.0, true)
@@ -2457,6 +2479,7 @@ pub mod tests {
             index += 1;
         }
 
+        println!("L={L}, height={}", asset_tree.height());
         println!(
             "total proof size = {}",
             proof.compressed_size() + leg_enc.compressed_size()
@@ -2614,10 +2637,10 @@ pub mod tests {
 
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 64;
+        const L: usize = 512;
 
         // Create public params (generators, etc)
-        let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+        let asset_tree_params = SelRerandProofParameters::<VestaParameters, PallasParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -2636,7 +2659,7 @@ pub mod tests {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors + num_mediators,
-            &asset_tree_params.even_parameters.bp_gens,
+            &asset_tree_params.even_parameters.bp_gens(),
         );
 
         // Account signing (affirmation) keys
@@ -2666,7 +2689,7 @@ pub mod tests {
                 asset_id,
                 keys.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.delta,
+                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
 
@@ -2677,7 +2700,7 @@ pub mod tests {
         let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &commitments,
             &asset_tree_params,
-            Some(2),
+            Some(3),
         );
 
         let amount = 100;
@@ -2774,10 +2797,11 @@ pub mod tests {
             odd_tuples.push(odd);
         }
 
-        batch_verify_bp(even_tuples, odd_tuples, &asset_tree_params).unwrap();
+        batch_verify_bp(even_tuples, odd_tuples, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens(), asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens()).unwrap();
 
         let batch_verifier_time = clock.elapsed();
 
+        println!("L={L}, height={}", asset_tree.height());
         println!(
             "For {batch_size} leg verification proofs, verifier time = {:?}, batch verifier time {:?}",
             verifier_time, batch_verifier_time
@@ -2813,7 +2837,10 @@ pub mod tests {
         add_verification_tuples_batches_to_rmc(
             even_tuples,
             odd_tuples,
-            &asset_tree_params,
+            asset_tree_params.even_parameters.pc_gens(),
+            asset_tree_params.odd_parameters.pc_gens(),
+            asset_tree_params.even_parameters.bp_gens(),
+            asset_tree_params.odd_parameters.bp_gens(),
             &mut rmc_0,
             &mut rmc_1,
         )
@@ -2832,11 +2859,11 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         // Setup begins
-        const NUM_GENS: usize = 1 << 15; // increased for combined proofs
-        const L: usize = 64;
+        const NUM_GENS: usize = 1 << 16;
+        const L: usize = 512;
 
         // Create public params (generators, etc)
-        let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+        let asset_tree_params = SelRerandProofParameters::<VestaParameters, PallasParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -2855,7 +2882,7 @@ pub mod tests {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors + num_mediators,
-            &asset_tree_params.even_parameters.bp_gens,
+            &asset_tree_params.even_parameters.bp_gens(),
         );
 
         // Account signing (affirmation) keys
@@ -2885,7 +2912,7 @@ pub mod tests {
                 asset_id,
                 keys.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.delta,
+                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
 
@@ -2931,8 +2958,8 @@ pub mod tests {
         let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_prover =
-            Prover::new(&asset_tree_params.even_parameters.pc_gens, even_transcript);
-        let mut odd_prover = Prover::new(&asset_tree_params.odd_parameters.pc_gens, odd_transcript);
+            Prover::new(&asset_tree_params.even_parameters.pc_gens(), even_transcript);
+        let mut odd_prover = Prover::new(&asset_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
         let mut proofs = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
@@ -2957,7 +2984,7 @@ pub mod tests {
         }
 
         let (even_bp, odd_bp) =
-            prove_with_rng(even_prover, odd_prover, &asset_tree_params, &mut rng).unwrap();
+            prove_with_rng(even_prover, odd_prover, asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
         let proving_time = clock.elapsed();
 
         let clock = Instant::now();
@@ -2988,7 +3015,10 @@ pub mod tests {
             odd_verifier,
             &even_bp,
             &odd_bp,
-            &asset_tree_params,
+            asset_tree_params.even_parameters.pc_gens(),
+            asset_tree_params.odd_parameters.pc_gens(),
+            asset_tree_params.even_parameters.bp_gens(),
+            asset_tree_params.odd_parameters.bp_gens(),
             &mut rng,
         )
         .unwrap();
@@ -3032,7 +3062,10 @@ pub mod tests {
         add_verification_tuples_batches_to_rmc(
             vec![even_tuple_rmc],
             vec![odd_tuple_rmc],
-            &asset_tree_params,
+            asset_tree_params.even_parameters.pc_gens(),
+            asset_tree_params.odd_parameters.pc_gens(),
+            asset_tree_params.even_parameters.bp_gens(),
+            asset_tree_params.odd_parameters.bp_gens(),
             &mut rmc_0,
             &mut rmc_1,
         )
@@ -3040,6 +3073,7 @@ pub mod tests {
         verify_rmc(&rmc_0, &rmc_1).unwrap();
         let rmc_verification_time = clock.elapsed();
 
+        println!("L={L}, height={}", asset_tree.height());
         println!("Combined leg proving time = {:?}", proving_time);
         println!("Combined leg verification time = {:?}", verification_time);
         println!(
@@ -3060,11 +3094,11 @@ pub mod tests {
         const L: usize = 512;
         const M: usize = 2;
 
-        let height = 2;
+        let height = 3;
 
         let label = b"test";
         let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
+            SelRerandProofParameters::<VestaParameters, PallasParameters>::new_using_label(
                 label,
                 NUM_GENS as u32,
                 NUM_GENS as u32,
@@ -3079,7 +3113,7 @@ pub mod tests {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors,
-            &asset_tree_params.even_parameters.bp_gens,
+            &asset_tree_params.even_parameters.bp_gens(),
         );
 
         let asset_id_1 = 1;
@@ -3112,7 +3146,7 @@ pub mod tests {
                 asset_id,
                 keys.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.delta,
+                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
             commitments.push(ad.commitment);
@@ -3358,7 +3392,7 @@ pub mod tests {
 
         let label = b"test";
         let asset_tree_params =
-            SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
+            SelRerandProofParameters::<VestaParameters, PallasParameters>::new_using_label(
                 label,
                 NUM_GENS as u32,
                 NUM_GENS as u32,
@@ -3373,7 +3407,7 @@ pub mod tests {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors,
-            &asset_tree_params.even_parameters.bp_gens,
+            &asset_tree_params.even_parameters.bp_gens(),
         );
 
         let asset_id = 1;
@@ -3394,7 +3428,7 @@ pub mod tests {
             asset_id,
             keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.delta,
+            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3412,7 +3446,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         // Create legs with same asset, sender and receiver
-        let num_legs: usize = 32;
+        let num_legs: usize = 30;
         let mut legs = Vec::with_capacity(num_legs);
         let mut leg_encs = Vec::with_capacity(num_legs);
         let mut leg_enc_rands = Vec::with_capacity(num_legs);
@@ -3491,11 +3525,11 @@ pub mod tests {
             const L: usize = 512;
             const M: usize = 2;
 
-            let height = 2;
+            let height = 3;
 
             let label = b"test";
             let asset_tree_params =
-                SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
+                SelRerandProofParameters::<VestaParameters, PallasParameters>::new_using_label(
                     label,
                     NUM_GENS as u32,
                     NUM_GENS as u32,
@@ -3510,7 +3544,7 @@ pub mod tests {
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
                 num_auditors,
-                &asset_tree_params.even_parameters.bp_gens,
+                &asset_tree_params.even_parameters.bp_gens(),
             );
 
             let mut all_asset_data = Vec::new();
@@ -3525,7 +3559,7 @@ pub mod tests {
                     asset_id,
                     keys.clone(),
                     &asset_comm_params,
-                    asset_tree_params.odd_parameters.delta,
+                    asset_tree_params.odd_parameters.sl_params.delta,
                 )
                 .unwrap();
                 commitments.push(ad.commitment);
@@ -3665,7 +3699,7 @@ pub mod tests {
             let batch_tuple_time = clock.elapsed();
 
             let clock = Instant::now();
-            batch_verify_bp(even_tuples, odd_tuples, &asset_tree_params).unwrap();
+            batch_verify_bp(even_tuples, odd_tuples, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens(), asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens()).unwrap();
             let batch_bp_time = clock.elapsed();
 
             let clock = Instant::now();
@@ -3698,7 +3732,10 @@ pub mod tests {
             add_verification_tuples_batches_to_rmc(
                 even_tuples,
                 odd_tuples,
-                &asset_tree_params,
+                asset_tree_params.even_parameters.pc_gens(),
+                asset_tree_params.odd_parameters.pc_gens(),
+                asset_tree_params.even_parameters.bp_gens(),
+                asset_tree_params.odd_parameters.bp_gens(),
                 &mut rmc_0,
                 &mut rmc_1,
             )
@@ -3728,11 +3765,11 @@ pub mod tests {
             const L: usize = 512;
             const M: usize = 2;
 
-            let height = 2;
+            let height = 3;
 
             let label = b"test";
             let asset_tree_params =
-                SelRerandParameters::<VestaParameters, PallasParameters>::new_using_label(
+                SelRerandProofParameters::<VestaParameters, PallasParameters>::new_using_label(
                     label,
                     NUM_GENS as u32,
                     NUM_GENS as u32,
@@ -3747,7 +3784,7 @@ pub mod tests {
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
                 num_auditors,
-                &asset_tree_params.even_parameters.bp_gens,
+                &asset_tree_params.even_parameters.bp_gens(),
             );
 
             let mut all_asset_data = Vec::new();
@@ -3762,7 +3799,7 @@ pub mod tests {
                     asset_id,
                     keys.clone(),
                     &asset_comm_params,
-                    asset_tree_params.odd_parameters.delta,
+                    asset_tree_params.odd_parameters.sl_params.delta,
                 )
                 .unwrap();
                 commitments.push(ad.commitment);
@@ -3853,9 +3890,9 @@ pub mod tests {
             let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
             let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
             let mut even_prover =
-                Prover::new(&asset_tree_params.even_parameters.pc_gens, even_transcript);
+                Prover::new(&asset_tree_params.even_parameters.pc_gens(), even_transcript);
             let mut odd_prover =
-                Prover::new(&asset_tree_params.odd_parameters.pc_gens, odd_transcript);
+                Prover::new(&asset_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
             let mut proofs = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
@@ -3880,7 +3917,7 @@ pub mod tests {
             }
 
             let (even_bp, odd_bp) =
-                prove_with_rng(even_prover, odd_prover, &asset_tree_params, &mut rng).unwrap();
+                prove_with_rng(even_prover, odd_prover, asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
             let proving_time = clock.elapsed();
 
             let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
@@ -3909,13 +3946,16 @@ pub mod tests {
 
             let bp_clock = Instant::now();
             verify_with_rng(
-                even_verifier,
-                odd_verifier,
-                &even_bp,
-                &odd_bp,
-                &asset_tree_params,
-                &mut rng,
-            )
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            asset_tree_params.even_parameters.pc_gens(),
+            asset_tree_params.odd_parameters.pc_gens(),
+            asset_tree_params.even_parameters.bp_gens(),
+            asset_tree_params.odd_parameters.bp_gens(),
+            &mut rng,
+        )
             .unwrap();
             let bp_verification_time = bp_clock.elapsed();
 
@@ -3958,7 +3998,10 @@ pub mod tests {
             add_verification_tuples_batches_to_rmc(
                 vec![even_tuple_rmc],
                 vec![odd_tuple_rmc],
-                &asset_tree_params,
+                asset_tree_params.even_parameters.pc_gens(),
+                asset_tree_params.odd_parameters.pc_gens(),
+                asset_tree_params.even_parameters.bp_gens(),
+                asset_tree_params.odd_parameters.bp_gens(),
                 &mut rmc_0,
                 &mut rmc_1,
             )
@@ -3999,7 +4042,7 @@ pub mod tests {
             const L: usize = 64;
 
             // Create public params (generators, etc)
-            let asset_tree_params = SelRerandParameters::<VestaParameters, PallasParameters>::new(
+            let asset_tree_params = SelRerandProofParameters::<VestaParameters, PallasParameters>::new(
                 NUM_GENS as u32,
                 NUM_GENS as u32,
             )
@@ -4016,7 +4059,7 @@ pub mod tests {
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
                 num_auditors + num_mediators,
-                &asset_tree_params.even_parameters.bp_gens,
+                &asset_tree_params.even_parameters.bp_gens(),
             );
 
             // Account signing (affirmation) keys
@@ -4043,7 +4086,7 @@ pub mod tests {
                 asset_id,
                 keys.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.delta,
+                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
 

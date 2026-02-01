@@ -1,7 +1,8 @@
 use test_log::test;
 
 use ark_ec::AffineRepr;
-use curve_tree_relations::curve_tree::{CurveTree, SelRerandParameters};
+use curve_tree_relations::curve_tree::CurveTree;
+use curve_tree_relations::parameters::SelRerandProofParameters;
 
 use polymesh_dart::curve_tree::{
     AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeConfig,
@@ -129,7 +130,7 @@ fn create_test_leaf(value: usize) -> CompressedLeafValue<AssetTreeConfig> {
 fn setup_trees() -> (
     CurveTreeOld<L>,
     CurveTreeWithBackend<L, 1, AssetTreeConfig>,
-    SelRerandParameters<VestaParameters, PallasParameters>,
+    SelRerandProofParameters<VestaParameters, PallasParameters>,
 ) {
     let mut full_tree =
         CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize).expect("Failed to create full tree");

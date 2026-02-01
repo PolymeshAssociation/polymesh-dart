@@ -1512,10 +1512,10 @@ pub mod tests {
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
-    use curve_tree_relations::curve_tree::SelRerandParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
+    use curve_tree_relations::parameters::SelRerandProofParameters;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1784,7 +1784,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -1813,8 +1813,8 @@ pub mod tests {
             nullifier_gen_counter,
             nonce,
             account_comm_key.clone(),
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &poseidon_params,
             None,
         )
@@ -1835,8 +1835,8 @@ pub mod tests {
                 nullifier,
                 nonce,
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 None,
                 None,
@@ -1858,8 +1858,8 @@ pub mod tests {
                 nullifier,
                 nonce,
                 account_comm_key,
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 None,
                 Some(&mut rmc),
@@ -1888,7 +1888,7 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -1923,8 +1923,8 @@ pub mod tests {
             nullifier_gen_counter,
             nonce,
             account_comm_key.clone(),
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &poseidon_params,
             Some((pk_T.0, enc_key_gen, enc_gen)),
         )
@@ -1945,8 +1945,8 @@ pub mod tests {
                 nullifier,
                 nonce,
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
                 None,
@@ -1969,8 +1969,8 @@ pub mod tests {
                 nullifier,
                 nonce,
                 account_comm_key,
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
                 Some(&mut rmc),
@@ -2016,7 +2016,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -2053,8 +2053,8 @@ pub mod tests {
             pk_T.0,
             enc_key_gen,
             &tables,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
         )
         .unwrap();
 
@@ -2074,8 +2074,8 @@ pub mod tests {
                 pk_T.0,
                 enc_key_gen,
                 &tables,
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
             )
             .unwrap();
 
@@ -2249,7 +2249,7 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -2311,8 +2311,8 @@ pub mod tests {
                 nullifier_gen_counter,
                 nonces[i].as_slice(),
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 None,
             )
@@ -2336,8 +2336,8 @@ pub mod tests {
                     nullifiers_without_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     None,
                     None,
@@ -2363,8 +2363,8 @@ pub mod tests {
                     nullifiers_without_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &&poseidon_params,
                     None,
                     &mut rng,
@@ -2377,8 +2377,8 @@ pub mod tests {
 
         batch_verify(
             tuples,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
         )
         .unwrap();
 
@@ -2405,8 +2405,8 @@ pub mod tests {
                 nullifier_gen_counter,
                 nonces[i].as_slice(),
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
             )
@@ -2430,8 +2430,8 @@ pub mod tests {
                     nullifiers_with_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
                     None,
@@ -2457,8 +2457,8 @@ pub mod tests {
                     nullifiers_with_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &&poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
                     &mut rng,
@@ -2471,8 +2471,8 @@ pub mod tests {
 
         batch_verify(
             tuples_with_pk_T,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
         )
         .unwrap();
 
@@ -2503,8 +2503,8 @@ pub mod tests {
                         nullifiers_without_pk_T[i],
                         &nonces[i],
                         account_comm_key.clone(),
-                        &account_tree_params.even_parameters.pc_gens,
-                        &account_tree_params.even_parameters.bp_gens,
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
                         &poseidon_params,
                         None,
                         &mut rng,
@@ -2516,8 +2516,8 @@ pub mod tests {
 
         add_verification_tuples_to_rmc(
             tuples,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &mut rmc,
         )
         .unwrap();
@@ -2543,8 +2543,8 @@ pub mod tests {
                         nullifiers_with_pk_T[i],
                         &nonces[i],
                         account_comm_key.clone(),
-                        &account_tree_params.even_parameters.pc_gens,
-                        &account_tree_params.even_parameters.bp_gens,
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
                         &poseidon_params,
                         Some((pk_T.0, enc_key_gen, enc_gen)),
                         &mut rng,
@@ -2556,8 +2556,8 @@ pub mod tests {
 
         add_verification_tuples_to_rmc(
             tuples,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &mut rmc_with_pk_T,
         )
         .unwrap();
@@ -2582,7 +2582,7 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandParameters::<PallasParameters, VestaParameters>::new(
+        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
             NUM_GENS as u32,
             NUM_GENS as u32,
         )
@@ -2633,7 +2633,7 @@ pub mod tests {
         // Combined proving without pk_T
         let clock = Instant::now();
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens, transcript);
+        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens(), transcript);
 
         let mut proofs_without_pk_T = vec![];
         let mut nullifiers_without_pk_T = vec![];
@@ -2646,8 +2646,8 @@ pub mod tests {
                 nullifier_gen_counter,
                 &nonces[i],
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 None,
                 &mut prover,
@@ -2658,7 +2658,7 @@ pub mod tests {
         }
 
         let r1cs_proof_without_pk_T = prover
-            .prove_with_rng(&account_tree_params.even_parameters.bp_gens, &mut rng)
+            .prove_with_rng(&account_tree_params.even_parameters.bp_gens(), &mut rng)
             .unwrap();
 
         let proving_time_without_pk_T = clock.elapsed();
@@ -2678,8 +2678,8 @@ pub mod tests {
                     nullifiers_without_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     None,
                     &mut verifier,
@@ -2695,8 +2695,8 @@ pub mod tests {
         // Verify the tuple
         verify_given_verification_tuple(
             tuple_without_pk_T,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
         )
         .unwrap();
 
@@ -2719,8 +2719,8 @@ pub mod tests {
                     nullifiers_without_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     None,
                     &mut verifier,
@@ -2735,8 +2735,8 @@ pub mod tests {
 
         add_verification_tuples_to_rmc(
             vec![tuple_rmc_without_pk_T],
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &mut rmc_without_pk_T,
         )
         .unwrap();
@@ -2750,7 +2750,7 @@ pub mod tests {
 
         let clock = Instant::now();
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
-        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens, transcript);
+        let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens(), transcript);
 
         let mut proofs_with_pk_T = vec![];
         let mut nullifiers_with_pk_T = vec![];
@@ -2763,8 +2763,8 @@ pub mod tests {
                 nullifier_gen_counter,
                 &nonces[i],
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 Some((pk_T.0, enc_key_gen, enc_gen)),
                 &mut prover,
@@ -2775,7 +2775,7 @@ pub mod tests {
         }
 
         let r1cs_proof_with_pk_T = prover
-            .prove_with_rng(&account_tree_params.even_parameters.bp_gens, &mut rng)
+            .prove_with_rng(&account_tree_params.even_parameters.bp_gens(), &mut rng)
             .unwrap();
 
         let proving_time_with_pk_T = clock.elapsed();
@@ -2795,8 +2795,8 @@ pub mod tests {
                     nullifiers_with_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
                     &mut verifier,
@@ -2812,8 +2812,8 @@ pub mod tests {
         // Verify the tuple
         verify_given_verification_tuple(
             tuple_with_pk_T,
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
         )
         .unwrap();
 
@@ -2836,8 +2836,8 @@ pub mod tests {
                     nullifiers_with_pk_T[i],
                     &nonces[i],
                     account_comm_key.clone(),
-                    &account_tree_params.even_parameters.pc_gens,
-                    &account_tree_params.even_parameters.bp_gens,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
                     Some((pk_T.0, enc_key_gen, enc_gen)),
                     &mut verifier,
@@ -2852,8 +2852,8 @@ pub mod tests {
 
         add_verification_tuples_to_rmc(
             vec![tuple_rmc_with_pk_T],
-            &account_tree_params.even_parameters.pc_gens,
-            &account_tree_params.even_parameters.bp_gens,
+            &account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
             &mut rmc_with_pk_T,
         )
         .unwrap();
@@ -2907,7 +2907,7 @@ pub mod tests {
 
             // Create public params (generators, etc)
             let account_tree_params =
-                SelRerandParameters::<PallasParameters, VestaParameters>::new(
+                SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
                     NUM_GENS as u32,
                     NUM_GENS as u32,
                 )
@@ -2940,8 +2940,8 @@ pub mod tests {
                 nullifier_gen_counter,
                 nonce,
                 account_comm_key.clone(),
-                &account_tree_params.even_parameters.pc_gens,
-                &account_tree_params.even_parameters.bp_gens,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
                 None,
             )
@@ -2959,8 +2959,8 @@ pub mod tests {
                         nullifier,
                         nonce,
                         account_comm_key,
-                        &account_tree_params.even_parameters.pc_gens,
-                        &account_tree_params.even_parameters.bp_gens,
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
                         &poseidon_params,
                         None,
                         None,

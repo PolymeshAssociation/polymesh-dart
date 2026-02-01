@@ -1,320 +1,46 @@
+use crate::fee_account::ensure_correct_account_state;
 use crate::account::AccountCommitmentKeyTrait;
 use crate::error::*;
 use crate::util::{
-    BPProof, add_verification_tuples_to_rmc, get_verification_tuples_with_rng,
-    initialize_curve_tree_prover, initialize_curve_tree_verifier, prove_with_rng,
-    verify_given_verification_tuples,
+    BPProof, get_verification_tuples_with_rng, prove_with_rng, handle_verification_tuples,
 };
 use crate::{
-    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL,
+    ASSET_ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL,
     RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
     UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
 };
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
-use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
-use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
-use curve_tree_relations::parameters::SelRerandProofParameters;
+use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS, MAX_FEE_BALANCE};
+use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
 
-/// To commit, use the same commitment key as non-fee asset account commitment.
-#[derive(
-    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
-)]
-pub struct FeeAccountState<G: AffineRepr> {
-    // TODO: Remove this later.
-    pub sk: G::ScalarField,
-    pub balance: Balance,
-    /// This is 0 for PolyX is always revealed when paying fee
-    /// Including the asset-id as we might need to support multiple fee currencies in future.
-    pub asset_id: AssetId,
-    pub rho: G::ScalarField,
-    pub randomness: G::ScalarField,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
-
-impl<G: AffineRepr> FeeAccountState<G> {
-    pub fn new<R: CryptoRngCore>(
-        rng: &mut R,
-        sk: G::ScalarField,
-        balance: Balance,
-        asset_id: AssetId,
-    ) -> Result<Self> {
-        let rho = G::ScalarField::rand(rng);
-        let randomness = G::ScalarField::rand(rng);
-
-        Ok(Self {
-            sk,
-            balance,
-            asset_id,
-            rho,
-            randomness,
-        })
-    }
-
-    pub fn commit(
-        &self,
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<FeeAccountStateCommitment<G>> {
-        let comm = G::Group::msm(
-            &[
-                account_comm_key.sk_gen(),
-                account_comm_key.balance_gen(),
-                account_comm_key.asset_id_gen(),
-                account_comm_key.rho_gen(),
-                account_comm_key.randomness_gen(),
-            ],
-            &[
-                self.sk,
-                G::ScalarField::from(self.balance),
-                G::ScalarField::from(self.asset_id),
-                self.rho,
-                self.randomness,
-            ],
-        )
-        .map_err(Error::size_mismatch)?;
-        Ok(FeeAccountStateCommitment(comm.into_affine()))
-    }
-
-    pub fn get_state_for_topup<R: CryptoRngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
-        if amount + self.balance > MAX_FEE_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change(rng);
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_payment<R: CryptoRngCore>(
-        &self,
-        rng: &mut R,
-        fee_amount: u64,
-    ) -> Result<Self> {
-        if fee_amount > self.balance {
-            return Err(Error::AmountTooLarge(fee_amount));
-        }
-        let mut new_state = self.clone();
-        new_state.balance -= fee_amount;
-        new_state.refresh_randomness_for_state_change(rng);
-        Ok(new_state)
-    }
-
-    pub fn refresh_randomness_for_state_change<R: CryptoRngCore>(&mut self, rng: &mut R) {
-        self.rho = G::ScalarField::rand(rng);
-        self.randomness = G::ScalarField::rand(rng);
-    }
-
-    pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
-        (comm_key.rho_gen() * self.rho).into()
-    }
-}
-
-const FEE_REG_TXN_LABEL: &'static [u8; 24] = b"fee_account_registration";
-
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RegTxnProof<G: AffineRepr> {
-    pub resp_acc_comm: PokPedersenCommitment<G>,
-    pub resp_pk: PokDiscreteLog<G>,
-}
-
-impl<G: AffineRepr> RegTxnProof<G> {
-    pub fn new<R: CryptoRngCore>(
-        rng: &mut R,
-        pk: G,
-        account: &FeeAccountState<G>,
-        account_commitment: FeeAccountStateCommitment<G>,
-        nonce: &[u8],
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<Self> {
-        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
-        Self::new_with_given_transcript(
-            rng,
-            pk,
-            account,
-            account_commitment,
-            nonce,
-            account_comm_key,
-            &mut transcript,
-        )
-    }
-
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
-        rng: &mut R,
-        pk: G,
-        account: &FeeAccountState<G>,
-        account_commitment: FeeAccountStateCommitment<G>,
-        nonce: &[u8],
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        mut transcript: &mut MerlinTranscript,
-    ) -> Result<Self> {
-        add_to_transcript!(
-            transcript,
-            NONCE_LABEL,
-            nonce,
-            ASSET_ID_LABEL,
-            account.asset_id,
-            ACCOUNT_COMMITMENT_LABEL,
-            account_commitment,
-            PK_LABEL,
-            pk
-        );
-
-        // D = pk + g_balance * balance + g_asset_id * asset_id
-        let D = pk.into_group()
-            + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance))
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id));
-
-        let mut rho_blinding = G::ScalarField::rand(rng);
-        let mut randomness_blinding = G::ScalarField::rand(rng);
-
-        // For proving Comm - D = g_rho * rho + g_randomness * randomness
-        let comm_protocol = PokPedersenCommitmentProtocol::init(
-            account.rho,
-            rho_blinding,
-            &account_comm_key.rho_gen(),
-            account.randomness,
-            randomness_blinding,
-            &account_comm_key.randomness_gen(),
-        );
-
-        rho_blinding.zeroize();
-        randomness_blinding.zeroize();
-
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
-        comm_protocol.challenge_contribution(
-            &account_comm_key.rho_gen(),
-            &account_comm_key.randomness_gen(),
-            &reduced_acc_comm,
-            &mut transcript,
-        )?;
-
-        let mut sk_blinding = G::ScalarField::rand(rng);
-
-        let pk_protocol =
-            PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
-
-        sk_blinding.zeroize();
-
-        pk_protocol.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
-
-        let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-
-        let resp_acc_comm = comm_protocol.gen_proof(&prover_challenge);
-        let resp_pk = pk_protocol.gen_proof(&prover_challenge);
-
-        Ok(Self {
-            resp_acc_comm,
-            resp_pk,
-        })
-    }
-
-    pub fn verify(
-        &self,
-        pk: &G,
-        balance: Balance,
-        asset_id: AssetId,
-        account_commitment: &FeeAccountStateCommitment<G>,
-        nonce: &[u8],
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<()> {
-        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
-        self.verify_with_given_transcript(
-            pk,
-            balance,
-            asset_id,
-            account_commitment,
-            nonce,
-            account_comm_key,
-            &mut transcript,
-        )
-    }
-
-    pub fn verify_with_given_transcript(
-        &self,
-        pk: &G,
-        balance: Balance,
-        asset_id: AssetId,
-        account_commitment: &FeeAccountStateCommitment<G>,
-        nonce: &[u8],
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        mut transcript: &mut MerlinTranscript,
-    ) -> Result<()> {
-        add_to_transcript!(
-            transcript,
-            NONCE_LABEL,
-            nonce,
-            ASSET_ID_LABEL,
-            asset_id,
-            ACCOUNT_COMMITMENT_LABEL,
-            account_commitment,
-            PK_LABEL,
-            pk
-        );
-
-        // D = pk + g_balance * balance + g_asset_id * asset_id
-        let D = pk.into_group()
-            + (account_comm_key.balance_gen() * G::ScalarField::from(balance))
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
-
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
-        self.resp_acc_comm.challenge_contribution(
-            &account_comm_key.rho_gen(),
-            &account_comm_key.randomness_gen(),
-            &reduced_acc_comm,
-            &mut transcript,
-        )?;
-
-        self.resp_pk
-            .challenge_contribution(&account_comm_key.sk_gen(), pk, &mut transcript)?;
-
-        let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-
-        if !self.resp_acc_comm.verify(
-            &reduced_acc_comm,
-            &account_comm_key.rho_gen(),
-            &account_comm_key.randomness_gen(),
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Account commitment proof verification failed".to_string(),
-            ));
-        }
-
-        if !self
-            .resp_pk
-            .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "Public key proof verification failed".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-}
+// Re-export types from original fee_account.rs that don't change
+pub use crate::fee_account::{
+    FeeAccountState, FeeAccountStateCommitment,
+};
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FeeAccountTopupTxnProof<
@@ -326,7 +52,7 @@ pub struct FeeAccountTopupTxnProof<
 > {
     pub r1cs_proof: Option<BPProof<G0, G1>>,
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
-    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -355,7 +81,13 @@ impl<
 {
     /// `pk` is the public key of the investor who is topping up his fee account
     /// and has the same secret key as the one in `account`
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
@@ -365,19 +97,15 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let mut even_prover = Prover::new(
-            account_tree_params.even_parameters.pc_gens(),
-            even_transcript,
-        );
+        let mut even_prover = Prover::new(&account_tree_params.even_parameters.sl_params.pc_gens(), even_transcript);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut odd_prover =
-            Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(&account_tree_params.odd_parameters.sl_params.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) = Self::new_with_given_prover(
+        let (mut proof, nullifier) = Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
             rng,
             pk,
             increase_bal_by,
@@ -393,9 +121,7 @@ impl<
             &mut odd_prover,
         )?;
 
-        let bp_gens = account_tree_params.bp_gens();
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -405,7 +131,13 @@ impl<
         Ok((proof, nullifier))
     }
 
-    pub fn new_with_given_prover<R: CryptoRngCore>(
+    pub fn new_with_given_prover<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
@@ -415,7 +147,7 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
@@ -423,12 +155,12 @@ impl<
         ensure_correct_account_state(account, updated_account, increase_bal_by, false)?;
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
+            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
                 rng,
-            );
+            )?;
 
         let mut transcript = even_prover.transcript();
 
@@ -518,10 +250,10 @@ impl<
         let t_bp = PokPedersenCommitmentProtocol::init(
             new_balance,
             new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
             comm_bp_blinding,
             F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
         );
 
         new_balance_blinding.zeroize();
@@ -534,8 +266,8 @@ impl<
         let mut transcript = even_prover.transcript();
 
         t_bp.challenge_contribution(
-            &account_tree_params.even_parameters.pc_gens().B,
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
             &comm_new_bal,
             &mut transcript,
         )?;
@@ -585,7 +317,11 @@ impl<
         ))
     }
 
-    pub fn verify<R: CryptoRngCore>(
+    pub fn verify<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         pk: Affine<G0>,
         asset_id: AssetId,
@@ -594,7 +330,7 @@ impl<
         nullifier: Affine<G0>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
         mut rmc: Option<(
@@ -607,7 +343,7 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<R, Parameters0, Parameters1>(
             pk,
             asset_id,
             increase_bal_by,
@@ -621,28 +357,20 @@ impl<
             rmc_0,
         )?;
 
-        // TODO: This and similar single verifications can be sped by taking Bulletproof tuples first
-        // so they are not multiplied by the randomness. Then the Sigma protocols can follow.
-        // Extract bases and scalars from rmc since they are less and combine them with Bulletproof crate's verification.
-        
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-            ),
-        }
+        handle_verification_tuples(
+            even_tuple,
+            odd_tuple,
+            account_tree_params,
+            rmc,
+        )
     }
 
     /// Verifies the proof except for final Bulletproof verification
-    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         pk: Affine<G0>,
         asset_id: AssetId,
@@ -651,7 +379,7 @@ impl<
         nullifier: Affine<G0>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -660,7 +388,7 @@ impl<
         let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
-        self.verify_sigma_protocols_and_enforce_constraints(
+        self.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
             pk,
             asset_id,
             increase_bal_by,
@@ -688,7 +416,10 @@ impl<
         )
     }
 
-    pub fn verify_sigma_protocols_and_enforce_constraints(
+    pub fn verify_sigma_protocols_and_enforce_constraints<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         pk: Affine<G0>,
         asset_id: AssetId,
@@ -697,7 +428,7 @@ impl<
         nullifier: Affine<G0>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
@@ -718,11 +449,11 @@ impl<
 
         let _ = self
             .re_randomized_path
-            .select_and_rerandomize_verifier_gadget(
+            .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
                 even_verifier,
                 odd_verifier,
-                &account_tree_params,
+                account_tree_params,
             );
 
         let mut transcript = even_verifier.transcript();
@@ -770,8 +501,8 @@ impl<
         let mut transcript = even_verifier.transcript();
 
         self.resp_bp.challenge_contribution(
-            &account_tree_params.even_parameters.pc_gens().B,
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
             &self.comm_new_bal,
             &mut transcript,
         )?;
@@ -784,7 +515,7 @@ impl<
 
         let issuer_pk_proj = pk.into_group();
         let reduce = asset_id_comm + issuer_pk_proj;
-        let y = self.re_randomized_path.get_rerandomized_leaf().into_group() - reduce
+        let y = self.re_randomized_path.path.get_rerandomized_leaf().into_group() - reduce
             + (account_comm_key.balance_gen() * increase_bal_by);
         let y_affine = y.into_affine();
 
@@ -823,8 +554,8 @@ impl<
                 // Amount matches the one in response for leaf
                 self.resp_bp.verify_using_randomized_mult_checker(
                     self.comm_new_bal,
-                    account_tree_params.even_parameters.pc_gens().B,
-                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.sl_params.pc_gens().B,
+                    account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
                     &challenge,
                     &self.resp_leaf.0[0],
                     rmc,
@@ -863,8 +594,8 @@ impl<
                 // Amount matches the one in response for leaf
                 if !self.resp_bp.verify(
                     &self.comm_new_bal,
-                    &account_tree_params.even_parameters.pc_gens().B,
-                    &account_tree_params.even_parameters.pc_gens().B_blinding,
+                    &account_tree_params.even_parameters.sl_params.pc_gens().B,
+                    &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
                     &challenge,
                     &self.resp_leaf.0[0],
                 ) {
@@ -877,15 +608,15 @@ impl<
         Ok(())
     }
 
-    fn leaf_gens(
+    fn leaf_gens<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
     ) -> [Affine<G0>; 4] {
         [
             account_comm_key.balance_gen(),
             account_comm_key.rho_gen(),
             account_comm_key.randomness_gen(),
-            account_tree_params.even_parameters.pc_gens().B_blinding,
+            account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
         ]
     }
 
@@ -911,7 +642,7 @@ pub struct FeePaymentProof<
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
-    pub re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
     pub t_r_leaf: Affine<G0>,
     /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
@@ -937,7 +668,13 @@ impl<
 {
     /// `nonce` is used to tie this fee payment proof to the corresponding txn and the eventual payee (relayer, etc) identity, eg. it can
     /// be constructed as b"<txn id>||<payee id>" and the verifier can ensure that the appropriate `nonce` is used
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         fee_amount: Balance,
         account: &FeeAccountState<Affine<G0>>,
@@ -946,19 +683,23 @@ impl<
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_correct_account_state(account, updated_account, fee_amount, true)?;
 
-        let (mut even_prover, odd_prover, re_randomized_path, mut rerandomization) =
-            initialize_curve_tree_prover(
-                rng,
-                TXN_EVEN_LABEL,
-                TXN_ODD_LABEL,
-                leaf_path,
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let mut even_prover = Prover::new(&account_tree_params.even_parameters.sl_params.pc_gens(), even_transcript);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut odd_prover = Prover::new(&account_tree_params.odd_parameters.sl_params.pc_gens(), odd_transcript);
+
+        let (re_randomized_path, mut rerandomization) = leaf_path
+            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+                &mut even_prover,
+                &mut odd_prover,
                 account_tree_params,
-            );
+                rng,
+            )?;
 
         let mut transcript = even_prover.transcript();
 
@@ -1049,10 +790,10 @@ impl<
         let t_bp = PokPedersenCommitmentProtocol::init(
             new_balance,
             new_balance_blinding,
-            &account_tree_params.even_parameters.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
             comm_bp_blinding,
             F0::rand(rng),
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
         );
 
         sk_blinding.zeroize();
@@ -1066,8 +807,8 @@ impl<
         let mut transcript = even_prover.transcript();
 
         t_bp.challenge_contribution(
-            &account_tree_params.even_parameters.pc_gens().B,
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
             &comm_new_bal,
             &mut transcript,
         )?;
@@ -1098,9 +839,7 @@ impl<
         // Response for witness will already be generated in sigma protocol for the new account commitment
         let resp_bp = t_bp.gen_partial2_proof(&challenge);
 
-        let bp_gens = account_tree_params.bp_gens();
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         Ok((
             Self {
@@ -1119,7 +858,11 @@ impl<
         ))
     }
 
-    pub fn verify<R: CryptoRngCore>(
+    pub fn verify<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         fee_amount: Balance,
@@ -1127,7 +870,7 @@ impl<
         nullifier: Affine<G0>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
         mut rmc: Option<(
@@ -1139,7 +882,7 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<R, Parameters0, Parameters1>(
             asset_id,
             fee_amount,
             updated_account_commitment,
@@ -1152,25 +895,20 @@ impl<
             rmc_0,
         )?;
 
-        
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-            ),
-        }
+        handle_verification_tuples(
+            even_tuple,
+            odd_tuple,
+            account_tree_params,
+            rmc,
+        )
     }
 
     /// Verifies the proof except for Bulletproof final verification
-    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         fee_amount: Balance,
@@ -1178,7 +916,7 @@ impl<
         nullifier: Affine<G0>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -1196,13 +934,19 @@ impl<
             ));
         }
 
-        let (mut even_verifier, odd_verifier) = initialize_curve_tree_verifier(
-            TXN_EVEN_LABEL,
-            TXN_ODD_LABEL,
-            &self.re_randomized_path,
-            root,
-            account_tree_params,
-        );
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+
+        let _ = self
+            .re_randomized_path
+            .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
+                root,
+                &mut even_verifier,
+                &mut odd_verifier,
+                account_tree_params,
+            );
 
         let mut transcript = even_verifier.transcript();
 
@@ -1244,8 +988,8 @@ impl<
         let mut transcript = even_verifier.transcript();
 
         self.resp_bp.challenge_contribution(
-            &account_tree_params.even_parameters.pc_gens().B,
-            &account_tree_params.even_parameters.pc_gens().B_blinding,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
             &self.comm_new_bal,
             &mut transcript,
         )?;
@@ -1256,7 +1000,7 @@ impl<
 
         let fee_amount = F0::from(fee_amount);
 
-        let y = self.re_randomized_path.get_rerandomized_leaf()
+        let y = self.re_randomized_path.path.get_rerandomized_leaf()
             - asset_id_comm
             - (account_comm_key.balance_gen() * fee_amount);
         let y_affine = y.into_affine();
@@ -1294,8 +1038,8 @@ impl<
                 );
                 self.resp_bp.verify_using_randomized_mult_checker(
                     self.comm_new_bal,
-                    account_tree_params.even_parameters.pc_gens().B,
-                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.sl_params.pc_gens().B,
+                    account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
                     &challenge,
                     &self.resp_leaf.0[1],
                     rmc,
@@ -1329,8 +1073,8 @@ impl<
 
                 if !self.resp_bp.verify(
                     &self.comm_new_bal,
-                    &account_tree_params.even_parameters.pc_gens().B,
-                    &account_tree_params.even_parameters.pc_gens().B_blinding,
+                    &account_tree_params.even_parameters.sl_params.pc_gens().B,
+                    &account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
                     &challenge,
                     &self.resp_leaf.0[1],
                 ) {
@@ -1350,16 +1094,16 @@ impl<
         )
     }
 
-    fn leaf_gens(
+    fn leaf_gens<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
     ) -> [Affine<G0>; 5] {
         [
             account_comm_key.sk_gen(),
             account_comm_key.balance_gen(),
             account_comm_key.rho_gen(),
             account_comm_key.randomness_gen(),
-            account_tree_params.even_parameters.pc_gens().B_blinding,
+            account_tree_params.even_parameters.sl_params.pc_gens().B_blinding,
         ]
     }
 
@@ -1375,60 +1119,19 @@ impl<
     }
 }
 
-pub fn ensure_correct_account_state<G: AffineRepr>(
-    old_state: &FeeAccountState<G>,
-    new_state: &FeeAccountState<G>,
-    amount: Balance,
-    has_balance_decreased: bool,
-) -> Result<()> {
-    #[cfg(feature = "ignore_prover_input_sanitation")]
-    {
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-    {
-        // Ensure accounts are consistent (same sk, asset_id)
-        if old_state.sk != new_state.sk {
-            return Err(Error::ProofGenerationError(
-                "Secret key mismatch between old and new account states".to_string(),
-            ));
-        }
-        if old_state.asset_id != new_state.asset_id {
-            return Err(Error::ProofGenerationError(
-                "Asset ID mismatch between old and new account states".to_string(),
-            ));
-        }
-        if has_balance_decreased {
-            if new_state.balance != old_state.balance - amount {
-                return Err(Error::ProofGenerationError(
-                    "Balance decrease incorrect".to_string(),
-                ));
-            }
-        } else {
-            if new_state.balance != old_state.balance + amount {
-                return Err(Error::ProofGenerationError(
-                    "Balance increase incorrect".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::account::tests::setup_gens;
-    use crate::account_registration::tests::setup_comm_key;
-    use crate::keys::{SigKey, keygen_sig};
+    use crate::account::tests::setup_gens_new;
+    use crate::keys::{keygen_sig};
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
-    // use ark_std::cfg_into_iter;
+    use ark_ec_divisors::curves::{
+        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
+        vesta::VestaParams,
+    };
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
-
-    // #[cfg(feature = "parallel")]
-    // use rayon::prelude::*;
+    use crate::fee_account::tests::new_fee_account;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1436,80 +1139,14 @@ pub mod tests {
     type F0 = ark_pallas::Fr;
     type F1 = ark_vesta::Fr;
 
-    pub fn new_fee_account<R: CryptoRngCore, G: AffineRepr>(
-        rng: &mut R,
-        asset_id: AssetId,
-        sk: SigKey<G>,
-        balance: Balance,
-    ) -> FeeAccountState<G> {
-        FeeAccountState::new(rng, sk.0, balance, asset_id).unwrap()
-    }
-
-    #[test]
-    fn fee_account_init() {
-        let mut rng = rand::thread_rng();
-
-        let account_comm_key = setup_comm_key(b"testing");
-
-        let asset_id = 1;
-        let balance = 1000;
-
-        let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-
-        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i.clone(), balance);
-        assert_eq!(fee_account.asset_id, asset_id);
-        assert_eq!(fee_account.balance, balance);
-        assert_eq!(fee_account.sk, sk_i.0);
-
-        fee_account.commit(account_comm_key).unwrap();
-    }
-
-    #[test]
-    fn fee_account_registration() {
-        let mut rng = rand::thread_rng();
-
-        let account_comm_key = setup_comm_key(b"testing");
-
-        let asset_id = 1;
-        let balance = 1000;
-
-        let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-
-        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
-        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
-
-        let nonce = b"test-nonce";
-
-        let reg_proof = RegTxnProof::new(
-            &mut rng,
-            pk_i.0,
-            &fee_account,
-            fee_account_comm.clone(),
-            nonce,
-            account_comm_key.clone(),
-        )
-        .unwrap();
-
-        reg_proof
-            .verify(
-                &pk_i.0,
-                balance,
-                asset_id,
-                &fee_account_comm,
-                nonce,
-                account_comm_key,
-            )
-            .unwrap();
-    }
-
     #[test]
     fn fee_account_topup_txn() {
         let mut rng = rand::thread_rng();
 
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1526,7 +1163,7 @@ pub mod tests {
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
             &set,
             &account_tree_params,
-            Some(4),
+            Some(6),
         );
 
         let increase_bal_by = 10;
@@ -1545,7 +1182,7 @@ pub mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = FeeAccountTopupTxnProof::new(
+        let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
             &mut rng,
             &pk_i.0,
             increase_bal_by,
@@ -1658,8 +1295,8 @@ pub mod tests {
 
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1674,7 +1311,7 @@ pub mod tests {
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
             &set,
             &account_tree_params,
-            Some(4),
+            Some(6),
         );
 
         let fee_amount = 10;
@@ -1692,7 +1329,7 @@ pub mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = FeePaymentProof::new(
+        let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
             &mut rng,
             fee_amount,
             &account,
@@ -1744,9 +1381,7 @@ pub mod tests {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        let start = Instant::now();
         verify_rmc(&rmc_0, &rmc_1).unwrap();
-        println!("verify_rmc time: {:?}", start.elapsed());
         let verifier_time_rmc = clock.elapsed();
 
         println!("For fee payment txn");
@@ -1815,8 +1450,8 @@ pub mod tests {
 
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
-        const L: usize = 512;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1868,7 +1503,7 @@ pub mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) = FeePaymentProof::new(
+            let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 fee_amount,
                 &accounts[i],
@@ -1885,32 +1520,7 @@ pub mod tests {
             nullifiers.push(nullifier);
         }
 
-        // NOTE: Rather than creating fresh thread rngs, use seeded ChaCha rngs from the original rng
-
         let clock = Instant::now();
-
-        // let res = cfg_into_iter!(0..batch_size)
-        //     .map(|i| {
-        //         let mut rng_ = rand::thread_rng();
-        //         proofs[i].verify(
-        //             asset_id,
-        //             fee_amount,
-        //             updated_account_comms[i],
-        //             nullifiers[i],
-        //             &root,
-        //             &nonces[i],
-        //             &account_tree_params,
-        //             account_comm_key.clone(),
-        //             &mut rng_,
-        //             None,
-        //         )
-        //     })
-        //     .map(|r| r)
-        //     .collect::<Vec<_>>();
-        //
-        // for r in res {
-        //     r.unwrap();
-        // }
 
         for i in 0..batch_size {
             proofs[i]
@@ -1935,29 +1545,6 @@ pub mod tests {
 
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
-
-        // let res = cfg_into_iter!(0..batch_size)
-        //     .map(|i| {
-        //         let mut rng_ = rand::thread_rng();
-        //         proofs[i].verify_and_return_tuples(
-        //             asset_id,
-        //             fee_amount,
-        //             updated_account_comms[i],
-        //             nullifiers[i],
-        //             &root,
-        //             &nonces[i],
-        //             &account_tree_params,
-        //             account_comm_key.clone(),
-        //             &mut rng_,
-        //             None,
-        //         )
-        //     })
-        //     .collect::<Vec<_>>();
-        // for res in res {
-        //     let (even, odd) = res.unwrap();
-        //     even_tuples.push(even);
-        //     odd_tuples.push(odd);
-        // }
 
         // These can also be done in parallel
         for i in 0..batch_size {
@@ -2048,8 +1635,6 @@ pub mod tests {
         );
     }
 
-    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
-
     #[cfg(feature = "ignore_prover_input_sanitation")]
     mod input_sanitation_disabled {
         use super::*;
@@ -2062,7 +1647,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 64;
-            let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2096,7 +1681,7 @@ pub mod tests {
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
-            let (proof, nullifier) = FeeAccountTopupTxnProof::new(
+            let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 &pk_i.0,
                 increase_bal_by,
@@ -2138,7 +1723,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 64;
-            let (account_tree_params, account_comm_key, _, _) = setup_gens::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2167,7 +1752,7 @@ pub mod tests {
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
-            let (proof, nullifier) = FeePaymentProof::new(
+            let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 fee_amount,
                 &account,

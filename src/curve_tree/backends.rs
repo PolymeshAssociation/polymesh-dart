@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use ark_std::{collections::BTreeMap, vec::Vec};
-use curve_tree_relations::curve_tree::SelRerandParameters;
+use curve_tree_relations::parameters::SelRerandProofParameters;
 
 use codec::{Decode, Encode};
 
@@ -171,7 +171,7 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn new(height: NodeLevel) -> Result<Self, Self::Error>;
 
-    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
+    fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1>;
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error>;
 
@@ -269,7 +269,7 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn new(height: NodeLevel) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
-    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1>;
+    fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1>;
 
     fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
@@ -427,7 +427,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         Ok(CurveTreeMemoryBackend::new(height)?)
     }
 
-    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
+    fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1> {
         C::parameters()
     }
 
@@ -554,7 +554,7 @@ where
         Ok(CurveTreeMemoryBackend::new(height)?)
     }
 
-    fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
+    fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1> {
         C::parameters()
     }
 

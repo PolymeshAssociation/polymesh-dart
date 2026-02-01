@@ -252,7 +252,7 @@ pub fn update_inner_node<
     old_child: Option<ChildCommitments<M, P0>>,
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
-    parameters: &SingleLayerParameters<P1>,
+    parameters: &SingleLayerProofParameters<P1>,
 ) -> Result<[P0::BaseField; M], Error> {
     let mut new_x_coords = [P0::BaseField::zero(); M];
     for (tree_index, new_x_coord) in new_x_coords.iter_mut().enumerate() {
@@ -267,7 +267,7 @@ pub fn update_inner_node<
             .into_affine()
             .x;
         let mut gen_iter = parameters
-            .bp_gens
+            .bp_gens()
             .share(0)
             .G((L * (tree_index + 1)) as u32)
             .skip(L * tree_index + child_index as usize);
@@ -669,7 +669,7 @@ macro_rules! impl_curve_tree_with_backend {
                 self.backend.height()$($await)*
             }
 
-            pub fn parameters(&self) -> &SelRerandParameters<C::P0, C::P1> {
+            pub fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1> {
                 C::parameters()
             }
 
@@ -844,13 +844,13 @@ macro_rules! impl_curve_tree_with_backend {
                         Inner::Even(commitments) => Ok(Root::Even(RootNode {
                             commitments: commitments.clone(),
                             x_coord_children: self
-                                ._get_odd_x_coord_children_batch(root, block_number, &params.odd_parameters.delta)
+                                ._get_odd_x_coord_children_batch(root, block_number, &params.odd_parameters.sl_params.delta)
                                 $($await)*?,
                         })),
                         Inner::Odd(commitments) => Ok(Root::Odd(RootNode {
                             commitments: commitments.clone(),
                             x_coord_children: self
-                                ._get_even_x_coord_children_batch(root, block_number, &params.even_parameters.delta)
+                                ._get_even_x_coord_children_batch(root, block_number, &params.even_parameters.sl_params.delta)
                                 $($await)*?,
                         })),
                     }
@@ -922,7 +922,7 @@ macro_rules! impl_curve_tree_with_backend {
                                         tree_index,
                                         parent_location,
                                         block_number,
-                                        &params.odd_parameters.delta,
+                                        &params.odd_parameters.sl_params.delta,
                                     )
                                     $($await)*?,
                                 child_node_to_randomize: odd_child,
@@ -936,7 +936,7 @@ macro_rules! impl_curve_tree_with_backend {
                                         tree_index,
                                         parent_location,
                                         block_number,
-                                        &params.even_parameters.delta,
+                                        &params.even_parameters.sl_params.delta,
                                     )
                                     $($await)*?,
                                 child_node_to_randomize: even_child,
