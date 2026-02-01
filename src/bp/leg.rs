@@ -527,7 +527,16 @@ impl<
             odd_tuples.push(odd);
         }
 
-        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+        let params = C::parameters();
+        batch_verify_bp_with_rng(
+            even_tuples, 
+            odd_tuples, 
+            params.even_parameters.pc_gens(), 
+            params.odd_parameters.pc_gens(),
+            params.even_parameters.bp_gens(),
+            params.odd_parameters.bp_gens(),
+            rng
+        )?;
 
         Ok(())
     }
@@ -561,7 +570,16 @@ impl<
             odd_tuples.push(odd);
         }
 
-        batch_verify_bp_with_rng(even_tuples, odd_tuples, C::parameters(), rng)?;
+        let params = C::parameters();
+        batch_verify_bp_with_rng(
+            even_tuples, 
+            odd_tuples, 
+            params.even_parameters.pc_gens(), 
+            params.odd_parameters.pc_gens(),
+            params.even_parameters.bp_gens(),
+            params.odd_parameters.bp_gens(),
+            rng
+        )?;
 
         Ok(())
     }

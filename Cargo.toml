@@ -14,14 +14,19 @@ members = ["dart-bp", "dart-testing-cli", "dart-common"]
 # Curve tree dependencies
 #bulletproofs = { path = "../curve-trees/bulletproofs" }
 #curve_tree_relations = { package = "relations", path = "../curve-trees/relations" }
+#ark-ec-divisors = { package = "ark-ec-divisors", path = "../curve-trees/ark-ec-divisors"}
+#ark-dlog-gadget = { package = "ark-dlog-gadget", path = "../curve-trees/ark-dlog-gadget"}
+
 # If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
-curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
+bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "divisor-proof" }
+curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "divisor-proof" }
+ark-ec-divisors = { package = "ark-ec-divisors", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "divisor-proof" }
+ark-dlog-gadget = { package = "ark-dlog-gadget", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "divisor-proof" }
 
 #dock_crypto_utils = { path = "../crypto/utils" }
 #schnorr_pok = { path = "../crypto/schnorr_pok" }
-dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto" }
-schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto" }
+dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto", branch = "main" }
+schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = "main" }
 
 # Polymesh changes.
 #ark-serialize = { path = "../arkworks-algebra/serialize" }
@@ -83,6 +88,8 @@ ark-vesta = { version = "0.5.0", default-features = false }
 # Curve tree dependencies
 bulletproofs = { version = "2.0.0", default-features = false }
 curve_tree_relations = { version = "0.1.0", package = "relations", default-features = false }
+ark-ec-divisors = { version = "0.1.0", default-features = false }
+ark-dlog-gadget = { version = "0.1.0", default-features = false }
 
 # Dev dependencies
 anyhow = { version = "1.0.98", default-features = false }

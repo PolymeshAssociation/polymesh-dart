@@ -83,7 +83,7 @@ impl<T: DartLimits> AssetState<T> {
             self.asset_id,
             self.keys(),
             asset_comm_params,
-            tree_params.odd_parameters.delta,
+            tree_params.odd_parameters.sl_params.delta,
         )?;
         Ok(asset_data)
     }

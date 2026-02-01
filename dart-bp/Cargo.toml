@@ -28,6 +28,8 @@ schnorr_pok = { workspace = true, default-features = false }
 # Curve tree dependencies
 bulletproofs = { workspace = true, default-features = false }
 curve_tree_relations = { workspace = true, default-features = false }
+ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"] }
+ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"] }
 
 # Poseidon dependencies
 #arkworks-r1cs-gadgets = {git = "https://github.com/tangle-network/zero-knowledge-gadgets", default-features = false}
@@ -40,6 +42,7 @@ rand_chacha = { workspace = true, default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1.21.3", default-features = false, features = ["alloc", "race"] }
 lazy_static = { workspace = true, default-features = false, optional = true }
+itertools = { version = "0.14.0", default-features = false }
 
 [dev-dependencies]
 test-log = { workspace = true }
@@ -51,11 +54,23 @@ name = "affirmation_proofs"
 harness = false
 
 [[bench]]
+name = "affirmation_proofs_new"
+harness = false
+
+[[bench]]
 name = "fee_account_proofs"
 harness = false
 
 [[bench]]
+name = "fee_account_proofs_new"
+harness = false
+
+[[bench]]
 name = "settlement_proofs"
+harness = false
+
+[[bench]]
+name = "settlement_proofs_new"
 harness = false
 
 [features]
@@ -79,7 +94,8 @@ std = [
 	"ark-pallas/std",
 	"hex/std",
 	"once_cell/std",
-	"lazy_static"
+	"lazy_static",
+	"itertools/use_std"
 ]
 
 # Turn on this feature for faster proof verification.

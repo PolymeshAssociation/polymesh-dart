@@ -65,6 +65,8 @@ pub mod leg;
 pub mod poseidon_impls;
 
 pub mod discrete_log;
+pub mod leg_new;
+pub mod fee_account_new;
 
 pub use error::Error;
 

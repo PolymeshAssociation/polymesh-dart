@@ -18,13 +18,14 @@ use bulletproofs::r1cs::{
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
-use curve_tree_relations::curve_tree::{Root, SelRerandParameters, SelectAndRerandomizePath};
+use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
+use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters,};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_chacha::ChaChaRng;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, CryptoRngCore, RngCore, SeedableRng};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
@@ -74,7 +75,7 @@ pub struct BPProof<
 /// odd prover, re-randomize path and blinding used to re-randomize the leaf
 pub fn initialize_curve_tree_prover<
     'g,
-    R: RngCore,
+    R: CryptoRngCore,
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
@@ -85,7 +86,7 @@ pub fn initialize_curve_tree_prover<
     even_label: &'static [u8],
     odd_label: &'static [u8],
     leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    tree_parameters: &'g SelRerandParameters<G0, G1>,
+    tree_parameters: &'g SelRerandProofParameters<G0, G1>,
 ) -> (
     Prover<'g, MerlinTranscript, Affine<G0>>,
     Prover<'g, MerlinTranscript, Affine<G1>>,
@@ -107,7 +108,7 @@ pub fn initialize_curve_tree_prover<
 /// even and odd levels rather than creating new
 pub fn initialize_curve_tree_prover_with_given_transcripts<
     'g,
-    R: RngCore,
+    R: CryptoRngCore,
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
@@ -116,7 +117,7 @@ pub fn initialize_curve_tree_prover_with_given_transcripts<
 >(
     rng: &mut R,
     leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    tree_parameters: &'g SelRerandParameters<G0, G1>,
+    tree_parameters: &'g SelRerandProofParameters<G0, G1>,
     even_transcript: MerlinTranscript,
     odd_transcript: MerlinTranscript,
 ) -> (
@@ -125,8 +126,8 @@ pub fn initialize_curve_tree_prover_with_given_transcripts<
     SelectAndRerandomizePath<L, G0, G1>,
     F0,
 ) {
-    let mut even_prover = Prover::new(&tree_parameters.even_parameters.pc_gens, even_transcript);
-    let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens, odd_transcript);
+    let mut even_prover = Prover::new(&tree_parameters.even_parameters.sl_params.pc_gens(), even_transcript);
+    let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.sl_params.pc_gens(), odd_transcript);
 
     let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
         &mut even_prover,
@@ -152,7 +153,7 @@ pub fn initialize_curve_tree_verifier<
     odd_label: &'static [u8],
     re_randomized_path: &SelectAndRerandomizePath<L, G0, G1>,
     tree_root: &Root<L, 1, G0, G1>,
-    tree_parameters: &SelRerandParameters<G0, G1>,
+    tree_parameters: &SelRerandProofParameters<G0, G1>,
 ) -> (
     Verifier<MerlinTranscript, Affine<G0>>,
     Verifier<MerlinTranscript, Affine<G1>>,
@@ -179,7 +180,7 @@ pub fn initialize_curve_tree_verifier_with_given_transcripts<
 >(
     re_randomized_path: &SelectAndRerandomizePath<L, G0, G1>,
     tree_root: &Root<L, 1, G0, G1>,
-    tree_parameters: &SelRerandParameters<G0, G1>,
+    tree_parameters: &SelRerandProofParameters<G0, G1>,
     even_transcript: MerlinTranscript,
     odd_transcript: MerlinTranscript,
 ) -> (
@@ -193,7 +194,7 @@ pub fn initialize_curve_tree_verifier_with_given_transcripts<
         tree_root,
         &mut even_verifier,
         &mut odd_verifier,
-        &tree_parameters,
+        tree_parameters,
     );
 
     (even_verifier, odd_verifier)
@@ -316,10 +317,11 @@ pub fn prove<
 >(
     even_prover: Prover<MerlinTranscript, Affine<G0>>,
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
     let mut rng = rand::thread_rng();
-    prove_with_rng(even_prover, odd_prover, tree_params, &mut rng)
+    prove_with_rng(even_prover, odd_prover, even_bp_gens, odd_bp_gens, &mut rng)
 }
 
 #[allow(unused_variables)]
@@ -332,21 +334,22 @@ pub fn prove_with_rng<
 >(
     even_prover: Prover<MerlinTranscript, Affine<G0>>,
     odd_prover: Prover<MerlinTranscript, Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
     rng: &mut R,
 ) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
     let (mut rng_even, mut rng_odd) = generate_even_odd_rngs(rng);
 
     #[cfg(feature = "parallel")]
     let (even_proof, odd_proof) = rayon::join(
-        || even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, &mut rng_even),
-        || odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, &mut rng_odd),
+        || even_prover.prove_with_rng(even_bp_gens, &mut rng_even),
+        || odd_prover.prove_with_rng(odd_bp_gens, &mut rng_odd),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_proof, odd_proof) = (
-        even_prover.prove_with_rng(&tree_params.even_parameters.bp_gens, &mut rng_even),
-        odd_prover.prove_with_rng(&tree_params.odd_parameters.bp_gens, &mut rng_odd),
+        even_prover.prove_with_rng(even_bp_gens, &mut rng_even),
+        odd_prover.prove_with_rng(odd_bp_gens, &mut rng_odd),
     );
 
     let (even_proof, odd_proof) = (even_proof?, odd_proof?);
@@ -364,7 +367,10 @@ pub fn verify<
     odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
     even_proof: &R1CSProof<Affine<G0>>,
     odd_proof: &R1CSProof<Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
 ) -> Result<()> {
     let mut rng = rand::thread_rng();
     verify_with_rng(
@@ -372,7 +378,10 @@ pub fn verify<
         odd_verifier,
         even_proof,
         odd_proof,
-        tree_params,
+        even_pc_gens,
+        odd_pc_gens,
+        even_bp_gens,
+        odd_bp_gens,
         &mut rng,
     )
 }
@@ -389,7 +398,10 @@ pub fn verify_with_rng<
     odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
     even_proof: &R1CSProof<Affine<G0>>,
     odd_proof: &R1CSProof<Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
     rng: &mut R,
 ) -> Result<()> {
     #[cfg(feature = "parallel")]
@@ -397,15 +409,15 @@ pub fn verify_with_rng<
         || {
             even_verifier.verify(
                 even_proof,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
             )
         },
         || {
             odd_verifier.verify(
                 odd_proof,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
             )
         },
     );
@@ -414,14 +426,14 @@ pub fn verify_with_rng<
     let (even_res, odd_res) = (
         even_verifier.verify_with_rng(
             even_proof,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
             rng,
         ),
         odd_verifier.verify_with_rng(
             odd_proof,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
             rng,
         ),
     );
@@ -464,31 +476,37 @@ pub fn get_verification_tuples_with_rng<
     Ok((even, odd))
 }
 
-#[allow(unused_variables)]
+/// Verify given verification tuples and return error if either verification fails
 pub fn verify_given_verification_tuples<
     F0: PrimeField,
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    P: SelRerandParametersRef<G0, G1>,
 >(
     even_tuple: VerificationTuple<Affine<G0>>,
     odd_tuple: VerificationTuple<Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    tree_params: &P,
 ) -> Result<()> {
+    let even_pc_gens = tree_params.even_parameters().pc_gens();
+    let odd_pc_gens = tree_params.odd_parameters().pc_gens();
+    let even_bp_gens = tree_params.even_parameters().bp_gens();
+    let odd_bp_gens = tree_params.odd_parameters().bp_gens();
+
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {
             verify_given_verification_tuple(
                 even_tuple,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
             )
         },
         || {
             verify_given_verification_tuple(
                 odd_tuple,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
             )
         },
     );
@@ -497,13 +515,13 @@ pub fn verify_given_verification_tuples<
     let (even_res, odd_res) = (
         verify_given_verification_tuple(
             even_tuple,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
         ),
         verify_given_verification_tuple(
             odd_tuple,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
         ),
     );
 
@@ -519,28 +537,33 @@ pub fn add_verification_tuples_to_rmc<
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    P: SelRerandParametersRef<G0, G1>,
 >(
     even_tuple: VerificationTuple<Affine<G0>>,
     odd_tuple: VerificationTuple<Affine<G1>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    tree_params: &P,
     rmc_0: &mut RandomizedMultChecker<Affine<G0>>,
     rmc_1: &mut RandomizedMultChecker<Affine<G1>>,
 ) -> Result<()> {
+    let even_pc_gens = tree_params.even_parameters().pc_gens();
+    let odd_pc_gens = tree_params.odd_parameters().pc_gens();
+    let even_bp_gens = tree_params.even_parameters().bp_gens();
+    let odd_bp_gens = tree_params.odd_parameters().bp_gens();
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {
             add_verification_tuple_to_rmc(
                 even_tuple,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
                 rmc_0,
             )
         },
         || {
             add_verification_tuple_to_rmc(
                 odd_tuple,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
                 rmc_1,
             )
         },
@@ -550,14 +573,14 @@ pub fn add_verification_tuples_to_rmc<
     let (even_res, odd_res) = (
         add_verification_tuple_to_rmc(
             even_tuple,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
             rmc_0,
         ),
         add_verification_tuple_to_rmc(
             odd_tuple,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
             rmc_1,
         ),
     );
@@ -603,22 +626,25 @@ pub fn batch_verify_bp<
 >(
     even_tuples: Vec<VerificationTuple<Affine<G0>>>,
     odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
 ) -> Result<()> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
         || {
             batch_verify(
                 even_tuples,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
             )
         },
         || {
             batch_verify(
                 odd_tuples,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
             )
         },
     );
@@ -627,13 +653,13 @@ pub fn batch_verify_bp<
     let (even_res, odd_res) = (
         batch_verify(
             even_tuples,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
         ),
         batch_verify(
             odd_tuples,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
         ),
     );
 
@@ -652,7 +678,10 @@ pub fn batch_verify_bp_with_rng<
 >(
     even_tuples: Vec<VerificationTuple<Affine<G0>>>,
     odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
     rng: &mut R,
 ) -> Result<()> {
     let (mut rng_even, mut rng_odd) = generate_even_odd_rngs(rng);
@@ -662,16 +691,16 @@ pub fn batch_verify_bp_with_rng<
         || {
             batch_verify_with_rng(
                 even_tuples,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
                 &mut rng_even,
             )
         },
         || {
             batch_verify_with_rng(
                 odd_tuples,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
                 &mut rng_odd,
             )
         },
@@ -681,14 +710,14 @@ pub fn batch_verify_bp_with_rng<
     let (even_res, odd_res) = (
         batch_verify_with_rng(
             even_tuples,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
             &mut rng_even,
         ),
         batch_verify_with_rng(
             odd_tuples,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
             &mut rng_odd,
         ),
     );
@@ -707,7 +736,10 @@ pub fn add_verification_tuples_batches_to_rmc<
 >(
     even_tuples: Vec<VerificationTuple<Affine<G0>>>,
     odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
-    tree_params: &SelRerandParameters<G0, G1>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    even_bp_gens: &BulletproofGens<Affine<G0>>,
+    odd_bp_gens: &BulletproofGens<Affine<G1>>,
     rmc_0: &mut RandomizedMultChecker<Affine<G0>>,
     rmc_1: &mut RandomizedMultChecker<Affine<G1>>,
 ) -> Result<()> {
@@ -716,16 +748,16 @@ pub fn add_verification_tuples_batches_to_rmc<
         || {
             add_vts_to_rmc(
                 even_tuples,
-                &tree_params.even_parameters.pc_gens,
-                &tree_params.even_parameters.bp_gens,
+                even_pc_gens,
+                even_bp_gens,
                 rmc_0,
             )
         },
         || {
             add_vts_to_rmc(
                 odd_tuples,
-                &tree_params.odd_parameters.pc_gens,
-                &tree_params.odd_parameters.bp_gens,
+                odd_pc_gens,
+                odd_bp_gens,
                 rmc_1,
             )
         },
@@ -735,14 +767,14 @@ pub fn add_verification_tuples_batches_to_rmc<
     let (even_res, odd_res) = (
         add_vts_to_rmc(
             even_tuples,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            even_pc_gens,
+            even_bp_gens,
             rmc_0,
         ),
         add_vts_to_rmc(
             odd_tuples,
-            &tree_params.odd_parameters.pc_gens,
-            &tree_params.odd_parameters.bp_gens,
+            odd_pc_gens,
+            odd_bp_gens,
             rmc_1,
         ),
     );
@@ -1061,7 +1093,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
 
     Zeroize::zeroize(&mut wits);
 
-    // Response for other witnesses will already be generated in sigma protocol for leaf
+    // Response for other witnesses will already be generated in sigma protocols for leaf
     let mut wits = BTreeMap::new();
     if account.balance != updated_account.balance {
         wits.insert(1, updated_account.balance.into());
@@ -1840,3 +1872,61 @@ mod tests {
         ));
     }
 }
+
+/// Prove using SelRerandProofParameters (which contains bp_gens)
+pub fn prove_with_rng_using_params<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_prover: Prover<MerlinTranscript, Affine<G0>>,
+    odd_prover: Prover<MerlinTranscript, Affine<G1>>,
+    tree_params: &SelRerandProofParameters<G0, G1>,
+    rng: &mut R,
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
+    let even_bp_gens = tree_params.even_parameters.bp_gens();
+    let odd_bp_gens = tree_params.odd_parameters.bp_gens();
+    prove_with_rng(even_prover, odd_prover, even_bp_gens, odd_bp_gens, rng)
+}
+
+/// Get verification tuples using SelRerandProofParameters
+pub fn get_verification_tuples_with_rng_using_params<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    even_proof: &R1CSProof<Affine<G0>>,
+    odd_proof: &R1CSProof<Affine<G1>>,
+    rng: &mut R,
+) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+    get_verification_tuples_with_rng(even_verifier, odd_verifier, even_proof, odd_proof, rng)
+}
+
+pub fn handle_verification_tuples<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    P: SelRerandParametersRef<G0, G1>,
+>(
+    even_tuple: VerificationTuple<Affine<G0>>,
+    odd_tuple: VerificationTuple<Affine<G1>>,
+    tree_params: &P,
+    rmc: Option<(&mut RandomizedMultChecker<Affine<G0>>, &mut RandomizedMultChecker<Affine<G1>>)>,
+) -> Result<()> {
+    match rmc {
+        Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
+            even_tuple, odd_tuple, tree_params, rmc_0, rmc_1,
+        ),
+        None => verify_given_verification_tuples(
+            even_tuple, odd_tuple, tree_params,
+        ),
+    }
+}
+
