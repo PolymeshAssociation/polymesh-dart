@@ -1,5 +1,5 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::leg::{LegEncryption, LegEncryptionRandomness};
+use crate::leg_new::{LegEncryption, LegEncryptionRandomness};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, Error, ID_LABEL, NONCE_LABEL,
     PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
@@ -809,8 +809,8 @@ mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::keygen_sig;
-    use crate::leg::Leg;
-    use crate::leg::tests::setup_keys;
+    use crate::leg_new::Leg;
+    use crate::leg_new::tests::setup_keys;
     use blake2::Blake2b512;
     use std::time::Instant;
 

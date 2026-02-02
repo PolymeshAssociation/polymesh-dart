@@ -8,10 +8,11 @@ use curve_tree_relations::parameters::SelRerandProofParameters;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::account::state::NUM_GENERATORS;
-use polymesh_dart_bp::fee_account::{FeeAccountState, FeeAccountTopupTxnProof, FeePaymentProof};
+use polymesh_dart_bp::fee_account_old::{FeeAccountTopupTxnProof, FeePaymentProof};
 use polymesh_dart_bp::keys::{SigKey, keygen_sig};
 use polymesh_dart_bp::util::verify_rmc;
 use rand_core::CryptoRngCore;
+use polymesh_dart_bp::fee_account_new::FeeAccountState;
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;

@@ -1,0 +1,55 @@
+delayed bug: `type_of` called on const argument's anon const before the const argument was lowered
+   0: std::backtrace::Backtrace::create
+   1: <rustc_errors::DiagCtxtInner>::emit_diagnostic
+   2: <rustc_errors::DiagCtxtHandle>::emit_diagnostic
+   3: <rustc_span::ErrorGuaranteed as rustc_errors::diagnostic::EmissionGuarantee>::emit_producing_guarantee
+   4: <rustc_errors::DiagCtxtHandle>::span_delayed_bug::<rustc_span::span_encoding::Span, &str>
+   5: rustc_hir_analysis::collect::type_of::type_of
+   6: rustc_query_impl::plumbing::__rust_begin_short_backtrace::<rustc_query_impl::query_impl::type_of::dynamic_query::{closure#2}::{closure#0}, rustc_middle::query::erase::Erased<[u8; 8]>>
+   7: rustc_query_system::query::plumbing::try_execute_query::<rustc_query_impl::DynamicConfig<rustc_query_system::query::caches::DefIdCache<rustc_middle::query::erase::Erased<[u8; 8]>>, false, false, false>, rustc_query_impl::plumbing::QueryCtxt, true>
+   8: rustc_query_impl::query_impl::type_of::get_query_incr::__rust_end_short_backtrace
+   9: rustc_hir_typeck::typeck_with_inspect::{closure#0}
+  10: rustc_hir_typeck::inspect_typeck
+  11: argus_lib::analysis::obligations
+  12: <argus_cli::plugin::ArgusCallbacks<A,T,F> as rustc_driver_impl::Callbacks>::after_expansion::{{closure}}
+  13: alloc::vec::in_place_collect::<impl alloc::vec::spec_from_iter::SpecFromIter<T,I> for alloc::vec::Vec<T>>::from_iter
+  14: <argus_cli::plugin::ArgusCallbacks<A,T,F> as rustc_driver_impl::Callbacks>::after_expansion
+  15: rustc_interface::passes::create_and_enter_global_ctxt::<core::option::Option<rustc_interface::queries::Linker>, rustc_driver_impl::run_compiler::{closure#0}::{closure#2}>
+  16: rustc_interface::interface::run_compiler::<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}
+  17: std::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface::util::run_in_thread_with_globals<rustc_interface::util::run_in_thread_pool_with_globals<rustc_interface::interface::run_compiler<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  18: <<std::thread::Builder>::spawn_unchecked_<rustc_interface::util::run_in_thread_with_globals<rustc_interface::util::run_in_thread_pool_with_globals<rustc_interface::interface::run_compiler<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  19: std::sys::pal::unix::thread::Thread::new::thread_start
+  20: __pthread_cond_wait
+
+delayed bug: Trying to feed an already recorded value for query type_of key=DefId(0:3125 ~ polymesh_dart_bp[014c]::leg::{impl#3}::encryption_randomness::{constant#0}):
+old value: EarlyBinder { value: {type error}, .. }
+new value: EarlyBinder { value: usize, .. }
+   0: std::backtrace::Backtrace::create
+   1: <rustc_errors::DiagCtxtInner>::emit_diagnostic
+   2: <rustc_errors::DiagCtxtHandle>::emit_diagnostic
+   3: <rustc_span::ErrorGuaranteed as rustc_errors::diagnostic::EmissionGuarantee>::emit_producing_guarantee
+   4: <rustc_errors::DiagCtxtHandle>::delayed_bug::<alloc::string::String>
+   5: <rustc_middle::ty::context::TyCtxt>::feed_anon_const_type
+   6: <dyn rustc_hir_analysis::hir_ty_lowering::HirTyLowerer>::lower_const_arg
+   7: <<rustc_hir_typeck::method::confirm::ConfirmContext>::instantiate_method_args::GenericArgsCtxt as rustc_hir_analysis::hir_ty_lowering::GenericArgsLowerer>::provided_kind
+   8: <rustc_hir_typeck::method::confirm::ConfirmContext>::confirm
+   9: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_expr_kind
+  10: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  11: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_decl
+  12: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_expr_block
+  13: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  14: <rustc_hir_typeck::fn_ctxt::FnCtxt>::check_return_or_body_tail
+  15: rustc_hir_typeck::check::check_fn
+  16: rustc_hir_typeck::typeck_with_inspect::{closure#0}
+  17: rustc_hir_typeck::inspect_typeck
+  18: argus_lib::analysis::obligations
+  19: <argus_cli::plugin::ArgusCallbacks<A,T,F> as rustc_driver_impl::Callbacks>::after_expansion::{{closure}}
+  20: alloc::vec::in_place_collect::<impl alloc::vec::spec_from_iter::SpecFromIter<T,I> for alloc::vec::Vec<T>>::from_iter
+  21: <argus_cli::plugin::ArgusCallbacks<A,T,F> as rustc_driver_impl::Callbacks>::after_expansion
+  22: rustc_interface::passes::create_and_enter_global_ctxt::<core::option::Option<rustc_interface::queries::Linker>, rustc_driver_impl::run_compiler::{closure#0}::{closure#2}>
+  23: rustc_interface::interface::run_compiler::<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}
+  24: std::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface::util::run_in_thread_with_globals<rustc_interface::util::run_in_thread_pool_with_globals<rustc_interface::interface::run_compiler<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  25: <<std::thread::Builder>::spawn_unchecked_<rustc_interface::util::run_in_thread_with_globals<rustc_interface::util::run_in_thread_pool_with_globals<rustc_interface::interface::run_compiler<(), rustc_driver_impl::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  26: std::sys::pal::unix::thread::Thread::new::thread_start
+  27: __pthread_cond_wait
+

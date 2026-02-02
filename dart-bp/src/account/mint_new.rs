@@ -1,4 +1,4 @@
-use crate::account::common::{ensure_correct_balance_change, ensure_same_accounts};
+use crate::account::common_new::ensure_correct_balance_change;
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{
@@ -6,9 +6,9 @@ use crate::util::{
     prove_with_rng, verify_with_rng, BPProof,
 };
 use crate::{
-    ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
-    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
-    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
+    add_to_transcript, error::Result, Error, ASSET_ID_LABEL, ID_LABEL, INCREASE_BAL_BY_LABEL,
+    NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
+    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL,
 };
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -19,7 +19,7 @@ use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
-use curve_tree_relations::parameters::{SelRerandProofParametersNew};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance};
@@ -31,6 +31,7 @@ use zeroize::Zeroize;
 use ark_ec_divisors::DivisorCurve;
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use bulletproofs::{BulletproofGens, PedersenGens};
+use crate::account::common_new::ensure_same_accounts;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 
@@ -577,7 +578,6 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::keys::keygen_sig;
     use ark_ff::Field;
@@ -587,7 +587,8 @@ mod tests {
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
-    use ark_pallas::{Fr as PallasFr};
+    use ark_pallas::Fr as PallasFr;
+    use crate::account::tests_new_ct::{get_tree_with_account_comm, setup_gens_new};
 
     #[test]
     fn increase_supply_txn() {

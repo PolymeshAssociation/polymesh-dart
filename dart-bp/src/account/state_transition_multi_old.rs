@@ -1,7 +1,8 @@
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountStateTransitionProof, AccountStateTransitionProofBuilder,
+    AccountCommitmentKeyTrait, AccountStateTransitionProofBuilder,
     AccountStateTransitionProofVerifier,
 };
+use crate::account::state_transition_old::AccountStateTransitionProof;
 use crate::util::{
     BPProof, add_verification_tuples_to_rmc, get_verification_tuples_with_rng, prove_with_rng,
     verify_given_verification_tuples,
@@ -386,8 +387,8 @@ pub mod tests {
         AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
     };
     use crate::account_registration::tests::new_account;
-    use crate::leg::Leg;
-    use crate::leg::tests::setup_keys;
+    use crate::leg_old::Leg;
+    use crate::leg_old::tests::setup_keys;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use rand::thread_rng;

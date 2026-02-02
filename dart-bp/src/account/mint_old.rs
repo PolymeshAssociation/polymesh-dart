@@ -1,4 +1,4 @@
-use crate::account::common::{ensure_correct_balance_change, ensure_same_accounts};
+use crate::account::common_old::{ensure_correct_balance_change, ensure_same_accounts};
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{

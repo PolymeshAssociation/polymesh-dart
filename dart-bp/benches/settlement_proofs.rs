@@ -1,23 +1,22 @@
 use ark_ec::CurveGroup;
 use ark_pallas::Affine as PallasA;
 use ark_serialize::CanonicalSerialize;
-use ark_std::{UniformRand, format};
+use ark_std::{format, UniformRand};
 use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParameters;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
-use polymesh_dart_bp::account::{
-    AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
-    MultiAssetStateTransitionProof,
-};
-use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg, SettlementCreationProof};
+use polymesh_dart_bp::account::MultiAssetStateTransitionProof;
+use polymesh_dart_bp::keys::{keygen_enc, keygen_sig, DecKey, EncKey, SigKey, VerKey};
+use polymesh_dart_bp::leg_old::SettlementCreationProof;
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
 use rand_core::CryptoRngCore;
+use polymesh_dart_bp::account::state_transition_new::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use polymesh_dart_bp::leg_new::{AssetCommitmentParams, AssetData, Leg};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;

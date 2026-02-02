@@ -1,20 +1,17 @@
 use ark_ec::CurveGroup;
 use ark_pallas::Affine as PallasA;
 use ark_serialize::CanonicalSerialize;
-use ark_std::{UniformRand, format};
+use ark_std::{format, UniformRand};
 use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
-use polymesh_dart_bp::account::{
-    AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
-};
 use polymesh_dart_bp::account::state_transition_multi_new::MultiAssetStateTransitionProof;
-use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg_new::{AssetCommitmentParams, AssetData, Leg, SettlementCreationProofNew};
+use polymesh_dart_bp::keys::{keygen_enc, keygen_sig, DecKey, EncKey, SigKey, VerKey};
+use polymesh_dart_bp::leg_new::{AssetCommitmentParams, AssetData, Leg, SettlementCreationProof};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
 use rand_core::CryptoRngCore;
@@ -22,6 +19,7 @@ use ark_ec_divisors::curves::{
     pallas::{PallasParams, Point as PallasPoint},
     vesta::{Point as VestaPoint, VestaParams},
 };
+use polymesh_dart_bp::account::state_transition_new::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -209,7 +207,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
 
     println!("L={L}, M={M}, asset tree height = {height} and {num_legs} legs");
 
-    let proof = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         legs.clone(),
         leg_encs.clone(),
@@ -232,7 +230,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Large settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let _ = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
@@ -404,7 +402,7 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         }
 
         // Create the settlement proof
-        let proof = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
             &mut rng,
             legs,
             leg_encs.clone(),
@@ -597,7 +595,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         "L={L}, ASSET_TREE_M={ASSET_TREE_M}, ACCOUNT_TREE_M={ACCOUNT_TREE_M}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height} and {num_legs} legs",
     );
 
-    let settlement_proof = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         legs.clone(),
         leg_encs.clone(),
@@ -620,7 +618,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Multi-asset settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let _ = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
