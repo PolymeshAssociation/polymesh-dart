@@ -7,7 +7,7 @@ use ark_dlog_gadget::dlog::{DiscreteLogParameters, DivisorComms};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup, VariableBaseMSM};
 use ark_ec_divisors::DivisorCurve;
-use ark_ff::{Field, PrimeField};
+use ark_ff::{PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::ToString, vec, vec::Vec, UniformRand};
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Prover, Variable, VerificationTuple, Verifier};
@@ -2033,7 +2033,7 @@ pub mod tests {
             ((sk_a, pk_a), (sk_a_e, pk_a_e)),
         )
     }
-    
+
     #[test]
     fn leg_verification() {
         let mut rng = rand::thread_rng();

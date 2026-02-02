@@ -1,6 +1,6 @@
 target
 **/*.rs.bk
-Cargo.lock
+#Cargo.lock
 .VSCODE
 .DS_Store
 .idea
