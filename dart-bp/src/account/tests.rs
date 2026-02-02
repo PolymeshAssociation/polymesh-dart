@@ -1,9 +1,9 @@
-use crate::leg_new::Leg;
+use crate::leg::Leg;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::account_registration::tests::{new_account, setup_comm_key};
-use crate::leg_new::tests::setup_keys;
-use crate::leg_new::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, MediatorTxnProof, LEG_TXN_EVEN_LABEL, MEDIATOR_TXN_LABEL};
-use crate::leg_new::{LegCreationProof, LEG_TXN_ODD_LABEL};
+use crate::leg::tests::setup_keys;
+use crate::leg::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, MediatorTxnProof, LEG_TXN_EVEN_LABEL, MEDIATOR_TXN_LABEL};
+use crate::leg::{LegCreationProof, LEG_TXN_ODD_LABEL};
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
@@ -38,9 +38,9 @@ use crate::account::{
     ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof,
     SenderReverseTxnProof,
 };
-use crate::account::state_transition_multi_new::MultiAssetStateTransitionProof;
-use crate::account::state_transition_new::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
-use crate::leg_new::SettlementCreationProof;
+use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
+use crate::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use crate::leg::SettlementCreationProof;
 
 #[test]
 fn send_txn() {
@@ -6293,7 +6293,7 @@ mod input_sanitation_disabled {
     use super::*;
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::new_account;
-    use crate::leg_new::tests::setup_keys;
+    use crate::leg::tests::setup_keys;
     use crate::account::{
         AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
         IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
@@ -6301,7 +6301,7 @@ mod input_sanitation_disabled {
     };
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
-    use crate::account::tests_new_ct::{get_tree_with_account_comm, setup_gens_new, setup_leg};
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
 
     #[test]
     fn keep_balance_same_in_send_txn() {

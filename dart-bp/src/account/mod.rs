@@ -1,31 +1,16 @@
 // pub mod common;
-pub mod common_new;
+pub mod common;
 pub mod state;
-pub mod state_transition_new;
-pub mod state_transition_multi_new;
-pub mod mint_new;
-pub mod transparent_new;
-// pub mod transparent_old;
-// pub mod state_transition_old;
+pub mod state_transition;
+pub mod state_transition_multi;
+pub mod mint;
+pub mod transparent;
 pub mod pob;
 
-// pub mod common_old;
-// pub mod mint_old;
-
-// #[cfg(test)]
-// pub mod tests_old;
-
 #[cfg(test)]
-pub mod tests_new_ct;
+pub mod tests;
 
-// // Re-exports from common
-// pub use common::{
-//     ensure_correct_balance_change, BalanceChangeConfig, BalanceChangeProof,
-//     BalanceChangeProver, LegProverConfig,
-//     LegVerifierConfig,
-// };
-
-pub use common_new::{
+pub use common::{
     CommonStateChangeProof, CommonStateChangeProver, StateChangeVerifier,
     ensure_correct_balance_change, BalanceChangeConfig, BalanceChangeProof,
     BalanceChangeProver, LegProverConfig,
@@ -36,11 +21,11 @@ pub use state::{
     AccountCommitmentKeyTrait, AccountState, AccountStateBuilder, AccountStateCommitment,
 };
 
-pub use state_transition_new::AccountStateTransitionProof;
+pub use state_transition::AccountStateTransitionProof;
 
-pub use state_transition_multi_new::MultiAssetStateTransitionProof;
+pub use state_transition_multi::MultiAssetStateTransitionProof;
 
-use crate::leg_new::{LegEncryption, LegEncryptionRandomness};
+use crate::leg::{LegEncryption, LegEncryptionRandomness};
 use crate::util::{handle_verification_tuples, prove_with_rng, BPProof};
 use crate::{error::Result, Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
@@ -58,9 +43,9 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
 
-pub use common_new::ensure_same_accounts;
-pub use state_transition_new::AccountStateTransitionProofBuilder;
-pub use state_transition_new::AccountStateTransitionProofVerifier;
+pub use common::ensure_same_accounts;
+pub use state_transition::AccountStateTransitionProofBuilder;
+pub use state_transition::AccountStateTransitionProofVerifier;
 
 /// This is the proof for "send" txn. Report section 5.1.7
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]

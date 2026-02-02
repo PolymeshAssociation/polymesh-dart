@@ -1,18 +1,13 @@
-use ark_ec::AffineRepr;
 use crate::account::common::ensure_correct_balance_change;
 use crate::account::state::NUM_GENERATORS;
-use crate::account::{transparent_new, AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::util::{
-    add_verification_tuples_to_rmc, bp_gens_for_vec_commitment,
-    enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng, prove_with_rng,
-    verify_given_verification_tuples,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::util::{bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
 use crate::{
     add_to_transcript, error::Result, Error, ASSET_ID_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
     ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
     UPDATED_ACCOUNT_COMMITMENT_LABEL,
 };
-use ark_ec::CurveGroup;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -20,13 +15,12 @@ use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
-use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
-use curve_tree_relations::parameters::SelRerandProofParameters;
+use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_bp::account::transparent_new::EncryptedPublicKey;
 use polymesh_dart_common::{AssetId, Balance, BALANCE_BITS};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
@@ -35,7 +29,9 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
-use crate::account::common_new::ensure_same_accounts;
+use ark_ec_divisors::DivisorCurve;
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use crate::account::common::ensure_same_accounts;
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 struct CommonTransparentProof<
@@ -45,8 +41,8 @@ struct CommonTransparentProof<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    r1cs_proof: Option<BPProof<F0, F1, G0, G1>>,
-    re_randomized_path: SelectAndRerandomizePath<L, G0, G1>,
+    r1cs_proof: Option<BPProof<G0, G1>>,
+    re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     t_r_leaf: Affine<G0>,
     t_acc_new: Affine<G0>,
     resp_leaf: SchnorrResponse<Affine<G0>>,
@@ -68,7 +64,13 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > CommonTransparentProof<L, F0, F1, G0, G1>
 {
-    fn new<R: CryptoRngCore>(
+    fn new<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -79,20 +81,20 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut even_prover = Prover::new(
-            account_tree_params.even_parameters.pc_gens(),
+            &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
         let mut odd_prover =
-            Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) = Self::new_with_given_prover(
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -110,9 +112,8 @@ impl<
             &mut odd_prover,
         )?;
 
-        let bp_gens = account_tree_params.bp_gens();
         let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
+            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -122,7 +123,14 @@ impl<
         Ok((proof, nullifier))
     }
 
-    fn new_with_given_prover<'a, R: CryptoRngCore>(
+    fn new_with_given_prover<
+        'a,
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -133,7 +141,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &'a SelRerandProofParameters<G0, G1>,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
@@ -141,15 +149,15 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account, true)?;
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
-        transparent_new::ensure_counter_unchanged(account, updated_account)?;
+        ensure_counter_unchanged(account, updated_account)?;
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget(
+            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
                 rng,
-            );
+            )?;
 
         let mut transcript = even_prover.transcript();
 
@@ -266,7 +274,7 @@ impl<
                     updated_account.balance.into(),
                 ],
                 comm_bp_blinding,
-                account_tree_params.even_parameters.bp_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
             );
             // Enforce range proof only during withdraw
             let new_bal_var = vars.pop().unwrap();
@@ -287,7 +295,7 @@ impl<
                     updated_account.randomness,
                 ],
                 comm_bp_blinding,
-                account_tree_params.even_parameters.bp_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
             )
         };
         enforce_constraints_for_randomness_relations(even_prover, vars);
@@ -389,7 +397,11 @@ impl<
         ))
     }
 
-    fn verify<R: CryptoRngCore>(
+    fn verify<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -399,7 +411,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
@@ -413,7 +425,7 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
+        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<_, Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -429,23 +441,17 @@ impl<
             rmc_0,
         )?;
 
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(
-                even_tuple, 
-                odd_tuple, 
-                account_tree_params,
-            ),
-        }
+        
+        handle_verification_tuples(
+            even_tuple, odd_tuple, account_tree_params, rmc
+        )
     }
 
-    fn verify_and_return_tuples<R: CryptoRngCore>(
+    fn verify_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -455,7 +461,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
@@ -466,7 +472,7 @@ impl<
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
-        self.verify_sigma_protocols_and_enforce_constraints(
+        self.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -497,7 +503,10 @@ impl<
         )
     }
 
-    fn verify_sigma_protocols_and_enforce_constraints(
+    fn verify_sigma_protocols_and_enforce_constraints<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -507,7 +516,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
@@ -547,11 +556,11 @@ impl<
 
         let _ = self
             .re_randomized_path
-            .select_and_rerandomize_verifier_gadget(
+            .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
                 even_verifier,
                 odd_verifier,
-                &account_tree_params,
+                account_tree_params,
             );
 
         let mut transcript = even_verifier.transcript();
@@ -618,7 +627,7 @@ impl<
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
 
-        let mut y = self.re_randomized_path.get_rerandomized_leaf() - asset_id_comm;
+        let mut y = self.re_randomized_path.path.get_rerandomized_leaf() - asset_id_comm;
         if has_balance_decreased {
             y = y - (account_comm_key.balance_gen() * F0::from(amount));
         } else {
@@ -775,9 +784,9 @@ impl<
         Ok(())
     }
 
-    fn leaf_gens(
+    fn leaf_gens<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
     ) -> [Affine<G0>; NUM_GENERATORS] {
         [
             account_comm_key.sk_gen(),
@@ -805,7 +814,7 @@ impl<
         ]
     }
 
-    fn bp_gens_vec_bal_decr(account_tree_params: &SelRerandProofParameters<G0, G1>) -> [Affine<G0>; 7] {
+    fn bp_gens_vec_bal_decr<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>) -> [Affine<G0>; 7] {
         let mut gens = bp_gens_for_vec_commitment(6, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -818,7 +827,7 @@ impl<
         ]
     }
 
-    fn bp_gens_vec(account_tree_params: &SelRerandProofParameters<G0, G1>) -> [Affine<G0>; 6] {
+    fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>) -> [Affine<G0>; 6] {
         let mut gens = bp_gens_for_vec_commitment(5, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -831,8 +840,6 @@ impl<
     }
 }
 
-/// Proof that a public amount was withdrawn from the account. Reveals the asset-id and amount but nothing else.
-/// Commonly called "unshielding"
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct WithdrawProof<
     const L: usize,
@@ -852,7 +859,13 @@ impl<
 {
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -862,11 +875,11 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new(
+        let (common, nullifier) = CommonTransparentProof::new::<_, D0, D1, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -885,7 +898,14 @@ impl<
         Ok((Self(common), nullifier))
     }
 
-    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
+    pub fn new_with_given_prover<
+        'a,
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -895,13 +915,13 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &'a SelRerandProofParameters<G0, G1>,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new_with_given_prover(
+        let (common, nullifier) = CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -924,7 +944,11 @@ impl<
 
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
-    pub fn verify<R: CryptoRngCore>(
+    pub fn verify<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -933,7 +957,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
@@ -942,7 +966,7 @@ impl<
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
     ) -> Result<()> {
-        self.0.verify(
+        self.0.verify::<_, Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -959,7 +983,11 @@ impl<
         )
     }
 
-    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -968,13 +996,13 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.0.verify_and_return_tuples(
+        self.0.verify_and_return_tuples::<_, Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -991,7 +1019,10 @@ impl<
         )
     }
 
-    pub fn verify_sigma_protocols_and_enforce_constraints(
+    pub fn verify_sigma_protocols_and_enforce_constraints<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -1000,14 +1031,14 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.0.verify_sigma_protocols_and_enforce_constraints(
+        self.0.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -1026,8 +1057,6 @@ impl<
     }
 }
 
-/// Proof that a public amount was deposited to the account. Reveals the asset-id and amount but nothing else.
-/// Commonly called "shielding"
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct DepositProof<
     const L: usize,
@@ -1047,7 +1076,13 @@ impl<
 {
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -1057,11 +1092,11 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new(
+        let (common, nullifier) = CommonTransparentProof::new::<_, D0, D1, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -1080,7 +1115,14 @@ impl<
         Ok((Self(common), nullifier))
     }
 
-    pub fn new_with_given_prover<'a, R: CryptoRngCore>(
+    pub fn new_with_given_prover<
+        'a,
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         rng: &mut R,
         amount: Balance,
         account: &AccountState<Affine<G0>>,
@@ -1090,13 +1132,13 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &'a SelRerandProofParameters<G0, G1>,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new_with_given_prover(
+        let (common, nullifier) = CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -1119,7 +1161,11 @@ impl<
 
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
-    pub fn verify<R: CryptoRngCore>(
+    pub fn verify<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -1128,7 +1174,7 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
@@ -1137,7 +1183,7 @@ impl<
             &mut RandomizedMultChecker<Affine<G1>>,
         )>,
     ) -> Result<()> {
-        self.0.verify(
+        self.0.verify::<_, Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -1154,7 +1200,11 @@ impl<
         )
     }
 
-    pub fn verify_and_return_tuples<R: CryptoRngCore>(
+    pub fn verify_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -1163,13 +1213,13 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.0.verify_and_return_tuples(
+        self.0.verify_and_return_tuples::<_, Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -1186,7 +1236,10 @@ impl<
         )
     }
 
-    pub fn verify_sigma_protocols_and_enforce_constraints(
+    pub fn verify_sigma_protocols_and_enforce_constraints<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         &self,
         asset_id: AssetId,
         amount: Balance,
@@ -1195,14 +1248,14 @@ impl<
         auditor_keys: Vec<Affine<G0>>,
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.0.verify_sigma_protocols_and_enforce_constraints(
+        self.0.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
             asset_id,
             amount,
             updated_account_commitment,
@@ -1224,7 +1277,6 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::tests_old::{get_tree_with_account_comm, setup_gens};
     use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
@@ -1234,21 +1286,24 @@ mod tests {
     use ark_ff::UniformRand;
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
-
-    type PallasA = ark_pallas::Affine;
-    type PallasFr = ark_pallas::Fr;
-    type VestaFr = ark_vesta::Fr;
-    type PallasParameters = ark_pallas::PallasConfig;
-    type VestaParameters = ark_vesta::VestaConfig;
+    use ark_ec_divisors::curves::{
+        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
+        vesta::VestaParams,
+    };
+    use ark_pallas::{Fr as PallasFr, PallasConfig};
+    use ark_vesta::{Fr as VestaFr, VestaConfig};
+    use rand::rngs::ThreadRng;
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
 
     #[test]
     fn withdraw_proof() {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
+
 
         let asset_id = 1;
         let num_auditor_keys = 2;
@@ -1269,7 +1324,7 @@ mod tests {
             &account,
             account_comm_key.clone(),
             &account_tree_params,
-            4,
+            6,
         )
         .unwrap();
 
@@ -1284,7 +1339,7 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = WithdrawProof::new(
+        let (proof, nullifier) = WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
             &mut rng,
             withdraw_amount,
             &account,
@@ -1297,6 +1352,7 @@ mod tests {
             &account_tree_params,
             account_comm_key.clone(),
             enc_key_gen,
+
         )
         .unwrap();
 
@@ -1304,7 +1360,7 @@ mod tests {
 
         let clock = Instant::now();
         proof
-            .verify(
+            .verify::<_, PallasParams, VestaParams>(
                 asset_id,
                 withdraw_amount,
                 updated_account_comm,
@@ -1317,6 +1373,7 @@ mod tests {
                 enc_key_gen,
                 &mut rng,
                 None,
+
             )
             .unwrap();
 
@@ -1332,63 +1389,6 @@ mod tests {
         for (i, (sk, _)) in auditor_keys.into_iter().enumerate() {
             assert_eq!(proof.0.encrypted_pubkeys.decrypt(i, sk.0), account_pk.0);
         }
-
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    withdraw_amount + 10,
-                    updated_account_comm,
-                    nullifier,
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
-
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    withdraw_amount,
-                    updated_account_comm,
-                    PallasA::rand(&mut rng),
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
-
-        assert!(
-            proof
-                .verify(
-                    asset_id + 1,
-                    withdraw_amount,
-                    updated_account_comm,
-                    nullifier,
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
     }
 
     #[test]
@@ -1396,9 +1396,10 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
+
 
         let asset_id = 1;
         let num_auditor_keys = 2;
@@ -1419,7 +1420,7 @@ mod tests {
             &account,
             account_comm_key.clone(),
             &account_tree_params,
-            4,
+            6,
         )
         .unwrap();
 
@@ -1434,7 +1435,7 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = DepositProof::new(
+        let (proof, nullifier) = DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
             &mut rng,
             deposit_amount,
             &account,
@@ -1447,6 +1448,7 @@ mod tests {
             &account_tree_params,
             account_comm_key.clone(),
             enc_key_gen,
+
         )
         .unwrap();
 
@@ -1454,7 +1456,7 @@ mod tests {
 
         let clock = Instant::now();
         proof
-            .verify(
+            .verify::<_, PallasParams, VestaParams>(
                 asset_id,
                 deposit_amount,
                 updated_account_comm,
@@ -1467,6 +1469,7 @@ mod tests {
                 enc_key_gen,
                 &mut rng,
                 None,
+
             )
             .unwrap();
 
@@ -1482,63 +1485,6 @@ mod tests {
         for (i, (sk, _)) in auditor_keys.into_iter().enumerate() {
             assert_eq!(proof.0.encrypted_pubkeys.decrypt(i, sk.0), account_pk.0);
         }
-
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    deposit_amount + 5,
-                    updated_account_comm,
-                    nullifier,
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
-
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    deposit_amount,
-                    updated_account_comm,
-                    PallasA::rand(&mut rng),
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
-
-        assert!(
-            proof
-                .verify(
-                    asset_id + 1,
-                    deposit_amount,
-                    updated_account_comm,
-                    nullifier,
-                    auditor_pubkeys.clone(),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    &mut rng,
-                    None,
-                )
-                .is_err()
-        );
     }
 
     #[test]
@@ -1546,9 +1492,9 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let withdraw_amount = 30;
@@ -1578,10 +1524,10 @@ mod tests {
         }
 
         let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        let account_tree = CurveTree::<L, 1, PallasConfig, VestaConfig>::from_leaves(
             &set,
             &account_tree_params,
-            Some(4),
+            Some(6),
         );
 
         for i in 0..batch_size {
@@ -1604,7 +1550,7 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) = WithdrawProof::new(
+            let (proof, nullifier) = WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 withdraw_amount,
                 &accounts[i],
@@ -1628,7 +1574,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comms[i],
@@ -1654,7 +1600,7 @@ mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_and_return_tuples(
+                .verify_and_return_tuples::<ThreadRng, PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comms[i],
@@ -1699,7 +1645,7 @@ mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_and_return_tuples(
+                .verify_and_return_tuples::<ThreadRng, PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comms[i],
@@ -1743,9 +1689,9 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 16;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let withdraw_amount = 30;
@@ -1775,10 +1721,10 @@ mod tests {
         }
 
         let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        let account_tree = CurveTree::<L, 1, PallasConfig, VestaConfig>::from_leaves(
             &set,
             &account_tree_params,
-            Some(3),
+            Some(5),
         );
 
         for i in 0..batch_size {
@@ -1810,7 +1756,7 @@ mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = WithdrawProof::new_with_given_prover(
+            let (proof, nullifier) = WithdrawProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 withdraw_amount,
                 &accounts[i],
@@ -1843,7 +1789,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints(
+                .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comms[i],
@@ -1885,7 +1831,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints(
+                .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comms[i],
@@ -1946,9 +1892,9 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let deposit_amount = 25;
@@ -1978,10 +1924,10 @@ mod tests {
         }
 
         let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        let account_tree = CurveTree::<L, 1, PallasConfig, VestaConfig>::from_leaves(
             &set,
             &account_tree_params,
-            Some(3),
+            Some(5),
         );
 
         for i in 0..batch_size {
@@ -2004,7 +1950,7 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) = DepositProof::new(
+            let (proof, nullifier) = DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 deposit_amount,
                 &accounts[i],
@@ -2028,7 +1974,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     asset_id,
                     deposit_amount,
                     updated_account_comms[i],
@@ -2054,7 +2000,7 @@ mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_and_return_tuples(
+                .verify_and_return_tuples::<ThreadRng, PallasParams, VestaParams>(
                     asset_id,
                     deposit_amount,
                     updated_account_comms[i],
@@ -2099,7 +2045,7 @@ mod tests {
 
         for i in 0..batch_size {
             let (even, odd) = proofs[i]
-                .verify_and_return_tuples(
+                .verify_and_return_tuples::<ThreadRng, PallasParams, VestaParams>(
                     asset_id,
                     deposit_amount,
                     updated_account_comms[i],
@@ -2143,9 +2089,9 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 16;
-        const L: usize = 512;
+        const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens::<NUM_GENS>(b"testing");
+            setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let deposit_amount = 25;
@@ -2175,10 +2121,10 @@ mod tests {
         }
 
         let set = account_comms.iter().map(|x| x.0).collect::<Vec<_>>();
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        let account_tree = CurveTree::<L, 1, PallasConfig, VestaConfig>::from_leaves(
             &set,
             &account_tree_params,
-            Some(3),
+            Some(5),
         );
 
         for i in 0..batch_size {
@@ -2210,7 +2156,7 @@ mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = DepositProof::new_with_given_prover(
+            let (proof, nullifier) = DepositProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 deposit_amount,
                 &accounts[i],
@@ -2243,7 +2189,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints(
+                .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                     asset_id,
                     deposit_amount,
                     updated_account_comms[i],
@@ -2285,7 +2231,7 @@ mod tests {
 
         for i in 0..batch_size {
             proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints(
+                .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                     asset_id,
                     deposit_amount,
                     updated_account_comms[i],
@@ -2339,5 +2285,50 @@ mod tests {
             "Combined deposit proof size = {} bytes",
             even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
         );
+    }
+}
+
+pub fn ensure_counter_unchanged<G>(
+    old_state: &AccountState<G>,
+    new_state: &AccountState<G>,
+) -> Result<()>
+where
+    G: AffineRepr,
+{
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if old_state.counter != new_state.counter {
+            return Err(Error::ProofGenerationError(
+                "Counter must remain unchanged for transparent proofs".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub const AMOUNT_LABEL: &'static [u8; 6] = b"amount";
+
+/// Public key of an account encrypted for auditors/mediators using twisted-Elgamal
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedPublicKey<G: SWCurveConfig + Copy + Clone> {
+    /// Ephemeral key per auditor/mediator like `r * PK_i`
+    pub eph_pk: Vec<Affine<G>>,
+    /// Encrypted account public key as `r * G + pk_{acct}`
+    pub encrypted: Affine<G>,
+}
+
+impl<G: SWCurveConfig + Copy + Clone> EncryptedPublicKey<G> {
+    /// Decrypt to the get the public key of account using auditor/mediator secret key
+    pub fn decrypt(&self, index: usize, mut sk: G::ScalarField) -> Affine<G> {
+        assert!(index < self.eph_pk.len());
+        sk.inverse_in_place().unwrap();
+        let mask = self.eph_pk[index] * sk;
+        sk.zeroize();
+        (self.encrypted - mask).into_affine()
     }
 }

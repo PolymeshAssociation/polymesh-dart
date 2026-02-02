@@ -1,6 +1,6 @@
 use crate::account::state::{AccountCommitmentKeyTrait, AccountState};
 use crate::error::*;
-use crate::leg_new::LegEncryption;
+use crate::leg::LegEncryption;
 use crate::{AssetId, BALANCE_BITS, Balance};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};

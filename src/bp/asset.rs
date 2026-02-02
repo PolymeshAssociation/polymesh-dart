@@ -13,6 +13,10 @@ use rand_core::{CryptoRng, RngCore};
 use super::*;
 use crate::*;
 use polymesh_dart_bp::account::mint::MintTxnProof;
+use ark_ec_divisors::curves::{
+    pallas::{Point as PallasPoint},
+    vesta::{Point as VestaPoint},
+};
 
 /// Represents the state of an asset in the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo)]
@@ -144,7 +148,7 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = MintTxnProof::new(
+        let (proof, nullifier) = MintTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             pk.get_affine()?,
             amount,

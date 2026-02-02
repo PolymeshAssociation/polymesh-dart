@@ -4,15 +4,18 @@ use ark_std::{UniformRand, format};
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::CurveTree;
-use curve_tree_relations::parameters::SelRerandProofParameters;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::account::state::NUM_GENERATORS;
-use polymesh_dart_bp::fee_account_old::{FeeAccountTopupTxnProof, FeePaymentProof};
+use polymesh_dart_bp::fee_account::{FeeAccountState, FeeAccountTopupTxnProof, FeePaymentProof};
 use polymesh_dart_bp::keys::{SigKey, keygen_sig};
 use polymesh_dart_bp::util::verify_rmc;
 use rand_core::CryptoRngCore;
-use polymesh_dart_bp::fee_account_new::FeeAccountState;
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -39,13 +42,13 @@ fn new_fee_account<R: CryptoRngCore>(
 }
 
 fn create_shared_setup() -> (
-    SelRerandProofParameters<PallasParameters, VestaParameters>,
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
     [PallasA; NUM_GENERATORS],
 ) {
     const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
 
     // Create public params (generators, etc)
-    let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+    let account_tree_params = SelRerandProofParametersNew::<PallasParameters, VestaParameters, PallasParams, VestaParams>::new::<PallasPoint, VestaPoint>(
         NUM_GENS as u32,
         NUM_GENS as u32,
     )
@@ -55,26 +58,27 @@ fn create_shared_setup() -> (
     (account_tree_params, account_comm_key)
 }
 
+/// Create a fee account and tree
 fn create_fee_account_and_tree<R: CryptoRngCore>(
     rng: &mut R,
     asset_id: u32,
     sk: SigKey<PallasA>,
     balance: u64,
     account_comm_key: &[PallasA; NUM_GENERATORS],
-    account_tree_params: &SelRerandProofParameters<PallasParameters, VestaParameters>,
+    account_tree_params: &SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
 ) -> (
     FeeAccountState<PallasA>,
-    CurveTree<512, 1, PallasParameters, VestaParameters>,
+    CurveTree<64, 1, PallasParameters, VestaParameters>,
 ) {
     let account = new_fee_account(rng, asset_id, sk, balance);
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
     // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
     let set = vec![account_comm.0];
-    let account_tree = CurveTree::<512, 1, PallasParameters, VestaParameters>::from_leaves(
+    let account_tree = CurveTree::<64, 1, PallasParameters, VestaParameters>::from_leaves(
         &set,
         account_tree_params,
-        Some(4),
+        Some(6),
     );
 
     (account, account_tree)
@@ -109,7 +113,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeeAccountTopupTxnProof::new(
+    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut setup_rng,
         &pk_i.0,
         increase_bal_by,
@@ -128,7 +132,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     pk_i.0,
                     asset_id,
                     increase_bal_by,
@@ -175,7 +179,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeeAccountTopupTxnProof::new(
+    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut setup_rng,
         &pk_i.0,
         increase_bal_by,
@@ -197,7 +201,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
             let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut local_rng));
 
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     pk_i.0,
                     asset_id,
                     increase_bal_by,
@@ -246,7 +250,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeePaymentProof::new(
+    let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut setup_rng,
         fee_amount,
         &account,
@@ -264,7 +268,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     asset_id,
                     fee_amount,
                     updated_account_comm,
@@ -311,7 +315,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeePaymentProof::new(
+    let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut setup_rng,
         fee_amount,
         &account,
@@ -332,7 +336,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
             let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut local_rng));
 
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     asset_id,
                     fee_amount,
                     updated_account_comm,

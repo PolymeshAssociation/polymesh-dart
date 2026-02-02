@@ -154,6 +154,8 @@ ark-vesta = { workspace = true, default-features = false, optional = true }
 # Curve tree BP dependencies
 bulletproofs = { workspace = true, default-features = false, optional = true }
 curve_tree_relations = { workspace = true, default-features = false, optional = true }
+ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
+ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -208,6 +210,8 @@ backend_bp = [
     "schnorr_pok",
     "bulletproofs",
     "curve_tree_relations",
+    "ark-ec-divisors",
+    "ark-dlog-gadget",
     "ark-pallas/curve",
     "ark-vesta",
 ]

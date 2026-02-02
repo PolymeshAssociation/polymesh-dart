@@ -1,4 +1,4 @@
-use crate::leg_new::LegEncryptionRandomness;
+use crate::leg::LegEncryptionRandomness;
 use std::marker::PhantomData;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ff::PrimeField;
@@ -15,12 +15,12 @@ use ark_ec_divisors::DivisorCurve;
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use polymesh_dart_common::Balance;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig};
-use crate::account::common_new::{
+use crate::account::common::{
     CommonStateChangeProof, CommonStateChangeProver, StateChangeVerifier,
 };
 use crate::util::{get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
 use crate::{error::Error, error::Result, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL};
-use crate::leg_new::LegEncryption;
+use crate::leg::LegEncryption;
 
 /// Combined proof for multi-leg state transitions
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -1289,8 +1289,8 @@ mod tests {
     use super::*;
     use crate::account::AccountStateBuilder;
     use crate::account_registration::tests::new_account;
-    use crate::leg_new::Leg;
-    use crate::leg_new::tests::setup_keys;
+    use crate::leg::Leg;
+    use crate::leg::tests::setup_keys;
     use crate::util::{prove_with_rng, verify_with_rng};
     use ark_std::UniformRand;
     use blake2::Blake2b512;
@@ -1302,7 +1302,7 @@ mod tests {
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
-    use crate::account::tests_new_ct::{get_tree_with_account_comm, setup_gens_new};
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
