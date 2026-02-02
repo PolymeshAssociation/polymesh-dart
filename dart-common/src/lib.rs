@@ -25,14 +25,14 @@ pub const MAX_ASSET_AUDITORS: u32 = 2;
 pub const MAX_ASSET_MEDIATORS: u32 = 2;
 pub const MAX_ASSET_KEYS: usize = (MAX_ASSET_AUDITORS + MAX_ASSET_MEDIATORS) as usize;
 
-pub const ACCOUNT_TREE_L: usize = 512;
+pub const ACCOUNT_TREE_L: usize = 64;
 pub const ACCOUNT_TREE_M: usize = 1;
-pub const ACCOUNT_TREE_HEIGHT: u8 = 4;
+pub const ACCOUNT_TREE_HEIGHT: u8 = 6;
 pub const ACCOUNT_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
 
-pub const FEE_ACCOUNT_TREE_L: usize = 512;
+pub const FEE_ACCOUNT_TREE_L: usize = 64;
 pub const FEE_ACCOUNT_TREE_M: usize = 1;
-pub const FEE_ACCOUNT_TREE_HEIGHT: u8 = 4;
+pub const FEE_ACCOUNT_TREE_HEIGHT: u8 = 6;
 pub const FEE_ACCOUNT_TREE_GENS: usize = MAX_CURVE_TREE_GENS;
 pub const FEE_ASSET_ID: AssetId = 0;
 
