@@ -1,4 +1,3 @@
-use crate::fee_account::ensure_correct_account_state;
 use crate::account::AccountCommitmentKeyTrait;
 use crate::error::*;
 use crate::util::{
@@ -11,7 +10,7 @@ use crate::{
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -25,22 +24,335 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS};
+use polymesh_dart_common::{AssetId, Balance, FEE_BALANCE_BITS, MAX_FEE_BALANCE};
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
-};
+use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
+const FEE_REG_TXN_LABEL: &'static [u8; 24] = b"fee_account_registration";
 
-// Re-export types from original fee_account.rs that don't change
-pub use crate::fee_account::{
-    FeeAccountState, FeeAccountStateCommitment,
-};
+/// To commit, use the same commitment key as non-fee asset account commitment.
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
+pub struct FeeAccountState<G: AffineRepr> {
+    // TODO: Remove this later.
+    pub sk: G::ScalarField,
+    pub balance: Balance,
+    /// This is 0 for PolyX is always revealed when paying fee
+    /// Including the asset-id as we might need to support multiple fee currencies in future.
+    pub asset_id: AssetId,
+    pub rho: G::ScalarField,
+    pub randomness: G::ScalarField,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
+
+impl<G: AffineRepr> FeeAccountState<G> {
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        sk: G::ScalarField,
+        balance: Balance,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        let rho = G::ScalarField::rand(rng);
+        let randomness = G::ScalarField::rand(rng);
+
+        Ok(Self {
+            sk,
+            balance,
+            asset_id,
+            rho,
+            randomness,
+        })
+    }
+
+    pub fn commit(
+        &self,
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> Result<FeeAccountStateCommitment<G>> {
+        let comm = G::Group::msm(
+            &[
+                account_comm_key.sk_gen(),
+                account_comm_key.balance_gen(),
+                account_comm_key.asset_id_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
+            ],
+            &[
+                self.sk,
+                G::ScalarField::from(self.balance),
+                G::ScalarField::from(self.asset_id),
+                self.rho,
+                self.randomness,
+            ],
+        )
+            .map_err(Error::size_mismatch)?;
+        Ok(FeeAccountStateCommitment(comm.into_affine()))
+    }
+
+    pub fn get_state_for_topup<R: CryptoRngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
+        if amount + self.balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(amount + self.balance));
+        }
+        let mut new_state = self.clone();
+        new_state.balance += amount;
+        new_state.refresh_randomness_for_state_change(rng);
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_payment<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        fee_amount: u64,
+    ) -> Result<Self> {
+        if fee_amount > self.balance {
+            return Err(Error::AmountTooLarge(fee_amount));
+        }
+        let mut new_state = self.clone();
+        new_state.balance -= fee_amount;
+        new_state.refresh_randomness_for_state_change(rng);
+        Ok(new_state)
+    }
+
+    pub fn refresh_randomness_for_state_change<R: CryptoRngCore>(&mut self, rng: &mut R) {
+        self.rho = G::ScalarField::rand(rng);
+        self.randomness = G::ScalarField::rand(rng);
+    }
+
+    pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
+        (comm_key.rho_gen() * self.rho).into()
+    }
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct RegTxnProof<G: AffineRepr> {
+    pub resp_acc_comm: PokPedersenCommitment<G>,
+    pub resp_pk: PokDiscreteLog<G>,
+}
+
+impl<G: AffineRepr> RegTxnProof<G> {
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        pk: G,
+        account: &FeeAccountState<G>,
+        account_commitment: FeeAccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> Result<Self> {
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        Self::new_with_given_transcript(
+            rng,
+            pk,
+            account,
+            account_commitment,
+            nonce,
+            account_comm_key,
+            &mut transcript,
+        )
+    }
+
+    pub fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        pk: G,
+        account: &FeeAccountState<G>,
+        account_commitment: FeeAccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        mut transcript: &mut MerlinTranscript,
+    ) -> Result<Self> {
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk
+        );
+
+        // D = pk + g_balance * balance + g_asset_id * asset_id
+        let D = pk.into_group()
+            + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance))
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id));
+
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut randomness_blinding = G::ScalarField::rand(rng);
+
+        // For proving Comm - D = g_rho * rho + g_randomness * randomness
+        let comm_protocol = PokPedersenCommitmentProtocol::init(
+            account.rho,
+            rho_blinding,
+            &account_comm_key.rho_gen(),
+            account.randomness,
+            randomness_blinding,
+            &account_comm_key.randomness_gen(),
+        );
+
+        rho_blinding.zeroize();
+        randomness_blinding.zeroize();
+
+        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        comm_protocol.challenge_contribution(
+            &account_comm_key.rho_gen(),
+            &account_comm_key.randomness_gen(),
+            &reduced_acc_comm,
+            &mut transcript,
+        )?;
+
+        let mut sk_blinding = G::ScalarField::rand(rng);
+
+        let pk_protocol =
+            PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+
+        sk_blinding.zeroize();
+
+        pk_protocol.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
+
+        let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        let resp_acc_comm = comm_protocol.gen_proof(&prover_challenge);
+        let resp_pk = pk_protocol.gen_proof(&prover_challenge);
+
+        Ok(Self {
+            resp_acc_comm,
+            resp_pk,
+        })
+    }
+
+    pub fn verify(
+        &self,
+        pk: &G,
+        balance: Balance,
+        asset_id: AssetId,
+        account_commitment: &FeeAccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> Result<()> {
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        self.verify_with_given_transcript(
+            pk,
+            balance,
+            asset_id,
+            account_commitment,
+            nonce,
+            account_comm_key,
+            &mut transcript,
+        )
+    }
+
+    pub fn verify_with_given_transcript(
+        &self,
+        pk: &G,
+        balance: Balance,
+        asset_id: AssetId,
+        account_commitment: &FeeAccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        mut transcript: &mut MerlinTranscript,
+    ) -> Result<()> {
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            asset_id,
+            UPDATED_ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk
+        );
+
+        // D = pk + g_balance * balance + g_asset_id * asset_id
+        let D = pk.into_group()
+            + (account_comm_key.balance_gen() * G::ScalarField::from(balance))
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
+
+        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        self.resp_acc_comm.challenge_contribution(
+            &account_comm_key.rho_gen(),
+            &account_comm_key.randomness_gen(),
+            &reduced_acc_comm,
+            &mut transcript,
+        )?;
+
+        self.resp_pk
+            .challenge_contribution(&account_comm_key.sk_gen(), pk, &mut transcript)?;
+
+        let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        if !self.resp_acc_comm.verify(
+            &reduced_acc_comm,
+            &account_comm_key.rho_gen(),
+            &account_comm_key.randomness_gen(),
+            &verifier_challenge,
+        ) {
+            return Err(Error::ProofVerificationError(
+                "Account commitment proof verification failed".to_string(),
+            ));
+        }
+
+        if !self
+            .resp_pk
+            .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
+        {
+            return Err(Error::ProofVerificationError(
+                "Public key proof verification failed".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+pub fn ensure_correct_account_state<G: AffineRepr>(
+    old_state: &FeeAccountState<G>,
+    new_state: &FeeAccountState<G>,
+    amount: Balance,
+    has_balance_decreased: bool,
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        // Ensure accounts are consistent (same sk, asset_id)
+        if old_state.sk != new_state.sk {
+            return Err(Error::ProofGenerationError(
+                "Secret key mismatch between old and new account states".to_string(),
+            ));
+        }
+        if old_state.asset_id != new_state.asset_id {
+            return Err(Error::ProofGenerationError(
+                "Asset ID mismatch between old and new account states".to_string(),
+            ));
+        }
+        if has_balance_decreased {
+            if new_state.balance != old_state.balance - amount {
+                return Err(Error::ProofGenerationError(
+                    "Balance decrease incorrect".to_string(),
+                ));
+            }
+        } else {
+            if new_state.balance != old_state.balance + amount {
+                return Err(Error::ProofGenerationError(
+                    "Balance increase incorrect".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FeeAccountTopupTxnProof<
@@ -1121,8 +1433,10 @@ impl<
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::account::tests::setup_gens_new;
+    use crate::keys::SigKey;
+use crate::account_registration::tests::setup_comm_key;
+use super::*;
+    use crate::account::tests_new_ct::setup_gens_new;
     use crate::keys::{keygen_sig};
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec_divisors::curves::{
@@ -1131,7 +1445,6 @@ pub mod tests {
     };
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
-    use crate::fee_account::tests::new_fee_account;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1139,6 +1452,72 @@ pub mod tests {
     type F0 = ark_pallas::Fr;
     type F1 = ark_vesta::Fr;
 
+    pub fn new_fee_account<R: CryptoRngCore, G: AffineRepr>(
+        rng: &mut R,
+        asset_id: AssetId,
+        sk: SigKey<G>,
+        balance: Balance,
+    ) -> FeeAccountState<G> {
+        FeeAccountState::new(rng, sk.0, balance, asset_id).unwrap()
+    }
+
+    #[test]
+    fn fee_account_init() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let asset_id = 1;
+        let balance = 1000;
+
+        let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i.clone(), balance);
+        assert_eq!(fee_account.asset_id, asset_id);
+        assert_eq!(fee_account.balance, balance);
+        assert_eq!(fee_account.sk, sk_i.0);
+
+        fee_account.commit(account_comm_key).unwrap();
+    }
+
+    #[test]
+    fn fee_account_registration() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let asset_id = 1;
+        let balance = 1000;
+
+        let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
+        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
+
+        let nonce = b"test-nonce";
+
+        let reg_proof = RegTxnProof::new(
+            &mut rng,
+            pk_i.0,
+            &fee_account,
+            fee_account_comm.clone(),
+            nonce,
+            account_comm_key.clone(),
+        )
+            .unwrap();
+
+        reg_proof
+            .verify(
+                &pk_i.0,
+                balance,
+                asset_id,
+                &fee_account_comm,
+                nonce,
+                account_comm_key,
+            )
+            .unwrap();
+    }
+    
     #[test]
     fn fee_account_topup_txn() {
         let mut rng = rand::thread_rng();

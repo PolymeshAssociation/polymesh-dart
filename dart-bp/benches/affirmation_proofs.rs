@@ -9,10 +9,11 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
 use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
+use polymesh_dart_bp::leg_old::{};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::verify_rmc;
 use ark_ec::CurveGroup;
+use polymesh_dart_bp::leg_new::{Leg, LegEncryption, LegEncryptionRandomness};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;

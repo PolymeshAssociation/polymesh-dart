@@ -1,27 +1,27 @@
-use crate::account::common::{ensure_correct_balance_change, ensure_same_accounts};
+use crate::account::common_new::ensure_correct_balance_change;
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::util::{bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng, prove_with_rng, BPProof, handle_verification_tuples};
+use crate::util::{bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
 use crate::{
-    ASSET_ID_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
-    error::Result,
+    add_to_transcript, error::Result, Error, ASSET_ID_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
+    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL,
 };
-use ark_ec::CurveGroup;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use ark_ff::{PrimeField};
+use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
-use curve_tree_relations::parameters::{SelRerandProofParametersNew};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance};
+use polymesh_dart_common::{AssetId, Balance, BALANCE_BITS};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
@@ -29,9 +29,9 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
-use crate::account::transparent::{AMOUNT_LABEL, EncryptedPublicKey};
 use ark_ec_divisors::DivisorCurve;
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use crate::account::common_new::ensure_same_accounts;
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 struct CommonTransparentProof<
@@ -149,7 +149,7 @@ impl<
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account, true)?;
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
-        // ensure_counter_unchanged(account, updated_account)?;
+        ensure_counter_unchanged(account, updated_account)?;
 
         let (re_randomized_path, mut rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
@@ -1277,7 +1277,6 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
@@ -1294,6 +1293,7 @@ mod tests {
     use ark_pallas::{Fr as PallasFr, PallasConfig};
     use ark_vesta::{Fr as VestaFr, VestaConfig};
     use rand::rngs::ThreadRng;
+    use crate::account::tests_new_ct::{get_tree_with_account_comm, setup_gens_new};
 
     #[test]
     fn withdraw_proof() {
@@ -2285,5 +2285,50 @@ mod tests {
             "Combined deposit proof size = {} bytes",
             even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
         );
+    }
+}
+
+pub fn ensure_counter_unchanged<G>(
+    old_state: &AccountState<G>,
+    new_state: &AccountState<G>,
+) -> Result<()>
+where
+    G: AffineRepr,
+{
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if old_state.counter != new_state.counter {
+            return Err(Error::ProofGenerationError(
+                "Counter must remain unchanged for transparent proofs".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub const AMOUNT_LABEL: &'static [u8; 6] = b"amount";
+
+/// Public key of an account encrypted for auditors/mediators using twisted-Elgamal
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedPublicKey<G: SWCurveConfig + Copy + Clone> {
+    /// Ephemeral key per auditor/mediator like `r * PK_i`
+    pub eph_pk: Vec<Affine<G>>,
+    /// Encrypted account public key as `r * G + pk_{acct}`
+    pub encrypted: Affine<G>,
+}
+
+impl<G: SWCurveConfig + Copy + Clone> EncryptedPublicKey<G> {
+    /// Decrypt to the get the public key of account using auditor/mediator secret key
+    pub fn decrypt(&self, index: usize, mut sk: G::ScalarField) -> Affine<G> {
+        assert!(index < self.eph_pk.len());
+        sk.inverse_in_place().unwrap();
+        let mask = self.eph_pk[index] * sk;
+        sk.zeroize();
+        (self.encrypted - mask).into_affine()
     }
 }

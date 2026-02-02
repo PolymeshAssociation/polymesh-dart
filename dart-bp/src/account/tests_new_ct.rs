@@ -1,41 +1,46 @@
-use crate::account::tests::{create_provers, create_verifiers, get_tree_with_account_comm, setup_gens_new, setup_leg, setup_single_leg_settlement_new, setup_multi_asset_settlement_new, setup_asset_and_account_params_new};
-use crate::account::AccountCommitmentKeyTrait;
-use crate::account_registration::tests::new_account;
-use crate::leg::tests::setup_keys;
-use crate::leg::{
-    AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL,
-    MEDIATOR_TXN_LABEL, MediatorTxnProof,
-};
-use crate::leg_new::LegCreationProofNew;
+use crate::leg_new::Leg;
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::account_registration::tests::{new_account, setup_comm_key};
+use crate::leg_new::tests::setup_keys;
+use crate::leg_new::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, MediatorTxnProof, LEG_TXN_EVEN_LABEL, MEDIATOR_TXN_LABEL};
+use crate::leg_new::{LegCreationProof, LEG_TXN_ODD_LABEL};
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
 };
-use crate::{TXN_EVEN_LABEL, TXN_ODD_LABEL};
+use crate::{error, TXN_EVEN_LABEL, TXN_ODD_LABEL};
 use ark_ec_divisors::curves::{
     pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
     vesta::VestaParams,
 };
-use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters, Affine as PallasA};
+use ark_pallas::{Affine as PallasA, Fr as PallasFr, PallasConfig as PallasParameters};
 use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
 use ark_vesta::{Fr as VestaFr, VestaConfig as VestaParameters};
-use curve_tree_relations::parameters::{SelRerandProofParametersNew};
-use curve_tree_relations::curve_tree::CurveTree;
+use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
+use curve_tree_relations::curve_tree::{CurveTree, Root};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use std::time::Instant;
-use crate::account::mod_new::{
+use rand_core::CryptoRngCore;
+use blake2::Blake2b512;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use bulletproofs::r1cs::{Prover, Verifier};
+use bulletproofs::PedersenGens;
+use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use ark_ec::CurveGroup;
+use polymesh_dart_common::{AssetId, Balance};
+use crate::account::{
     AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
     IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
     ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof,
     SenderReverseTxnProof,
 };
-use crate::account::{
-    AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
-};
 use crate::account::state_transition_multi_new::MultiAssetStateTransitionProof;
-use crate::leg_new::SettlementCreationProofNew;
+use crate::account::state_transition_new::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use crate::leg_new::SettlementCreationProof;
 
 #[test]
 fn send_txn() {
@@ -341,7 +346,7 @@ fn single_shot_settlement() {
 
     // Create all three proofs
     let start = Instant::now();
-    let settlement_proof = LegCreationProofNew::<
+    let settlement_proof = LegCreationProof::<
         L,
         PallasFr,
         VestaFr,
@@ -606,7 +611,7 @@ fn single_shot_combined_create_and_send() {
     let (mut even_prover, mut odd_prover) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let leg_creation_proof = LegCreationProofNew::<
+    let leg_creation_proof = LegCreationProof::<
         L,
         PallasFr,
         VestaFr,
@@ -1440,7 +1445,7 @@ fn single_shot_combined_create_and_recv() {
     let (mut even_prover, mut odd_prover) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let leg_creation_proof = LegCreationProofNew::<
+    let leg_creation_proof = LegCreationProof::<
         L,
         PallasFr,
         VestaFr,
@@ -1884,7 +1889,7 @@ fn single_shot_swap() {
     let (mut even_prover_settlement, mut odd_prover_settlement) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let settlement_proof_1 = LegCreationProofNew::<
+    let settlement_proof_1 = LegCreationProof::<
         L,
         PallasFr,
         VestaFr,
@@ -1916,7 +1921,7 @@ fn single_shot_swap() {
     )
     .unwrap();
 
-    let settlement_proof_2 = LegCreationProofNew::<
+    let settlement_proof_2 = LegCreationProof::<
         L,
         PallasFr,
         VestaFr,
@@ -2797,7 +2802,7 @@ fn combined_create_and_send() {
     let (mut even_prover, mut odd_prover) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let leg_creation_proof = LegCreationProofNew::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let leg_creation_proof = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         leg.clone(),
         leg_enc.clone(),
@@ -3558,7 +3563,7 @@ fn swap_settlement() {
     let (mut even_prover_settlement, mut odd_prover_settlement) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let settlement_proof_1 = LegCreationProofNew::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof_1 = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         leg_1.clone(),
         leg_enc_1.clone(),
@@ -3576,7 +3581,7 @@ fn swap_settlement() {
     )
     .unwrap();
 
-    let settlement_proof_2 = LegCreationProofNew::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof_2 = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         leg_2.clone(),
         leg_enc_2.clone(),
@@ -5207,7 +5212,7 @@ fn multi_asset_settlement() {
     );
 
     let start = Instant::now();
-    let settlement_proof = SettlementCreationProofNew::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -5568,7 +5573,7 @@ fn multi_asset_combined_create_and_send() {
     let (mut even_prover, mut odd_prover) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let settlement_proof = SettlementCreationProofNew::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -5944,7 +5949,7 @@ fn multi_asset_combined_create_and_recv() {
     let (mut even_prover, mut odd_prover) =
         create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
 
-    let settlement_proof = SettlementCreationProofNew::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -6286,17 +6291,17 @@ fn multi_asset_combined_create_and_recv() {
 #[cfg(feature = "ignore_prover_input_sanitation")]
 mod input_sanitation_disabled {
     use super::*;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account_registration::tests::new_account;
-    use crate::leg::tests::setup_keys;
-    use crate::account::mod_new::{
+    use crate::leg_new::tests::setup_keys;
+    use crate::account::{
         AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
         IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
         SenderCounterUpdateTxnProof, SenderReverseTxnProof,
     };
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
+    use crate::account::tests_new_ct::{get_tree_with_account_comm, setup_gens_new, setup_leg};
 
     #[test]
     fn keep_balance_same_in_send_txn() {
@@ -7482,4 +7487,544 @@ fn multi_asset_state_transition_different_confs() {
         enc_key_gen,
         enc_gen,
     );
+}
+
+pub fn setup_leg<R: CryptoRngCore>(
+    rng: &mut R,
+    pk_s: PallasA,
+    pk_r: PallasA,
+    pk_a_e: PallasA,
+    role: bool,
+    amount: Balance,
+    asset_id: AssetId,
+    pk_s_e: PallasA,
+    pk_r_e: PallasA,
+    enc_key_gen: PallasA,
+    enc_gen: PallasA,
+) -> (
+    Leg<PallasA>,
+    LegEncryption<PallasA>,
+    LegEncryptionRandomness<PallasFr>,
+) {
+    let leg = Leg::new(pk_s, pk_r, vec![(role, pk_a_e)], amount, asset_id).unwrap();
+    let (leg_enc, leg_enc_rand) = leg
+        .encrypt::<_, Blake2b512>(rng, pk_s_e, pk_r_e, enc_key_gen, enc_gen)
+        .unwrap();
+    (leg, leg_enc, leg_enc_rand)
+}
+
+/// Create a new tree and add the given account's commitment to the tree and return the tree
+/// In future, allow to generate tree many given number of leaves and add the account commitment to a
+/// random position in tree.
+pub fn get_tree_with_account_comm<
+    const L: usize,
+    P: SelRerandParametersRef<PallasParameters, VestaParameters>,
+>(
+    account: &AccountState<PallasA>,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    account_tree_params: &P,
+    tree_height: usize,
+) -> error::Result<CurveTree<L, 1, PallasParameters, VestaParameters>> {
+    let account_comm = account.commit(account_comm_key)?;
+
+    // Add account commitment in curve tree
+    let set = vec![account_comm.0];
+    Ok(
+        CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            account_tree_params,
+            Some(tree_height),
+        ),
+    )
+}
+
+/// Create a batched tree with multiple account commitments
+pub fn get_batched_tree_with_account_comms<
+    const L: usize,
+    const M: usize,
+    P: SelRerandParametersRef<PallasParameters, VestaParameters>,
+>(
+    accounts: Vec<&AccountState<PallasA>>,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    account_tree_params: &P,
+    tree_height: usize,
+) -> error::Result<CurveTree<L, M, PallasParameters, VestaParameters>> {
+    let account_comms: Vec<_> = accounts
+        .iter()
+        .map(|account| account.commit(account_comm_key.clone()).map(|c| c.0))
+        .collect::<error::Result<Vec<_>>>()?;
+
+    Ok(
+        CurveTree::<L, M, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            account_tree_params,
+            Some(tree_height),
+        ),
+    )
+}
+
+/// Setup parameters for new proof protocol
+pub fn setup_gens_new<const NUM_GENS: usize>(
+    label: &[u8],
+) -> (
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    impl AccountCommitmentKeyTrait<PallasA>,
+    PallasA,
+    PallasA,
+) {
+    // Create public params with generator tables for new divisor-based proof protocol
+    let account_tree_params = SelRerandProofParametersNew::<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >::new::<PallasPoint, VestaPoint>(
+        NUM_GENS as u32, NUM_GENS as u32
+    )
+    .unwrap();
+    let account_comm_key = setup_comm_key(label);
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+    (account_tree_params, account_comm_key, enc_key_gen, enc_gen)
+}
+
+/// Setup asset and account params for new proof protocol
+pub fn setup_asset_and_account_params_new<const NUM_GENS: usize>() -> (
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    SelRerandProofParametersNew<VestaParameters, PallasParameters, VestaParams, PallasParams>,
+    AssetCommitmentParams<PallasParameters, VestaParameters>,
+    impl AccountCommitmentKeyTrait<PallasA>,
+    PallasA,
+    PallasA,
+) {
+    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+        setup_gens_new::<NUM_GENS>(b"testing");
+
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new::<VestaPoint, PallasPoint>(NUM_GENS as u32, NUM_GENS as u32)
+    .unwrap();
+
+    let asset_comm_params = AssetCommitmentParams::new(
+        b"asset-comm-params",
+        1,
+        account_tree_params.odd_parameters.bp_gens(),
+    );
+
+    (
+        account_tree_params,
+        asset_tree_params,
+        asset_comm_params,
+        account_comm_key,
+        enc_key_gen,
+        enc_gen,
+    )
+}
+
+pub fn create_provers<'a, P0: SWCurveConfig + Copy + Clone, P1: SWCurveConfig + Copy + Clone>(
+    label_even: &'static [u8],
+    label_odd: &'static [u8],
+    even_pc_gens: &'a PedersenGens<Affine<P0>>,
+    odd_pc_gens: &'a PedersenGens<Affine<P1>>,
+) -> (
+    Prover<'a, MerlinTranscript, Affine<P0>>,
+    Prover<'a, MerlinTranscript, Affine<P1>>,
+) {
+    let even_transcript = MerlinTranscript::new(label_even);
+    let odd_transcript = MerlinTranscript::new(label_odd);
+    let even_prover = Prover::new(even_pc_gens, even_transcript);
+    let odd_prover = Prover::new(odd_pc_gens, odd_transcript);
+    (even_prover, odd_prover)
+}
+
+pub fn create_verifiers<P0: SWCurveConfig + Copy + Clone, P1: SWCurveConfig + Copy + Clone>(
+    label_even: &'static [u8],
+    label_odd: &'static [u8],
+) -> (
+    Verifier<MerlinTranscript, Affine<P0>>,
+    Verifier<MerlinTranscript, Affine<P1>>,
+) {
+    let even_transcript = MerlinTranscript::new(label_even);
+    let odd_transcript = MerlinTranscript::new(label_odd);
+    let even_verifier = Verifier::new(even_transcript);
+    let odd_verifier = Verifier::new(odd_transcript);
+    (even_verifier, odd_verifier)
+}
+
+pub fn setup_single_leg_settlement_common<
+    const L: usize,
+    AccountTreeParams: SelRerandParametersRef<PallasParameters, VestaParameters>,
+    AssetTreeParams: SelRerandParametersRef<VestaParameters, PallasParameters>,
+>(
+    asset_tree_height: u64,
+    account_tree_height: u64,
+    account_tree_params: AccountTreeParams,
+    asset_tree_params: AssetTreeParams,
+    asset_comm_params: AssetCommitmentParams<PallasParameters, VestaParameters>,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    enc_key_gen: PallasA,
+    enc_gen: PallasA,
+    asset_tree_delta: PallasA,
+) -> (
+    AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    CurveTreeWitnessPath<L, VestaParameters, PallasParameters>,
+    Root<L, 1, VestaParameters, PallasParameters>,
+    Leg<PallasA>,
+    LegEncryption<PallasA>,
+    LegEncryptionRandomness<PallasFr>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountStateCommitment<PallasA>,
+    AccountStateCommitment<PallasA>,
+    CurveTreeWitnessPath<L, PallasParameters, VestaParameters>,
+    CurveTreeWitnessPath<L, PallasParameters, VestaParameters>,
+    Root<L, 1, PallasParameters, VestaParameters>,
+    AccountTreeParams,
+    AssetTreeParams,
+    AssetCommitmentParams<PallasParameters, VestaParameters>,
+    impl AccountCommitmentKeyTrait<PallasA>,
+    PallasA,
+    PallasA,
+) {
+    let mut rng = rand::thread_rng();
+
+    // All parties generate their keys
+    let (((sk_s, pk_s), (_, pk_s_e)), ((sk_r, pk_r), (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+        setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+    let asset_id = 1;
+    let amount = 50;
+
+    // Create asset data
+    let keys = vec![(true, pk_a_e.0)];
+    let asset_data =
+        AssetData::new(asset_id, keys.clone(), &asset_comm_params, asset_tree_delta).unwrap();
+
+    // Create asset tree with the asset commitment
+    let set = vec![asset_data.commitment];
+    let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(asset_tree_height as usize),
+    );
+
+    // Get asset tree path
+    let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let asset_tree_root = asset_tree.root_node();
+
+    // Create a single leg
+    let (leg, leg_enc, leg_enc_rand) = setup_leg(
+        &mut rng,
+        pk_s.0,
+        pk_r.0,
+        pk_a_e.0,
+        true,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        enc_key_gen,
+        enc_gen,
+    );
+
+    // Create sender account
+    let sender_id = PallasFr::rand(&mut rng);
+    let (mut sender_account, _, _) = new_account(&mut rng, asset_id, sk_s, sender_id);
+    sender_account.balance = 200; // Ensure sufficient balance
+    let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+
+    // Create receiver account
+    let receiver_id = PallasFr::rand(&mut rng);
+    let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, receiver_id);
+    receiver_account.balance = 150; // Some initial balance
+    let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
+
+    // Create the account tree with both accounts
+    let account_comms = vec![sender_account_comm.0, receiver_account_comm.0];
+    let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &account_comms,
+        &account_tree_params,
+        Some(account_tree_height as usize),
+    );
+
+    let account_tree_root = account_tree.root_node();
+
+    // Prepare updated account states
+    let updated_sender_account = sender_account
+        .get_state_for_irreversible_send(amount)
+        .unwrap();
+    let updated_sender_account_comm = updated_sender_account
+        .commit(account_comm_key.clone())
+        .unwrap();
+    let sender_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+
+    let updated_receiver_account = receiver_account
+        .get_state_for_irreversible_receive(amount)
+        .unwrap();
+    let updated_receiver_account_comm = updated_receiver_account
+        .commit(account_comm_key.clone())
+        .unwrap();
+    let receiver_path = account_tree.get_path_to_leaf_for_proof(1, 0).unwrap();
+
+    (
+        asset_data,
+        asset_path,
+        asset_tree_root,
+        leg,
+        leg_enc,
+        leg_enc_rand,
+        sender_account,
+        receiver_account,
+        updated_sender_account,
+        updated_receiver_account,
+        updated_sender_account_comm,
+        updated_receiver_account_comm,
+        sender_path,
+        receiver_path,
+        account_tree_root,
+        account_tree_params,
+        asset_tree_params,
+        asset_comm_params,
+        account_comm_key,
+        enc_key_gen,
+        enc_gen,
+    )
+}
+
+pub fn setup_single_leg_settlement_new<const NUM_GENS: usize, const L: usize>(
+    asset_tree_height: u64,
+    account_tree_height: u64,
+) -> (
+    AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    CurveTreeWitnessPath<L, VestaParameters, PallasParameters>,
+    Root<L, 1, VestaParameters, PallasParameters>,
+    Leg<PallasA>,
+    LegEncryption<PallasA>,
+    LegEncryptionRandomness<PallasFr>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountState<PallasA>,
+    AccountStateCommitment<PallasA>,
+    AccountStateCommitment<PallasA>,
+    CurveTreeWitnessPath<L, PallasParameters, VestaParameters>,
+    CurveTreeWitnessPath<L, PallasParameters, VestaParameters>,
+    Root<L, 1, PallasParameters, VestaParameters>,
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    SelRerandProofParametersNew<VestaParameters, PallasParameters, VestaParams, PallasParams>,
+    AssetCommitmentParams<PallasParameters, VestaParameters>,
+    impl AccountCommitmentKeyTrait<PallasA>,
+    PallasA,
+    PallasA,
+) {
+    // Create NEW API params using setup_gens_new
+    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+        setup_gens_new::<NUM_GENS>(b"test_settlement");
+
+    // Create asset tree params (swapped curves for asset tree)
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new::<VestaPoint, PallasPoint>(NUM_GENS as u32, NUM_GENS as u32)
+    .unwrap();
+
+    let asset_comm_params = AssetCommitmentParams::new(
+        b"asset-comm-params",
+        1,
+        &account_tree_params.odd_parameters.bp_gens(),
+    );
+
+    let asset_tree_delta = asset_tree_params.odd_parameters.sl_params.delta;
+
+    setup_single_leg_settlement_common(
+        asset_tree_height,
+        account_tree_height,
+        account_tree_params,
+        asset_tree_params,
+        asset_comm_params,
+        account_comm_key,
+        enc_key_gen,
+        enc_gen,
+        asset_tree_delta,
+    )
+}
+
+pub fn setup_multi_asset_settlement_new<
+    const NUM_GENS: usize,
+    const L: usize,
+    const ASSET_TREE_M: usize,
+    const ACCOUNT_TREE_M: usize,
+>(
+    num_legs: usize,
+    asset_tree_height: usize,
+    account_tree_height: usize,
+) -> (
+    Vec<AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>>,
+    Vec<CurveTreeWitnessMultiPath<L, ASSET_TREE_M, VestaParameters, PallasParameters>>,
+    Root<L, ASSET_TREE_M, VestaParameters, PallasParameters>,
+    Vec<Leg<PallasA>>,
+    Vec<LegEncryption<PallasA>>,
+    Vec<LegEncryptionRandomness<PallasFr>>,
+    Vec<AccountState<PallasA>>,
+    Vec<AccountState<PallasA>>,
+    Vec<CurveTreeWitnessMultiPath<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>>,
+    Vec<CurveTreeWitnessMultiPath<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>>,
+    Root<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    SelRerandProofParametersNew<VestaParameters, PallasParameters, VestaParams, PallasParams>,
+    AssetCommitmentParams<PallasParameters, VestaParameters>,
+    impl AccountCommitmentKeyTrait<PallasA>,
+    PallasA,
+    PallasA,
+) {
+    let mut rng = rand::thread_rng();
+
+    let (
+        account_tree_params,
+        asset_tree_params,
+        asset_comm_params,
+        account_comm_key,
+        enc_key_gen,
+        enc_gen,
+    ) = setup_asset_and_account_params_new::<NUM_GENS>();
+
+    let (
+        ((sk_alice, pk_alice), (_, pk_alice_e)),
+        ((sk_bob, pk_bob), (_, pk_bob_e)),
+        (_, (_, pk_auditor_e)),
+    ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+    let keys = vec![(true, pk_auditor_e.0)];
+    let mut asset_data_vec = Vec::with_capacity(num_legs);
+    let mut asset_commitments = Vec::with_capacity(num_legs);
+
+    for asset_id in 1..=num_legs as u32 {
+        let asset_data = AssetData::new(
+            asset_id,
+            keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+        asset_commitments.push(asset_data.commitment);
+        asset_data_vec.push(asset_data);
+    }
+
+    let asset_tree = CurveTree::<L, ASSET_TREE_M, VestaParameters, PallasParameters>::from_leaves(
+        &asset_commitments,
+        &asset_tree_params,
+        Some(asset_tree_height),
+    );
+    let asset_tree_root = asset_tree.root_node();
+
+    let mut legs = Vec::with_capacity(num_legs);
+    let mut leg_encs = Vec::with_capacity(num_legs);
+    let mut leg_enc_rands = Vec::with_capacity(num_legs);
+    let amount = 100;
+
+    for asset_id in 1..=num_legs as u32 {
+        let (leg, leg_enc, leg_enc_rand) = setup_leg(
+            &mut rng,
+            pk_alice.0,
+            pk_bob.0,
+            pk_auditor_e.0,
+            true,
+            amount,
+            asset_id,
+            pk_alice_e.0,
+            pk_bob_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        legs.push(leg);
+        leg_encs.push(leg_enc);
+        leg_enc_rands.push(leg_enc_rand);
+    }
+
+    let mut asset_paths = Vec::new();
+    for chunk in (0..num_legs).collect::<Vec<_>>().chunks(ASSET_TREE_M) {
+        let indices: Vec<_> = chunk.iter().map(|&i| i as u32).collect();
+        let path = asset_tree.get_paths_to_leaves(&indices).unwrap();
+        asset_paths.push(path);
+    }
+
+    let alice_id = PallasFr::rand(&mut rng);
+    let mut alice_accounts = Vec::with_capacity(num_legs);
+    let mut alice_account_comms = Vec::with_capacity(num_legs);
+
+    for asset_id in 1..=num_legs as u32 {
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_alice.clone(), alice_id);
+        account.balance = 500;
+        let comm = account.commit(account_comm_key.clone()).unwrap();
+        alice_account_comms.push(comm.0);
+        alice_accounts.push(account);
+    }
+
+    let bob_id = PallasFr::rand(&mut rng);
+    let mut bob_accounts = Vec::with_capacity(num_legs);
+    let mut bob_account_comms = Vec::with_capacity(num_legs);
+
+    for asset_id in 1..=num_legs as u32 {
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_bob.clone(), bob_id);
+        account.balance = 300;
+        let comm = account.commit(account_comm_key.clone()).unwrap();
+        bob_account_comms.push(comm.0);
+        bob_accounts.push(account);
+    }
+
+    let mut all_account_comms = Vec::with_capacity(2 * num_legs);
+    all_account_comms.extend_from_slice(&alice_account_comms);
+    all_account_comms.extend_from_slice(&bob_account_comms);
+
+    let account_tree =
+        CurveTree::<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>::from_leaves(
+            &all_account_comms,
+            &account_tree_params,
+            Some(account_tree_height),
+        );
+    let account_tree_root = account_tree.root_node();
+
+    // Get paths for Alice's accounts in batches
+    let mut alice_paths = Vec::new();
+    for chunk in (0..num_legs).collect::<Vec<_>>().chunks(ACCOUNT_TREE_M) {
+        let indices: Vec<_> = chunk.iter().map(|&i| i as u32).collect();
+        let path = account_tree.get_paths_to_leaves(&indices).unwrap();
+        alice_paths.push(path);
+    }
+
+    // Get paths for Bob's accounts in batches
+    let mut bob_paths = Vec::new();
+    for chunk in (0..num_legs).collect::<Vec<_>>().chunks(ACCOUNT_TREE_M) {
+        let indices: Vec<_> = chunk.iter().map(|&i| (num_legs + i) as u32).collect();
+        let path = account_tree.get_paths_to_leaves(&indices).unwrap();
+        bob_paths.push(path);
+    }
+
+    (
+        asset_data_vec,
+        asset_paths,
+        asset_tree_root,
+        legs,
+        leg_encs,
+        leg_enc_rands,
+        alice_accounts,
+        bob_accounts,
+        alice_paths,
+        bob_paths,
+        account_tree_root,
+        account_tree_params,
+        asset_tree_params,
+        asset_comm_params,
+        account_comm_key,
+        enc_key_gen,
+        enc_gen,
+    )
 }

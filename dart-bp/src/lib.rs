@@ -60,8 +60,8 @@ pub mod util;
 pub mod account;
 pub mod account_registration;
 mod error;
-pub mod fee_account;
-pub mod leg;
+// pub mod fee_account_old;
+// pub mod leg_old;
 pub mod poseidon_impls;
 
 pub mod discrete_log;

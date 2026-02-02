@@ -3,16 +3,16 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{format, string::ToString, vec, vec::Vec};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizeMultiPathWithDivisorComms};
-use curve_tree_relations::parameters::{SelRerandProofParametersNew};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
-use crate::account::state_transition_new::AccountStateTransitionProof;
-use crate::util::{BPProof, get_verification_tuples_with_rng, prove_with_rng, handle_verification_tuples};
-use crate::{Error, TXN_EVEN_LABEL, TXN_ODD_LABEL, add_to_transcript, error::Result};
+use crate::account::state_transition_new::{AccountStateTransitionProof, AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use crate::util::{get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
+use crate::{add_to_transcript, error::Result, Error, TXN_EVEN_LABEL, TXN_ODD_LABEL};
 use crate::{RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
-use crate::account::{AccountCommitmentKeyTrait, AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use crate::account::AccountCommitmentKeyTrait;
 use ark_ec_divisors::DivisorCurve;
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -354,15 +354,10 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::tests::{get_batched_tree_with_account_comms, setup_gens_new, setup_leg};
-    use crate::account::{
-        AccountCommitmentKeyTrait,
-        AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
-    };
+    use crate::account::AccountCommitmentKeyTrait;
     use crate::account::state::AccountStateBuilder;
     use crate::account_registration::tests::new_account;
-    use crate::leg::tests::setup_keys;
-    use ark_ec::short_weierstrass::Affine;
+    use crate::leg_new::tests::setup_keys;
     use ark_std::UniformRand;
     use rand::thread_rng;
     use std::time::Instant;
@@ -372,7 +367,8 @@ mod tests {
     };
     use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters};
     use ark_vesta::VestaConfig as VestaParameters;
-
+    use crate::account::state_transition_new::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+    use crate::account::tests_new_ct::{get_batched_tree_with_account_comms, setup_gens_new, setup_leg};
 
     #[test]
     fn test_multi_asset_state_transition_two_accounts() {
