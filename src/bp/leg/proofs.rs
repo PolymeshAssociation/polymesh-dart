@@ -8,10 +8,10 @@ use bounded_collections::BoundedVec;
 use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
 use polymesh_dart_common::{LegId, MediatorId};
 use ark_ec_divisors::curves::{
-    pallas::{Point as PallasPoint},
-    vesta::{Point as VestaPoint},
+    pallas::Point as PallasPoint,
+    vesta::Point as VestaPoint,
 };
-
+use polymesh_dart_bp::leg::mediator;
 use super::WrappedCanonical;
 use super::*;
 
@@ -727,7 +727,7 @@ pub struct MediatorAffirmationProof {
     pub accept: bool,
     pub key_index: MediatorId,
 
-    inner: WrappedCanonical<bp_leg::MediatorTxnProof<PallasA>>,
+    inner: WrappedCanonical<mediator::MediatorTxnProof<PallasA>>,
 }
 
 impl MediatorAffirmationProof {
@@ -741,7 +741,7 @@ impl MediatorAffirmationProof {
         accept: bool,
     ) -> Result<Self, Error> {
         let ctx = leg_ref.context();
-        let proof = bp_leg::MediatorTxnProof::new(
+        let proof = mediator::MediatorTxnProof::new(
             rng,
             leg_enc.decode()?,
             asset_id,

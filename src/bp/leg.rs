@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use ark_ec::{CurveConfig, short_weierstrass::Affine};
+use ark_ec::{short_weierstrass::Affine, CurveConfig};
 use ark_std::{
     format,
     string::{String, ToString},
@@ -21,12 +21,12 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use polymesh_dart_bp::leg as bp_leg;
+use polymesh_dart_bp::{leg as bp_leg};
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{LegId, MediatorId};
 use ark_ec_divisors::curves::{
-    pallas::{Point as PallasPoint},
-    vesta::{Point as VestaPoint},
+    pallas::Point as PallasPoint,
+    vesta::Point as VestaPoint,
 };
 
 use super::WrappedCanonical;
@@ -635,7 +635,7 @@ impl<
     }
 }
 
-type BPSettlementTxnProof<C> = bp_leg::LegCreationProof<
+type BPSettlementTxnProof<C> = bp_leg::proofs::LegCreationProof<
     ASSET_TREE_L,
     <C as CurveTreeConfig>::F1,
     <C as CurveTreeConfig>::F0,
@@ -677,7 +677,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let root = asset_tree.root()?.root_node()?;
 
-        let proof = bp_leg::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
+        let proof = bp_leg::proofs::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             leg,
             leg_enc.decode()?,

@@ -11,7 +11,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
 use polymesh_dart_bp::account::state_transition_multi::MultiAssetStateTransitionProof;
 use polymesh_dart_bp::keys::{keygen_enc, keygen_sig, DecKey, EncKey, SigKey, VerKey};
-use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg, SettlementCreationProof};
+use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
 use rand_core::CryptoRngCore;
@@ -20,6 +20,7 @@ use ark_ec_divisors::curves::{
     vesta::{Point as VestaPoint, VestaParams},
 };
 use polymesh_dart_bp::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use polymesh_dart_bp::leg::proofs::SettlementCreationProof;
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
