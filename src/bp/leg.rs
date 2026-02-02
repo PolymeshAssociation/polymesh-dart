@@ -24,6 +24,10 @@ use bounded_collections::BoundedVec;
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{LegId, MediatorId};
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 
 use super::WrappedCanonical;
 use crate::curve_tree::*;
@@ -627,7 +631,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let root = asset_tree.root()?.root_node()?;
 
-        let proof = bp_leg::LegCreationProof::new(
+        let proof = bp_leg::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             leg,
             leg_enc.decode()?,

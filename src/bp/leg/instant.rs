@@ -8,6 +8,10 @@ use bounded_collections::BoundedVec;
 
 use polymesh_dart_bp::account as bp_account;
 use polymesh_dart_common::LegId;
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 
 use crate::curve_tree::*;
 use crate::*;
@@ -183,7 +187,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             leg_enc.decode()?,
@@ -307,7 +311,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             leg_enc.decode()?,

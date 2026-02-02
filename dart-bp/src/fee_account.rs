@@ -1436,7 +1436,7 @@ pub mod tests {
     use crate::keys::SigKey;
 use crate::account_registration::tests::setup_comm_key;
 use super::*;
-    use crate::account::tests_new_ct::setup_gens_new;
+    use crate::account::tests::setup_gens_new;
     use crate::keys::{keygen_sig};
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec_divisors::curves::{

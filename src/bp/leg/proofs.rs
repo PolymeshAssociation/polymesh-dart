@@ -7,6 +7,10 @@ use bounded_collections::BoundedVec;
 
 use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
 use polymesh_dart_common::{LegId, MediatorId};
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 
 use super::WrappedCanonical;
 use super::*;
@@ -149,7 +153,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new(
+        let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             leg_enc.decode()?,
@@ -272,7 +276,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new(
+        let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             leg_enc.decode()?,
             leg_enc_rand.decode()?,
@@ -395,7 +399,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new(
+        let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             leg_enc.decode()?,
@@ -518,7 +522,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new(
+        let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             leg_enc.decode()?,
             leg_enc_rand.decode()?,
@@ -641,7 +645,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::SenderReverseTxnProof::new(
+        let (proof, nullifier) = bp_account::SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             leg_enc.decode()?,

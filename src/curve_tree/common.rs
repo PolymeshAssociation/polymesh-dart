@@ -246,13 +246,14 @@ pub fn update_inner_node<
     const M: usize,
     P0: SWCurveConfig + Copy + Send,
     P1: SWCurveConfig<BaseField = P0::ScalarField, ScalarField = P0::BaseField> + Copy + Send,
+    DLogParams: DiscreteLogParameters,
 >(
     commitments: &mut [Affine<P1>; M],
     child_index: ChildIndex,
     old_child: Option<ChildCommitments<M, P0>>,
     new_child: ChildCommitments<M, P0>,
     delta: &Affine<P0>,
-    parameters: &SingleLayerProofParameters<P1>,
+    parameters: &SingleLayerProofParametersNew<P1, DLogParams>,
 ) -> Result<[P0::BaseField; M], Error> {
     let mut new_x_coords = [P0::BaseField::zero(); M];
     for (tree_index, new_x_coord) in new_x_coords.iter_mut().enumerate() {
@@ -669,7 +670,7 @@ macro_rules! impl_curve_tree_with_backend {
                 self.backend.height()$($await)*
             }
 
-            pub fn parameters(&self) -> &SelRerandProofParameters<C::P0, C::P1> {
+            pub fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
                 C::parameters()
             }
 

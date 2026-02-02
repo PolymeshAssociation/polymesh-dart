@@ -4,16 +4,19 @@ use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::CurveTree;
-use curve_tree_relations::parameters::SelRerandProofParameters;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
 use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg_old::{};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::verify_rmc;
 use ark_ec::CurveGroup;
-use polymesh_dart_bp::leg_new::{Leg, LegEncryption, LegEncryptionRandomness};
+use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -34,14 +37,14 @@ fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
 }
 
 fn create_shared_setup(label: &[u8]) -> (
-    SelRerandProofParameters<PallasParameters, VestaParameters>,
+    SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
     impl AccountCommitmentKeyTrait<PallasA>,
     PallasA,
     PallasA,
 ) {
     const NUM_GENS: usize = 1 << 12;
 
-    let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+    let account_tree_params = SelRerandProofParametersNew::<PallasParameters, VestaParameters, PallasParams, VestaParams>::new::<PallasPoint, VestaPoint>(
         NUM_GENS as u32,
         NUM_GENS as u32,
     )
@@ -106,10 +109,10 @@ fn create_account_and_tree<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyT
     rng: &mut R,
     sk: SigKey<PallasA>,
     account_comm_key: K,
-    account_tree_params: &SelRerandProofParameters<PallasParameters, VestaParameters>,
+    account_tree_params: &SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
 ) -> (
     AccountState<PallasA>,
-    CurveTree<512, 1, PallasParameters, VestaParameters>,
+    CurveTree<64, 1, PallasParameters, VestaParameters>,
 ) {
     let asset_id = 1;
     let id = PallasFr::rand(rng);
@@ -119,10 +122,10 @@ fn create_account_and_tree<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyT
 
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let set = vec![account_comm.0];
-    let account_tree = CurveTree::<512, 1, PallasParameters, VestaParameters>::from_leaves(
+    let account_tree = CurveTree::<64, 1, PallasParameters, VestaParameters>::from_leaves(
         &set,
         &account_tree_params,
-        Some(4),
+        Some(5),
     );
 
     (account, account_tree)
@@ -158,7 +161,7 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsSenderTxnProof::new(
+    let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         amount,
         leg_enc.clone(),
@@ -180,7 +183,7 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.clone(),
                     &root,
@@ -227,7 +230,7 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
+    let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         leg_enc.clone(),
         leg_enc_rand.clone(),
@@ -248,7 +251,7 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.clone(),
                     &root,
@@ -296,7 +299,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsSenderTxnProof::new(
+    let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         amount,
         leg_enc.clone(),
@@ -321,7 +324,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
             let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.clone(),
                     &root,
@@ -369,7 +372,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsReceiverTxnProof::new(
+    let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         leg_enc.clone(),
         leg_enc_rand.clone(),
@@ -393,7 +396,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
             let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
             proof
-                .verify(
+                .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.clone(),
                     &root,

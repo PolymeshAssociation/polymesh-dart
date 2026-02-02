@@ -16,6 +16,10 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use polymesh_dart_bp::fee_account as bp_fee_account;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 
 use super::encode::*;
 use super::*;
@@ -495,7 +499,7 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new(
+        let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             &pk.get_affine()?,
             amount,
@@ -876,7 +880,7 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_fee_account::FeePaymentProof::new(
+        let (proof, nullifier) = bp_fee_account::FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             amount,
             &state_change.current_state,

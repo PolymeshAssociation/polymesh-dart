@@ -54,23 +54,11 @@ name = "affirmation_proofs"
 harness = false
 
 [[bench]]
-name = "affirmation_proofs_new"
-harness = false
-
-[[bench]]
 name = "fee_account_proofs"
 harness = false
 
 [[bench]]
-name = "fee_account_proofs_new"
-harness = false
-
-[[bench]]
 name = "settlement_proofs"
-harness = false
-
-[[bench]]
-name = "settlement_proofs_new"
 harness = false
 
 [features]
@@ -95,7 +83,9 @@ std = [
 	"hex/std",
 	"once_cell/std",
 	"lazy_static",
-	"itertools/use_std"
+	"itertools/use_std",
+	"ark-dlog-gadget/std",
+	"ark-ec-divisors/std"
 ]
 
 # Turn on this feature for faster proof verification.
@@ -103,7 +93,9 @@ verifier_parallel = [
 	"parallel",
 	"ark-ec/parallel",
 	"bulletproofs/parallel_full",
-	"curve_tree_relations/parallel_full"
+	"curve_tree_relations/parallel_full",
+	"ark-ec-divisors/parallel",
+	"ark-dlog-gadget/parallel"
 ]
 
 asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]

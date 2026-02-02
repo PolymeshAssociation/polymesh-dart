@@ -60,27 +60,17 @@ pub mod util;
 pub mod account;
 pub mod account_registration;
 mod error;
-// pub mod fee_account_old;
-// pub mod leg_old;
 pub mod poseidon_impls;
 
 pub mod discrete_log;
-pub mod leg_new;
-pub mod fee_account_new;
+pub mod leg;
+pub mod fee_account;
 
 pub use error::Error;
 
 pub use polymesh_dart_common::{
     AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE, PendingTxnCounter,
 };
-
-// TODO: General question: Should i be hashing a generator/commitment every time i use it so that the instance is always hashed in order of invoking the protocol?
-
-// TODO: Check if root should be added to the transcript before its used.
-
-// TODO: Ensure all intermediate secret values are being zeroed.
-
-// TODO: All the verifications can be sped up using `RandomizedMultChecker`. Secondly this can be combined with Bulletproof's MSM
 
 // Venue creating settlement
 // - takes sender key, receiver key, amount, asset id, and auditor/mediator key

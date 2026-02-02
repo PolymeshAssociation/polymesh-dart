@@ -1,5 +1,5 @@
 use core::marker::PhantomData;
-
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::AffineRepr;
 pub use ark_ec::CurveConfig;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
@@ -17,7 +17,11 @@ use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_common::MAX_ASSET_KEYS;
 
 use codec::{Decode, Encode};
-use curve_tree_relations::parameters::{SelRerandProofParameters, SingleLayerParameters, SingleLayerProofParameters};
+use curve_tree_relations::parameters::{SelRerandProofParametersNew, SingleLayerParameters, SingleLayerProofParametersNew};
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 use scale_info::TypeInfo;
 
 use super::*;
@@ -40,8 +44,8 @@ const ASSET_COMMITMENT_PARAMETERS_LABEL: &[u8] = b"asset-comm-params";
 
 #[cfg(feature = "std")]
 lazy_static::lazy_static! {
-    static ref CURVE_TREE_PARAMETERS_PALLAS: SingleLayerProofParameters<PallasParameters> = SingleLayerProofParameters::from(SingleLayerParameters::<PallasParameters>::new_using_label(CURVE_TREE_PARAMETERS_PALLAS_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Pallas"));
-    static ref CURVE_TREE_PARAMETERS_VESTA: SingleLayerProofParameters<VestaParameters> = SingleLayerProofParameters::from(SingleLayerParameters::<VestaParameters>::new_using_label(CURVE_TREE_PARAMETERS_VESTA_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Vesta"));
+    static ref CURVE_TREE_PARAMETERS_PALLAS: SingleLayerProofParametersNew<PallasParameters, VestaParams> = SingleLayerProofParametersNew::from_single_layer_params::<PallasPoint>(SingleLayerParameters::<PallasParameters>::new_using_label(CURVE_TREE_PARAMETERS_PALLAS_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Pallas"));
+    static ref CURVE_TREE_PARAMETERS_VESTA: SingleLayerProofParametersNew<VestaParameters, PallasParams> = SingleLayerProofParametersNew::from_single_layer_params::<VestaPoint>(SingleLayerParameters::<VestaParameters>::new_using_label(CURVE_TREE_PARAMETERS_VESTA_LABEL, MAX_CURVE_TREE_GENS as u32).expect("Failed to create SingleLayerParameters for Vesta"));
     static ref ASSET_CURVE_TREE_PARAMETERS: CurveTreeParameters<AssetTreeConfig> = AssetTreeConfig::build_parameters();
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
@@ -53,9 +57,9 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(not(feature = "std"))]
-static mut CURVE_TREE_PARAMETERS_PALLAS: Option<SingleLayerProofParameters<PallasParameters>> = None;
+static mut CURVE_TREE_PARAMETERS_PALLAS: Option<SingleLayerProofParametersNew<PallasParameters, PallasParams>> = None;
 #[cfg(not(feature = "std"))]
-static mut CURVE_TREE_PARAMETERS_VESTA: Option<SingleLayerProofParameters<VestaParameters>> = None;
+static mut CURVE_TREE_PARAMETERS_VESTA: Option<SingleLayerProofParametersNew<VestaParameters, VestaParams>> = None;
 #[cfg(not(feature = "std"))]
 static mut ASSET_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AssetTreeConfig>> = None;
 #[cfg(not(feature = "std"))]
@@ -64,12 +68,12 @@ static mut ASSET_COMMITMENT_PARAMETERS: Option<AssetCommitmentParameters<AssetTr
 static mut ACCOUNT_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AccountTreeConfig>> = None;
 
 #[cfg(feature = "std")]
-pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParameters<PallasParameters> {
+pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     &CURVE_TREE_PARAMETERS_PALLAS
 }
 
 #[cfg(feature = "std")]
-pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParameters<VestaParameters> {
+pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParametersNew<VestaParameters, PallasParams> {
     &CURVE_TREE_PARAMETERS_VESTA
 }
 
@@ -90,10 +94,10 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
-pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParameters<PallasParameters> {
+pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParametersNew<PallasParameters, PallasParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_PALLAS.is_none() {
-            let parameters = SingleLayerProofParameters::from(SingleLayerParameters::<PallasParameters>::new_using_label(
+            let parameters = SingleLayerProofParametersNew::from_single_layer_params::<PallasPoint>(SingleLayerParameters::<PallasParameters>::new_using_label(
                 CURVE_TREE_PARAMETERS_PALLAS_LABEL,
                 MAX_CURVE_TREE_GENS as u32,
             )
@@ -106,10 +110,10 @@ pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParameters<Pall
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
-pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParameters<VestaParameters> {
+pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParametersNew<VestaParameters, VestaParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_VESTA.is_none() {
-            let parameters = SingleLayerProofParameters::from(SingleLayerParameters::<VestaParameters>::new_using_label(
+            let parameters = SingleLayerProofParametersNew::from_single_layer_params::<VestaPoint>(SingleLayerParameters::<VestaParameters>::new_using_label(
                 CURVE_TREE_PARAMETERS_VESTA_LABEL,
                 MAX_CURVE_TREE_GENS as u32,
             )
@@ -141,7 +145,7 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
             let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
                 ASSET_COMMITMENT_PARAMETERS_LABEL,
                 MAX_ASSET_KEYS as u32,
-                &tree_parameters.even_parameters.bp_gens,
+                &tree_parameters.even_parameters.bp_gens(),
             );
             ASSET_COMMITMENT_PARAMETERS = Some(parameters);
         }
@@ -163,8 +167,8 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 #[cfg(not(feature = "parallel"))]
 fn get_pallas_and_vesta_layer_parameters() -> (
-    SingleLayerProofParameters<PallasParameters>,
-    SingleLayerProofParameters<VestaParameters>,
+    SingleLayerProofParametersNew<PallasParameters, PallasParams>,
+    SingleLayerProofParametersNew<VestaParameters, VestaParams>,
 ) {
     (
         get_pallas_layer_parameters().clone(),
@@ -174,8 +178,8 @@ fn get_pallas_and_vesta_layer_parameters() -> (
 
 #[cfg(feature = "parallel")]
 fn get_pallas_and_vesta_layer_parameters() -> (
-    SingleLayerProofParameters<PallasParameters>,
-    SingleLayerProofParameters<VestaParameters>,
+    SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+    SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
     rayon::join(
         || get_pallas_layer_parameters().clone(),
@@ -215,10 +219,12 @@ pub trait CurveTreeConfig:
         + Copy
         + PartialEq
         + Eq;
+    type DLogParams0: DiscreteLogParameters;
+    type DLogParams1: DiscreteLogParameters;
 
-    fn build_parameters() -> SelRerandProofParameters<Self::P0, Self::P1>;
+    fn build_parameters() -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1>;
 
-    fn parameters() -> &'static SelRerandProofParameters<Self::P0, Self::P1>;
+    fn parameters() -> &'static SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1>;
 }
 
 // NOTE: Currently build_parameters uses unsafe but its also called from unsafe code except in tests or
@@ -237,16 +243,18 @@ impl CurveTreeConfig for AssetTreeConfig {
     type F1 = <PallasParameters as CurveConfig>::ScalarField;
     type P0 = VestaParameters;
     type P1 = PallasParameters;
+    type DLogParams0 = VestaParams;
+    type DLogParams1 = PallasParams;
 
-    fn build_parameters() -> SelRerandProofParameters<Self::P0, Self::P1> {
+    fn build_parameters() -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
-        SelRerandProofParameters {
+        SelRerandProofParametersNew {
             even_parameters: vesta_params,
             odd_parameters: pallas_params,
         }
     }
 
-    fn parameters() -> &'static SelRerandProofParameters<Self::P0, Self::P1> {
+    fn parameters() -> &'static SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         get_asset_curve_tree_parameters()
     }
 }
@@ -264,16 +272,18 @@ impl CurveTreeConfig for AccountTreeConfig {
     type F1 = <VestaParameters as CurveConfig>::ScalarField;
     type P0 = PallasParameters;
     type P1 = VestaParameters;
+    type DLogParams0 = PallasParams;
+    type DLogParams1 = VestaParams;
 
-    fn build_parameters() -> SelRerandProofParameters<Self::P0, Self::P1> {
+    fn build_parameters() -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
-        SelRerandProofParameters {
+        SelRerandProofParametersNew {
             odd_parameters: vesta_params,
             even_parameters: pallas_params,
         }
     }
 
-    fn parameters() -> &'static SelRerandProofParameters<Self::P0, Self::P1> {
+    fn parameters() -> &'static SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         get_account_curve_tree_parameters()
     }
 }
@@ -291,16 +301,18 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     type F1 = <VestaParameters as CurveConfig>::ScalarField;
     type P0 = PallasParameters;
     type P1 = VestaParameters;
+    type DLogParams0 = PallasParams;
+    type DLogParams1 = VestaParams;
 
-    fn build_parameters() -> SelRerandProofParameters<Self::P0, Self::P1> {
+    fn build_parameters() -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
-        SelRerandProofParameters {
+        SelRerandProofParametersNew {
             odd_parameters: vesta_params,
             even_parameters: pallas_params,
         }
     }
 
-    fn parameters() -> &'static SelRerandProofParameters<Self::P0, Self::P1> {
+    fn parameters() -> &'static SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         get_account_curve_tree_parameters()
     }
 }
@@ -317,13 +329,13 @@ impl WrappedCurveTreeParameters {
     }
 
     /// Decodes the wrapped value back into its original type `T`.
-    pub fn decode<C: CurveTreeConfig>(&self) -> Result<SelRerandProofParameters<C::P0, C::P1>, Error> {
+    pub fn decode<C: CurveTreeConfig>(&self) -> Result<SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1>, Error> {
         Ok(CurveTreeParameters::<C>::deserialize_uncompressed_unchecked(&self.0[..])?)
     }
 }
 
 pub type CurveTreeParameters<C> =
-SelRerandProofParameters<<C as CurveTreeConfig>::P0, <C as CurveTreeConfig>::P1>;
+SelRerandProofParametersNew<<C as CurveTreeConfig>::P0, <C as CurveTreeConfig>::P1, <C as CurveTreeConfig>::DLogParams0, <C as CurveTreeConfig>::DLogParams1>;
 pub type CurveTreePath<const L: usize, C> =
     CurveTreeWitnessPath<L, <C as CurveTreeConfig>::P0, <C as CurveTreeConfig>::P1>;
 
@@ -1128,7 +1140,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, 
                 let new_child = new_child.decompress::<C::P1>()?;
 
                 // Update the node.
-                let new_x_coords = update_inner_node::<L, M, C::P1, C::P0>(
+                let new_x_coords = update_inner_node::<L, M, C::P1, C::P0, _>(
                     commitments,
                     child_index,
                     old_child,
@@ -1145,7 +1157,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, 
                 let new_child = new_child.decompress::<C::P0>()?;
 
                 // Update the node.
-                let new_x_coords = update_inner_node::<L, M, C::P0, C::P1>(
+                let new_x_coords = update_inner_node::<L, M, C::P0, C::P1, _>(
                     commitments,
                     child_index,
                     old_child,
