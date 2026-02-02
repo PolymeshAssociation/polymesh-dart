@@ -25,8 +25,8 @@ use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{LegId, MediatorId};
 use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
+    pallas::{Point as PallasPoint},
+    vesta::{Point as VestaPoint},
 };
 
 use super::WrappedCanonical;

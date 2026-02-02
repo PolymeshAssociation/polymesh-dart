@@ -9,8 +9,8 @@ use bounded_collections::BoundedVec;
 use polymesh_dart_bp::account as bp_account;
 use polymesh_dart_common::LegId;
 use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
+    pallas::{Point as PallasPoint},
+    vesta::{Point as VestaPoint},
 };
 
 use crate::curve_tree::*;
