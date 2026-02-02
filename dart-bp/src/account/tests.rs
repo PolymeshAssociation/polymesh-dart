@@ -2,8 +2,8 @@ use crate::leg::Leg;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::account_registration::tests::{new_account, setup_comm_key};
 use crate::leg::tests::setup_keys;
-use crate::leg::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, MediatorTxnProof, LEG_TXN_EVEN_LABEL, MEDIATOR_TXN_LABEL};
-use crate::leg::{LegCreationProof, LEG_TXN_ODD_LABEL};
+use crate::leg::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, LEG_TXN_EVEN_LABEL};
+use crate::leg::LEG_TXN_ODD_LABEL;
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
@@ -40,7 +40,9 @@ use crate::account::{
 };
 use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
 use crate::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
-use crate::leg::SettlementCreationProof;
+use crate::leg::mediator::{MediatorTxnProof, MEDIATOR_TXN_LABEL};
+use crate::leg::proofs::LegCreationProof;
+use crate::leg::proofs::SettlementCreationProof;
 
 #[test]
 fn send_txn() {
