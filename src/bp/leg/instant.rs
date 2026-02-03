@@ -12,7 +12,8 @@ use ark_ec_divisors::curves::{
     pallas::{Point as PallasPoint},
     vesta::{Point as VestaPoint},
 };
-
+use ark_std::UniformRand;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use crate::curve_tree::*;
 use crate::*;
 
@@ -231,6 +232,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -242,8 +246,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }
@@ -355,6 +365,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -366,8 +379,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }

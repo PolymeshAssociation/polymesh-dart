@@ -107,6 +107,10 @@ pub enum Error {
     /// Too many proofs in batched proof.
     #[error("Too many proofs in batched proof")]
     TooManyBatchedProofs,
+
+    /// RMC failed to verify.
+    #[error("RMC failed to verify")]
+    RMCVerifyError,
 }
 
 impl From<ark_serialize::SerializationError> for Error {

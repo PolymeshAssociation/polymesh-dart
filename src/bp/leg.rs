@@ -8,11 +8,7 @@ use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::{short_weierstrass::Affine, CurveConfig};
-use ark_std::{
-    format,
-    string::{String, ToString},
-    vec::Vec,
-};
+use ark_std::{format, string::{String, ToString}, vec::Vec, UniformRand};
 use bulletproofs::r1cs::VerificationTuple;
 use curve_tree_relations::curve_tree::Root;
 
@@ -28,7 +24,7 @@ use ark_ec_divisors::curves::{
     pallas::Point as PallasPoint,
     vesta::Point as VestaPoint,
 };
-
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
@@ -505,6 +501,7 @@ impl<
             })?;
         let root = root.root_node()?;
         let memo = &*self.memo;
+        // NOTE: If we don't care which leg failed, then leg.verify could accept an RMC
         self.legs.par_iter().enumerate().try_for_each_init(
             || rng.clone(),
             |rng, (idx, leg)| {
@@ -717,6 +714,11 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
+
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
+        
         proof.verify(
             rng,
             leg_enc.clone(),
@@ -726,8 +728,14 @@ impl<
             asset_comm_params,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 

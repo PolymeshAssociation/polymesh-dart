@@ -42,10 +42,11 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
-
 pub use common::ensure_same_accounts;
 pub use state_transition::AccountStateTransitionProofBuilder;
 pub use state_transition::AccountStateTransitionProofVerifier;
+
+// For most protocols, only leaf level rmc is sufficient
 
 /// This is the proof for "send" txn. Report section 5.1.7
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
