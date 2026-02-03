@@ -5,12 +5,14 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use polymesh_dart_bp::{account as bp_account, leg as bp_leg};
+use polymesh_dart_bp::{account as bp_account};
 use polymesh_dart_common::{LegId, MediatorId};
 use ark_ec_divisors::curves::{
     pallas::Point as PallasPoint,
     vesta::Point as VestaPoint,
 };
+use ark_std::UniformRand;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::leg::mediator;
 use super::WrappedCanonical;
 use super::*;
@@ -186,6 +188,7 @@ impl<
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let start = std::time::Instant::now();
         // Get the curve tree root.
         let root = tree_roots
             .get_block_root(self.root_block.into())
@@ -193,23 +196,41 @@ impl<
                 log::error!("Invalid root for sender affirmation proof");
                 Error::CurveTreeRootNotFound
             })?;
+        println!("root getting {:?}", start.elapsed());
         let root = root.root_node()?;
+        println!("root decompress {:?}", start.elapsed());
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        println!("proof decompress {:?}", start.elapsed());
+        let leg_enc = leg_enc.decode()?;
+        println!("leg decompress {:?}", start.elapsed());
+        let nullifier = self.nullifier.get_affine()?;
+        let acc_cm = self.updated_account_state_commitment.as_commitment()?;
+        println!("pre-verify {:?}", start.elapsed());
+
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc,
             &root,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
+            acc_cm,
+            nullifier,
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }
@@ -319,6 +340,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -330,8 +354,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }
@@ -443,6 +473,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -454,8 +487,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }
@@ -565,6 +604,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -576,8 +618,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }
@@ -689,6 +737,9 @@ impl<
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
             leg_enc.decode()?,
@@ -700,8 +751,14 @@ impl<
             dart_gens().account_comm_key(),
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }

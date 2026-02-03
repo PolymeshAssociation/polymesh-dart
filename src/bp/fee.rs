@@ -20,7 +20,8 @@ use ark_ec_divisors::curves::{
     pallas::{PallasParams, Point as PallasPoint},
     vesta::{Point as VestaPoint, VestaParams},
 };
-
+use ark_std::UniformRand;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use super::encode::*;
 use super::*;
 use crate::*;
@@ -530,6 +531,9 @@ impl<
         ctx: &[u8],
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
     ) -> Result<(), Error> {
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         let proof = self.inner.decode()?;
         proof.verify(
             self.account.get_affine()?,
@@ -542,8 +546,14 @@ impl<
             C::parameters(),
             dart_gens().account_comm_key(),
             rng,
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 
@@ -690,6 +700,7 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
+        // NOTE: This could single pair of RMC if allowed to pass the pair in proof.verify
         self.proofs
             .par_iter()
             .try_for_each_init(|| rng.clone(), |rng, proof| proof.verify(rng, ctx, &root))?;
@@ -909,6 +920,9 @@ impl<
         ctx: &[u8],
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
         // Get the curve tree root.
         let root = tree_roots
             .get_block_root(self.root_block.into())
@@ -928,8 +942,14 @@ impl<
             tree_roots.params(),
             dart_gens().account_comm_key(),
             rng,
-            None,
+            rmc,
         )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 }

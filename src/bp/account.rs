@@ -7,9 +7,11 @@ use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
+use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
 use bounded_collections::BoundedVec;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
@@ -456,6 +458,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
             return self.verify(identity, tree_params, rng);
         }
 
+        // NOTE: This could use single RMC if allowed to pass in batched_verify
         let tuples = self
             .proofs
             .par_iter()
@@ -573,6 +576,9 @@ impl AccountAssetRegistrationProof {
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
+
+        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+        
         proof.verify(
             rng,
             id,
@@ -587,7 +593,7 @@ impl AccountAssetRegistrationProof {
             tree_params.even_parameters.bp_gens(),
             &params.params,
             None,
-            None,
+            Some(&mut rmc),
         )?;
         Ok(())
     }
@@ -603,6 +609,8 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
+        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+        
         Ok(proof.verify_and_return_tuples(
             id,
             &self.account.get_affine()?,
@@ -617,7 +625,7 @@ impl AccountAssetRegistrationProof {
             &params.params,
             None,
             rng,
-            None,
+            Some(&mut rmc),
         )?)
     }
 }
