@@ -498,8 +498,8 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
 
         bulletproofs::r1cs::batch_verify_with_rng(
             tuples,
-            &tree_params.even_parameters.pc_gens,
-            &tree_params.even_parameters.bp_gens,
+            tree_params.even_parameters.pc_gens(),
+            tree_params.even_parameters.bp_gens(),
             rng,
         )?;
 
