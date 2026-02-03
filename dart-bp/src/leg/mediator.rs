@@ -9,6 +9,7 @@ use polymesh_dart_common::AssetId;
 use zeroize::Zeroize;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use ark_std::UniformRand;
+use ark_std::{vec, vec::Vec};
 use crate::{add_to_transcript, error, Error, LEG_ENC_LABEL, NONCE_LABEL};
 use crate::leg::LegEncryption;
 
