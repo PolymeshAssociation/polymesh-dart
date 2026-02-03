@@ -57,9 +57,9 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(not(feature = "std"))]
-static mut CURVE_TREE_PARAMETERS_PALLAS: Option<SingleLayerProofParametersNew<PallasParameters, PallasParams>> = None;
+static mut CURVE_TREE_PARAMETERS_PALLAS: Option<SingleLayerProofParametersNew<PallasParameters, VestaParams>> = None;
 #[cfg(not(feature = "std"))]
-static mut CURVE_TREE_PARAMETERS_VESTA: Option<SingleLayerProofParametersNew<VestaParameters, VestaParams>> = None;
+static mut CURVE_TREE_PARAMETERS_VESTA: Option<SingleLayerProofParametersNew<VestaParameters, PallasParams>> = None;
 #[cfg(not(feature = "std"))]
 static mut ASSET_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AssetTreeConfig>> = None;
 #[cfg(not(feature = "std"))]
@@ -94,7 +94,7 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
-pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParametersNew<PallasParameters, PallasParams> {
+pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_PALLAS.is_none() {
             let parameters = SingleLayerProofParametersNew::from_single_layer_params::<PallasPoint>(SingleLayerParameters::<PallasParameters>::new_using_label(
@@ -110,7 +110,7 @@ pub fn get_pallas_layer_parameters() -> &'static SingleLayerProofParametersNew<P
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
-pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParametersNew<VestaParameters, VestaParams> {
+pub fn get_vesta_layer_parameters() -> &'static SingleLayerProofParametersNew<VestaParameters, PallasParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_VESTA.is_none() {
             let parameters = SingleLayerProofParametersNew::from_single_layer_params::<VestaPoint>(SingleLayerParameters::<VestaParameters>::new_using_label(
@@ -167,8 +167,8 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 #[cfg(not(feature = "parallel"))]
 fn get_pallas_and_vesta_layer_parameters() -> (
-    SingleLayerProofParametersNew<PallasParameters, PallasParams>,
-    SingleLayerProofParametersNew<VestaParameters, VestaParams>,
+    SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+    SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
     (
         get_pallas_layer_parameters().clone(),
