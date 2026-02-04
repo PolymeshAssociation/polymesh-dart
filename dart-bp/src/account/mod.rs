@@ -1,20 +1,19 @@
 // pub mod common;
 pub mod common;
+pub mod mint;
+pub mod pob;
 pub mod state;
 pub mod state_transition;
 pub mod state_transition_multi;
-pub mod mint;
 pub mod transparent;
-pub mod pob;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use common::{
-    CommonStateChangeProof, CommonStateChangeProver, StateChangeVerifier,
-    ensure_correct_balance_change, BalanceChangeConfig, BalanceChangeProof,
-    BalanceChangeProver, LegProverConfig,
-    LegVerifierConfig,
+    BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof,
+    CommonStateChangeProver, LegProverConfig, LegVerifierConfig, StateChangeVerifier,
+    ensure_correct_balance_change,
 };
 
 pub use state::{
@@ -26,8 +25,8 @@ pub use state_transition::AccountStateTransitionProof;
 pub use state_transition_multi::MultiAssetStateTransitionProof;
 
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::util::{handle_verification_tuples, prove_with_rng, BPProof};
-use crate::{error::Result, Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL};
+use crate::util::{BPProof, handle_verification_tuples, prove_with_rng};
+use crate::{Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
@@ -35,6 +34,7 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::ToString, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+pub use common::ensure_same_accounts;
 use curve_tree_relations::curve_tree::Root;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
@@ -42,7 +42,6 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
-pub use common::ensure_same_accounts;
 pub use state_transition::AccountStateTransitionProofBuilder;
 pub use state_transition::AccountStateTransitionProofVerifier;
 
@@ -274,9 +273,7 @@ impl<
                 rmc_0,
             )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -607,10 +604,7 @@ impl<
                 rmc_0,
             )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -779,8 +773,10 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         let (mut proof, nullifier) =
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
@@ -802,8 +798,13 @@ impl<
                 &mut odd_prover,
             )?;
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
         proof.common_proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -960,10 +961,7 @@ impl<
                 rmc_0,
             )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -1174,8 +1172,13 @@ impl<
                 &mut odd_prover,
             )?;
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
         proof.common_proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -1331,10 +1334,7 @@ impl<
             rmc_0,
         )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -1523,8 +1523,10 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         let (mut proof, nullifier) =
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
@@ -1546,8 +1548,13 @@ impl<
                 &mut odd_prover,
             )?;
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
         proof.common_proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -1687,10 +1694,7 @@ impl<
                 rmc_0,
             )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     pub fn verify_and_return_tuples<
@@ -1876,8 +1880,10 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         let (mut proof, nullifier) =
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
@@ -1899,8 +1905,13 @@ impl<
                 &mut odd_prover,
             )?;
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
         proof.common_proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -2040,10 +2051,7 @@ impl<
                 rmc_0,
             )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     pub fn verify_and_return_tuples<
@@ -2182,7 +2190,6 @@ impl<
     }
 }
 
-
 /// This is the proof for sender sending counter update txn. Report calls it txn_cu
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct SenderCounterUpdateTxnProof<
@@ -2302,33 +2309,28 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
-        let common_prover = CommonStateChangeProver::init_with_given_prover::<
-            _,
-            D0,
-            D1,
-            Parameters0,
-            Parameters1,
-        >(
-            rng,
-            vec![LegProverConfig {
-                encryption: leg_enc,
-                randomness: leg_enc_rand,
-                is_sender: true,
-                has_balance_changed: false,
-            }],
-            account,
-            updated_account,
-            updated_account_commitment,
-            leaf_path,
-            account_tree_root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-            odd_prover,
-        )?;
+        let common_prover =
+            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                vec![LegProverConfig {
+                    encryption: leg_enc,
+                    randomness: leg_enc_rand,
+                    is_sender: true,
+                    has_balance_changed: false,
+                }],
+                account,
+                updated_account,
+                updated_account_commitment,
+                leaf_path,
+                account_tree_root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                even_prover,
+                odd_prover,
+            )?;
 
         let nullifier = common_prover.nullifier;
 
@@ -2383,9 +2385,7 @@ impl<
                 rmc_0,
             )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -2625,33 +2625,28 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
-        let common_prover = CommonStateChangeProver::init_with_given_prover::<
-            _,
-            D0,
-            D1,
-            Parameters0,
-            Parameters1,
-        >(
-            rng,
-            vec![LegProverConfig {
-                encryption: leg_enc,
-                randomness: leg_enc_rand,
-                is_sender: false,
-                has_balance_changed: false,
-            }],
-            account,
-            updated_account,
-            updated_account_commitment,
-            leaf_path,
-            account_tree_root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-            odd_prover,
-        )?;
+        let common_prover =
+            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                vec![LegProverConfig {
+                    encryption: leg_enc,
+                    randomness: leg_enc_rand,
+                    is_sender: false,
+                    has_balance_changed: false,
+                }],
+                account,
+                updated_account,
+                updated_account_commitment,
+                leaf_path,
+                account_tree_root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                even_prover,
+                odd_prover,
+            )?;
 
         let nullifier = common_prover.nullifier;
 
@@ -2706,9 +2701,7 @@ impl<
                 rmc_0,
             )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification

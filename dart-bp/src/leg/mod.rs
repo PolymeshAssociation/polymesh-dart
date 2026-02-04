@@ -4,28 +4,28 @@ pub mod proofs;
 #[cfg(test)]
 pub mod tests;
 
-use core::iter;
-use crate::util::{bp_gens_for_vec_commitment};
-use crate::{error::Result, Error};
+pub use self::mediator::MediatorTxnProof;
+pub use self::proofs::{LegCreationProof, SettlementCreationProof};
+use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::util::bp_gens_for_vec_commitment;
+use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
+use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{vec, vec::Vec};
+use bulletproofs::BulletproofGens;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use core::iter;
+use digest::Digest;
+use dock_crypto_utils::aliases::FullDigest;
+use dock_crypto_utils::concat_slices;
+use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
 use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use dock_crypto_utils::aliases::FullDigest;
-use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
-use ark_pallas::PallasConfig;
-use bulletproofs::BulletproofGens;
-use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use digest::Digest;
-use dock_crypto_utils::hashing_utils::affine_group_elem_from_try_and_incr;
-use dock_crypto_utils::concat_slices;
-use crate::discrete_log::solve_discrete_log_bsgs;
-pub use self::mediator::MediatorTxnProof;
-pub use self::proofs::{LegCreationProof, SettlementCreationProof};
 
 pub const LEG_TXN_ODD_LABEL: &[u8; 17] = b"leg-txn-odd-level";
 pub const LEG_TXN_EVEN_LABEL: &[u8; 18] = b"leg-txn-even-level";
@@ -62,10 +62,10 @@ impl<
 
 impl<
     G1: SWCurveConfig<
-        ScalarField = <PallasConfig as CurveConfig>::BaseField,
-        BaseField = <PallasConfig as CurveConfig>::ScalarField,
-    > + Clone
-    + Copy,
+            ScalarField = <PallasConfig as CurveConfig>::BaseField,
+            BaseField = <PallasConfig as CurveConfig>::ScalarField,
+        > + Clone
+        + Copy,
 > AssetCommitmentParams<PallasConfig, G1>
 {
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
@@ -545,4 +545,3 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         encrypted.into_group() - eph_pk * sk_inv
     }
 }
-

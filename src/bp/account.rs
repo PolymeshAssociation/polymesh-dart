@@ -578,7 +578,7 @@ impl AccountAssetRegistrationProof {
         let id = hash_identity::<PallasScalar>(identity);
 
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-        
+
         proof.verify(
             rng,
             id,
@@ -610,7 +610,7 @@ impl AccountAssetRegistrationProof {
         let id = hash_identity::<PallasScalar>(identity);
 
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-        
+
         Ok(proof.verify_and_return_tuples(
             id,
             &self.account.get_affine()?,

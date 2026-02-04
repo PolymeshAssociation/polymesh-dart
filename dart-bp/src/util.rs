@@ -19,8 +19,8 @@ use bulletproofs::r1cs::{
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
-use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters,};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters};
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -126,8 +126,14 @@ pub fn initialize_curve_tree_prover_with_given_transcripts<
     SelectAndRerandomizePath<L, G0, G1>,
     F0,
 ) {
-    let mut even_prover = Prover::new(&tree_parameters.even_parameters.sl_params.pc_gens(), even_transcript);
-    let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.sl_params.pc_gens(), odd_transcript);
+    let mut even_prover = Prover::new(
+        &tree_parameters.even_parameters.sl_params.pc_gens(),
+        even_transcript,
+    );
+    let mut odd_prover = Prover::new(
+        &tree_parameters.odd_parameters.sl_params.pc_gens(),
+        odd_transcript,
+    );
 
     let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
         &mut even_prover,
@@ -406,36 +412,14 @@ pub fn verify_with_rng<
 ) -> Result<()> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            even_verifier.verify(
-                even_proof,
-                even_pc_gens,
-                even_bp_gens,
-            )
-        },
-        || {
-            odd_verifier.verify(
-                odd_proof,
-                odd_pc_gens,
-                odd_bp_gens,
-            )
-        },
+        || even_verifier.verify(even_proof, even_pc_gens, even_bp_gens),
+        || odd_verifier.verify(odd_proof, odd_pc_gens, odd_bp_gens),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        even_verifier.verify_with_rng(
-            even_proof,
-            even_pc_gens,
-            even_bp_gens,
-            rng,
-        ),
-        odd_verifier.verify_with_rng(
-            odd_proof,
-            odd_pc_gens,
-            odd_bp_gens,
-            rng,
-        ),
+        even_verifier.verify_with_rng(even_proof, even_pc_gens, even_bp_gens, rng),
+        odd_verifier.verify_with_rng(odd_proof, odd_pc_gens, odd_bp_gens, rng),
     );
 
     even_res?;
@@ -495,34 +479,14 @@ pub fn verify_given_verification_tuples<
 
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            verify_given_verification_tuple(
-                even_tuple,
-                even_pc_gens,
-                even_bp_gens,
-            )
-        },
-        || {
-            verify_given_verification_tuple(
-                odd_tuple,
-                odd_pc_gens,
-                odd_bp_gens,
-            )
-        },
+        || verify_given_verification_tuple(even_tuple, even_pc_gens, even_bp_gens),
+        || verify_given_verification_tuple(odd_tuple, odd_pc_gens, odd_bp_gens),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        verify_given_verification_tuple(
-            even_tuple,
-            even_pc_gens,
-            even_bp_gens,
-        ),
-        verify_given_verification_tuple(
-            odd_tuple,
-            odd_pc_gens,
-            odd_bp_gens,
-        ),
+        verify_given_verification_tuple(even_tuple, even_pc_gens, even_bp_gens),
+        verify_given_verification_tuple(odd_tuple, odd_pc_gens, odd_bp_gens),
     );
 
     even_res?;
@@ -551,38 +515,14 @@ pub fn add_verification_tuples_to_rmc<
     let odd_bp_gens = tree_params.odd_parameters().bp_gens();
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            add_verification_tuple_to_rmc(
-                even_tuple,
-                even_pc_gens,
-                even_bp_gens,
-                rmc_0,
-            )
-        },
-        || {
-            add_verification_tuple_to_rmc(
-                odd_tuple,
-                odd_pc_gens,
-                odd_bp_gens,
-                rmc_1,
-            )
-        },
+        || add_verification_tuple_to_rmc(even_tuple, even_pc_gens, even_bp_gens, rmc_0),
+        || add_verification_tuple_to_rmc(odd_tuple, odd_pc_gens, odd_bp_gens, rmc_1),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        add_verification_tuple_to_rmc(
-            even_tuple,
-            even_pc_gens,
-            even_bp_gens,
-            rmc_0,
-        ),
-        add_verification_tuple_to_rmc(
-            odd_tuple,
-            odd_pc_gens,
-            odd_bp_gens,
-            rmc_1,
-        ),
+        add_verification_tuple_to_rmc(even_tuple, even_pc_gens, even_bp_gens, rmc_0),
+        add_verification_tuple_to_rmc(odd_tuple, odd_pc_gens, odd_bp_gens, rmc_1),
     );
 
     even_res.map_err(Error::from)?;
@@ -633,34 +573,14 @@ pub fn batch_verify_bp<
 ) -> Result<()> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            batch_verify(
-                even_tuples,
-                even_pc_gens,
-                even_bp_gens,
-            )
-        },
-        || {
-            batch_verify(
-                odd_tuples,
-                odd_pc_gens,
-                odd_bp_gens,
-            )
-        },
+        || batch_verify(even_tuples, even_pc_gens, even_bp_gens),
+        || batch_verify(odd_tuples, odd_pc_gens, odd_bp_gens),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        batch_verify(
-            even_tuples,
-            even_pc_gens,
-            even_bp_gens,
-        ),
-        batch_verify(
-            odd_tuples,
-            odd_pc_gens,
-            odd_bp_gens,
-        ),
+        batch_verify(even_tuples, even_pc_gens, even_bp_gens),
+        batch_verify(odd_tuples, odd_pc_gens, odd_bp_gens),
     );
 
     even_res?;
@@ -688,38 +608,14 @@ pub fn batch_verify_bp_with_rng<
 
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            batch_verify_with_rng(
-                even_tuples,
-                even_pc_gens,
-                even_bp_gens,
-                &mut rng_even,
-            )
-        },
-        || {
-            batch_verify_with_rng(
-                odd_tuples,
-                odd_pc_gens,
-                odd_bp_gens,
-                &mut rng_odd,
-            )
-        },
+        || batch_verify_with_rng(even_tuples, even_pc_gens, even_bp_gens, &mut rng_even),
+        || batch_verify_with_rng(odd_tuples, odd_pc_gens, odd_bp_gens, &mut rng_odd),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        batch_verify_with_rng(
-            even_tuples,
-            even_pc_gens,
-            even_bp_gens,
-            &mut rng_even,
-        ),
-        batch_verify_with_rng(
-            odd_tuples,
-            odd_pc_gens,
-            odd_bp_gens,
-            &mut rng_odd,
-        ),
+        batch_verify_with_rng(even_tuples, even_pc_gens, even_bp_gens, &mut rng_even),
+        batch_verify_with_rng(odd_tuples, odd_pc_gens, odd_bp_gens, &mut rng_odd),
     );
 
     even_res?;
@@ -745,38 +641,14 @@ pub fn add_verification_tuples_batches_to_rmc<
 ) -> Result<()> {
     #[cfg(feature = "parallel")]
     let (even_res, odd_res) = rayon::join(
-        || {
-            add_vts_to_rmc(
-                even_tuples,
-                even_pc_gens,
-                even_bp_gens,
-                rmc_0,
-            )
-        },
-        || {
-            add_vts_to_rmc(
-                odd_tuples,
-                odd_pc_gens,
-                odd_bp_gens,
-                rmc_1,
-            )
-        },
+        || add_vts_to_rmc(even_tuples, even_pc_gens, even_bp_gens, rmc_0),
+        || add_vts_to_rmc(odd_tuples, odd_pc_gens, odd_bp_gens, rmc_1),
     );
 
     #[cfg(not(feature = "parallel"))]
     let (even_res, odd_res) = (
-        add_vts_to_rmc(
-            even_tuples,
-            even_pc_gens,
-            even_bp_gens,
-            rmc_0,
-        ),
-        add_vts_to_rmc(
-            odd_tuples,
-            odd_pc_gens,
-            odd_bp_gens,
-            rmc_1,
-        ),
+        add_vts_to_rmc(even_tuples, even_pc_gens, even_bp_gens, rmc_0),
+        add_vts_to_rmc(odd_tuples, odd_pc_gens, odd_bp_gens, rmc_1),
     );
 
     even_res?;
@@ -1918,15 +1790,15 @@ pub fn handle_verification_tuples<
     even_tuple: VerificationTuple<Affine<G0>>,
     odd_tuple: VerificationTuple<Affine<G1>>,
     tree_params: &P,
-    rmc: Option<(&mut RandomizedMultChecker<Affine<G0>>, &mut RandomizedMultChecker<Affine<G1>>)>,
+    rmc: Option<(
+        &mut RandomizedMultChecker<Affine<G0>>,
+        &mut RandomizedMultChecker<Affine<G1>>,
+    )>,
 ) -> Result<()> {
     match rmc {
-        Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-            even_tuple, odd_tuple, tree_params, rmc_0, rmc_1,
-        ),
-        None => verify_given_verification_tuples(
-            even_tuple, odd_tuple, tree_params,
-        ),
+        Some((rmc_0, rmc_1)) => {
+            add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_params, rmc_0, rmc_1)
+        }
+        None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_params),
     }
 }
-

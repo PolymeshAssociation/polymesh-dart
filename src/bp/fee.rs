@@ -14,17 +14,17 @@ use scale_info::TypeInfo;
 
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
-use polymesh_dart_bp::fee_account as bp_fee_account;
-use polymesh_dart_bp::util::batch_verify_bp_with_rng;
+use super::encode::*;
+use super::*;
+use crate::*;
 use ark_ec_divisors::curves::{
     pallas::{PallasParams, Point as PallasPoint},
     vesta::{Point as VestaPoint, VestaParams},
 };
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use super::encode::*;
-use super::*;
-use crate::*;
+use polymesh_dart_bp::fee_account as bp_fee_account;
+use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 
 type BPFeeAccountState = bp_fee_account::FeeAccountState<PallasA>;
 type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
@@ -500,19 +500,20 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            &pk.get_affine()?,
-            amount,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx,
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-        )?;
+        let (proof, nullifier) =
+            bp_fee_account::FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                &pk.get_affine()?,
+                amount,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx,
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+            )?;
         Ok(Self {
             account: pk,
             asset_id: state_change.new_state.asset_id,
@@ -771,13 +772,13 @@ impl<
 
         let params = C::parameters();
         batch_verify_bp_with_rng(
-            even_tuples, 
-            odd_tuples, 
-            params.even_parameters.pc_gens(), 
+            even_tuples,
+            odd_tuples,
+            params.even_parameters.pc_gens(),
             params.odd_parameters.pc_gens(),
             params.even_parameters.bp_gens(),
             params.odd_parameters.bp_gens(),
-            rng
+            rng,
         )?;
 
         Ok(())
@@ -815,13 +816,13 @@ impl<
 
         let params = C::parameters();
         batch_verify_bp_with_rng(
-            even_tuples, 
-            odd_tuples, 
-            params.even_parameters.pc_gens(), 
+            even_tuples,
+            odd_tuples,
+            params.even_parameters.pc_gens(),
             params.odd_parameters.pc_gens(),
             params.even_parameters.bp_gens(),
             params.odd_parameters.bp_gens(),
-            rng
+            rng,
         )?;
 
         Ok(())
@@ -891,18 +892,19 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_fee_account::FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            amount,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx,
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-        )?;
+        let (proof, nullifier) =
+            bp_fee_account::FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                amount,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx,
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+            )?;
         Ok(Self {
             asset_id: state_change.new_state.asset_id,
             amount,

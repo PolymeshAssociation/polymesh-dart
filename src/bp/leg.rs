@@ -7,8 +7,12 @@ use serde::{Deserialize, Serialize};
 use codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use ark_ec::{short_weierstrass::Affine, CurveConfig};
-use ark_std::{format, string::{String, ToString}, vec::Vec, UniformRand};
+use ark_ec::{CurveConfig, short_weierstrass::Affine};
+use ark_std::{
+    UniformRand, format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use bulletproofs::r1cs::VerificationTuple;
 use curve_tree_relations::curve_tree::Root;
 
@@ -17,17 +21,14 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use polymesh_dart_bp::{leg as bp_leg};
-use polymesh_dart_bp::util::batch_verify_bp_with_rng;
-use polymesh_dart_common::{LegId, MediatorId};
-use ark_ec_divisors::curves::{
-    pallas::Point as PallasPoint,
-    vesta::Point as VestaPoint,
-};
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
+use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use polymesh_dart_bp::leg as bp_leg;
+use polymesh_dart_bp::util::batch_verify_bp_with_rng;
+use polymesh_dart_common::{LegId, MediatorId};
 
 pub mod proofs;
 pub use proofs::*;
@@ -576,13 +577,13 @@ impl<
 
         let params = C::parameters();
         batch_verify_bp_with_rng(
-            even_tuples, 
-            odd_tuples, 
-            params.even_parameters.pc_gens(), 
+            even_tuples,
+            odd_tuples,
+            params.even_parameters.pc_gens(),
             params.odd_parameters.pc_gens(),
             params.even_parameters.bp_gens(),
             params.odd_parameters.bp_gens(),
-            rng
+            rng,
         )?;
 
         Ok(())
@@ -619,13 +620,13 @@ impl<
 
         let params = C::parameters();
         batch_verify_bp_with_rng(
-            even_tuples, 
-            odd_tuples, 
-            params.even_parameters.pc_gens(), 
+            even_tuples,
+            odd_tuples,
+            params.even_parameters.pc_gens(),
             params.odd_parameters.pc_gens(),
             params.even_parameters.bp_gens(),
             params.odd_parameters.bp_gens(),
-            rng
+            rng,
         )?;
 
         Ok(())
@@ -718,7 +719,7 @@ impl<
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
-        
+
         proof.verify(
             rng,
             leg_enc.clone(),

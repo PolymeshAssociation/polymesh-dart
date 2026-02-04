@@ -1,24 +1,27 @@
 use super::*;
-use crate::keys::{keygen_enc, keygen_sig, DecKey, EncKey, SigKey, VerKey};
+use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use crate::leg::mediator::MediatorTxnProof;
-use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng, prove_with_rng, verify_rmc, verify_with_rng};
+use crate::leg::proofs::{LegCreationProof, SettlementCreationProof};
+use crate::util::{
+    add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
+    prove_with_rng, verify_rmc, verify_with_rng,
+};
 use ark_ec_divisors::curves::{
     pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
     vesta::VestaParams,
 };
 use ark_pallas::{Fq as PallasBase, Fr as PallasScalar, PallasConfig};
+use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
 use ark_vesta::{Fr as VestaScalar, VestaConfig};
 use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use bulletproofs::r1cs::{Prover, Verifier};
 use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use std::time::Instant;
-use bulletproofs::r1cs::{Prover, Verifier};
 use dock_crypto_utils::transcript::MerlinTranscript;
-use ark_serialize::CanonicalSerialize;
-use crate::leg::proofs::{LegCreationProof, SettlementCreationProof};
+use std::time::Instant;
 
 type PallasParameters = PallasConfig;
 type VestaParameters = VestaConfig;

@@ -1,26 +1,31 @@
-use crate::leg::LegEncryptionRandomness;
-use ark_std::marker::PhantomData;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use ark_ff::PrimeField;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{format, string::ToString, vec::Vec};
-use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
-use curve_tree_relations::curve_tree::Root;
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use rand_core::CryptoRngCore;
-use ark_ec_divisors::DivisorCurve;
-use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use polymesh_dart_common::Balance;
-use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig};
 use crate::account::common::{
     CommonStateChangeProof, CommonStateChangeProver, StateChangeVerifier,
 };
-use crate::util::{get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
-use crate::{error::Error, error::Result, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL};
+use crate::account::{
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, BalanceChangeConfig,
+    BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig,
+};
 use crate::leg::LegEncryption;
+use crate::leg::LegEncryptionRandomness;
+use crate::util::{
+    BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
+};
+use crate::{TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Error, error::Result};
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec_divisors::DivisorCurve;
+use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::marker::PhantomData;
+use ark_std::{format, string::ToString, vec::Vec};
+use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+use curve_tree_relations::curve_tree::Root;
+use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::Balance;
+use rand_core::CryptoRngCore;
 
 /// Combined proof for multi-leg state transitions
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -837,23 +842,31 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
-        let (mut proof, nullifier) = self.finalize_with_given_prover_new::<_, D0, D1, Parameters0, Parameters1>(
+        let (mut proof, nullifier) = self
+            .finalize_with_given_prover_new::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                leaf_path,
+                root,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )?;
+
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
             rng,
-            leaf_path,
-            root,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            &mut even_prover,
-            &mut odd_prover,
         )?;
-
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         proof.common_proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -884,22 +897,23 @@ impl<
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
         self.pre_finalize_checks()?;
 
-        let common_prover = CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-            rng,
-            self.legs.clone(),
-            &self.account,
-            &self.updated_account,
-            self.updated_account_commitment,
-            leaf_path,
-            root,
-            &self.nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-            odd_prover,
-        )?;
+        let common_prover =
+            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                self.legs.clone(),
+                &self.account,
+                &self.updated_account,
+                self.updated_account_commitment,
+                leaf_path,
+                root,
+                &self.nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                even_prover,
+                odd_prover,
+            )?;
 
         self.generate_proof_given_common_prover_new(
             rng,
@@ -956,7 +970,12 @@ impl<
         )
     }
 
-    fn generate_proof_given_common_prover_new<'a, R: CryptoRngCore, Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
+    fn generate_proof_given_common_prover_new<
+        'a,
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         self,
         rng: &mut R,
         common_prover: CommonStateChangeProver<'a, L, F0, F1, G0, G1>,
@@ -1040,21 +1059,19 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples_new::<_, Parameters0, Parameters1>(
-            proof,
-            root,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            rmc_0,
-        )?;
+        let (even_tuple, odd_tuple) = self
+            .verify_and_return_tuples_new::<_, Parameters0, Parameters1>(
+                proof,
+                root,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                rng,
+                rmc_0,
+            )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     pub fn verify_and_return_tuples_new<
@@ -1162,7 +1179,10 @@ impl<
     /// Verifies the proof when the account leaf has already been re-randomized externally.
     /// This is useful for batched verification when verifying multiple account paths at once.
     /// `rerandomized_leaf` - The re-randomized leaf obtained from external batched curve tree operations.
-    pub fn enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
+    pub fn enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         self,
         proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
         rerandomized_leaf: Affine<G0>,
@@ -1200,7 +1220,10 @@ impl<
         )
     }
 
-    fn verify_sigma_protocols_given_state_change_verifier_new<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
+    fn verify_sigma_protocols_given_state_change_verifier_new<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         self,
         proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
         mut verifier: StateChangeVerifier<L, F0, F1, G0, G1>,
@@ -1288,21 +1311,21 @@ impl<
 mod tests {
     use super::*;
     use crate::account::AccountStateBuilder;
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::leg::Leg;
     use crate::leg::tests::setup_keys;
     use crate::util::{prove_with_rng, verify_with_rng};
+    use ark_ec_divisors::curves::{
+        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
+        vesta::VestaParams,
+    };
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use bulletproofs::r1cs::{Prover, Verifier};
     use curve_tree_relations::curve_tree::CurveTree;
     use rand::thread_rng;
     use std::time::Instant;
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -2143,8 +2166,10 @@ mod tests {
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         // Alice creates builders for both assets using the single account tree
         let mut alice_builder_asset1 =
@@ -2207,8 +2232,14 @@ mod tests {
             )
             .unwrap();
 
-        let (even_bp, odd_bp) =
-            prove_with_rng(even_prover, odd_prover, account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+        let (even_bp, odd_bp) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rng,
+        )
+        .unwrap();
 
         let proving_time = start.elapsed();
 

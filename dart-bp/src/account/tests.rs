@@ -1,14 +1,30 @@
-use crate::leg::Leg;
+use crate::account::state_transition::{
+    AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
+};
+use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::account::{
+    AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
+    IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
+    ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof, SenderReverseTxnProof,
+};
 use crate::account_registration::tests::{new_account, setup_comm_key};
-use crate::leg::tests::setup_keys;
-use crate::leg::{AssetCommitmentParams, AssetData, LegEncryption, LegEncryptionRandomness, LEG_TXN_EVEN_LABEL};
 use crate::leg::LEG_TXN_ODD_LABEL;
+use crate::leg::Leg;
+use crate::leg::mediator::{MEDIATOR_TXN_LABEL, MediatorTxnProof};
+use crate::leg::proofs::LegCreationProof;
+use crate::leg::proofs::SettlementCreationProof;
+use crate::leg::tests::setup_keys;
+use crate::leg::{
+    AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LegEncryption, LegEncryptionRandomness,
+};
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
 };
-use crate::{error, TXN_EVEN_LABEL, TXN_ODD_LABEL};
+use crate::{TXN_EVEN_LABEL, TXN_ODD_LABEL, error};
+use ark_ec::CurveGroup;
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::curves::{
     pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
     vesta::VestaParams,
@@ -17,32 +33,19 @@ use ark_pallas::{Affine as PallasA, Fr as PallasFr, PallasConfig as PallasParame
 use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
 use ark_vesta::{Fr as VestaFr, VestaConfig as VestaParameters};
-use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
+use blake2::Blake2b512;
+use bulletproofs::PedersenGens;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use bulletproofs::r1cs::{Prover, Verifier};
+use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{CurveTree, Root};
+use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
-use std::time::Instant;
-use rand_core::CryptoRngCore;
-use blake2::Blake2b512;
-use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
-use bulletproofs::r1cs::{Prover, Verifier};
-use bulletproofs::PedersenGens;
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use ark_ec::CurveGroup;
 use polymesh_dart_common::{AssetId, Balance};
-use crate::account::{
-    AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
-    IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
-    ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof,
-    SenderReverseTxnProof,
-};
-use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
-use crate::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
-use crate::leg::mediator::{MediatorTxnProof, MEDIATOR_TXN_LABEL};
-use crate::leg::proofs::LegCreationProof;
-use crate::leg::proofs::SettlementCreationProof;
+use rand_core::CryptoRngCore;
+use std::time::Instant;
 
 #[test]
 fn send_txn() {
@@ -81,9 +84,13 @@ fn send_txn() {
     // Assume that account had some balance. Either got it as the issuer or from another transfer
     account.balance = 200;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     // Setup ends. Sender and verifier interaction begins below
 
@@ -98,23 +105,23 @@ fn send_txn() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        amount,
-        leg_enc.clone(),
-        leg_enc_rand.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
-        path,
-        &root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        
-    )
+    let (proof, nullifier) =
+        AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
         .unwrap();
 
     let prover_time = clock.elapsed();
@@ -134,7 +141,6 @@ fn send_txn() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -158,7 +164,6 @@ fn send_txn() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -210,9 +215,13 @@ fn receive_txn() {
     let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
     account.balance = 200;
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     // Setup ends. Receiver and verifier interaction begins below
 
@@ -227,27 +236,22 @@ fn receive_txn() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
-        &mut rng,
-        leg_enc.clone(),
-        leg_enc_rand.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
-        path,
-        &root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-    )
+    let (proof, nullifier) =
+        AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
         .unwrap();
 
     let prover_time = clock.elapsed();
@@ -267,7 +271,6 @@ fn receive_txn() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -291,7 +294,6 @@ fn receive_txn() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -342,9 +344,10 @@ fn single_shot_settlement() {
     let amount = 50;
 
     let nonce = b"single_shot_settlement_nonce_txn_id_1";
-    
 
-    println!("For L={L}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height}");
+    println!(
+        "For L={L}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height}"
+    );
 
     // Create all three proofs
     let start = Instant::now();
@@ -367,8 +370,6 @@ fn single_shot_settlement() {
         &asset_comm_params,
         enc_key_gen,
         enc_gen,
-        
-        
     )
     .unwrap();
     println!("Settlement creation time : {:?}", start.elapsed());
@@ -395,7 +396,6 @@ fn single_shot_settlement() {
         account_comm_key.clone(),
         enc_key_gen,
         enc_gen,
-        
     )
     .unwrap();
     println!("Sender time : {:?}", start.elapsed());
@@ -422,7 +422,6 @@ fn single_shot_settlement() {
         account_comm_key.clone(),
         enc_key_gen,
         enc_gen,
-        
     )
     .unwrap();
     println!("Receiver time : {:?}", start.elapsed());
@@ -440,8 +439,6 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
-            
             None,
         )
         .unwrap();
@@ -458,7 +455,6 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             None,
         )
         .unwrap();
@@ -475,17 +471,24 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             None,
         )
         .unwrap();
 
     println!("tuples time : {:?}", start.elapsed());
-    
+
     let even_tuples = vec![settlement_odd, sender_even, receiver_even];
     let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
 
-    batch_verify_bp(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens()).unwrap();
+    batch_verify_bp(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
+    )
+    .unwrap();
 
     let verifier_time = start.elapsed();
     println!("Verifier time: {:?}", verifier_time);
@@ -505,8 +508,6 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -523,7 +524,6 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -540,7 +540,6 @@ fn single_shot_settlement() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -549,11 +548,17 @@ fn single_shot_settlement() {
     let even_tuples = vec![settlement_odd, sender_even, receiver_even];
     let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
 
-    add_verification_tuples_batches_to_rmc(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(),
+    add_verification_tuples_batches_to_rmc(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
         &mut rmc_1,
         &mut rmc_0,
     )
-        .unwrap();
+    .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
     let verifier_rmc_time = start.elapsed();
 
@@ -610,8 +615,12 @@ fn single_shot_combined_create_and_send() {
 
     let start = Instant::now();
 
-    let (mut even_prover, mut odd_prover) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
     let leg_creation_proof = LegCreationProof::<
         L,
@@ -640,8 +649,6 @@ fn single_shot_combined_create_and_send() {
         enc_gen,
         &mut even_prover,
         &mut odd_prover,
-        
-        
     )
     .unwrap();
 
@@ -669,12 +676,17 @@ fn single_shot_combined_create_and_send() {
             enc_gen,
             &mut odd_prover,
             &mut even_prover,
-            
         )
         .unwrap();
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(even_prover, odd_prover, asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
 
     let proving_time = start.elapsed();
 
@@ -701,7 +713,6 @@ fn single_shot_combined_create_and_send() {
         account_comm_key.clone(),
         enc_key_gen,
         enc_gen,
-        
     )
     .unwrap();
 
@@ -725,8 +736,6 @@ fn single_shot_combined_create_and_send() {
             enc_gen,
             &mut even_verifier,
             &mut odd_verifier,
-            
-            
             None,
         )
         .unwrap();
@@ -744,7 +753,6 @@ fn single_shot_combined_create_and_send() {
             enc_gen,
             &mut odd_verifier,
             &mut even_verifier,
-            
             None,
         )
         .unwrap();
@@ -765,7 +773,6 @@ fn single_shot_combined_create_and_send() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             None,
         )
         .unwrap();
@@ -773,7 +780,15 @@ fn single_shot_combined_create_and_send() {
     let even_tuples = vec![odd_tuple, receiver_even];
     let odd_tuples = vec![even_tuple, receiver_odd];
 
-    batch_verify_bp(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens()).unwrap();
+    batch_verify_bp(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
+    )
+    .unwrap();
 
     let verification_time = start.elapsed();
     println!("Verification time: {:?}", verification_time);
@@ -799,8 +814,6 @@ fn single_shot_combined_create_and_send() {
             enc_gen,
             &mut even_verifier,
             &mut odd_verifier,
-            
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -818,7 +831,6 @@ fn single_shot_combined_create_and_send() {
             enc_gen,
             &mut odd_verifier,
             &mut even_verifier,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -839,7 +851,6 @@ fn single_shot_combined_create_and_send() {
             enc_key_gen,
             enc_gen,
             &mut rng,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -847,7 +858,13 @@ fn single_shot_combined_create_and_send() {
     let even_tuples = vec![odd_tuple, receiver_even];
     let odd_tuples = vec![even_tuple, receiver_odd];
 
-    add_verification_tuples_batches_to_rmc(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(),
+    add_verification_tuples_batches_to_rmc(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
         &mut rmc_1,
         &mut rmc_0,
     )
@@ -888,8 +905,6 @@ fn claim_received_funds() {
     let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
         setup_gens_new::<NUM_GENS>(b"testing");
 
-    
-
     // All parties generate their keys
     let (
         ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
@@ -921,9 +936,13 @@ fn claim_received_funds() {
     account.balance = 200;
     account.counter += 1;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     let nonce = b"test-nonce";
 
@@ -936,30 +955,24 @@ fn claim_received_funds() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = ClaimReceivedTxnProof::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
-        &mut rng,
-        amount,
-        leg_enc.clone(),
-        leg_enc_rand.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
-        path,
-        &root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        
-    )
-    .unwrap();
+    let (proof, nullifier) =
+        ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
 
     let prover_time = clock.elapsed();
 
@@ -978,7 +991,6 @@ fn claim_received_funds() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -1002,7 +1014,6 @@ fn claim_received_funds() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -1057,9 +1068,13 @@ fn counter_update_txn_by_sender() {
     account.balance = 50;
     account.counter = 1;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     let nonce = b"test-nonce";
 
@@ -1071,23 +1086,23 @@ fn counter_update_txn_by_sender() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        leg_enc.clone(),
-        leg_enc_rand.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
-        path,
-        &root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        
-    )
-    .unwrap();
+    let (proof, nullifier) =
+        SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
 
     let prover_time = clock.elapsed();
 
@@ -1106,7 +1121,6 @@ fn counter_update_txn_by_sender() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -1130,7 +1144,6 @@ fn counter_update_txn_by_sender() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -1184,9 +1197,13 @@ fn reverse_send_txn() {
     account.balance = 200;
     account.counter += 1;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     let nonce = b"test-nonce";
 
@@ -1199,30 +1216,24 @@ fn reverse_send_txn() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = SenderReverseTxnProof::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
-        &mut rng,
-        amount,
-        leg_enc.clone(),
-        leg_enc_rand.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
-        path,
-        &root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        
-    )
-    .unwrap();
+    let (proof, nullifier) =
+        SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            leg_enc.clone(),
+            leg_enc_rand.clone(),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
 
     let prover_time = clock.elapsed();
 
@@ -1241,7 +1252,6 @@ fn reverse_send_txn() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -1265,7 +1275,6 @@ fn reverse_send_txn() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -1317,9 +1326,13 @@ fn reverse_receive_txn() {
     account.balance = 50;
     account.counter = 1;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
 
     let nonce = b"test-nonce";
 
@@ -1331,7 +1344,13 @@ fn reverse_receive_txn() {
 
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = ReceiverCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (proof, nullifier) = ReceiverCounterUpdateTxnProof::new::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         leg_enc.clone(),
         leg_enc_rand.clone(),
@@ -1345,7 +1364,6 @@ fn reverse_receive_txn() {
         account_comm_key.clone(),
         enc_key_gen,
         enc_gen,
-        
     )
     .unwrap();
 
@@ -1366,7 +1384,6 @@ fn reverse_receive_txn() {
             enc_key_gen,
             enc_gen,
             None,
-            
         )
         .unwrap();
 
@@ -1390,7 +1407,6 @@ fn reverse_receive_txn() {
             enc_key_gen,
             enc_gen,
             Some((&mut rmc_0, &mut rmc_1)),
-            
         )
         .unwrap();
     verify_rmc(&rmc_0, &rmc_1).unwrap();
@@ -1438,14 +1454,17 @@ fn single_shot_combined_create_and_recv() {
 
     let mut rng = rand::thread_rng();
     let amount = 50;
-    
 
     let nonce = b"single_shot_combined_recv_nonce_txn_id_1";
 
     let start = Instant::now();
 
-    let (mut even_prover, mut odd_prover) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
     let leg_creation_proof = LegCreationProof::<
         L,
@@ -1474,8 +1493,6 @@ fn single_shot_combined_create_and_recv() {
         enc_gen,
         &mut even_prover,
         &mut odd_prover,
-        
-        
     )
     .unwrap();
 
@@ -1503,12 +1520,17 @@ fn single_shot_combined_create_and_recv() {
             enc_gen,
             &mut odd_prover,
             &mut even_prover,
-            
         )
         .unwrap();
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(even_prover, odd_prover, asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
 
     let proving_time = start.elapsed();
 
@@ -1535,7 +1557,6 @@ fn single_shot_combined_create_and_recv() {
         account_comm_key.clone(),
         enc_key_gen,
         enc_gen,
-        
     )
     .unwrap();
 
@@ -1740,10 +1761,12 @@ fn single_shot_swap() {
         setup_gens_new::<NUM_GENS>(b"testing");
 
     // Create asset tree params by swapping even/odd from account tree params
-    let asset_tree_params = SelRerandProofParametersNew::<VestaParameters, PallasParameters, VestaParams, PallasParams>::new::<VestaPoint, PallasPoint>(
-        NUM_GENS as u32,
-        NUM_GENS as u32,
-    )
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new::<VestaPoint, PallasPoint>(NUM_GENS as u32, NUM_GENS as u32)
     .unwrap();
 
     let asset_comm_params = AssetCommitmentParams::new(
@@ -1888,8 +1911,12 @@ fn single_shot_swap() {
     let start = Instant::now();
 
     // Combined settlement proofs for both legs
-    let (mut even_prover_settlement, mut odd_prover_settlement) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_settlement, mut odd_prover_settlement) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
     let settlement_proof_1 = LegCreationProof::<
         L,
@@ -1918,8 +1945,6 @@ fn single_shot_swap() {
         enc_gen,
         &mut even_prover_settlement,
         &mut odd_prover_settlement,
-        
-        
     )
     .unwrap();
 
@@ -1950,20 +1975,28 @@ fn single_shot_swap() {
         enc_gen,
         &mut even_prover_settlement,
         &mut odd_prover_settlement,
-        
-        
     )
     .unwrap();
 
-    let (settlement_even_bp, settlement_odd_bp) = prove_with_rng(even_prover_settlement, odd_prover_settlement, asset_tree_params.even_parameters.bp_gens(), asset_tree_params.odd_parameters.bp_gens(), &mut rng)
+    let (settlement_even_bp, settlement_odd_bp) = prove_with_rng(
+        even_prover_settlement,
+        odd_prover_settlement,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
     .unwrap();
 
     let proving_setup_time = start.elapsed();
     let start = Instant::now();
 
     // Combined proofs for Alice (sending in leg1, receiving in leg2)
-    let (mut even_prover_alice, mut odd_prover_alice) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_alice, mut odd_prover_alice) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     let (alice_sender_proof, alice_sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<
@@ -1989,7 +2022,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut even_prover_alice,
             &mut odd_prover_alice,
-            
         )
         .unwrap();
 
@@ -2017,7 +2049,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut even_prover_alice,
             &mut odd_prover_alice,
-            
         )
         .unwrap();
 
@@ -2034,8 +2065,12 @@ fn single_shot_swap() {
     let start = Instant::now();
 
     // Combined proofs for Bob (receiving in leg1, sending in leg2)
-    let (mut even_prover_bob, mut odd_prover_bob) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_bob, mut odd_prover_bob) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     let (bob_receiver_proof, bob_receiver_nullifier) =
         IrreversibleAffirmAsReceiverTxnProof::new_with_given_prover::<
@@ -2061,7 +2096,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut even_prover_bob,
             &mut odd_prover_bob,
-            
         )
         .unwrap();
 
@@ -2089,7 +2123,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut even_prover_bob,
             &mut odd_prover_bob,
-            
         )
         .unwrap();
 
@@ -2127,8 +2160,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut settlement_even_verifier,
             &mut settlement_odd_verifier,
-            
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2144,8 +2175,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut settlement_even_verifier,
             &mut settlement_odd_verifier,
-            
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2177,7 +2206,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut alice_even_verifier,
             &mut alice_odd_verifier,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2195,7 +2223,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut alice_even_verifier,
             &mut alice_odd_verifier,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2226,7 +2253,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut bob_even_verifier,
             &mut bob_odd_verifier,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2244,7 +2270,6 @@ fn single_shot_swap() {
             enc_gen,
             &mut bob_even_verifier,
             &mut bob_odd_verifier,
-            
             Some(&mut rmc_1),
         )
         .unwrap();
@@ -2262,7 +2287,13 @@ fn single_shot_swap() {
 
     let odd_tuples = vec![settlement_odd_tuple, alice_odd_tuple, bob_odd_tuple];
 
-    add_verification_tuples_batches_to_rmc(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(),
+    add_verification_tuples_batches_to_rmc(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
         &mut rmc_1,
         &mut rmc_0,
     )
@@ -2386,23 +2417,24 @@ fn batch_send_txn_proofs() {
     let mut nullifiers = Vec::with_capacity(batch_size);
 
     for i in 0..batch_size {
-        let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_encs[i].clone(),
-            leg_enc_rands[i].clone(),
-            &accounts[i],
-            &updated_accounts[i],
-            updated_account_comms[i],
-            paths[i].clone(),
-            &root,
-            &nonces[i],
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         proofs.push(proof);
         nullifiers.push(nullifier);
@@ -2463,7 +2495,8 @@ fn batch_send_txn_proofs() {
         account_tree_params.odd_parameters.pc_gens(),
         account_tree_params.even_parameters.bp_gens(),
         account_tree_params.odd_parameters.bp_gens(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let batch_verifier_time = clock.elapsed();
 
@@ -2605,13 +2638,23 @@ fn combined_send_txn_proofs() {
         .collect();
 
     let clock = Instant::now();
-    let (mut even_prover, mut odd_prover) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     let mut proofs = Vec::with_capacity(batch_size);
     let mut nullifiers = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
-        let (proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             amount,
             leg_encs[i].clone(),
@@ -2634,8 +2677,14 @@ fn combined_send_txn_proofs() {
         nullifiers.push(nullifier);
     }
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(even_prover, odd_prover, account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
     let proving_time = clock.elapsed();
 
     let clock = Instant::now();
@@ -2788,9 +2837,13 @@ fn combined_create_and_send() {
     let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, id);
     account.balance = 200;
 
-    let account_tree =
-        get_tree_with_account_comm::<L, _>(&account, account_comm_key.clone(), &account_tree_params, 6)
-            .unwrap();
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
     let account_tree_root = account_tree.root_node();
 
     let updated_account = account.get_state_for_send(amount).unwrap();
@@ -2801,10 +2854,20 @@ fn combined_create_and_send() {
 
     let clock = Instant::now();
 
-    let (mut even_prover, mut odd_prover) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
-    let leg_creation_proof = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let leg_creation_proof = LegCreationProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         leg.clone(),
         leg_enc.clone(),
@@ -2822,7 +2885,13 @@ fn combined_create_and_send() {
     )
     .unwrap();
 
-    let (send_proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (send_proof, nullifier) = AffirmAsSenderTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount,
         leg_enc.clone(),
@@ -2842,14 +2911,14 @@ fn combined_create_and_send() {
     )
     .unwrap();
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(
-            even_prover,
-            odd_prover,
-            asset_tree_params.even_parameters.bp_gens(),
-            asset_tree_params.odd_parameters.bp_gens(),
-            &mut rng,
-        ).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
 
     let proving_time = clock.elapsed();
 
@@ -3069,22 +3138,23 @@ fn batch_receive_txn_proofs() {
     let mut nullifiers = Vec::with_capacity(batch_size);
 
     for i in 0..batch_size {
-        let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            leg_encs[i].clone(),
-            leg_enc_rands[i].clone(),
-            &accounts[i],
-            &updated_accounts[i],
-            updated_account_comms[i],
-            paths[i].clone(),
-            &root,
-            &nonces[i],
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                leg_encs[i].clone(),
+                leg_enc_rands[i].clone(),
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         proofs.push(proof);
         nullifiers.push(nullifier);
@@ -3145,7 +3215,8 @@ fn batch_receive_txn_proofs() {
         account_tree_params.odd_parameters.pc_gens(),
         account_tree_params.even_parameters.bp_gens(),
         account_tree_params.odd_parameters.bp_gens(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let batch_verifier_time = clock.elapsed();
 
@@ -3287,13 +3358,23 @@ fn combined_receive_txn_proofs() {
         .collect();
 
     let clock = Instant::now();
-    let (mut even_prover, mut odd_prover) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     let mut proofs = Vec::with_capacity(batch_size);
     let mut nullifiers = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
-        let (proof, nullifier) = AffirmAsReceiverTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = AffirmAsReceiverTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_encs[i].clone(),
             leg_enc_rands[i].clone(),
@@ -3315,8 +3396,14 @@ fn combined_receive_txn_proofs() {
         nullifiers.push(nullifier);
     }
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(even_prover, odd_prover, account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
     let proving_time = clock.elapsed();
 
     let clock = Instant::now();
@@ -3562,10 +3649,20 @@ fn swap_settlement() {
 
     // Combined settlement proofs for both legs
     let clock = Instant::now();
-    let (mut even_prover_settlement, mut odd_prover_settlement) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_settlement, mut odd_prover_settlement) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
-    let settlement_proof_1 = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof_1 = LegCreationProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         leg_1.clone(),
         leg_enc_1.clone(),
@@ -3583,7 +3680,13 @@ fn swap_settlement() {
     )
     .unwrap();
 
-    let settlement_proof_2 = LegCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof_2 = LegCreationProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         leg_2.clone(),
         leg_enc_2.clone(),
@@ -3833,11 +3936,21 @@ fn swap_settlement() {
 
     // Combined alice proofs for both legs (alice sends in leg1, receives in leg2)
     let clock = Instant::now();
-    let (mut even_prover_alice, mut odd_prover_alice) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_alice, mut odd_prover_alice) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     // Alice proof for leg1 (sending asset1)
-    let (alice_proof_leg1, alice_nullifier_leg1) = AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (alice_proof_leg1, alice_nullifier_leg1) = AffirmAsSenderTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount_1,
         leg_enc_1.clone(),
@@ -3858,24 +3971,31 @@ fn swap_settlement() {
     .unwrap();
 
     // Alice proof for leg2 (receiving asset2)
-    let (alice_proof_leg2, alice_nullifier_leg2) = AffirmAsReceiverTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        leg_enc_2.clone(),
-        leg_enc_rand_2.clone(),
-        &alice_account_2,
-        &updated_alice_account_2,
-        updated_alice_account_comm_2,
-        alice_path_2.clone(),
-        &account_tree_root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        &mut even_prover_alice,
-        &mut odd_prover_alice,
-    )
-    .unwrap();
+    let (alice_proof_leg2, alice_nullifier_leg2) =
+        AffirmAsReceiverTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
+            &mut rng,
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            &alice_account_2,
+            &updated_alice_account_2,
+            updated_alice_account_comm_2,
+            alice_path_2.clone(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_alice,
+            &mut odd_prover_alice,
+        )
+        .unwrap();
 
     let (alice_even_bp, alice_odd_bp) = prove_with_rng(
         even_prover_alice,
@@ -3889,11 +4009,21 @@ fn swap_settlement() {
 
     // Combined bob proofs for both legs (bob receives leg1, sends leg2)
     let clock = Instant::now();
-    let (mut even_prover_bob, mut odd_prover_bob) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_bob, mut odd_prover_bob) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     // Bob proof for leg1 (receiving asset1)
-    let (bob_proof_leg1, bob_nullifier_leg1) = AffirmAsReceiverTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (bob_proof_leg1, bob_nullifier_leg1) = AffirmAsReceiverTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         leg_enc_1.clone(),
         leg_enc_rand_1.clone(),
@@ -3913,7 +4043,13 @@ fn swap_settlement() {
     .unwrap();
 
     // Bob proof for leg2 (sending asset2)
-    let (bob_proof_leg2, bob_nullifier_leg2) = AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (bob_proof_leg2, bob_nullifier_leg2) = AffirmAsSenderTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount_2,
         leg_enc_2.clone(),
@@ -4243,11 +4379,21 @@ fn swap_settlement() {
     let clock = Instant::now();
 
     // Alice counter updates with her own provers
-    let (mut even_prover_alice, mut odd_prover_alice) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_alice, mut odd_prover_alice) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     let (alice_counter_update_proof, alice_cu_nullifier) =
-        SenderCounterUpdateTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        SenderCounterUpdateTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc_1.clone(),
             leg_enc_rand_1.clone(),
@@ -4266,25 +4412,32 @@ fn swap_settlement() {
         )
         .unwrap();
 
-    let (alice_claim_proof, alice_claim_nullifier) = ClaimReceivedTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        amount_2,
-        leg_enc_2.clone(),
-        leg_enc_rand_2.clone(),
-        &updated_alice_account_2,
-        &updated_alice_account_3,
-        updated_alice_account_comm_3,
-        alice_2_path,
-        &account_tree_root,
-        nonce,
-        &account_tree_params,
-        account_comm_key.clone(),
-        enc_key_gen,
-        enc_gen,
-        &mut even_prover_alice,
-        &mut odd_prover_alice,
-    )
-    .unwrap();
+    let (alice_claim_proof, alice_claim_nullifier) =
+        ClaimReceivedTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
+            &mut rng,
+            amount_2,
+            leg_enc_2.clone(),
+            leg_enc_rand_2.clone(),
+            &updated_alice_account_2,
+            &updated_alice_account_3,
+            updated_alice_account_comm_3,
+            alice_2_path,
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover_alice,
+            &mut odd_prover_alice,
+        )
+        .unwrap();
 
     let (alice_even_bp, alice_odd_bp) = prove_with_rng(
         even_prover_alice,
@@ -4301,10 +4454,20 @@ fn swap_settlement() {
     let clock = Instant::now();
 
     // Bob counter updates with his own provers
-    let (mut even_prover_bob, mut odd_prover_bob) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_bob, mut odd_prover_bob) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
-    let (bob_claim_proof, bob_claim_nullifier) = ClaimReceivedTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (bob_claim_proof, bob_claim_nullifier) = ClaimReceivedTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount_1,
         leg_enc_1.clone(),
@@ -4325,7 +4488,13 @@ fn swap_settlement() {
     .unwrap();
 
     let (bob_counter_update_proof, bob_cu_nullifier) =
-        SenderCounterUpdateTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        SenderCounterUpdateTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc_2.clone(),
             leg_enc_rand_2.clone(),
@@ -4623,7 +4792,9 @@ fn swap_settlement() {
         + bob_claim_proof.compressed_size()
         + bob_counter_update_proof.compressed_size();
 
-    println!("For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}");
+    println!(
+        "For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}"
+    );
 
     println!(
         "Settlement proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
@@ -4792,11 +4963,21 @@ fn reverse_settlement() {
 
     // Combined alice proofs for both legs (alice reverses send in leg1, reverses receive in leg2)
     let clock = Instant::now();
-    let (mut even_prover_alice, mut odd_prover_alice) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_alice, mut odd_prover_alice) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     // Alice proof for leg1 (reverse sending asset1)
-    let (alice_proof_leg1, alice_nullifier_leg1) = SenderReverseTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (alice_proof_leg1, alice_nullifier_leg1) = SenderReverseTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount_1,
         leg_enc_1.clone(),
@@ -4818,7 +4999,13 @@ fn reverse_settlement() {
 
     // Alice proof for leg2 (reverse receiving asset2)
     let (alice_proof_leg2, alice_nullifier_leg2) =
-        ReceiverCounterUpdateTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        ReceiverCounterUpdateTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc_2.clone(),
             leg_enc_rand_2.clone(),
@@ -4849,12 +5036,22 @@ fn reverse_settlement() {
 
     // Combined bob proofs for both legs (bob reverses receive in leg1, reverses send in leg2)
     let clock = Instant::now();
-    let (mut even_prover_bob, mut odd_prover_bob) =
-        create_provers(TXN_EVEN_LABEL, TXN_ODD_LABEL, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover_bob, mut odd_prover_bob) = create_provers(
+        TXN_EVEN_LABEL,
+        TXN_ODD_LABEL,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+    );
 
     // Bob proof for leg1 (reverse receiving asset1)
     let (bob_proof_leg1, bob_nullifier_leg1) =
-        ReceiverCounterUpdateTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        ReceiverCounterUpdateTxnProof::new_with_given_prover::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc_1.clone(),
             leg_enc_rand_1.clone(),
@@ -4874,7 +5071,13 @@ fn reverse_settlement() {
         .unwrap();
 
     // Bob proof for leg2 (reverse sending asset2)
-    let (bob_proof_leg2, bob_nullifier_leg2) = SenderReverseTxnProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let (bob_proof_leg2, bob_nullifier_leg2) = SenderReverseTxnProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         amount_2,
         leg_enc_2.clone(),
@@ -5214,21 +5417,22 @@ fn multi_asset_settlement() {
     );
 
     let start = Instant::now();
-    let settlement_proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        legs,
-        leg_encs.clone(),
-        leg_enc_rands.clone(),
-        asset_paths,
-        asset_data_vec,
-        &asset_tree_root,
-        nonce,
-        &asset_tree_params,
-        &asset_comm_params,
-        enc_key_gen,
-        enc_gen,
-    )
-    .unwrap();
+    let settlement_proof =
+        SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            legs,
+            leg_encs.clone(),
+            leg_enc_rands.clone(),
+            asset_paths,
+            asset_data_vec,
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
     let settlement_proving_time = start.elapsed();
     let settlement_proof_size = settlement_proof.compressed_size() + leg_encs.compressed_size();
 
@@ -5267,7 +5471,13 @@ fn multi_asset_settlement() {
         _,
         PallasParameters,
         VestaParameters,
-    >::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         alice_builders,
         alice_paths,
@@ -5422,7 +5632,8 @@ fn multi_asset_settlement() {
         account_tree_params.odd_parameters.pc_gens(),
         account_tree_params.even_parameters.bp_gens(),
         account_tree_params.odd_parameters.bp_gens(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let verify_time = start.elapsed();
 
@@ -5517,7 +5728,9 @@ fn multi_asset_settlement() {
 
     let verify_rmc_time = start.elapsed();
 
-    println!("For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}");
+    println!(
+        "For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}"
+    );
     println!(
         "total proof size = {} bytes, regular verify time = {:?} and with rmc time = {:?}",
         settlement_proof_size + alice_proof_size + bob_proof_size,
@@ -5572,10 +5785,20 @@ fn multi_asset_combined_create_and_send() {
 
     let start = Instant::now();
 
-    let (mut even_prover, mut odd_prover) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
-    let settlement_proof = SettlementCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -5621,7 +5844,13 @@ fn multi_asset_combined_create_and_send() {
         _,
         PallasParameters,
         VestaParameters,
-    >::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         alice_builders,
         alice_paths,
@@ -5635,14 +5864,14 @@ fn multi_asset_combined_create_and_send() {
     )
     .unwrap();
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(
-            even_prover,
-            odd_prover,
-            asset_tree_params.even_parameters.bp_gens(),
-            asset_tree_params.odd_parameters.bp_gens(),
-            &mut rng,
-        ).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
 
     let combined_proving_time = start.elapsed();
 
@@ -5777,7 +6006,8 @@ fn multi_asset_combined_create_and_send() {
         account_tree_params.odd_parameters.pc_gens(),
         account_tree_params.even_parameters.bp_gens(),
         account_tree_params.odd_parameters.bp_gens(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let verification_time = start.elapsed();
 
@@ -5888,7 +6118,9 @@ fn multi_asset_combined_create_and_send() {
 
     let bob_proof_size = bob_proof.compressed_size();
 
-    println!("For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}");
+    println!(
+        "For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}"
+    );
 
     println!(
         "Combined (settlement + alice): proving time = {:?}, proof size = {} bytes",
@@ -5948,10 +6180,20 @@ fn multi_asset_combined_create_and_recv() {
 
     let start = Instant::now();
 
-    let (mut even_prover, mut odd_prover) =
-        create_provers(LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, asset_tree_params.even_parameters.pc_gens(), asset_tree_params.odd_parameters.pc_gens());
+    let (mut even_prover, mut odd_prover) = create_provers(
+        LEG_TXN_EVEN_LABEL,
+        LEG_TXN_ODD_LABEL,
+        asset_tree_params.even_parameters.pc_gens(),
+        asset_tree_params.odd_parameters.pc_gens(),
+    );
 
-    let settlement_proof = SettlementCreationProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    let settlement_proof = SettlementCreationProof::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -5997,7 +6239,13 @@ fn multi_asset_combined_create_and_recv() {
         _,
         PallasParameters,
         VestaParameters,
-    >::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new_with_given_prover::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         bob_builders,
         bob_paths,
@@ -6011,14 +6259,14 @@ fn multi_asset_combined_create_and_recv() {
     )
     .unwrap();
 
-    let (even_bp, odd_bp) =
-        prove_with_rng(
-            even_prover,
-            odd_prover,
-            asset_tree_params.even_parameters.bp_gens(),
-            asset_tree_params.odd_parameters.bp_gens(),
-            &mut rng,
-        ).unwrap();
+    let (even_bp, odd_bp) = prove_with_rng(
+        even_prover,
+        odd_prover,
+        asset_tree_params.even_parameters.bp_gens(),
+        asset_tree_params.odd_parameters.bp_gens(),
+        &mut rng,
+    )
+    .unwrap();
 
     let combined_proving_time = start.elapsed();
 
@@ -6051,7 +6299,13 @@ fn multi_asset_combined_create_and_recv() {
         _,
         PallasParameters,
         VestaParameters,
-    >::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         alice_builders,
         alice_paths,
@@ -6156,7 +6410,8 @@ fn multi_asset_combined_create_and_recv() {
         account_tree_params.odd_parameters.pc_gens(),
         account_tree_params.even_parameters.bp_gens(),
         account_tree_params.odd_parameters.bp_gens(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let verification_time = start.elapsed();
 
@@ -6271,7 +6526,9 @@ fn multi_asset_combined_create_and_recv() {
 
     let alice_proof_size = alice_proof.compressed_size();
 
-    println!("For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}");
+    println!(
+        "For L={L}, asset tree height={asset_tree_height}, account tree height={account_tree_height}"
+    );
     println!(
         "Combined (settlement + receiver): proving time = {:?}, proof size = {} bytes",
         combined_proving_time, combined_proof_size
@@ -6294,16 +6551,16 @@ fn multi_asset_combined_create_and_recv() {
 mod input_sanitation_disabled {
     use super::*;
     use crate::account::AccountCommitmentKeyTrait;
-    use crate::account_registration::tests::new_account;
-    use crate::leg::tests::setup_keys;
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account::{
         AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
         IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
         SenderCounterUpdateTxnProof, SenderReverseTxnProof,
     };
+    use crate::account_registration::tests::new_account;
+    use crate::leg::tests::setup_keys;
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
 
     #[test]
     fn keep_balance_same_in_send_txn() {
@@ -6365,23 +6622,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6407,23 +6665,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6504,22 +6763,23 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6601,23 +6861,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6643,23 +6904,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6740,7 +7002,13 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc.clone(),
             leg_enc_rand.clone(),
@@ -6781,7 +7049,13 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             leg_enc.clone(),
             leg_enc_rand.clone(),
@@ -6877,23 +7151,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -6919,23 +7194,24 @@ mod input_sanitation_disabled {
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
-        let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            amount,
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         assert!(
             proof
@@ -7027,7 +7303,13 @@ mod input_sanitation_disabled {
             .commit(account_comm_key.clone())
             .unwrap();
 
-        let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             amount,
             leg_enc.clone(),
@@ -7074,7 +7356,13 @@ mod input_sanitation_disabled {
             .commit(account_comm_key.clone())
             .unwrap();
 
-        let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             amount,
             leg_enc.clone(),
@@ -7120,7 +7408,13 @@ mod input_sanitation_disabled {
             .commit(account_comm_key.clone())
             .unwrap();
 
-        let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = IrreversibleAffirmAsSenderTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             amount,
             leg_enc.clone(),
@@ -7166,7 +7460,13 @@ mod input_sanitation_disabled {
             .commit(account_comm_key.clone())
             .unwrap();
 
-        let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let (proof, nullifier) = IrreversibleAffirmAsReceiverTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            PallasParams,
+            VestaParams,
+        >(
             &mut rng,
             amount,
             leg_enc.clone(),
@@ -7211,7 +7511,12 @@ fn multi_asset_state_transition_different_confs() {
     fn check<const L: usize, const M: usize>(
         num_legs: usize,
         height: usize,
-        account_tree_params: &SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+        account_tree_params: &SelRerandProofParametersNew<
+            PallasParameters,
+            VestaParameters,
+            PallasParams,
+            VestaParams,
+        >,
         account_comm_key: impl AccountCommitmentKeyTrait<PallasA> + Clone,
         enc_key_gen: PallasA,
         enc_gen: PallasA,
@@ -7360,8 +7665,6 @@ fn multi_asset_state_transition_different_confs() {
                 _,
                 PallasParameters,
                 VestaParameters,
-                
-                
             >::init(
                 alice_updated_comms[i], alice_nullifiers[i], nonce
             );

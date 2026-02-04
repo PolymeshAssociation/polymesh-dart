@@ -12,11 +12,8 @@ use rand_core::{CryptoRng, RngCore};
 
 use super::*;
 use crate::*;
+use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use polymesh_dart_bp::account::mint::MintTxnProof;
-use ark_ec_divisors::curves::{
-    pallas::{Point as PallasPoint},
-    vesta::{Point as VestaPoint},
-};
 
 /// Represents the state of an asset in the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, TypeInfo)]

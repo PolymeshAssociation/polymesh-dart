@@ -1,17 +1,17 @@
-use ark_ec::CurveGroup;
-use core::ops::Neg;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use crate::leg::LegEncryption;
+use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, error};
 use ark_ec::AffineRepr;
-use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
-use rand_core::CryptoRngCore;
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::AssetId;
-use zeroize::Zeroize;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use ark_ec::CurveGroup;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::{vec, vec::Vec};
-use crate::{add_to_transcript, error, Error, LEG_ENC_LABEL, NONCE_LABEL};
-use crate::leg::LegEncryption;
+use core::ops::Neg;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::AssetId;
+use rand_core::CryptoRngCore;
+use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
+use zeroize::Zeroize;
 
 pub const INDEX_IN_ASSET_DATA_LABEL: &'static [u8; 19] = b"index_in_asset_data";
 pub const MEDIATOR_TXN_LABEL: &[u8; 12] = b"mediator-txn";

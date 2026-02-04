@@ -5,17 +5,14 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use polymesh_dart_bp::{account as bp_account};
-use polymesh_dart_common::{LegId, MediatorId};
-use ark_ec_divisors::curves::{
-    pallas::Point as PallasPoint,
-    vesta::Point as VestaPoint,
-};
-use ark_std::UniformRand;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::leg::mediator;
 use super::WrappedCanonical;
 use super::*;
+use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
+use ark_std::UniformRand;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use polymesh_dart_bp::account as bp_account;
+use polymesh_dart_bp::leg::mediator;
+use polymesh_dart_common::{LegId, MediatorId};
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
@@ -155,22 +152,23 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            amount,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx.as_bytes(),
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-        )?;
+        let (proof, nullifier) =
+            bp_account::AffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                amount,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -297,21 +295,22 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx.as_bytes(),
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-        )?;
+        let (proof, nullifier) =
+            bp_account::AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -429,22 +428,23 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            amount,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx.as_bytes(),
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-        )?;
+        let (proof, nullifier) =
+            bp_account::ClaimReceivedTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                amount,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -561,21 +561,22 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx.as_bytes(),
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-        )?;
+        let (proof, nullifier) =
+            bp_account::SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
@@ -693,22 +694,23 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-            rng,
-            amount,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx.as_bytes(),
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-        )?;
+        let (proof, nullifier) =
+            bp_account::SenderReverseTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                amount,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
 
         Ok(Self {
             leg_ref: leg_ref.clone(),

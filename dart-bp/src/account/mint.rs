@@ -1,26 +1,30 @@
 use crate::account::common::ensure_correct_balance_change;
+use crate::account::common::ensure_same_accounts;
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{
-    bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
-    prove_with_rng, verify_with_rng, BPProof,
+    BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
+    prove_with_rng, verify_with_rng,
 };
 use crate::{
-    add_to_transcript, error::Result, Error, ASSET_ID_LABEL, ID_LABEL, INCREASE_BAL_BY_LABEL,
-    NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL,
+    ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
+    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier};
+use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
@@ -28,10 +32,6 @@ use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
-use ark_ec_divisors::DivisorCurve;
-use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use bulletproofs::{BulletproofGens, PedersenGens};
-use crate::account::common::ensure_same_accounts;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
 
@@ -189,7 +189,14 @@ impl<
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_r_leaf = SchnorrCommitment::new(
-            &Self::leaf_gens(account_comm_key.clone(), account_tree_params.even_parameters.sl_params.pc_gens().B_blinding),
+            &Self::leaf_gens(
+                account_comm_key.clone(),
+                account_tree_params
+                    .even_parameters
+                    .sl_params
+                    .pc_gens()
+                    .B_blinding,
+            ),
             vec![
                 new_balance_blinding,
                 counter_blinding,
@@ -244,7 +251,10 @@ impl<
         let mut transcript = even_prover.transcript();
 
         let t_bp = SchnorrCommitment::new(
-            &Self::bp_gens_vec(account_tree_params.even_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens()),
+            &Self::bp_gens_vec(
+                account_tree_params.even_parameters.pc_gens(),
+                account_tree_params.even_parameters.bp_gens(),
+            ),
             vec![
                 F0::rand(rng),
                 initial_rho_blinding,
@@ -296,8 +306,13 @@ impl<
         comm_bp_blinding.zeroize();
         rerandomization.zeroize();
 
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
         Ok((
             Self {
@@ -467,7 +482,14 @@ impl<
             - issuer_pk_proj
             - (account_comm_key.id_gen() * id);
         self.resp_leaf.is_valid(
-            &Self::leaf_gens(account_comm_key.clone(), account_tree_params.even_parameters.sl_params.pc_gens().B_blinding),
+            &Self::leaf_gens(
+                account_comm_key.clone(),
+                account_tree_params
+                    .even_parameters
+                    .sl_params
+                    .pc_gens()
+                    .B_blinding,
+            ),
             &y.into_affine(),
             &self.t_r_leaf,
             &verifier_challenge,
@@ -516,7 +538,10 @@ impl<
         missing_resps.insert(4, self.resp_leaf.0[4]);
         missing_resps.insert(5, self.resp_acc_new.responses[&4]);
         self.resp_bp.is_valid(
-            &Self::bp_gens_vec(account_tree_params.even_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens()),
+            &Self::bp_gens_vec(
+                account_tree_params.even_parameters.pc_gens(),
+                account_tree_params.even_parameters.bp_gens(),
+            ),
             &self.comm_bp,
             &self.t_bp,
             &verifier_challenge,
@@ -562,7 +587,10 @@ impl<
         ]
     }
 
-    fn bp_gens_vec(pc_gens: &PedersenGens<Affine<G0>>, bp_gens: &BulletproofGens<Affine<G0>>) -> [Affine<G0>; 6] {
+    fn bp_gens_vec(
+        pc_gens: &PedersenGens<Affine<G0>>,
+        bp_gens: &BulletproofGens<Affine<G0>>,
+    ) -> [Affine<G0>; 6] {
         let mut gens = bp_gens_for_vec_commitment(5, bp_gens);
         [
             pc_gens.B_blinding,
@@ -578,17 +606,17 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::keys::keygen_sig;
-    use ark_ff::Field;
-    use ark_std::UniformRand;
-    use std::time::Instant;
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
+    use ark_ff::Field;
     use ark_pallas::Fr as PallasFr;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
+    use ark_std::UniformRand;
+    use std::time::Instant;
 
     #[test]
     fn increase_supply_txn() {
@@ -635,20 +663,21 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = MintTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            pk_i.0,
-            increase_bal_by,
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            MintTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                pk_i.0,
+                increase_bal_by,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -675,8 +704,7 @@ mod tests {
         println!("total proof size = {}", proof.compressed_size());
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
+            prover_time, verifier_time
         );
     }
 }

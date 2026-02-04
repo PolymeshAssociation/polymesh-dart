@@ -1,26 +1,28 @@
 use ark_ec::CurveGroup;
-use ark_pallas::Affine as PallasA;
-use ark_serialize::CanonicalSerialize;
-use ark_std::{format, UniformRand};
-use blake2::Blake2b512;
-use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use criterion::{criterion_group, criterion_main, Criterion};
-use curve_tree_relations::curve_tree::CurveTree;
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
-use polymesh_dart_bp::account::state_transition_multi::MultiAssetStateTransitionProof;
-use polymesh_dart_bp::keys::{keygen_enc, keygen_sig, DecKey, EncKey, SigKey, VerKey};
-use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg};
-use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
-use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
-use rand_core::CryptoRngCore;
 use ark_ec_divisors::curves::{
     pallas::{PallasParams, Point as PallasPoint},
     vesta::{Point as VestaPoint, VestaParams},
 };
-use polymesh_dart_bp::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
+use ark_pallas::Affine as PallasA;
+use ark_serialize::CanonicalSerialize;
+use ark_std::{UniformRand, format};
+use blake2::Blake2b512;
+use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use criterion::{Criterion, criterion_group, criterion_main};
+use curve_tree_relations::curve_tree::CurveTree;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
+use polymesh_dart_bp::account::state_transition::{
+    AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
+};
+use polymesh_dart_bp::account::state_transition_multi::MultiAssetStateTransitionProof;
+use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use polymesh_dart_bp::leg::proofs::SettlementCreationProof;
+use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg};
+use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
+use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
+use rand_core::CryptoRngCore;
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -58,18 +60,23 @@ fn create_shared_setup<const NUM_GENS: usize>(
     PallasA,
     PallasA,
 ) {
-    let account_tree_params =
-        SelRerandProofParametersNew::<PallasParameters, VestaParameters, PallasParams, VestaParams>::new::<PallasPoint, VestaPoint>(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+    let account_tree_params = SelRerandProofParametersNew::<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >::new::<PallasPoint, VestaPoint>(
+        NUM_GENS as u32, NUM_GENS as u32
+    )
+    .unwrap();
 
     // Asset tree uses opposite curves
-    let asset_tree_params = SelRerandProofParametersNew::<VestaParameters, PallasParameters, VestaParams, PallasParams>::new::<VestaPoint, PallasPoint>(
-        NUM_GENS as u32,
-        NUM_GENS as u32,
-    )
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new::<VestaPoint, PallasPoint>(NUM_GENS as u32, NUM_GENS as u32)
     .unwrap();
 
     let account_comm_key = setup_comm_key(label);
@@ -125,13 +132,13 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     let height = 4;
 
     let label = b"bench";
-    let asset_tree_params =
-        SelRerandProofParametersNew::<VestaParameters, PallasParameters, VestaParams, PallasParams>::new_using_label(
-            label,
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+    .unwrap();
 
     let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
@@ -208,21 +215,22 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
 
     println!("L={L}, M={M}, asset tree height = {height} and {num_legs} legs");
 
-    let proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        legs.clone(),
-        leg_encs.clone(),
-        leg_enc_rands.clone(),
-        paths.clone(),
-        asset_data_vec.clone(),
-        &root,
-        nonce,
-        &asset_tree_params,
-        &asset_comm_params,
-        enc_key_gen,
-        enc_gen,
-    )
-    .unwrap();
+    let proof =
+        SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            legs.clone(),
+            leg_encs.clone(),
+            leg_enc_rands.clone(),
+            paths.clone(),
+            asset_data_vec.clone(),
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
     let proof_size = proof.compressed_size() + leg_encs.compressed_size();
 
     println!("Proof: {proof_size} bytes");
@@ -231,7 +239,13 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Large settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let _ = SettlementCreationProof::new::<
+                _,
+                PallasPoint,
+                VestaPoint,
+                PallasParams,
+                VestaParams,
+            >(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
@@ -306,13 +320,13 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
     let height = 5;
 
     let label = b"bench";
-    let asset_tree_params =
-        SelRerandProofParametersNew::<VestaParameters, PallasParameters, VestaParams, PallasParams>::new_using_label(
-            label,
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+    .unwrap();
 
     let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
@@ -403,21 +417,22 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         }
 
         // Create the settlement proof
-        let proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            legs,
-            leg_encs.clone(),
-            leg_enc_rands,
-            leaf_paths,
-            asset_data,
-            &root,
-            &nonces[i],
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                legs,
+                leg_encs.clone(),
+                leg_enc_rands,
+                leaf_paths,
+                asset_data,
+                &root,
+                &nonces[i],
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         proofs.push(proof);
         all_leg_encs.push(leg_encs);
@@ -596,21 +611,22 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         "L={L}, ASSET_TREE_M={ASSET_TREE_M}, ACCOUNT_TREE_M={ACCOUNT_TREE_M}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height} and {num_legs} legs",
     );
 
-    let settlement_proof = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-        &mut rng,
-        legs.clone(),
-        leg_encs.clone(),
-        leg_enc_rands.clone(),
-        asset_paths.clone(),
-        asset_data_vec.clone(),
-        &asset_tree_root,
-        nonce,
-        &asset_tree_params,
-        &asset_comm_params,
-        enc_key_gen,
-        enc_gen,
-    )
-    .unwrap();
+    let settlement_proof =
+        SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            &mut rng,
+            legs.clone(),
+            leg_encs.clone(),
+            leg_enc_rands.clone(),
+            asset_paths.clone(),
+            asset_data_vec.clone(),
+            &asset_tree_root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
     let settlement_proof_size = settlement_proof.compressed_size() + leg_encs.compressed_size();
 
     println!("Settlement proof: {settlement_proof_size} bytes");
@@ -619,7 +635,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Multi-asset settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let _ = SettlementCreationProof::new::<
+                _,
+                PallasPoint,
+                VestaPoint,
+                PallasParams,
+                VestaParams,
+            >(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
@@ -718,7 +740,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         _,
         PallasParameters,
         VestaParameters,
-    >::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new::<
+        _,
+        PallasPoint,
+        VestaPoint,
+        PallasParams,
+        VestaParams,
+    >(
         &mut rng,
         alice_builders,
         alice_paths.clone(),
@@ -873,7 +901,15 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             let even_tuples = vec![settlement_odd, alice_even, bob_even];
             let odd_tuples = vec![settlement_even, alice_odd, bob_odd];
 
-            batch_verify_bp(even_tuples, odd_tuples, account_tree_params.even_parameters.pc_gens(), account_tree_params.odd_parameters.pc_gens(), account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens()).unwrap();
+            batch_verify_bp(
+                even_tuples,
+                odd_tuples,
+                account_tree_params.even_parameters.pc_gens(),
+                account_tree_params.odd_parameters.pc_gens(),
+                account_tree_params.even_parameters.bp_gens(),
+                account_tree_params.odd_parameters.bp_gens(),
+            )
+            .unwrap();
         });
     });
 

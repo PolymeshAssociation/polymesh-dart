@@ -1,4 +1,8 @@
 use ark_ec::CurveGroup;
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 use ark_pallas::Affine as PallasA;
 use ark_std::{UniformRand, format};
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
@@ -12,10 +16,6 @@ use polymesh_dart_bp::fee_account::{FeeAccountState, FeeAccountTopupTxnProof, Fe
 use polymesh_dart_bp::keys::{SigKey, keygen_sig};
 use polymesh_dart_bp::util::verify_rmc;
 use rand_core::CryptoRngCore;
-use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
-};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -48,9 +48,13 @@ fn create_shared_setup() -> (
     const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
 
     // Create public params (generators, etc)
-    let account_tree_params = SelRerandProofParametersNew::<PallasParameters, VestaParameters, PallasParams, VestaParams>::new::<PallasPoint, VestaPoint>(
-        NUM_GENS as u32,
-        NUM_GENS as u32,
+    let account_tree_params = SelRerandProofParametersNew::<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >::new::<PallasPoint, VestaPoint>(
+        NUM_GENS as u32, NUM_GENS as u32
     )
     .unwrap();
     let account_comm_key = setup_comm_key(b"testing");
@@ -65,7 +69,12 @@ fn create_fee_account_and_tree<R: CryptoRngCore>(
     sk: SigKey<PallasA>,
     balance: u64,
     account_comm_key: &[PallasA; NUM_GENERATORS],
-    account_tree_params: &SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
 ) -> (
     FeeAccountState<PallasA>,
     CurveTree<64, 1, PallasParameters, VestaParameters>,

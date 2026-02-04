@@ -171,7 +171,9 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
 
     fn new(height: NodeLevel) -> Result<Self, Self::Error>;
 
-    fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1>;
+    fn parameters(
+        &self,
+    ) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1>;
 
     fn get_block_number(&self) -> Result<BlockNumber, Self::Error>;
 
@@ -269,7 +271,9 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
 
     fn new(height: NodeLevel) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
-    fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1>;
+    fn parameters(
+        &self,
+    ) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1>;
 
     fn get_block_number(&self) -> impl Future<Output = Result<BlockNumber, Self::Error>> + Send;
 
@@ -427,7 +431,9 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
         Ok(CurveTreeMemoryBackend::new(height)?)
     }
 
-    fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
+    fn parameters(
+        &self,
+    ) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
         C::parameters()
     }
 
@@ -554,7 +560,9 @@ where
         Ok(CurveTreeMemoryBackend::new(height)?)
     }
 
-    fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
+    fn parameters(
+        &self,
+    ) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
         C::parameters()
     }
 

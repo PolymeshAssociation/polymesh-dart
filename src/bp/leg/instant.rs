@@ -6,16 +6,13 @@ use rand_core::{CryptoRng, RngCore};
 use ark_ec::CurveConfig;
 use bounded_collections::BoundedVec;
 
-use polymesh_dart_bp::account as bp_account;
-use polymesh_dart_common::LegId;
-use ark_ec_divisors::curves::{
-    pallas::{Point as PallasPoint},
-    vesta::{Point as VestaPoint},
-};
-use ark_std::UniformRand;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use crate::curve_tree::*;
 use crate::*;
+use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
+use ark_std::UniformRand;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use polymesh_dart_bp::account as bp_account;
+use polymesh_dart_common::LegId;
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
@@ -188,7 +185,13 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            _,
+            _,
+        >(
             rng,
             amount,
             leg_enc.decode()?,
@@ -321,7 +324,13 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new::<
+            _,
+            PallasPoint,
+            VestaPoint,
+            _,
+            _,
+        >(
             rng,
             amount,
             leg_enc.decode()?,

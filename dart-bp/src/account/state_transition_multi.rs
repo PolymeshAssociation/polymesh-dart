@@ -1,21 +1,26 @@
+use crate::account::AccountCommitmentKeyTrait;
+use crate::account::state_transition::{
+    AccountStateTransitionProof, AccountStateTransitionProofBuilder,
+    AccountStateTransitionProofVerifier,
+};
+use crate::util::{
+    BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
+};
+use crate::{Error, TXN_EVEN_LABEL, TXN_ODD_LABEL, add_to_transcript, error::Result};
+use crate::{RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{format, string::ToString, vec, vec::Vec};
+use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizeMultiPathWithDivisorComms};
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
-use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
-use crate::account::state_transition::{AccountStateTransitionProof, AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
-use crate::util::{get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
-use crate::{add_to_transcript, error::Result, Error, TXN_EVEN_LABEL, TXN_ODD_LABEL};
-use crate::{RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
-use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
-use crate::account::AccountCommitmentKeyTrait;
-use ark_ec_divisors::DivisorCurve;
-use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 
 /// Combined proof for state transitions across multiple accounts (multiple assets).
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -66,24 +71,32 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
-        let (mut proof, nullifiers) = Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+        let (mut proof, nullifiers) =
+            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                account_builders,
+                leaf_paths,
+                tree_root,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )?;
+
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
             rng,
-            account_builders,
-            leaf_paths,
-            tree_root,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            &mut even_prover,
-            &mut odd_prover,
         )?;
-
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -216,20 +229,19 @@ impl<
             Some((rmc_0, _)) => Some(&mut **rmc_0),
             None => None,
         };
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<_, Parameters0, Parameters1>(
-            account_verifiers,
-            tree_root,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            rmc_0,
-        )?;
+        let (even_tuple, odd_tuple) = self
+            .verify_and_return_tuples::<_, Parameters0, Parameters1>(
+                account_verifiers,
+                tree_root,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                enc_gen,
+                rng,
+                rmc_0,
+            )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     pub fn verify_and_return_tuples<
@@ -306,12 +318,13 @@ impl<
         // Verify batched curve tree operations
         let mut rerandomized_leaves = Vec::with_capacity(self.account_proofs.len());
         for re_randomized_path in &self.re_randomized_paths {
-            re_randomized_path.batched_select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
-                tree_root,
-                even_verifier,
-                odd_verifier,
-                account_tree_params,
-            )?;
+            re_randomized_path
+                .batched_select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
+                    tree_root,
+                    even_verifier,
+                    odd_verifier,
+                    account_tree_params,
+                )?;
 
             add_to_transcript!(
                 even_verifier.transcript(),
@@ -335,16 +348,17 @@ impl<
             };
 
             // Verify with pre-computed rerandomized leaf
-            verifier.enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new(
-                proof,
-                rerandomized_leaves[i],
-                account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
-                even_verifier,
-                rmc_for_this_iteration,
-            )?;
+            verifier
+                .enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new(
+                    proof,
+                    rerandomized_leaves[i],
+                    account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    enc_gen,
+                    even_verifier,
+                    rmc_for_this_iteration,
+                )?;
         }
 
         Ok(())
@@ -356,19 +370,21 @@ mod tests {
     use super::*;
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account::state::AccountStateBuilder;
+    use crate::account::state_transition::{
+        AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
+    };
+    use crate::account::tests::{get_batched_tree_with_account_comms, setup_gens_new, setup_leg};
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
-    use ark_std::UniformRand;
-    use rand::thread_rng;
-    use std::time::Instant;
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
     use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters};
+    use ark_std::UniformRand;
     use ark_vesta::VestaConfig as VestaParameters;
-    use crate::account::state_transition::{AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier};
-    use crate::account::tests::{get_batched_tree_with_account_comms, setup_gens_new, setup_leg};
+    use rand::thread_rng;
+    use std::time::Instant;
 
     #[test]
     fn test_multi_asset_state_transition_two_accounts() {

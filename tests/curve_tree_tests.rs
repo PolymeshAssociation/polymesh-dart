@@ -4,7 +4,7 @@ use ark_ec::AffineRepr;
 use ark_ec_divisors::curves::pallas::PallasParams;
 use ark_ec_divisors::curves::vesta::VestaParams;
 use curve_tree_relations::curve_tree::CurveTree;
-use curve_tree_relations::parameters::{SelRerandProofParametersNew};
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 
 use polymesh_dart::curve_tree::{
     AssetTreeConfig, CompressedCurveTreeRoot, CompressedLeafValue, CurveTreeConfig,

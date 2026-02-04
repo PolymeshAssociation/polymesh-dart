@@ -1,14 +1,20 @@
 use crate::account::common::ensure_correct_balance_change;
+use crate::account::common::ensure_same_accounts;
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::util::{bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
-use crate::{
-    add_to_transcript, error::Result, Error, ASSET_ID_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
-    ROOT_LABEL, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
-    UPDATED_ACCOUNT_COMMITMENT_LABEL,
+use crate::util::{
+    BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
+    get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
 };
-use ark_ec::{AffineRepr, CurveGroup};
+use crate::{
+    ASSET_ID_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
+    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
+    error::Result,
+};
+use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec_divisors::DivisorCurve;
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
@@ -16,12 +22,12 @@ use ark_std::string::ToString;
 use ark_std::{vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance, BALANCE_BITS};
+use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
@@ -29,9 +35,6 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
-use ark_ec_divisors::DivisorCurve;
-use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use crate::account::common::ensure_same_accounts;
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 struct CommonTransparentProof<
@@ -91,29 +94,37 @@ impl<
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
-        let (mut proof, nullifier) = Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+        let (mut proof, nullifier) =
+            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                amount,
+                account,
+                updated_account,
+                updated_account_commitment,
+                leaf_path,
+                has_balance_decreased,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )?;
+
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
             rng,
-            amount,
-            account,
-            updated_account,
-            updated_account_commitment,
-            leaf_path,
-            has_balance_decreased,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            &mut even_prover,
-            &mut odd_prover,
         )?;
-
-        let (even_proof, odd_proof) =
-            prove_with_rng(even_prover, odd_prover, &account_tree_params.even_parameters.bp_gens(), &account_tree_params.odd_parameters.bp_gens(), rng)?;
 
         proof.r1cs_proof = Some(BPProof {
             even_proof,
@@ -425,26 +436,24 @@ impl<
             None => None,
         };
 
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<_, Parameters0, Parameters1>(
-            asset_id,
-            amount,
-            updated_account_commitment,
-            nullifier,
-            has_balance_decreased,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            rng,
-            rmc_0,
-        )?;
+        let (even_tuple, odd_tuple) = self
+            .verify_and_return_tuples::<_, Parameters0, Parameters1>(
+                asset_id,
+                amount,
+                updated_account_commitment,
+                nullifier,
+                has_balance_decreased,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                rng,
+                rmc_0,
+            )?;
 
-        
-        handle_verification_tuples(
-            even_tuple, odd_tuple, account_tree_params, rmc
-        )
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     fn verify_and_return_tuples<
@@ -814,8 +823,14 @@ impl<
         ]
     }
 
-    fn bp_gens_vec_bal_decr<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>) -> [Affine<G0>; 7] {
-        let mut gens = bp_gens_for_vec_commitment(6, &account_tree_params.even_parameters.bp_gens());
+    fn bp_gens_vec_bal_decr<
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+    ) -> [Affine<G0>; 7] {
+        let mut gens =
+            bp_gens_for_vec_commitment(6, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
             gens.next().unwrap(),
@@ -827,8 +842,11 @@ impl<
         ]
     }
 
-    fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>) -> [Affine<G0>; 6] {
-        let mut gens = bp_gens_for_vec_commitment(5, &account_tree_params.even_parameters.bp_gens());
+    fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+    ) -> [Affine<G0>; 6] {
+        let mut gens =
+            bp_gens_for_vec_commitment(5, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
             gens.next().unwrap(),
@@ -921,23 +939,24 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-            rng,
-            amount,
-            account,
-            updated_account,
-            updated_account_commitment,
-            leaf_path,
-            true,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            even_prover,
-            odd_prover,
-        )?;
+        let (common, nullifier) =
+            CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                amount,
+                account,
+                updated_account,
+                updated_account_commitment,
+                leaf_path,
+                true,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                even_prover,
+                odd_prover,
+            )?;
 
         Ok((Self(common), nullifier))
     }
@@ -1002,21 +1021,22 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.0.verify_and_return_tuples::<_, Parameters0, Parameters1>(
-            asset_id,
-            amount,
-            updated_account_commitment,
-            nullifier,
-            true,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            rng,
-            rmc,
-        )
+        self.0
+            .verify_and_return_tuples::<_, Parameters0, Parameters1>(
+                asset_id,
+                amount,
+                updated_account_commitment,
+                nullifier,
+                true,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                rng,
+                rmc,
+            )
     }
 
     pub fn verify_sigma_protocols_and_enforce_constraints<
@@ -1038,22 +1058,23 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.0.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
-            asset_id,
-            amount,
-            updated_account_commitment,
-            nullifier,
-            true,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            even_verifier,
-            odd_verifier,
-            rmc,
-        )
+        self.0
+            .verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
+                asset_id,
+                amount,
+                updated_account_commitment,
+                nullifier,
+                true,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                even_verifier,
+                odd_verifier,
+                rmc,
+            )
     }
 }
 
@@ -1138,23 +1159,24 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-            rng,
-            amount,
-            account,
-            updated_account,
-            updated_account_commitment,
-            leaf_path,
-            false,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            even_prover,
-            odd_prover,
-        )?;
+        let (common, nullifier) =
+            CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                amount,
+                account,
+                updated_account,
+                updated_account_commitment,
+                leaf_path,
+                false,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                even_prover,
+                odd_prover,
+            )?;
 
         Ok((Self(common), nullifier))
     }
@@ -1219,21 +1241,22 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.0.verify_and_return_tuples::<_, Parameters0, Parameters1>(
-            asset_id,
-            amount,
-            updated_account_commitment,
-            nullifier,
-            false,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            rng,
-            rmc,
-        )
+        self.0
+            .verify_and_return_tuples::<_, Parameters0, Parameters1>(
+                asset_id,
+                amount,
+                updated_account_commitment,
+                nullifier,
+                false,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                rng,
+                rmc,
+            )
     }
 
     pub fn verify_sigma_protocols_and_enforce_constraints<
@@ -1255,45 +1278,46 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.0.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
-            asset_id,
-            amount,
-            updated_account_commitment,
-            nullifier,
-            false,
-            auditor_keys,
-            root,
-            nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            even_verifier,
-            odd_verifier,
-            rmc,
-        )
+        self.0
+            .verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
+                asset_id,
+                amount,
+                updated_account_commitment,
+                nullifier,
+                false,
+                auditor_keys,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_key_gen,
+                even_verifier,
+                odd_verifier,
+                rmc,
+            )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
         add_verification_tuples_batches_to_rmc, batch_verify_bp, prove_with_rng, verify_rmc,
         verify_with_rng,
     };
-    use ark_ff::UniformRand;
-    use curve_tree_relations::curve_tree::CurveTree;
-    use std::time::Instant;
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
+    use ark_ff::UniformRand;
     use ark_pallas::{Fr as PallasFr, PallasConfig};
     use ark_vesta::{Fr as VestaFr, VestaConfig};
+    use curve_tree_relations::curve_tree::CurveTree;
     use rand::rngs::ThreadRng;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
+    use std::time::Instant;
 
     #[test]
     fn withdraw_proof() {
@@ -1303,7 +1327,6 @@ mod tests {
         const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
             setup_gens_new::<NUM_GENS>(b"testing");
-
 
         let asset_id = 1;
         let num_auditor_keys = 2;
@@ -1339,22 +1362,22 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            withdraw_amount,
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            auditor_pubkeys.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                withdraw_amount,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                auditor_pubkeys.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+            )
+            .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1373,7 +1396,6 @@ mod tests {
                 enc_key_gen,
                 &mut rng,
                 None,
-
             )
             .unwrap();
 
@@ -1399,7 +1421,6 @@ mod tests {
         const L: usize = 64;
         let (account_tree_params, account_comm_key, enc_key_gen, _) =
             setup_gens_new::<NUM_GENS>(b"testing");
-
 
         let asset_id = 1;
         let num_auditor_keys = 2;
@@ -1435,22 +1456,22 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) = DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            deposit_amount,
-            &account,
-            &updated_account,
-            updated_account_comm,
-            path,
-            auditor_pubkeys.clone(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_key_gen,
-
-        )
-        .unwrap();
+        let (proof, nullifier) =
+            DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                deposit_amount,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                auditor_pubkeys.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+            )
+            .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1469,7 +1490,6 @@ mod tests {
                 enc_key_gen,
                 &mut rng,
                 None,
-
             )
             .unwrap();
 
@@ -1550,21 +1570,22 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) = WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                withdraw_amount,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
-                paths[i].clone(),
-                auditor_pubkeys.clone(),
-                &root,
-                &nonces[i],
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
+            let (proof, nullifier) =
+                WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                    &mut rng,
+                    withdraw_amount,
+                    &accounts[i],
+                    &updated_accounts[i],
+                    updated_account_comms[i],
+                    paths[i].clone(),
+                    auditor_pubkeys.clone(),
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                )
+                .unwrap();
 
             proofs.push(proof);
             nullifiers.push(nullifier);
@@ -1626,7 +1647,8 @@ mod tests {
             account_tree_params.odd_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
             account_tree_params.odd_parameters.bp_gens(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let batch_verifier_time = clock.elapsed();
 
@@ -1665,15 +1687,15 @@ mod tests {
         }
 
         add_verification_tuples_batches_to_rmc(
-        even_tuples,
-        odd_tuples,
-        account_tree_params.even_parameters.pc_gens(),
-        account_tree_params.odd_parameters.pc_gens(),
-        account_tree_params.even_parameters.bp_gens(),
-        account_tree_params.odd_parameters.bp_gens(),
-        &mut rmc_0,
-        &mut rmc_1,
-    )
+            even_tuples,
+            odd_tuples,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.odd_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rmc_0,
+            &mut rmc_1,
+        )
         .unwrap();
         verify_rmc(&rmc_0, &rmc_1).unwrap();
         let batch_verifier_rmc_time = clock.elapsed();
@@ -1750,13 +1772,21 @@ mod tests {
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = WithdrawProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let (proof, nullifier) = WithdrawProof::new_with_given_prover::<
+                _,
+                PallasPoint,
+                VestaPoint,
+                PallasParams,
+                VestaParams,
+            >(
                 &mut rng,
                 withdraw_amount,
                 &accounts[i],
@@ -1777,8 +1807,14 @@ mod tests {
             nullifiers.push(nullifier);
         }
 
-        let (even_bp, odd_bp) =
-            prove_with_rng(even_prover, odd_prover, account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+        let (even_bp, odd_bp) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rng,
+        )
+        .unwrap();
         let proving_time = clock.elapsed();
 
         let clock = Instant::now();
@@ -1950,21 +1986,22 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) = DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                deposit_amount,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
-                paths[i].clone(),
-                auditor_pubkeys.clone(),
-                &root,
-                &nonces[i],
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
+            let (proof, nullifier) =
+                DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                    &mut rng,
+                    deposit_amount,
+                    &accounts[i],
+                    &updated_accounts[i],
+                    updated_account_comms[i],
+                    paths[i].clone(),
+                    auditor_pubkeys.clone(),
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                )
+                .unwrap();
 
             proofs.push(proof);
             nullifiers.push(nullifier);
@@ -2026,7 +2063,8 @@ mod tests {
             account_tree_params.odd_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
             account_tree_params.odd_parameters.bp_gens(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let batch_verifier_time = clock.elapsed();
 
@@ -2065,15 +2103,15 @@ mod tests {
         }
 
         add_verification_tuples_batches_to_rmc(
-        even_tuples,
-        odd_tuples,
-        account_tree_params.even_parameters.pc_gens(),
-        account_tree_params.odd_parameters.pc_gens(),
-        account_tree_params.even_parameters.bp_gens(),
-        account_tree_params.odd_parameters.bp_gens(),
-        &mut rmc_0,
-        &mut rmc_1,
-    )
+            even_tuples,
+            odd_tuples,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.odd_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rmc_0,
+            &mut rmc_1,
+        )
         .unwrap();
         verify_rmc(&rmc_0, &rmc_1).unwrap();
         let batch_verifier_rmc_time = clock.elapsed();
@@ -2150,13 +2188,21 @@ mod tests {
             &account_tree_params.even_parameters.pc_gens(),
             even_transcript,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.pc_gens(), odd_transcript);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = DepositProof::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let (proof, nullifier) = DepositProof::new_with_given_prover::<
+                _,
+                PallasPoint,
+                VestaPoint,
+                PallasParams,
+                VestaParams,
+            >(
                 &mut rng,
                 deposit_amount,
                 &accounts[i],
@@ -2177,8 +2223,14 @@ mod tests {
             nullifiers.push(nullifier);
         }
 
-        let (even_bp, odd_bp) =
-            prove_with_rng(even_prover, odd_prover, account_tree_params.even_parameters.bp_gens(), account_tree_params.odd_parameters.bp_gens(), &mut rng).unwrap();
+        let (even_bp, odd_bp) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rng,
+        )
+        .unwrap();
         let proving_time = clock.elapsed();
 
         let clock = Instant::now();

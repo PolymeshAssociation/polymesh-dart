@@ -1,31 +1,45 @@
-use crate::util::generate_schnorr_responses_for_balance_change;
-use bulletproofs::BulletproofGens;
-use bulletproofs::PedersenGens;
 use crate::Balance;
+use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::{LegEncryption, LegEncryptionRandomness};
-use crate::util::{add_verification_tuples_to_rmc, enforce_balance_change_verifier, enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change, generate_sigma_responses_for_common_state_change, generate_sigma_t_values_for_common_state_change, get_verification_tuples_with_rng, prove_with_rng, take_challenge_contrib_of_sigma_t_values_for_balance_change, verify_given_verification_tuples, verify_sigma_for_balance_change, verify_sigma_for_common_state_change, BPProof, enforce_balance_change_prover, generate_sigma_t_values_for_balance_change};
-use crate::{add_to_transcript, error::Result, Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL};
+use crate::util::generate_schnorr_responses_for_balance_change;
+use crate::util::{
+    BPProof, add_verification_tuples_to_rmc, enforce_balance_change_prover,
+    enforce_balance_change_verifier,
+    enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
+    generate_sigma_responses_for_common_state_change, generate_sigma_t_values_for_balance_change,
+    generate_sigma_t_values_for_common_state_change, get_verification_tuples_with_rng,
+    prove_with_rng, take_challenge_contrib_of_sigma_t_values_for_balance_change,
+    verify_given_verification_tuples, verify_sigma_for_balance_change,
+    verify_sigma_for_common_state_change,
+};
+use crate::{
+    Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
+    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
+};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{format, string::ToString, vec, vec::Vec};
+use bulletproofs::BulletproofGens;
+use bulletproofs::PedersenGens;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
-use rand_core::CryptoRngCore;
-use schnorr_pok::partial::{Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse};
-use schnorr_pok::{SchnorrCommitment, SchnorrResponse};
-use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
-use zeroize::{Zeroize, ZeroizeOnDrop};
-use crate::account::state::NUM_GENERATORS;
 use dock_crypto_utils::transcript::Transcript;
-use ark_ec::AffineRepr;
+use rand_core::CryptoRngCore;
+use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
+use schnorr_pok::partial::{
+    Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
+};
+use schnorr_pok::{SchnorrCommitment, SchnorrResponse};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Proof for variables that change during each account state transition
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -152,8 +166,10 @@ impl<
             &account_tree_params.even_parameters.sl_params.pc_gens(),
             transcript_even,
         );
-        let mut odd_prover =
-            Prover::new(&account_tree_params.odd_parameters.sl_params.pc_gens(), transcript_odd);
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.sl_params.pc_gens(),
+            transcript_odd,
+        );
 
         let mut prover = Self::init_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
             rng,
@@ -494,10 +510,7 @@ impl<
     /// Takes challenge contributions from all relevant subprotocols
     /// `has_balance_decreased` is None when balance doesn't change
     /// `has_counter_decreased` is None when counter doesn't change
-    pub fn init<
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
+    pub fn init<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         legs_with_conf: Vec<LegVerifierConfig<G0>>,
         root: &Root<L, 1, G0, G1>,
@@ -597,11 +610,13 @@ impl<
 
         match rmc {
             Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple, odd_tuple, account_tree_params, rmc_0, rmc_1,
+                even_tuple,
+                odd_tuple,
+                account_tree_params,
+                rmc_0,
+                rmc_1,
             ),
-            None => verify_given_verification_tuples(
-                even_tuple, odd_tuple, account_tree_params,
-            ),
+            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
         }
     }
 
@@ -682,7 +697,7 @@ impl<
             root,
             even_verifier,
             odd_verifier,
-            account_tree_params
+            account_tree_params,
         )?;
         let re_randomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
 

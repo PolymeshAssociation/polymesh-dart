@@ -1,3 +1,8 @@
+use ark_ec::CurveGroup;
+use ark_ec_divisors::curves::{
+    pallas::{PallasParams, Point as PallasPoint},
+    vesta::{Point as VestaPoint, VestaParams},
+};
 use ark_pallas::Affine as PallasA;
 use ark_std::UniformRand;
 use blake2::Blake2b512;
@@ -8,15 +13,10 @@ use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
 use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
-use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
-};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
+use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::verify_rmc;
-use ark_ec::CurveGroup;
-use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 
 type PallasParameters = ark_pallas::PallasConfig;
 type VestaParameters = ark_vesta::VestaConfig;
@@ -36,7 +36,9 @@ fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
     ]
 }
 
-fn create_shared_setup(label: &[u8]) -> (
+fn create_shared_setup(
+    label: &[u8],
+) -> (
     SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
     impl AccountCommitmentKeyTrait<PallasA>,
     PallasA,
@@ -44,9 +46,13 @@ fn create_shared_setup(label: &[u8]) -> (
 ) {
     const NUM_GENS: usize = 1 << 12;
 
-    let account_tree_params = SelRerandProofParametersNew::<PallasParameters, VestaParameters, PallasParams, VestaParams>::new::<PallasPoint, VestaPoint>(
-        NUM_GENS as u32,
-        NUM_GENS as u32,
+    let account_tree_params = SelRerandProofParametersNew::<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >::new::<PallasPoint, VestaPoint>(
+        NUM_GENS as u32, NUM_GENS as u32
     )
     .unwrap();
 
@@ -105,11 +111,19 @@ fn create_leg_and_encryption<R: rand_core::CryptoRngCore>(
         .unwrap()
 }
 
-fn create_account_and_tree<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyTrait<PallasA> + Clone>(
+fn create_account_and_tree<
+    R: rand_core::CryptoRngCore,
+    K: AccountCommitmentKeyTrait<PallasA> + Clone,
+>(
     rng: &mut R,
     sk: SigKey<PallasA>,
     account_comm_key: K,
-    account_tree_params: &SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
 ) -> (
     AccountState<PallasA>,
     CurveTree<64, 1, PallasParameters, VestaParameters>,
@@ -151,8 +165,12 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
         enc_gen,
     );
 
-    let (account, account_tree) =
-        create_account_and_tree(&mut rng, sk_s, account_comm_key.clone(), &account_tree_params);
+    let (account, account_tree) = create_account_and_tree(
+        &mut rng,
+        sk_s,
+        account_comm_key.clone(),
+        &account_tree_params,
+    );
 
     let nonce = b"test-nonce";
     let amount = 100;
@@ -221,8 +239,12 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
         enc_gen,
     );
 
-    let (account, account_tree) =
-        create_account_and_tree(&mut rng, sk_r, account_comm_key.clone(), &account_tree_params);
+    let (account, account_tree) = create_account_and_tree(
+        &mut rng,
+        sk_r,
+        account_comm_key.clone(),
+        &account_tree_params,
+    );
 
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_receive();
@@ -289,8 +311,12 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
         enc_gen,
     );
 
-    let (account, account_tree) =
-        create_account_and_tree(&mut rng, sk_s, account_comm_key.clone(), &account_tree_params);
+    let (account, account_tree) = create_account_and_tree(
+        &mut rng,
+        sk_s,
+        account_comm_key.clone(),
+        &account_tree_params,
+    );
 
     let nonce = b"test-nonce";
     let amount = 100;
@@ -363,8 +389,12 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
         enc_gen,
     );
 
-    let (account, account_tree) =
-        create_account_and_tree(&mut rng, sk_r, account_comm_key.clone(), &account_tree_params);
+    let (account, account_tree) = create_account_and_tree(
+        &mut rng,
+        sk_r,
+        account_comm_key.clone(),
+        &account_tree_params,
+    );
 
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_receive();

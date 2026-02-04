@@ -1,29 +1,48 @@
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_ff::{PrimeField};
-use ark_std::{vec, vec::Vec};
-use ark_std::string::ToString;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizeMultiPathWithDivisorComms, SelectAndRerandomizePathWithDivisorComms};
-use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment};
-use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol};
-use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use crate::leg::{
+    AssetCommitmentParams, AssetData, LEG_TXN_CHALLENGE_LABEL, LEG_TXN_EVEN_LABEL,
+    LEG_TXN_ODD_LABEL, Leg, LegEncryption, LegEncryptionRandomness,
+};
+use crate::util::{
+    BPProof, bp_gens_for_vec_commitment, get_verification_tuples_with_rng,
+    handle_verification_tuples, prove_with_rng,
+};
+use crate::{
+    Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, add_to_transcript,
+    error,
+};
 use ark_dlog_gadget::dlog::{DiscreteLogParameters, DivisorComms};
-use rand_core::CryptoRngCore;
-use ark_ec_divisors::DivisorCurve;
-use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
-use curve_tree_relations::parameters::SelRerandProofParametersNew;
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, Prover, Variable, VerificationTuple, Verifier};
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
-use curve_tree_relations::ped_comm_group_elems::{prove as prove_ped_com, verify as verify_ped_com};
-use zeroize::Zeroize;
-use curve_tree_relations::range_proof::range_proof;
+use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use polymesh_dart_common::{Balance, BALANCE_BITS};
-use crate::{add_to_transcript, error, Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
-use crate::leg::{AssetCommitmentParams, AssetData, Leg, LegEncryption, LegEncryptionRandomness, LEG_TXN_CHALLENGE_LABEL, LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL};
-use crate::util::{bp_gens_for_vec_commitment, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, BPProof};
+use ark_ec_divisors::DivisorCurve;
+use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::string::ToString;
+use ark_std::{vec, vec::Vec};
+use bulletproofs::r1cs::{
+    ConstraintSystem, LinearCombination, Prover, Variable, VerificationTuple, Verifier,
+};
+use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
+use curve_tree_relations::curve_tree::{
+    Root, SelectAndRerandomizeMultiPathWithDivisorComms, SelectAndRerandomizePathWithDivisorComms,
+};
+use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+use curve_tree_relations::parameters::SelRerandProofParametersNew;
+use curve_tree_relations::ped_comm_group_elems::{
+    prove as prove_ped_com, verify as verify_ped_com,
+};
+use curve_tree_relations::range_proof::range_proof;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{BALANCE_BITS, Balance};
+use rand_core::CryptoRngCore;
+use schnorr_pok::discrete_log::{
+    PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
+use schnorr_pok::partial::{
+    Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
+};
+use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
+use zeroize::Zeroize;
 
 /// This is the proof for a single leg creation. Report section 5.1.5
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -89,17 +108,43 @@ impl<
     ) -> error::Result<Self> {
         let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
-        let mut even_prover = Prover::new(&tree_parameters.even_parameters.sl_params.pc_gens(), even_transcript);
-        let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.sl_params.pc_gens(), odd_transcript);
-        
+        let mut even_prover = Prover::new(
+            &tree_parameters.even_parameters.sl_params.pc_gens(),
+            even_transcript,
+        );
+        let mut odd_prover = Prover::new(
+            &tree_parameters.odd_parameters.sl_params.pc_gens(),
+            odd_transcript,
+        );
+
         let mut proof = Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
-            rng, leg, leg_enc, leg_enc_rand, leaf_path, asset_data, asset_tree_root,
-            nonce, tree_parameters, asset_comm_params, enc_key_gen, enc_gen,
-            &mut even_prover, &mut odd_prover,
+            rng,
+            leg,
+            leg_enc,
+            leg_enc_rand,
+            leaf_path,
+            asset_data,
+            asset_tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
         )?;
 
-        let (even_proof, odd_proof) = prove_with_rng(even_prover, odd_prover, &tree_parameters.even_parameters.bp_gens(), &tree_parameters.odd_parameters.bp_gens(), rng)?;
-        proof.r1cs_proof = Some(BPProof { even_proof, odd_proof });
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &tree_parameters.even_parameters.bp_gens(),
+            &tree_parameters.odd_parameters.bp_gens(),
+            rng,
+        )?;
+        proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
         Ok(proof)
     }
 
@@ -125,16 +170,22 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> error::Result<Self> {
-        let (re_randomized_path, re_randomization_of_leaf) =
-            leaf_path.select_and_rerandomize_prover_gadget_new::<R, D1, D0, Parameters1, Parameters0>(
-                even_prover, odd_prover, tree_parameters, rng
+        let (re_randomized_path, re_randomization_of_leaf) = leaf_path
+            .select_and_rerandomize_prover_gadget_new::<R, D1, D0, Parameters1, Parameters0>(
+                even_prover,
+                odd_prover,
+                tree_parameters,
+                rng,
             )?;
 
         add_to_transcript!(
             odd_prover.transcript(),
-            ROOT_LABEL, asset_tree_root,
-            NONCE_LABEL, nonce,
-            RE_RANDOMIZED_PATH_LABEL, re_randomized_path
+            ROOT_LABEL,
+            asset_tree_root,
+            NONCE_LABEL,
+            nonce,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path
         );
 
         add_to_transcript!(odd_prover.transcript(), LEG_ENC_LABEL, leg_enc,);
@@ -142,9 +193,20 @@ impl<
         let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
 
         Self::new_with_given_prover_inner::<R, D0, Parameters0, Parameters1>(
-            rng, leg, leg_enc, leg_enc_rand, rerandomized_leaf, re_randomization_of_leaf,
-            asset_data, tree_parameters, asset_comm_params, enc_key_gen, enc_gen,
-            even_prover, odd_prover, Some(re_randomized_path)
+            rng,
+            leg,
+            leg_enc,
+            leg_enc_rand,
+            rerandomized_leaf,
+            re_randomization_of_leaf,
+            asset_data,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            even_prover,
+            odd_prover,
+            Some(re_randomized_path),
         )
     }
 
@@ -169,13 +231,13 @@ impl<
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G1, G0>>,
     ) -> error::Result<Self> {
-
         let mut at = F0::from(leg.asset_id);
         let mut amount = F0::from(leg.amount);
 
         let num_asset_data_keys = asset_data.keys.len();
 
-        let asset_data_points = AssetData::points(leg.asset_id, &asset_data.keys, &asset_comm_params);
+        let asset_data_points =
+            AssetData::points(leg.asset_id, &asset_data.keys, &asset_comm_params);
 
         let num_asset_data_points = asset_data_points.len();
 
@@ -184,7 +246,11 @@ impl<
             let x_coords = asset_data_points
                 .clone()
                 .into_iter()
-                .map(|p| (tree_parameters.odd_parameters.sl_params.delta + p).into_affine().x)
+                .map(|p| {
+                    (tree_parameters.odd_parameters.sl_params.delta + p)
+                        .into_affine()
+                        .x
+                })
                 .collect::<Vec<_>>();
             let commitment = Projective::<G1>::msm(
                 &asset_comm_params.comm_key[..num_asset_data_points],
@@ -220,7 +286,8 @@ impl<
             assert_eq!(
                 re_randomized_points[0].into_group(),
                 (asset_comm_params.j_0 * at)
-                    + (tree_parameters.odd_parameters.pc_gens().B_blinding * blindings_for_points[0])
+                    + (tree_parameters.odd_parameters.pc_gens().B_blinding
+                        * blindings_for_points[0])
             );
 
             for i in 0..num_asset_data_keys {
@@ -269,20 +336,26 @@ impl<
             r_4_r_1_inv,
             amount,
         ];
-        
+
         // Commitment to `[r_1, r_2, r_3, r_4, r_2/r_1, r_3/r_1, r_4/r_1, amount]`
         let (comm_r_i_amount, vars) = odd_prover.commit_vec(
             &wits,
             comm_r_i_blinding,
             &tree_parameters.odd_parameters.bp_gens(),
         );
-        LegCreationProof::<L, F0, F1, G0, G1>::enforce_constraints(odd_prover, Some(leg.amount), vars)?;
+        LegCreationProof::<L, F0, F1, G0, G1>::enforce_constraints(
+            odd_prover,
+            Some(leg.amount),
+            vars,
+        )?;
 
         Zeroize::zeroize(&mut wits);
 
         // Sigma protocol for proving knowledge of `comm_r_i_amount`
         let t_comm_r_i_amount = SchnorrCommitment::new(
-            &LegCreationProof::<L, F0, F1, G0, G1>::bp_gens_vec::<Parameters0, Parameters1>(tree_parameters),
+            &LegCreationProof::<L, F0, F1, G0, G1>::bp_gens_vec::<Parameters0, Parameters1>(
+                tree_parameters,
+            ),
             vec![
                 F0::rand(rng),
                 r_1_blinding,
@@ -505,21 +578,30 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        mut rmc: Option<(&mut RandomizedMultChecker<Affine<G1>>, &mut RandomizedMultChecker<Affine<G0>>)>,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G1>>,
+            &mut RandomizedMultChecker<Affine<G0>>,
+        )>,
     ) -> error::Result<()> {
         let rmc_0 = match rmc.as_mut() {
             Some((_, rmc_0)) => Some(&mut **rmc_0),
             None => None,
         };
-        
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<R, Parameters0, Parameters1>(
-            leg_enc, asset_tree_root, nonce, tree_parameters, asset_comm_params,
-            enc_key_gen, enc_gen, rng, rmc_0,
-        )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, tree_parameters, rmc
-        )
+        let (even_tuple, odd_tuple) = self
+            .verify_and_return_tuples::<R, Parameters0, Parameters1>(
+                leg_enc,
+                asset_tree_root,
+                nonce,
+                tree_parameters,
+                asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                rng,
+                rmc_0,
+            )?;
+
+        handle_verification_tuples(even_tuple, odd_tuple, tree_parameters, rmc)
     }
 
     pub fn verify_and_return_tuples<
@@ -542,17 +624,30 @@ impl<
         let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
         let mut odd_verifier = Verifier::new(transcript_odd);
-        
+
         self.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
-            leg_enc, asset_tree_root, nonce, tree_parameters, asset_comm_params,
-            enc_key_gen, enc_gen, &mut even_verifier, &mut odd_verifier, rmc,
+            leg_enc,
+            asset_tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_verifier,
+            &mut odd_verifier,
+            rmc,
         )?;
 
-        let r1cs_proof = self.r1cs_proof.as_ref()
+        let r1cs_proof = self
+            .r1cs_proof
+            .as_ref()
             .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
         get_verification_tuples_with_rng(
-            even_verifier, odd_verifier,
-            &r1cs_proof.even_proof, &r1cs_proof.odd_proof, rng,
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
         )
     }
 
@@ -574,20 +669,27 @@ impl<
     ) -> error::Result<()> {
         let re_randomized_path = self.re_randomized_path.as_ref().ok_or_else(|| {
             Error::ProofVerificationError(
-                "re_randomized_path must be present when not using batched verification".to_string()
+                "re_randomized_path must be present when not using batched verification"
+                    .to_string(),
             )
         })?;
 
         // Call new curve tree verifier function with divisor commitments
         re_randomized_path.select_and_rerandomize_verifier_gadget::<Parameters1, Parameters0>(
-            asset_tree_root, even_verifier, odd_verifier, tree_parameters,
+            asset_tree_root,
+            even_verifier,
+            odd_verifier,
+            tree_parameters,
         )?;
 
         add_to_transcript!(
             odd_verifier.transcript(),
-            ROOT_LABEL, asset_tree_root,
-            NONCE_LABEL, nonce,
-            RE_RANDOMIZED_PATH_LABEL, re_randomized_path
+            ROOT_LABEL,
+            asset_tree_root,
+            NONCE_LABEL,
+            nonce,
+            RE_RANDOMIZED_PATH_LABEL,
+            re_randomized_path
         );
 
         let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
@@ -752,7 +854,7 @@ impl<
                         &challenge,
                         rmc,
                     )?;
-                    
+
                 for i in 0..self.resp_eph_pk_auds_meds.len() {
                     let resp = &self.resp_eph_pk_auds_meds[i];
                     let D_r1 = &leg_enc.eph_pk_auds_meds[i].1.0;
@@ -835,7 +937,7 @@ impl<
                     &self.t_comm_r_i_amount,
                     &challenge,
                 )?;
-                
+
                 for i in 0..self.resp_eph_pk_auds_meds.len() {
                     let resp = &self.resp_eph_pk_auds_meds[i];
                     let D_r1 = &leg_enc.eph_pk_auds_meds[i].1.0;
@@ -847,24 +949,43 @@ impl<
                         &challenge,
                         &self.resp_comm_r_i_amount.0[1],
                     ) {
-                        return Err(Error::ProofVerificationError(
-                            ark_std::format!("resp r_1 verification failed for auditor/mediator {}", i),
-                        ));
+                        return Err(Error::ProofVerificationError(ark_std::format!(
+                            "resp r_1 verification failed for auditor/mediator {}",
+                            i
+                        )));
                     }
-                    if !resp.r_2.verify(&leg_enc.eph_pk_auds_meds[i].1.1, D_r1, &challenge, &self.resp_comm_r_i_amount.0[5]) {
-                        return Err(Error::ProofVerificationError(
-                            ark_std::format!("resp r_2 verification failed for auditor/mediator {}", i),
-                        ));
+                    if !resp.r_2.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.1,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[5],
+                    ) {
+                        return Err(Error::ProofVerificationError(ark_std::format!(
+                            "resp r_2 verification failed for auditor/mediator {}",
+                            i
+                        )));
                     }
-                    if !resp.r_3.verify(&leg_enc.eph_pk_auds_meds[i].1.2, D_r1, &challenge, &self.resp_comm_r_i_amount.0[6]) {
-                        return Err(Error::ProofVerificationError(
-                            ark_std::format!("resp r_3 verification failed for auditor/mediator {}", i),
-                        ));
+                    if !resp.r_3.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.2,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[6],
+                    ) {
+                        return Err(Error::ProofVerificationError(ark_std::format!(
+                            "resp r_3 verification failed for auditor/mediator {}",
+                            i
+                        )));
                     }
-                    if !resp.r_4.verify(&leg_enc.eph_pk_auds_meds[i].1.3, D_r1, &challenge, &self.resp_comm_r_i_amount.0[7]) {
-                        return Err(Error::ProofVerificationError(
-                            ark_std::format!("resp r_4 verification failed for auditor/mediator {}", i),
-                        ));
+                    if !resp.r_4.verify(
+                        &leg_enc.eph_pk_auds_meds[i].1.3,
+                        D_r1,
+                        &challenge,
+                        &self.resp_comm_r_i_amount.0[7],
+                    ) {
+                        return Err(Error::ProofVerificationError(ark_std::format!(
+                            "resp r_4 verification failed for auditor/mediator {}",
+                            i
+                        )));
                     }
                 }
             }
@@ -905,10 +1026,7 @@ impl<
         Ok(())
     }
 
-    fn bp_gens_vec<
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
+    fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         tree_params: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
     ) -> [Affine<G0>; 9] {
         let mut gens = bp_gens_for_vec_commitment(8, tree_params.odd_parameters.bp_gens());
@@ -982,17 +1100,38 @@ impl<
     ) -> error::Result<Self> {
         let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
-        let mut even_prover = Prover::new(&tree_parameters.even_parameters.pc_gens(), even_transcript);
+        let mut even_prover =
+            Prover::new(&tree_parameters.even_parameters.pc_gens(), even_transcript);
         let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens(), odd_transcript);
 
         let mut proof = Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
-            rng, legs, leg_encs, leg_enc_rands, leaf_paths, asset_data, asset_tree_root,
-            nonce, tree_parameters, asset_comm_params, enc_key_gen, enc_gen,
-            &mut even_prover, &mut odd_prover,
+            rng,
+            legs,
+            leg_encs,
+            leg_enc_rands,
+            leaf_paths,
+            asset_data,
+            asset_tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
         )?;
 
-        let (even_proof, odd_proof) = prove_with_rng(even_prover, odd_prover, &tree_parameters.even_parameters.bp_gens(), &tree_parameters.odd_parameters.bp_gens(), rng)?;
-        proof.r1cs_proof = Some(BPProof { even_proof, odd_proof });
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &tree_parameters.even_parameters.bp_gens(),
+            &tree_parameters.odd_parameters.bp_gens(),
+            rng,
+        )?;
+        proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
         Ok(proof)
     }
 
@@ -1050,7 +1189,13 @@ impl<
         }
 
         // Use batched_select_and_rerandomize_prover_gadget_new for efficiency
-        add_to_transcript!(odd_prover.transcript(), ROOT_LABEL, asset_tree_root, NONCE_LABEL, nonce);
+        add_to_transcript!(
+            odd_prover.transcript(),
+            ROOT_LABEL,
+            asset_tree_root,
+            NONCE_LABEL,
+            nonce
+        );
 
         for leg_enc in &leg_encs {
             add_to_transcript!(odd_prover.transcript(), LEG_ENC_LABEL, leg_enc,);
@@ -1065,11 +1210,18 @@ impl<
                     even_prover, odd_prover, tree_parameters, rng
                 )?;
 
-            add_to_transcript!(odd_prover.transcript(), RE_RANDOMIZED_PATH_LABEL, re_randomized_path);
+            add_to_transcript!(
+                odd_prover.transcript(),
+                RE_RANDOMIZED_PATH_LABEL,
+                re_randomized_path
+            );
 
             let rerandomized_leaves = re_randomized_path.path.get_rerandomized_leaves();
             all_rerandomized_leaves.extend(
-                rerandomized_leaves.into_iter().zip(randomizers).map(|(l, r)| (l, r))
+                rerandomized_leaves
+                    .into_iter()
+                    .zip(randomizers)
+                    .map(|(l, r)| (l, r)),
             );
 
             re_randomized_paths.push(re_randomized_path);
@@ -1080,26 +1232,31 @@ impl<
         // Create individual leg proofs using the pre-computed rerandomized leaves
         let mut leg_proofs = Vec::with_capacity(num_legs);
         for i in 0..num_legs {
-            let leg_proof = LegCreationProof::new_with_given_prover_inner::<R, D0, Parameters0, Parameters1>(
-                rng,
-                legs[i].clone(),
-                leg_encs[i].clone(),
-                leg_enc_rands[i].clone(),
-                all_rerandomized_leaves[i].0,
-                all_rerandomized_leaves[i].1,
-                asset_data[i].clone(),
-                tree_parameters,
-                asset_comm_params,
-                enc_key_gen,
-                enc_gen,
-                even_prover,
-                odd_prover,
-                None, // re_randomized_path is stored separately in SettlementCreationProofNew
-            )?;
+            let leg_proof =
+                LegCreationProof::new_with_given_prover_inner::<R, D0, Parameters0, Parameters1>(
+                    rng,
+                    legs[i].clone(),
+                    leg_encs[i].clone(),
+                    leg_enc_rands[i].clone(),
+                    all_rerandomized_leaves[i].0,
+                    all_rerandomized_leaves[i].1,
+                    asset_data[i].clone(),
+                    tree_parameters,
+                    asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    even_prover,
+                    odd_prover,
+                    None, // re_randomized_path is stored separately in SettlementCreationProofNew
+                )?;
             leg_proofs.push(leg_proof);
         }
 
-        Ok(Self { leg_proofs, re_randomized_paths, r1cs_proof: None })
+        Ok(Self {
+            leg_proofs,
+            re_randomized_paths,
+            r1cs_proof: None,
+        })
     }
 
     pub fn verify<
@@ -1116,21 +1273,30 @@ impl<
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
-        mut rmc: Option<(&mut RandomizedMultChecker<Affine<G1>>, &mut RandomizedMultChecker<Affine<G0>>)>,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G1>>,
+            &mut RandomizedMultChecker<Affine<G0>>,
+        )>,
     ) -> error::Result<()> {
         let rmc_0 = match rmc.as_mut() {
             Some((_, rmc_0)) => Some(&mut **rmc_0),
             None => None,
         };
-        
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples::<R, Parameters0, Parameters1>(
-            leg_encs, asset_tree_root, nonce, tree_parameters, asset_comm_params,
-            enc_key_gen, enc_gen, rng, rmc_0,
-        )?;
 
-        handle_verification_tuples(
-            even_tuple, odd_tuple, tree_parameters, rmc
-        )
+        let (even_tuple, odd_tuple) = self
+            .verify_and_return_tuples::<R, Parameters0, Parameters1>(
+                leg_encs,
+                asset_tree_root,
+                nonce,
+                tree_parameters,
+                asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                rng,
+                rmc_0,
+            )?;
+
+        handle_verification_tuples(even_tuple, odd_tuple, tree_parameters, rmc)
     }
 
     pub fn verify_and_return_tuples<
@@ -1153,17 +1319,30 @@ impl<
         let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
         let mut even_verifier = Verifier::new(transcript_even);
         let mut odd_verifier = Verifier::new(transcript_odd);
-        
+
         self.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
-            leg_encs, asset_tree_root, nonce, tree_parameters, asset_comm_params,
-            enc_key_gen, enc_gen, &mut even_verifier, &mut odd_verifier, rmc,
+            leg_encs,
+            asset_tree_root,
+            nonce,
+            tree_parameters,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            &mut even_verifier,
+            &mut odd_verifier,
+            rmc,
         )?;
 
-        let r1cs_proof = self.r1cs_proof.as_ref()
+        let r1cs_proof = self
+            .r1cs_proof
+            .as_ref()
             .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
         get_verification_tuples_with_rng(
-            even_verifier, odd_verifier,
-            &r1cs_proof.even_proof, &r1cs_proof.odd_proof, rng,
+            even_verifier,
+            odd_verifier,
+            &r1cs_proof.even_proof,
+            &r1cs_proof.odd_proof,
+            rng,
         )
     }
 
@@ -1181,7 +1360,7 @@ impl<
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>, 
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> error::Result<()> {
         let num_legs = self.leg_proofs.len();
         if num_legs != leg_encs.len() {
@@ -1192,8 +1371,10 @@ impl<
 
         add_to_transcript!(
             odd_verifier.transcript(),
-            ROOT_LABEL, asset_tree_root,
-            NONCE_LABEL, nonce,
+            ROOT_LABEL,
+            asset_tree_root,
+            NONCE_LABEL,
+            nonce,
         );
 
         for leg_enc in &leg_encs {
@@ -1201,20 +1382,25 @@ impl<
         }
 
         let mut all_rerandomized_leaves = Vec::with_capacity(num_legs);
-        
+
         for re_randomized_path in self.re_randomized_paths.iter() {
-            re_randomized_path.batched_select_and_rerandomize_verifier_gadget::<Parameters1, Parameters0>(
-                asset_tree_root, even_verifier, odd_verifier, tree_parameters,
-            )?;
-            
+            re_randomized_path
+                .batched_select_and_rerandomize_verifier_gadget::<Parameters1, Parameters0>(
+                    asset_tree_root,
+                    even_verifier,
+                    odd_verifier,
+                    tree_parameters,
+                )?;
+
             all_rerandomized_leaves.extend(re_randomized_path.path.get_rerandomized_leaves());
 
             add_to_transcript!(
                 odd_verifier.transcript(),
-                RE_RANDOMIZED_PATH_LABEL, re_randomized_path
+                RE_RANDOMIZED_PATH_LABEL,
+                re_randomized_path
             );
         }
-        
+
         if all_rerandomized_leaves.len() != num_legs {
             return Err(Error::ProofVerificationError(
                 "Total number of rerandomized leaves does not match number of legs".to_string(),
@@ -1222,12 +1408,12 @@ impl<
         }
 
         for i in 0..num_legs {
-             self.leg_proofs[i].verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
+            self.leg_proofs[i].verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
                 leg_encs[i].clone(), all_rerandomized_leaves[i], tree_parameters, asset_comm_params,
                 enc_key_gen, enc_gen, even_verifier, odd_verifier, rmc.as_deref_mut(),
             )?;
         }
-        
+
         Ok(())
     }
 }

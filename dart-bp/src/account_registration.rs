@@ -1512,10 +1512,10 @@ pub mod tests {
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
+    use curve_tree_relations::parameters::SelRerandProofParameters;
     use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
-    use curve_tree_relations::parameters::SelRerandProofParameters;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
@@ -1784,11 +1784,12 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -1888,11 +1889,12 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2016,11 +2018,12 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2249,11 +2252,12 @@ pub mod tests {
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
@@ -2582,11 +2586,12 @@ pub mod tests {
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
         // Create public params (generators, etc)
-        let account_tree_params = SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
-            NUM_GENS as u32,
-            NUM_GENS as u32,
-        )
-        .unwrap();
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
 
         let account_comm_key = setup_comm_key(b"testing");
 
