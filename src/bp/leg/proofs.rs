@@ -188,7 +188,7 @@ impl<
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let start = std::time::Instant::now();
+        //let start = std::time::Instant::now();
         // Get the curve tree root.
         let root = tree_roots
             .get_block_root(self.root_block.into())
@@ -196,18 +196,18 @@ impl<
                 log::error!("Invalid root for sender affirmation proof");
                 Error::CurveTreeRootNotFound
             })?;
-        println!("root getting {:?}", start.elapsed());
+        //println!("root getting {:?}", start.elapsed());
         let root = root.root_node()?;
-        println!("root decompress {:?}", start.elapsed());
+        //println!("root decompress {:?}", start.elapsed());
 
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
-        println!("proof decompress {:?}", start.elapsed());
+        //println!("proof decompress {:?}", start.elapsed());
         let leg_enc = leg_enc.decode()?;
-        println!("leg decompress {:?}", start.elapsed());
+        //println!("leg decompress {:?}", start.elapsed());
         let nullifier = self.nullifier.get_affine()?;
         let acc_cm = self.updated_account_state_commitment.as_commitment()?;
-        println!("pre-verify {:?}", start.elapsed());
+        //println!("pre-verify {:?}", start.elapsed());
 
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
