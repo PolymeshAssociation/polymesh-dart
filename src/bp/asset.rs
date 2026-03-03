@@ -16,19 +16,30 @@ use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as Vest
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
 /// Represents the state of an asset in the Dart BP protocol.
+///
+/// - `auditors`: encryption keys shared between auditors and mediators (used to decrypt leg contents)
+/// - `mediators`: pairs of `(enc_key_index, affirmation_key)` where `enc_key_index` is an index into the
+///   `auditors` set pointing to the shared encryption key this mediator uses for decryption, and
+///   `affirmation_key` is the mediator's signing/affirmation key used to prove their identity.
+///
+/// This mirrors [`dart_bp::leg::AssetData`]'s `enc_keys` / `med_keys` fields exactly.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetState<T: DartLimits = ()> {
     pub asset_id: AssetId,
-    pub mediators: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetMediators>,
+    /// `(enc_key_index, affirmation_key)` — index points into `auditors` (the shared enc-keys list)
+    pub mediators: BoundedBTreeSet<(u8, AccountPublicKey), T::MaxAssetMediators>,
     pub auditors: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
 }
 
 impl<T: DartLimits> AssetState<T> {
-    /// Creates a new asset state with the given asset ID, mediator status, and public key.
+    /// Creates a new asset state with the given asset ID, mediators, and auditors.
+    ///
+    /// `mediators` is a slice of `(enc_key_index, affirmation_key)` pairs. The index must point to
+    /// a valid entry in `auditors` (i.e., `< auditors.len()`).
     pub fn new(
         asset_id: AssetId,
-        mediators: &[EncryptionPublicKey],
+        mediators: &[(u8, AccountPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Self {
         let mut state = Self {
@@ -53,10 +64,10 @@ impl<T: DartLimits> AssetState<T> {
         state
     }
 
-    /// Creates a new asset state with the given asset ID, mediator status, and public key.
+    /// Creates a new asset state from pre-bounded collections.
     pub fn new_bounded(
         asset_id: AssetId,
-        mediators: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetMediators>,
+        mediators: &BoundedBTreeSet<(u8, AccountPublicKey), T::MaxAssetMediators>,
         auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
     ) -> Self {
         Self {
@@ -66,23 +77,23 @@ impl<T: DartLimits> AssetState<T> {
         }
     }
 
-    pub fn keys(&self) -> Vec<(bool, PallasA)> {
-        let mut keys = Vec::with_capacity(self.auditors.len() + self.mediators.len());
-        for mediator in &self.mediators {
-            keys.push((false, mediator.get_affine().unwrap()));
-        }
-        for auditor in &self.auditors {
-            keys.push((true, auditor.get_affine().unwrap()));
-        }
-        keys
-    }
-
     pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
         let tree_params = get_asset_curve_tree_parameters();
         let asset_comm_params = get_asset_commitment_parameters();
+        let enc_keys: Vec<PallasA> = self
+            .auditors
+            .iter()
+            .map(|a| a.get_affine())
+            .collect::<Result<_, _>>()?;
+        let med_keys: Vec<(u8, PallasA)> = self
+            .mediators
+            .iter()
+            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
         let asset_data = AssetCommitmentData::new(
             self.asset_id,
-            self.keys(),
+            enc_keys,
+            med_keys,
             asset_comm_params,
             tree_params.odd_parameters.sl_params.delta,
         )?;
@@ -130,16 +141,16 @@ impl<
     /// Generate a new asset minting proof.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
-        let state_change = account_asset.mint(account, amount)?;
+        let state_change = account_asset.mint(keys, amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
-        let pk = account.public;
+        let pk = keys.acct.public;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root()?;

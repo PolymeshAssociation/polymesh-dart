@@ -5,7 +5,6 @@ use ark_ec_divisors::curves::{
 };
 use ark_pallas::Affine as PallasA;
 use ark_std::UniformRand;
-use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::CurveTree;
@@ -14,7 +13,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
 use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::{Leg, LegEncryption, LegEncryptionRandomness};
+use polymesh_dart_bp::leg::{Leg, LegEncConfig, LegEncryption};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::verify_rmc;
 
@@ -33,6 +32,7 @@ fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
         hash_to_pallas(label, b"current-rho-gen").into_affine(),
         hash_to_pallas(label, b"randomness-gen").into_affine(),
         hash_to_pallas(label, b"id-gen").into_affine(),
+        hash_to_pallas(label, b"sk-enc-inv-gen").into_affine(),
     ]
 }
 
@@ -95,20 +95,34 @@ fn create_keys<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyTrait<PallasA
 
 fn create_leg_and_encryption<R: rand_core::CryptoRngCore>(
     rng: &mut R,
-    pk_s: VerKey<PallasA>,
-    pk_r: VerKey<PallasA>,
     pk_s_e: EncKey<PallasA>,
     pk_r_e: EncKey<PallasA>,
     pk_a_e: EncKey<PallasA>,
     enc_key_gen: PallasA,
     enc_gen: PallasA,
-) -> (LegEncryption<PallasA>, LegEncryptionRandomness<PallasFr>) {
+    reveal_asset_id: bool,
+) -> LegEncryption<PallasA> {
     let asset_id = 1;
     let amount = 100;
 
-    let leg = Leg::new(pk_s.0, pk_r.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
-    leg.encrypt::<_, Blake2b512>(rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
-        .unwrap()
+    let conf = LegEncConfig {
+        parties_see_each_other: true,
+        reveal_asset_id,
+    };
+
+    let leg = Leg::new(
+        pk_s_e.0,
+        pk_r_e.0,
+        amount,
+        asset_id,
+        vec![pk_a_e.0],
+        vec![],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let (leg_enc, _) = leg.encrypt(rng, conf, enc_key_gen, enc_gen).unwrap();
+    leg_enc
 }
 
 fn create_account_and_tree<
@@ -117,6 +131,7 @@ fn create_account_and_tree<
 >(
     rng: &mut R,
     sk: SigKey<PallasA>,
+    sk_enc: DecKey<PallasA>,
     account_comm_key: K,
     account_tree_params: &SelRerandProofParametersNew<
         PallasParameters,
@@ -131,7 +146,8 @@ fn create_account_and_tree<
     let asset_id = 1;
     let id = PallasFr::rand(rng);
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
-    let mut account = AccountState::new(rng, id, sk.0, asset_id, 0, poseidon_config).unwrap();
+    let mut account =
+        AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap();
     account.balance = 200;
 
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -151,23 +167,23 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
     let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
-    let ((sk_s, pk_s), (_sk_s_e, pk_s_e), (_sk_r, pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
+    let ((sk_s, _pk_s), (sk_s_e, pk_s_e), (_sk_r, _pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
         create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
-    let (leg_enc, leg_enc_rand) = create_leg_and_encryption(
+    let leg_enc = create_leg_and_encryption(
         &mut rng,
-        pk_s,
-        pk_r,
         pk_s_e,
         pk_r_e,
         pk_a_e,
         enc_key_gen,
         enc_gen,
+        false,
     );
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
         sk_s,
+        sk_s_e,
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -183,7 +199,6 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
         &mut rng,
         amount,
         leg_enc.clone(),
-        leg_enc_rand.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -192,7 +207,6 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
         nonce,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -210,7 +224,6 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     None,
                 )
@@ -225,23 +238,23 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
-    let ((_sk_s, pk_s), (_sk_s_e, pk_s_e), (sk_r, pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
+    let ((_sk_s, _pk_s), (_sk_s_e, pk_s_e), (sk_r, _pk_r), (sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
         create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
-    let (leg_enc, leg_enc_rand) = create_leg_and_encryption(
+    let leg_enc = create_leg_and_encryption(
         &mut rng,
-        pk_s,
-        pk_r,
         pk_s_e,
         pk_r_e,
         pk_a_e,
         enc_key_gen,
         enc_gen,
+        false,
     );
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
         sk_r,
+        sk_r_e,
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -255,7 +268,6 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         leg_enc.clone(),
-        leg_enc_rand.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -264,7 +276,6 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
         nonce,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -282,7 +293,6 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     None,
                 )
@@ -297,23 +307,23 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
     let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
-    let ((sk_s, pk_s), (_sk_s_e, pk_s_e), (_sk_r, pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
+    let ((sk_s, _pk_s), (sk_s_e, pk_s_e), (_sk_r, _pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
         create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
-    let (leg_enc, leg_enc_rand) = create_leg_and_encryption(
+    let leg_enc = create_leg_and_encryption(
         &mut rng,
-        pk_s,
-        pk_r,
         pk_s_e,
         pk_r_e,
         pk_a_e,
         enc_key_gen,
         enc_gen,
+        false,
     );
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
         sk_s,
+        sk_s_e,
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -329,7 +339,6 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
         &mut rng,
         amount,
         leg_enc.clone(),
-        leg_enc_rand.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -338,7 +347,6 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
         nonce,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -359,7 +367,6 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     Some((&mut rmc_0, &mut rmc_1)),
                 )
@@ -375,23 +382,23 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
-    let ((_sk_s, pk_s), (_sk_s_e, pk_s_e), (sk_r, pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
+    let ((_sk_s, _pk_s), (_sk_s_e, pk_s_e), (sk_r, _pk_r), (sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
         create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
-    let (leg_enc, leg_enc_rand) = create_leg_and_encryption(
+    let leg_enc = create_leg_and_encryption(
         &mut rng,
-        pk_s,
-        pk_r,
         pk_s_e,
         pk_r_e,
         pk_a_e,
         enc_key_gen,
         enc_gen,
+        false,
     );
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
         sk_r,
+        sk_r_e,
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -405,7 +412,6 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
         &mut rng,
         leg_enc.clone(),
-        leg_enc_rand.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -414,7 +420,6 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
         nonce,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -435,7 +440,6 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     Some((&mut rmc_0, &mut rmc_1)),
                 )

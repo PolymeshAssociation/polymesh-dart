@@ -43,6 +43,8 @@ mod keys;
 pub use keys::*;
 
 mod fee;
+pub mod key_distribution_proof;
+
 use crate::curve_tree::{
     AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
     CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
@@ -228,11 +230,13 @@ pub struct AccountCommitmentKey {
     pub randomness_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     pub identity_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
+    pub sk_enc_gen: PallasA,
 }
 
 impl AccountCommitmentKey {
     /// Create a new account commitment key
-    pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA) -> Self {
+    pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA, enc_key_gen: PallasA) -> Self {
         let balance_gen = hash_to_pallas(label, b" : balance_gen").into_affine();
         let counter_gen = hash_to_pallas(label, b" : counter_gen").into_affine();
         let asset_id_gen = hash_to_pallas(label, b" : asset_id_gen").into_affine();
@@ -240,6 +244,7 @@ impl AccountCommitmentKey {
         let current_rho_gen = hash_to_pallas(label, b" : current_rho_gen").into_affine();
         let randomness_gen = hash_to_pallas(label, b" : randomness_gen").into_affine();
         let identity_gen = hash_to_pallas(label, b" : identity_gen").into_affine();
+        let sk_enc_gen = enc_key_gen;
 
         Self {
             sk_gen,
@@ -250,6 +255,7 @@ impl AccountCommitmentKey {
             current_rho_gen,
             randomness_gen,
             identity_gen,
+            sk_enc_gen,
         }
     }
 }
@@ -286,6 +292,10 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     fn id_gen(&self) -> PallasA {
         self.identity_gen
     }
+
+    fn sk_enc_gen(&self) -> PallasA {
+        self.sk_enc_gen
+    }
 }
 
 /// The generators for the Dart BP protocol.
@@ -307,7 +317,7 @@ impl DartBPGenerators {
         let enc_key_gen = hash_to_pallas(label, b" : enc_key_gen").into_affine();
 
         let account_comm_key =
-            AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen);
+            AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen, enc_key_gen);
 
         let leg_asset_value_gen = hash_to_pallas(label, b" : leg_asset_value_gen").into_affine();
 

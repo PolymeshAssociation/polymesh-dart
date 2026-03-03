@@ -10,6 +10,7 @@ pub mod transparent;
 #[cfg(test)]
 pub mod tests;
 
+pub use crate::leg::PartyEphemeralPublicKey;
 pub use common::{
     BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof,
     CommonStateChangeProver, LegProverConfig, LegVerifierConfig, StateChangeVerifier,
@@ -24,7 +25,7 @@ pub use state_transition::AccountStateTransitionProof;
 
 pub use state_transition_multi::MultiAssetStateTransitionProof;
 
-use crate::leg::{LegEncryption, LegEncryptionRandomness};
+use crate::leg::LegEncryption;
 use crate::util::{BPProof, handle_verification_tuples, prove_with_rng};
 use crate::{Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
@@ -78,7 +79,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -87,7 +87,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -104,7 +103,6 @@ impl<
                 rng,
                 amount,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -113,7 +111,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -143,7 +140,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -152,31 +148,38 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         // Need to prove that:
         // 1. sk is same in both old and new account commitment
-        // 2. asset-id is same in both old and new account commitment
+        // 2. asset-id is same in both old and new account commitment if asset-id is not revealed
         // 3. old balance - new balance = amount.
         // 4. amount and asset id are the same as the ones committed in leg
         // 5. new counter - old counter = 1
         // 6. initial rho is same in both old and new commitments
         // 7. nullifier is created from current_rho in old account commitment so this should be proven equal with other usages of current_rho.
         // 8. randomness in new account commitment is square of randomness in old account commitment
-        // 9. pk in leg has the sk in account commitment
+        // 9. id is same in both old and new account commitment
+        // 10. encryption sk inverse is same in both old and new account commitment
+        // 11. inverse of secret key of encryption pk in leg is present in account commitment
 
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
+
+        debug_assert_eq!(
+            ct_amount,
+            eph_pk_amount * account.sk_enc_inv + enc_gen * F0::from(amount)
+        );
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc.clone(),
-                    randomness: leg_enc_rand,
-                    is_sender: true,
+                    encryption: leg_enc,
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
                 account,
@@ -187,7 +190,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -198,17 +200,17 @@ impl<
             vec![BalanceChangeConfig {
                 amount,
                 ct_amount,
-                r_3: common_prover.r_3[0],
+                eph_pk_amount,
                 has_balance_decreased: true,
             }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
+            common_prover.sk_enc_inv_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
             enc_gen,
         )?;
 
@@ -246,7 +248,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -267,7 +268,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -290,18 +290,18 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
-
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: Some(false),
             }],
@@ -311,14 +311,12 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -338,7 +336,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -357,19 +354,20 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
         let ct_amount = leg_enc.ct_amount;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: Some(false),
             }],
@@ -379,7 +377,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -387,8 +384,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -406,7 +402,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -441,7 +436,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -450,7 +444,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -466,7 +459,6 @@ impl<
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -475,7 +467,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -504,7 +495,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -513,7 +503,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -528,13 +517,13 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: false,
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
                     has_balance_changed: false,
                 }],
                 account,
@@ -545,7 +534,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -577,7 +565,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -598,7 +585,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -621,7 +607,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -630,7 +615,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(false),
             }],
@@ -640,7 +625,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
@@ -660,7 +644,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -679,7 +662,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
@@ -689,7 +671,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(false),
             }],
@@ -699,7 +681,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -718,7 +699,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -755,7 +735,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -764,7 +743,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -783,7 +761,6 @@ impl<
                 rng,
                 amount,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -792,7 +769,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -825,7 +801,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -834,7 +809,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -857,14 +831,15 @@ impl<
         // 9. pk in leg has the sk in account commitment
 
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: true,
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
                 account,
@@ -875,7 +850,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -886,17 +860,17 @@ impl<
             vec![BalanceChangeConfig {
                 amount,
                 ct_amount,
-                r_3: common_prover.r_3[0],
+                eph_pk_amount,
                 has_balance_decreased: true,
             }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
+            common_prover.sk_enc_inv_blinding,
             even_prover,
-            &account_tree_params.even_parameters.pc_gens(),
-            &account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
             enc_gen,
         )?;
 
@@ -934,7 +908,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -955,7 +928,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -978,18 +950,18 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: None,
             }],
@@ -999,14 +971,12 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -1026,7 +996,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -1045,19 +1014,19 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: None,
             }],
@@ -1067,7 +1036,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -1075,8 +1043,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1094,7 +1061,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -1131,7 +1097,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1140,7 +1105,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -1157,7 +1121,6 @@ impl<
                 rng,
                 amount,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -1166,7 +1129,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -1199,7 +1161,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1208,7 +1169,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -1231,14 +1191,15 @@ impl<
         // 9. pk in leg has the sk in account commitment
 
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk = leg_enc.eph_pk_r.clone();
+        let eph_pk_amount = eph_pk.2;
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: false,
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
                     has_balance_changed: true,
                 }],
                 account,
@@ -1249,7 +1210,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -1260,17 +1220,17 @@ impl<
             vec![BalanceChangeConfig {
                 amount,
                 ct_amount,
-                r_3: common_prover.r_3[0],
+                eph_pk_amount,
                 has_balance_decreased: false,
             }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
+            common_prover.sk_enc_inv_blinding,
             even_prover,
-            &account_tree_params.even_parameters.pc_gens(),
-            &account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
             enc_gen,
         )?;
 
@@ -1308,7 +1268,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -1328,7 +1287,6 @@ impl<
             nonce,
             account_tree_params,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc_0,
@@ -1351,18 +1309,18 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: None,
             }],
@@ -1372,14 +1330,12 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -1399,7 +1355,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -1418,19 +1373,19 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: None,
             }],
@@ -1440,7 +1395,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -1448,8 +1402,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1467,7 +1420,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -1505,7 +1457,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1514,7 +1465,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -1533,7 +1483,6 @@ impl<
                 rng,
                 amount,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -1542,7 +1491,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -1575,7 +1523,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1584,20 +1531,20 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk = leg_enc.eph_pk_r.clone();
+        let eph_pk_amount = eph_pk.2;
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: false,
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
                     has_balance_changed: true,
                 }],
                 account,
@@ -1608,7 +1555,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -1619,17 +1565,17 @@ impl<
             vec![BalanceChangeConfig {
                 amount,
                 ct_amount,
-                r_3: common_prover.r_3[0],
+                eph_pk_amount,
                 has_balance_decreased: false,
             }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
+            common_prover.sk_enc_inv_blinding,
             even_prover,
-            &account_tree_params.even_parameters.pc_gens(),
-            &account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
             enc_gen,
         )?;
 
@@ -1667,7 +1613,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -1688,7 +1633,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -1710,16 +1654,18 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_r.2;
+
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
             }],
@@ -1729,14 +1675,12 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[leg_enc.ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -1756,7 +1700,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -1775,19 +1718,19 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
             }],
@@ -1797,7 +1740,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -1805,8 +1747,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1824,7 +1765,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -1862,7 +1802,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1871,7 +1810,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -1890,7 +1828,6 @@ impl<
                 rng,
                 amount,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -1899,7 +1836,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -1932,7 +1868,6 @@ impl<
         rng: &mut R,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1941,20 +1876,20 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: true,
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
                 account,
@@ -1965,7 +1900,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -1976,17 +1910,17 @@ impl<
             vec![BalanceChangeConfig {
                 amount,
                 ct_amount,
-                r_3: common_prover.r_3[0],
+                eph_pk_amount,
                 has_balance_decreased: false,
             }],
             account,
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
+            common_prover.sk_enc_inv_blinding,
             even_prover,
-            &account_tree_params.even_parameters.pc_gens(),
-            &account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
             enc_gen,
         )?;
 
@@ -2024,7 +1958,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -2045,7 +1978,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -2067,18 +1999,18 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
             }],
@@ -2088,14 +2020,12 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -2115,7 +2045,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -2134,19 +2063,19 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         let ct_amount = leg_enc.ct_amount;
+        let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
             }],
@@ -2156,7 +2085,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -2164,8 +2092,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[ct_amount],
-            enc_key_gen,
+            &[(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -2183,7 +2110,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -2219,7 +2145,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2228,7 +2153,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -2244,7 +2168,6 @@ impl<
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -2253,7 +2176,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -2285,7 +2207,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2294,7 +2215,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -2309,13 +2229,13 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: true,
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
                     has_balance_changed: false,
                 }],
                 account,
@@ -2326,7 +2246,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -2358,7 +2277,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -2379,7 +2297,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -2402,7 +2319,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -2411,7 +2327,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
             }],
@@ -2421,7 +2337,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
@@ -2441,7 +2356,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -2460,7 +2374,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
@@ -2470,7 +2383,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: true,
+                party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
             }],
@@ -2480,7 +2393,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -2499,7 +2411,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
@@ -2535,7 +2446,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2544,7 +2454,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -2560,7 +2469,6 @@ impl<
             Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 leg_enc,
-                leg_enc_rand,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -2569,7 +2477,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -2601,7 +2508,6 @@ impl<
     >(
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<G0::ScalarField>,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2610,7 +2516,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -2625,13 +2530,13 @@ impl<
         // 7. randomness in new account commitment is square of randomness in old account commitment
         // 8. pk in leg has the sk in account commitment
 
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
-                    randomness: leg_enc_rand,
-                    is_sender: false,
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
                     has_balance_changed: false,
                 }],
                 account,
@@ -2642,7 +2547,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 even_prover,
                 odd_prover,
@@ -2674,7 +2578,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -2695,7 +2598,6 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -2718,7 +2620,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -2727,7 +2628,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
             }],
@@ -2737,7 +2638,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
@@ -2757,7 +2657,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rng,
             rmc,
@@ -2776,7 +2675,6 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
@@ -2786,7 +2684,7 @@ impl<
             &self.common_proof,
             vec![LegVerifierConfig {
                 encryption: leg_enc.clone(),
-                is_sender: false,
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
             }],
@@ -2796,7 +2694,6 @@ impl<
             nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
@@ -2815,7 +2712,6 @@ impl<
             nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )

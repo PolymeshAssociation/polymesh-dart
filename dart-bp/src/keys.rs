@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use crate::util::add_slice_to_transcript;
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::One;
+use ark_ff::{One, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{
     UniformRand,
@@ -53,7 +53,10 @@ pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
     j: PK,
 ) -> (SigKey<PK>, VerKey<PK>) {
-    let s = PK::ScalarField::rand(rng);
+    let mut s = PK::ScalarField::rand(rng);
+    while s.is_zero() {
+        s = PK::ScalarField::rand(rng);
+    }
     keygen_sig_given_sk(s, j)
 }
 
@@ -67,7 +70,10 @@ pub fn keygen_enc<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
     g: PK,
 ) -> (DecKey<PK>, EncKey<PK>) {
-    let s = PK::ScalarField::rand(rng);
+    let mut s = PK::ScalarField::rand(rng);
+    while s.is_zero() {
+        s = PK::ScalarField::rand(rng);
+    }
     keygen_enc_given_sk(s, g)
 }
 

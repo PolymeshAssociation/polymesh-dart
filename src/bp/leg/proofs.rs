@@ -134,11 +134,10 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -157,7 +156,6 @@ impl<
                 rng,
                 amount,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -166,7 +164,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -219,7 +216,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -278,10 +274,9 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -299,7 +294,6 @@ impl<
             bp_account::AffirmAsReceiverTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
                 rng,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -308,7 +302,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -351,7 +344,7 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
+            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -410,11 +403,10 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -433,7 +425,6 @@ impl<
                 rng,
                 amount,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -442,7 +433,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -485,7 +475,7 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
+            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -544,14 +534,13 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        // Generate a new account state for decreasing the counter.
+        // Generate a new account state for decreasing counter.
         let state_change = account_asset.get_state_for_decreasing_counter(account)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
@@ -565,7 +554,6 @@ impl<
             bp_account::SenderCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
                 rng,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -574,7 +562,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -617,7 +604,7 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
+            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -676,15 +663,14 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        // Generate a new account state for reversing the send.
+        // Generate a new account state for reversing send.
         let state_change = account_asset.get_state_for_reversing_send(account, amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
@@ -699,7 +685,6 @@ impl<
                 rng,
                 amount,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -708,7 +693,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -751,7 +735,7 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
+            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -793,9 +777,8 @@ impl MediatorAffirmationProof {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        asset_id: AssetId,
         leg_enc: &LegEncrypted,
-        mediator_sk: &EncryptionKeyPair,
+        mediator_keys: &AccountKeys,
         key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
@@ -803,12 +786,13 @@ impl MediatorAffirmationProof {
         let proof = mediator::MediatorTxnProof::new(
             rng,
             leg_enc.decode()?,
-            asset_id,
-            mediator_sk.secret.0.0,
+            mediator_keys.enc.secret.0.0,
+            mediator_keys.acct.secret.0.0,
             accept,
+            false, // TODO: This should be accepted as an arg
             key_index as usize,
             ctx.as_bytes(),
-            dart_gens().leg_asset_value_gen(),
+            &dart_gens().sig_key_gen(),
         )?;
 
         Ok(Self {
@@ -826,9 +810,10 @@ impl MediatorAffirmationProof {
         proof.verify(
             leg_enc.decode()?,
             self.accept,
+            false, // TODO: This should be accepted as an arg
             self.key_index as usize,
             ctx.as_bytes(),
-            dart_gens().leg_asset_value_gen(),
+            dart_gens().sig_key_gen(),
             None,
         )?;
         Ok(())

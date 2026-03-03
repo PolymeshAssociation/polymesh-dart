@@ -6,7 +6,6 @@ use ark_ec_divisors::curves::{
 use ark_pallas::Affine as PallasA;
 use ark_serialize::CanonicalSerialize;
 use ark_std::{UniformRand, format};
-use blake2::Blake2b512;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::CurveTree;
@@ -18,7 +17,8 @@ use polymesh_dart_bp::account::state_transition::{
 };
 use polymesh_dart_bp::account::state_transition_multi::MultiAssetStateTransitionProof;
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::proofs::SettlementCreationProof;
+use polymesh_dart_bp::leg::LegEncConfig;
+use polymesh_dart_bp::leg::settlement_proof::SettlementCreationProof;
 use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
@@ -44,10 +44,11 @@ fn new_account<R: CryptoRngCore>(
     rng: &mut R,
     asset_id: u32,
     sk: SigKey<PallasA>,
+    sk_enc: DecKey<PallasA>,
     id: PallasFr,
 ) -> AccountState<PallasA> {
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
-    AccountState::new(rng, id, sk.0, asset_id, 0, poseidon_config).unwrap()
+    AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap()
 }
 
 /// Create shared setup params
@@ -154,20 +155,18 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     let asset_id = 1;
 
     // Setup keys for single sender/receiver pair
-    let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
+    let (_, _pk_s) = keygen_sig(&mut rng, sig_key_gen);
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
-    let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+    let (_, _pk_r) = keygen_sig(&mut rng, sig_key_gen);
     let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
     // Auditor key
     let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
 
-    let keys = vec![(true, pk_a_e.0)];
-
-    // Create single asset data entry
     let asset_data = AssetData::new(
         asset_id,
-        keys.clone(),
+        vec![pk_a_e.0],
+        vec![],
         &asset_comm_params,
         asset_tree_params.odd_parameters.sl_params.delta,
     )
@@ -194,9 +193,19 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     let mut asset_data_vec = Vec::with_capacity(num_legs);
 
     for _ in 0..num_legs {
-        let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, asset_id).unwrap();
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            vec![pk_a_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
         let (leg_enc, leg_enc_rand) = leg
-            .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         legs.push(leg);
@@ -272,6 +281,10 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -295,6 +308,10 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -343,13 +360,13 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
     let mut commitments = Vec::new();
 
     let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
-    let keys = vec![(true, pk_a_e.0)];
 
     for i in 0..(M + 1) {
         let asset_id = (i + 1) as u32;
         let ad = AssetData::new(
             asset_id,
-            keys.clone(),
+            vec![pk_a_e.0],
+            vec![],
             &asset_comm_params,
             asset_tree_params.odd_parameters.sl_params.delta,
         )
@@ -364,8 +381,8 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         Some(height),
     );
 
-    let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
-    let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
+    let (_, _pk_s) = keygen_sig(&mut rng, sig_key_gen);
+    let (_, _pk_r) = keygen_sig(&mut rng, sig_key_gen);
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
     let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
@@ -395,9 +412,19 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
 
         // Create legs for this settlement
         for j in 0..num_legs {
-            let leg = Leg::new(pk_s.0, pk_r.0, keys.clone(), amount, all_asset_data[j].id).unwrap();
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                all_asset_data[j].id,
+                vec![pk_a_e.0],
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap();
             let (leg_enc, leg_enc_rand) = leg
-                .encrypt::<_, Blake2b512>(&mut rng, pk_s_e.0, pk_r_e.0, enc_key_gen, enc_gen)
+                .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
                 .unwrap();
 
             legs.push(leg);
@@ -457,6 +484,10 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
                     .verify_and_return_tuples(
                         all_leg_encs[i].clone(),
                         &root,
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
                         &nonces[i],
                         &asset_tree_params,
                         &asset_comm_params,
@@ -507,22 +538,22 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
     // Setup keys for Alice (sender), Bob (receiver), and auditor
     let (
-        (sk_alice, pk_alice),
+        (sk_alice, _pk_alice),
         (_sk_alice_e, pk_alice_e),
-        (sk_bob, pk_bob),
+        (sk_bob, _pk_bob),
         (_sk_bob_e, pk_bob_e),
         (_sk_auditor_e, pk_auditor_e),
     ) = create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
     let num_legs = 16;
-    let keys = vec![(true, pk_auditor_e.0)];
     let mut asset_data_vec = Vec::with_capacity(num_legs);
     let mut asset_commitments = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
         let asset_data = AssetData::new(
             asset_id,
-            keys.clone(),
+            vec![pk_auditor_e.0],
+            vec![],
             &asset_comm_params,
             asset_tree_params.odd_parameters.sl_params.delta,
         )
@@ -548,9 +579,19 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let amount = 100;
 
     for asset_id in 1..=num_legs as u32 {
-        let leg = Leg::new(pk_alice.0, pk_bob.0, keys.clone(), amount, asset_id).unwrap();
+        let leg = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
         let (leg_enc, leg_enc_rand) = leg
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         legs.push(leg);
@@ -572,7 +613,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let mut alice_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let mut account = new_account(&mut rng, asset_id, sk_alice.clone(), alice_id);
+        let mut account = new_account(
+            &mut rng,
+            asset_id,
+            sk_alice.clone(),
+            _sk_alice_e.clone(),
+            alice_id,
+        );
         account.balance = 500;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         alice_account_comms.push(comm.0);
@@ -585,7 +632,13 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let mut bob_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let mut account = new_account(&mut rng, asset_id, sk_bob.clone(), bob_id);
+        let mut account = new_account(
+            &mut rng,
+            asset_id,
+            sk_bob.clone(),
+            _sk_bob_e.clone(),
+            bob_id,
+        );
         account.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         bob_account_comms.push(comm.0);
@@ -668,6 +721,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &asset_tree_root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -691,6 +748,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &asset_tree_root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -720,7 +781,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 updated_comm,
                 nonce,
             );
-        builder.add_irreversible_send(amount, leg_encs[i].clone(), leg_enc_rands[i].clone());
+        builder.add_irreversible_send(amount, leg_encs[i].clone());
         alice_builders.push(builder);
     }
 
@@ -753,7 +814,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         &account_tree_root,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -779,7 +839,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 updated_comm,
                 nonce,
             );
-        builder.add_irreversible_receive(amount, leg_encs[i].clone(), leg_enc_rands[i].clone());
+        builder.add_irreversible_receive(amount, leg_encs[i].clone());
         bob_builders.push(builder);
     }
 
@@ -808,7 +868,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         &account_tree_root,
         &account_tree_params,
         account_comm_key.clone(),
-        enc_key_gen,
         enc_gen,
     )
     .unwrap();
@@ -861,6 +920,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 .verify_and_return_tuples(
                     leg_encs.clone(),
                     &asset_tree_root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -877,7 +940,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &account_tree_root,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     &mut local_rng,
                     None,
@@ -890,7 +952,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &account_tree_root,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     &mut local_rng,
                     None,
@@ -955,6 +1016,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 .verify_and_return_tuples(
                     leg_encs.clone(),
                     &asset_tree_root,
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -971,7 +1036,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &account_tree_root,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     &mut local_rng,
                     Some(&mut rmc_0),
@@ -984,7 +1048,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &account_tree_root,
                     &account_tree_params,
                     account_comm_key.clone(),
-                    enc_key_gen,
                     enc_gen,
                     &mut local_rng,
                     Some(&mut rmc_0),

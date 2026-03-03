@@ -13,7 +13,7 @@ use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{format, string::ToString, vec, vec::Vec};
+use ark_std::{format, string::ToString, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizeMultiPathWithDivisorComms};
@@ -62,7 +62,6 @@ impl<
         tree_root: &Root<L, M, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
     ) -> Result<(Self, Vec<Affine<G0>>)> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -84,7 +83,6 @@ impl<
                 tree_root,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -119,7 +117,6 @@ impl<
         tree_root: &Root<L, M, G0, G1>,
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
@@ -183,12 +180,11 @@ impl<
         for (i, builder) in account_builders.into_iter().enumerate() {
             // Finalize with pre-computed rerandomized leaf
             // Note: nonce and updated_account_commitment are added to transcript inside finalize_with_given_prover_with_rerandomized_leaf
-            let (proof, nullifier) = builder.finalize_with_given_prover_with_rerandomized_leaf_new::<_, D0, D1, Parameters0, Parameters1>(
+            let (proof, nullifier) = builder.finalize_with_given_prover_with_rerandomized_leaf::<_, D0, D1, Parameters0, Parameters1>(
                 rng,
                 rerandomized_leaves_and_randomizers[i].1, // Extract just the scalar randomization
                 account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 even_prover,
             )?;
@@ -218,7 +214,6 @@ impl<
         tree_root: &Root<L, M, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -235,7 +230,6 @@ impl<
                 tree_root,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -254,7 +248,6 @@ impl<
         tree_root: &Root<L, M, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
@@ -269,7 +262,6 @@ impl<
             tree_root,
             account_tree_params,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             &mut even_verifier,
             &mut odd_verifier,
@@ -299,7 +291,6 @@ impl<
         tree_root: &Root<L, M, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
@@ -342,23 +333,21 @@ impl<
             let proof = &self.account_proofs[i];
 
             // Reborrow rmc for each iteration
-            let rmc_for_this_iteration = match rmc.as_mut() {
+            let rmc_i = match rmc.as_mut() {
                 Some(rmc_ref) => Some(&mut **rmc_ref),
                 None => None,
             };
 
             // Verify with pre-computed rerandomized leaf
-            verifier
-                .enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new(
-                    proof,
-                    rerandomized_leaves[i],
-                    account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                    enc_gen,
-                    even_verifier,
-                    rmc_for_this_iteration,
-                )?;
+            verifier.enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf(
+                proof,
+                rerandomized_leaves[i],
+                account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                even_verifier,
+                rmc_i,
+            )?;
         }
 
         Ok(())
@@ -373,16 +362,20 @@ mod tests {
     use crate::account::state_transition::{
         AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
     };
-    use crate::account::tests::{get_batched_tree_with_account_comms, setup_gens_new, setup_leg};
+    use crate::account::tests::{
+        get_batched_tree_with_account_comms, setup_gens_new, setup_leg, setup_leg_with_conf,
+    };
     use crate::account_registration::tests::new_account;
+    use crate::leg::LegEncConfig;
     use crate::leg::tests::setup_keys;
+    use crate::util::verify_rmc;
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
     use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters};
     use ark_std::UniformRand;
-    use ark_vesta::VestaConfig as VestaParameters;
+    use ark_vesta::{Fr as VestaFr, VestaConfig as VestaParameters};
     use rand::thread_rng;
     use std::time::Instant;
 
@@ -395,13 +388,14 @@ mod tests {
         const L: usize = 64;
         const M: usize = 2;
 
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((sk_bob, pk_bob), (_, pk_bob_e)),
+            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -412,12 +406,10 @@ mod tests {
         let bob_send_amount = 200u64; // Bob sends 200 of asset 2 to Alice
 
         // Leg 1: Alice -> Bob (asset 1)
-        let (_, leg_enc_1, leg_enc_rand_1) = setup_leg(
+        let (_, leg_enc_1, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             alice_send_amount,
             asset_id_1,
             pk_alice_e.0,
@@ -427,12 +419,10 @@ mod tests {
         );
 
         // Leg 2: Bob -> Alice (asset 2)
-        let (_, leg_enc_2, leg_enc_rand_2) = setup_leg(
+        let (_, leg_enc_2, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             bob_send_amount,
             asset_id_2,
             pk_bob_e.0,
@@ -444,23 +434,36 @@ mod tests {
         // Here the same keys are used but in practice, different accounts use different keys
         // Alice's account for asset 1
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) =
-            new_account(&mut rng, asset_id_1, sk_alice.clone(), alice_id_1);
+        let (mut alice_account_1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_1,
+        );
         alice_account_1.balance = 500;
 
         // Alice's account for asset 2
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_alice, alice_id_2);
+        let (mut alice_account_2, _, _) =
+            new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id_2);
         alice_account_2.balance = 300;
 
         // Bob's account for asset 1
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_bob.clone(), bob_id_1);
+        let (mut bob_account_1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_1,
+        );
         bob_account_1.balance = 400;
 
         // Bob's account for asset 2
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_bob, bob_id_2);
+        let (mut bob_account_2, _, _) =
+            new_account(&mut rng, asset_id_2, sk_bob, sk_bob_e, bob_id_2);
         bob_account_2.balance = 800;
 
         let account_tree = get_batched_tree_with_account_comms::<L, M, _>(
@@ -521,11 +524,7 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-        alice_builder_1.add_send_affirmation(
-            alice_send_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
+        alice_builder_1.add_send_affirmation(alice_send_amount, leg_enc_1.clone());
 
         // Alice's builder for asset 2 account
         let mut alice_builder_2 =
@@ -535,7 +534,7 @@ mod tests {
                 alice_account_2_after_comm,
                 alice_nonce,
             );
-        alice_builder_2.add_receive_affirmation(leg_enc_2.clone(), leg_enc_rand_2.clone());
+        alice_builder_2.add_receive_affirmation(leg_enc_2.clone());
 
         // Bob's builder for asset 1 account
         let mut bob_builder_1 =
@@ -545,7 +544,7 @@ mod tests {
                 bob_account_1_updated_comm,
                 bob_nonce,
             );
-        bob_builder_1.add_receive_affirmation(leg_enc_1.clone(), leg_enc_rand_1.clone());
+        bob_builder_1.add_receive_affirmation(leg_enc_1.clone());
 
         // Bob's builder for asset 2 account
         let mut bob_builder_2 =
@@ -555,11 +554,7 @@ mod tests {
                 bob_account_2_updated_comm,
                 bob_nonce,
             );
-        bob_builder_2.add_send_affirmation(
-            bob_send_amount,
-            leg_enc_2.clone(),
-            leg_enc_rand_2.clone(),
-        );
+        bob_builder_2.add_send_affirmation(bob_send_amount, leg_enc_2.clone());
 
         // Alice create multi-asset proof
         let start = Instant::now();
@@ -577,7 +572,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -610,7 +604,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -639,7 +632,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -672,7 +664,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -697,13 +688,13 @@ mod tests {
         const L: usize = 64;
         const M: usize = 2;
 
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((sk_bob, pk_bob), (_, pk_bob_e)),
+            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -719,12 +710,10 @@ mod tests {
         let leg_6_amount = 125u64; // Bob -> Alice (both claim, Bob counter update) on asset 6
 
         // Create all 6 legs
-        let (_, leg_enc_1, leg_enc_rand_1) = setup_leg(
+        let (_, leg_enc_1, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_1_amount,
             asset_ids[0],
             pk_alice_e.0,
@@ -733,12 +722,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_2, leg_enc_rand_2) = setup_leg(
+        let (_, leg_enc_2, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_2_amount,
             asset_ids[1],
             pk_bob_e.0,
@@ -747,12 +734,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_3, leg_enc_rand_3) = setup_leg(
+        let (_, leg_enc_3, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_3_amount,
             asset_ids[2],
             pk_alice_e.0,
@@ -761,12 +746,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_4, leg_enc_rand_4) = setup_leg(
+        let (_, leg_enc_4, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_4_amount,
             asset_ids[3],
             pk_bob_e.0,
@@ -775,12 +758,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_5, leg_enc_rand_5) = setup_leg(
+        let (_, leg_enc_5, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_5_amount,
             asset_ids[4],
             pk_alice_e.0,
@@ -789,12 +770,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_6, leg_enc_rand_6) = setup_leg(
+        let (_, leg_enc_6, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_6_amount,
             asset_ids[5],
             pk_bob_e.0,
@@ -805,71 +784,131 @@ mod tests {
 
         // Create Alice's 6 accounts (one per asset)
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) =
-            new_account(&mut rng, asset_ids[0], sk_alice.clone(), alice_id_1);
+        let (mut alice_account_1, _, _) = new_account(
+            &mut rng,
+            asset_ids[0],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_1,
+        );
         alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) =
-            new_account(&mut rng, asset_ids[1], sk_alice.clone(), alice_id_2);
+        let (mut alice_account_2, _, _) = new_account(
+            &mut rng,
+            asset_ids[1],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_2,
+        );
         alice_account_2.balance = 1000;
 
         let alice_id_3 = PallasFr::rand(&mut rng);
-        let (mut alice_account_3, _, _) =
-            new_account(&mut rng, asset_ids[2], sk_alice.clone(), alice_id_3);
+        let (mut alice_account_3, _, _) = new_account(
+            &mut rng,
+            asset_ids[2],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_3,
+        );
         alice_account_3.balance = 1000;
         alice_account_3.counter = 1;
 
         let alice_id_4 = PallasFr::rand(&mut rng);
-        let (mut alice_account_4, _, _) =
-            new_account(&mut rng, asset_ids[3], sk_alice.clone(), alice_id_4);
+        let (mut alice_account_4, _, _) = new_account(
+            &mut rng,
+            asset_ids[3],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_4,
+        );
         alice_account_4.balance = 1000;
         alice_account_4.counter = 1;
 
         let alice_id_5 = PallasFr::rand(&mut rng);
-        let (mut alice_account_5, _, _) =
-            new_account(&mut rng, asset_ids[4], sk_alice.clone(), alice_id_5);
+        let (mut alice_account_5, _, _) = new_account(
+            &mut rng,
+            asset_ids[4],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_5,
+        );
         alice_account_5.balance = 1000;
         alice_account_5.counter = 1;
 
         let alice_id_6 = PallasFr::rand(&mut rng);
-        let (mut alice_account_6, _, _) =
-            new_account(&mut rng, asset_ids[5], sk_alice.clone(), alice_id_6);
+        let (mut alice_account_6, _, _) = new_account(
+            &mut rng,
+            asset_ids[5],
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_6,
+        );
         alice_account_6.balance = 1000;
         alice_account_6.counter = 1;
 
         // Create Bob's 6 accounts (one per asset)
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) =
-            new_account(&mut rng, asset_ids[0], sk_bob.clone(), bob_id_1);
+        let (mut bob_account_1, _, _) = new_account(
+            &mut rng,
+            asset_ids[0],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_1,
+        );
         bob_account_1.balance = 1000;
 
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) =
-            new_account(&mut rng, asset_ids[1], sk_bob.clone(), bob_id_2);
+        let (mut bob_account_2, _, _) = new_account(
+            &mut rng,
+            asset_ids[1],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_2,
+        );
         bob_account_2.balance = 1000;
 
         let bob_id_3 = PallasFr::rand(&mut rng);
-        let (mut bob_account_3, _, _) =
-            new_account(&mut rng, asset_ids[2], sk_bob.clone(), bob_id_3);
+        let (mut bob_account_3, _, _) = new_account(
+            &mut rng,
+            asset_ids[2],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_3,
+        );
         bob_account_3.balance = 1000;
         bob_account_3.counter = 1;
 
         let bob_id_4 = PallasFr::rand(&mut rng);
-        let (mut bob_account_4, _, _) =
-            new_account(&mut rng, asset_ids[3], sk_bob.clone(), bob_id_4);
+        let (mut bob_account_4, _, _) = new_account(
+            &mut rng,
+            asset_ids[3],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_4,
+        );
         bob_account_4.balance = 1000;
         bob_account_4.counter = 1;
 
         let bob_id_5 = PallasFr::rand(&mut rng);
-        let (mut bob_account_5, _, _) =
-            new_account(&mut rng, asset_ids[4], sk_bob.clone(), bob_id_5);
+        let (mut bob_account_5, _, _) = new_account(
+            &mut rng,
+            asset_ids[4],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_5,
+        );
         bob_account_5.balance = 1000;
         bob_account_5.counter = 1;
 
         let bob_id_6 = PallasFr::rand(&mut rng);
-        let (mut bob_account_6, _, _) =
-            new_account(&mut rng, asset_ids[5], sk_bob.clone(), bob_id_6);
+        let (mut bob_account_6, _, _) = new_account(
+            &mut rng,
+            asset_ids[5],
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_6,
+        );
         bob_account_6.balance = 1000;
         bob_account_6.counter = 1;
 
@@ -991,11 +1030,7 @@ mod tests {
                 alice_account_1_updated_comm,
                 nonce_alice,
             );
-        alice_builder_1.add_send_affirmation(
-            leg_1_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
+        alice_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
 
         let mut alice_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1004,7 +1039,7 @@ mod tests {
                 alice_account_2_updated_comm,
                 nonce_alice,
             );
-        alice_builder_2.add_receive_affirmation(leg_enc_2.clone(), leg_enc_rand_2.clone());
+        alice_builder_2.add_receive_affirmation(leg_enc_2.clone());
 
         let mut alice_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1013,7 +1048,7 @@ mod tests {
                 alice_account_3_updated_comm,
                 nonce_alice,
             );
-        alice_builder_3.add_sender_reverse(leg_3_amount, leg_enc_3.clone(), leg_enc_rand_3.clone());
+        alice_builder_3.add_sender_reverse(leg_3_amount, leg_enc_3.clone());
 
         let mut alice_builder_4 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1022,7 +1057,7 @@ mod tests {
                 alice_account_4_updated_comm,
                 nonce_alice,
             );
-        alice_builder_4.add_receiver_reverse(leg_enc_4.clone(), leg_enc_rand_4.clone());
+        alice_builder_4.add_receiver_reverse(leg_enc_4.clone());
 
         let mut alice_builder_5 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1031,7 +1066,7 @@ mod tests {
                 alice_account_5_updated_comm,
                 nonce_alice,
             );
-        alice_builder_5.add_sender_counter_update(leg_enc_5.clone(), leg_enc_rand_5.clone());
+        alice_builder_5.add_sender_counter_update(leg_enc_5.clone());
 
         let mut alice_builder_6 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1040,7 +1075,7 @@ mod tests {
                 alice_account_6_updated_comm,
                 nonce_alice,
             );
-        alice_builder_6.add_claim_received(leg_6_amount, leg_enc_6.clone(), leg_enc_rand_6.clone());
+        alice_builder_6.add_claim_received(leg_6_amount, leg_enc_6.clone());
 
         // Alice creates multi-asset proof with all 6 accounts
         let start = Instant::now();
@@ -1065,7 +1100,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1131,7 +1165,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -1152,7 +1185,7 @@ mod tests {
                 bob_account_1_updated_comm,
                 nonce_bob,
             );
-        bob_builder_1.add_receive_affirmation(leg_enc_1.clone(), leg_enc_rand_1.clone());
+        bob_builder_1.add_receive_affirmation(leg_enc_1.clone());
 
         let mut bob_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1161,7 +1194,7 @@ mod tests {
                 bob_account_2_updated_comm,
                 nonce_bob,
             );
-        bob_builder_2.add_send_affirmation(leg_2_amount, leg_enc_2.clone(), leg_enc_rand_2.clone());
+        bob_builder_2.add_send_affirmation(leg_2_amount, leg_enc_2.clone());
 
         let mut bob_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1170,7 +1203,7 @@ mod tests {
                 bob_account_3_updated_comm,
                 nonce_bob,
             );
-        bob_builder_3.add_receiver_reverse(leg_enc_3.clone(), leg_enc_rand_3.clone());
+        bob_builder_3.add_receiver_reverse(leg_enc_3.clone());
 
         let mut bob_builder_4 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1179,7 +1212,7 @@ mod tests {
                 bob_account_4_updated_comm,
                 nonce_bob,
             );
-        bob_builder_4.add_sender_reverse(leg_4_amount, leg_enc_4.clone(), leg_enc_rand_4.clone());
+        bob_builder_4.add_sender_reverse(leg_4_amount, leg_enc_4.clone());
 
         let mut bob_builder_5 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1188,7 +1221,7 @@ mod tests {
                 bob_account_5_updated_comm,
                 nonce_bob,
             );
-        bob_builder_5.add_claim_received(leg_5_amount, leg_enc_5.clone(), leg_enc_rand_5.clone());
+        bob_builder_5.add_claim_received(leg_5_amount, leg_enc_5.clone());
 
         let mut bob_builder_6 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1197,7 +1230,7 @@ mod tests {
                 bob_account_6_updated_comm,
                 nonce_bob,
             );
-        bob_builder_6.add_sender_counter_update(leg_enc_6.clone(), leg_enc_rand_6.clone());
+        bob_builder_6.add_sender_counter_update(leg_enc_6.clone());
 
         // Bob creates multi-asset proof with all 6 accounts
         let start = Instant::now();
@@ -1222,7 +1255,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1289,7 +1321,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -1321,13 +1352,13 @@ mod tests {
         const L: usize = 64;
         const M: usize = 2;
 
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((sk_bob, pk_bob), (_, pk_bob_e)),
+            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1344,12 +1375,10 @@ mod tests {
         let leg_6_amount = 250u64; // Bob -> Alice irreversible on asset 2
 
         // Create all 6 legs
-        let (_, leg_enc_1, leg_enc_rand_1) = setup_leg(
+        let (_, leg_enc_1, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_1_amount,
             asset_id_1,
             pk_alice_e.0,
@@ -1358,12 +1387,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_2, leg_enc_rand_2) = setup_leg(
+        let (_, leg_enc_2, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_2_amount,
             asset_id_1,
             pk_bob_e.0,
@@ -1372,12 +1399,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_3, leg_enc_rand_3) = setup_leg(
+        let (_, leg_enc_3, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_3_amount,
             asset_id_1,
             pk_alice_e.0,
@@ -1386,12 +1411,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_4, leg_enc_rand_4) = setup_leg(
+        let (_, leg_enc_4, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_4_amount,
             asset_id_1,
             pk_bob_e.0,
@@ -1400,12 +1423,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_5, leg_enc_rand_5) = setup_leg(
+        let (_, leg_enc_5, _) = setup_leg(
             &mut rng,
-            pk_alice.0,
-            pk_bob.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_5_amount,
             asset_id_2,
             pk_alice_e.0,
@@ -1414,12 +1435,10 @@ mod tests {
             enc_gen,
         );
 
-        let (_, leg_enc_6, leg_enc_rand_6) = setup_leg(
+        let (_, leg_enc_6, _) = setup_leg(
             &mut rng,
-            pk_bob.0,
-            pk_alice.0,
             pk_auditor_e.0,
-            true,
+            None,
             leg_6_amount,
             asset_id_2,
             pk_bob_e.0,
@@ -1430,22 +1449,44 @@ mod tests {
 
         // Create Alice's 2 accounts (one per asset)
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) =
-            new_account(&mut rng, asset_id_1, sk_alice.clone(), alice_id_1);
+        let (mut alice_account_1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_1,
+        );
         alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) =
-            new_account(&mut rng, asset_id_2, sk_alice.clone(), alice_id_2);
+        let (mut alice_account_2, _, _) = new_account(
+            &mut rng,
+            asset_id_2,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_2,
+        );
         alice_account_2.balance = 1000;
 
         // Create Bob's 2 accounts (one per asset)
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) = new_account(&mut rng, asset_id_1, sk_bob.clone(), bob_id_1);
+        let (mut bob_account_1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_1,
+        );
         bob_account_1.balance = 1000;
 
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_bob.clone(), bob_id_2);
+        let (mut bob_account_2, _, _) = new_account(
+            &mut rng,
+            asset_id_2,
+            sk_bob.clone(),
+            sk_bob_e.clone(),
+            bob_id_2,
+        );
         bob_account_2.balance = 1000;
 
         let mut builder1 = AccountStateBuilder::init(alice_account_1.clone());
@@ -1520,18 +1561,10 @@ mod tests {
                 nonce_alice,
             );
         // Add all 4 operations for asset 1
-        alice_builder_1.add_send_affirmation(
-            leg_1_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
-        alice_builder_1.add_claim_received(leg_2_amount, leg_enc_2.clone(), leg_enc_rand_2.clone());
-        alice_builder_1.add_send_affirmation(
-            leg_3_amount,
-            leg_enc_3.clone(),
-            leg_enc_rand_3.clone(),
-        );
-        alice_builder_1.add_claim_received(leg_4_amount, leg_enc_4.clone(), leg_enc_rand_4.clone());
+        alice_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
+        alice_builder_1.add_claim_received(leg_2_amount, leg_enc_2.clone());
+        alice_builder_1.add_send_affirmation(leg_3_amount, leg_enc_3.clone());
+        alice_builder_1.add_claim_received(leg_4_amount, leg_enc_4.clone());
 
         let mut alice_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1540,16 +1573,8 @@ mod tests {
                 alice_account_2_updated_comm,
                 nonce_alice,
             );
-        alice_builder_2.add_irreversible_send(
-            leg_5_amount,
-            leg_enc_5.clone(),
-            leg_enc_rand_5.clone(),
-        );
-        alice_builder_2.add_irreversible_receive(
-            leg_6_amount,
-            leg_enc_6.clone(),
-            leg_enc_rand_6.clone(),
-        );
+        alice_builder_2.add_irreversible_send(leg_5_amount, leg_enc_5.clone());
+        alice_builder_2.add_irreversible_receive(leg_6_amount, leg_enc_6.clone());
 
         // Alice creates multi-asset proof with both accounts
         let start = Instant::now();
@@ -1567,7 +1592,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1583,10 +1607,10 @@ mod tests {
                 bob_account_1_updated_comm,
                 nonce_bob,
             );
-        bob_builder_1.add_claim_received(leg_1_amount, leg_enc_1.clone(), leg_enc_rand_1.clone());
-        bob_builder_1.add_send_affirmation(leg_2_amount, leg_enc_2.clone(), leg_enc_rand_2.clone());
-        bob_builder_1.add_claim_received(leg_3_amount, leg_enc_3.clone(), leg_enc_rand_3.clone());
-        bob_builder_1.add_send_affirmation(leg_4_amount, leg_enc_4.clone(), leg_enc_rand_4.clone());
+        bob_builder_1.add_claim_received(leg_1_amount, leg_enc_1.clone());
+        bob_builder_1.add_send_affirmation(leg_2_amount, leg_enc_2.clone());
+        bob_builder_1.add_claim_received(leg_3_amount, leg_enc_3.clone());
+        bob_builder_1.add_send_affirmation(leg_4_amount, leg_enc_4.clone());
 
         let mut bob_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1595,16 +1619,8 @@ mod tests {
                 bob_account_2_updated_comm,
                 nonce_bob,
             );
-        bob_builder_2.add_irreversible_receive(
-            leg_5_amount,
-            leg_enc_5.clone(),
-            leg_enc_rand_5.clone(),
-        );
-        bob_builder_2.add_irreversible_send(
-            leg_6_amount,
-            leg_enc_6.clone(),
-            leg_enc_rand_6.clone(),
-        );
+        bob_builder_2.add_irreversible_receive(leg_5_amount, leg_enc_5.clone());
+        bob_builder_2.add_irreversible_send(leg_6_amount, leg_enc_6.clone());
 
         let start = Instant::now();
         let (bob_proof, bob_nullifiers) =
@@ -1621,7 +1637,6 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1653,14 +1668,47 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
             .unwrap();
         let alice_verification_time = start.elapsed();
 
-        // Verify Bob
+        let mut alice_verifier_1 = AccountStateTransitionProofVerifier::init(
+            alice_account_1_updated_comm,
+            alice_nullifiers[0],
+            nonce_alice,
+        );
+        alice_verifier_1.add_send_affirmation(leg_enc_1.clone());
+        alice_verifier_1.add_claim_received(leg_enc_2.clone());
+        alice_verifier_1.add_send_affirmation(leg_enc_3.clone());
+        alice_verifier_1.add_claim_received(leg_enc_4.clone());
+
+        let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+            alice_account_2_updated_comm,
+            alice_nullifiers[1],
+            nonce_alice,
+        );
+        alice_verifier_2.add_irreversible_send(leg_enc_5.clone());
+        alice_verifier_2.add_irreversible_receive(leg_enc_6.clone());
+
+        let start = Instant::now();
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        alice_proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![alice_verifier_1, alice_verifier_2],
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let alice_verification_time_rmc = start.elapsed();
+
         let mut bob_verifier_1 = AccountStateTransitionProofVerifier::init(
             bob_account_1_updated_comm,
             bob_nullifiers[0],
@@ -1687,24 +1735,402 @@ mod tests {
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
             .unwrap();
         let bob_verification_time = start.elapsed();
 
+        let mut bob_verifier_1 = AccountStateTransitionProofVerifier::init(
+            bob_account_1_updated_comm,
+            bob_nullifiers[0],
+            nonce_bob,
+        );
+        bob_verifier_1.add_claim_received(leg_enc_1.clone());
+        bob_verifier_1.add_send_affirmation(leg_enc_2.clone());
+        bob_verifier_1.add_claim_received(leg_enc_3.clone());
+        bob_verifier_1.add_send_affirmation(leg_enc_4.clone());
+
+        let mut bob_verifier_2 = AccountStateTransitionProofVerifier::init(
+            bob_account_2_updated_comm,
+            bob_nullifiers[1],
+            nonce_bob,
+        );
+        bob_verifier_2.add_irreversible_receive(leg_enc_5.clone());
+        bob_verifier_2.add_irreversible_send(leg_enc_6.clone());
+
+        let start = Instant::now();
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        bob_proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![bob_verifier_1, bob_verifier_2],
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let bob_verification_time_rmc = start.elapsed();
+
         let alice_proof_size = alice_proof.compressed_size();
         let bob_proof_size = bob_proof.compressed_size();
 
         println!("For L={L}, height={}", account_tree.height());
         println!(
-            "Alice: Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            alice_proving_time, alice_verification_time, alice_proof_size
+            "Alice: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+            alice_proving_time,
+            alice_verification_time,
+            alice_verification_time_rmc,
+            alice_proof_size
         );
         println!(
-            "Bob: Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            bob_proving_time, bob_verification_time, bob_proof_size
+            "Bob: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+            bob_proving_time, bob_verification_time, bob_verification_time_rmc, bob_proof_size
+        );
+    }
+
+    #[test]
+    fn test_multi_asset_six_legs_mixed_revealed() {
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 14;
+        const L: usize = 64;
+        const M: usize = 2;
+
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_charlie_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let (_, (_, pk_dave_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
+        let (_, (_, pk_eve_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
+        let (_, (_, pk_frank_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id_1 = 1u32;
+        let asset_id_2 = 2u32;
+        let asset_id_3 = 3u32;
+
+        let leg_1_amount = 100u64;
+        let leg_2_amount = 150u64;
+        let leg_3_amount = 200u64;
+        let leg_4_amount = 250u64;
+        let leg_5_amount = 300u64;
+        let leg_6_amount = 350u64;
+
+        // Asset-id `asset_id_1` revealed, Alice is sender
+        let (_, leg_enc_1, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: true,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_1_amount,
+            asset_id_1,
+            pk_alice_e.0,
+            pk_bob_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        // Asset-id `asset_id_1` hidden, Alice is receiver
+        let (_, leg_enc_2, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_2_amount,
+            asset_id_1,
+            pk_charlie_e.0,
+            pk_alice_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        // Asset-id `asset_id_2` revealed, Alice is receiver
+        let (_, leg_enc_3, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: true,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_3_amount,
+            asset_id_2,
+            pk_dave_e.0,
+            pk_alice_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        // Asset-id `asset_id_2` hidden, Alice is sender
+        let (_, leg_enc_4, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_4_amount,
+            asset_id_2,
+            pk_alice_e.0,
+            pk_eve_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        // Asset-id `asset_id_3` hidden, Alice is receiver
+        let (_, leg_enc_5, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_5_amount,
+            asset_id_3,
+            pk_frank_e.0,
+            pk_alice_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        // Asset-id `asset_id_3` hidden, Alice is receiver
+        let (_, leg_enc_6, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            pk_auditor_e.0,
+            None,
+            leg_6_amount,
+            asset_id_3,
+            pk_bob_e.0,
+            pk_alice_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+
+        let alice_id_1 = PallasFr::rand(&mut rng);
+        let (mut alice_account_1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_1,
+        );
+        alice_account_1.balance = 1000;
+
+        let alice_id_2 = PallasFr::rand(&mut rng);
+        let (mut alice_account_2, _, _) = new_account(
+            &mut rng,
+            asset_id_2,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id_2,
+        );
+        alice_account_2.balance = 1000;
+
+        let alice_id_3 = PallasFr::rand(&mut rng);
+        let (mut alice_account_3, _, _) =
+            new_account(&mut rng, asset_id_3, sk_alice, sk_alice_e, alice_id_3);
+        alice_account_3.balance = 1000;
+
+        let account_tree = get_batched_tree_with_account_comms::<L, M, _>(
+            vec![&alice_account_1, &alice_account_2, &alice_account_3],
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let account_tree_root = account_tree.root_node();
+
+        let paths = vec![
+            account_tree.get_paths_to_leaves(&[0, 1]).unwrap(),
+            account_tree.get_paths_to_leaves(&[2]).unwrap(),
+        ];
+
+        let mut alice_builder_1 = AccountStateBuilder::init(alice_account_1.clone());
+        alice_builder_1.update_for_send(leg_1_amount).unwrap();
+        alice_builder_1.update_for_receive();
+        let alice_account_1_updated = alice_builder_1.finalize();
+        let alice_account_1_updated_comm = alice_account_1_updated
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        let mut alice_builder_2 = AccountStateBuilder::init(alice_account_2.clone());
+        alice_builder_2.update_for_receive();
+        alice_builder_2.update_for_send(leg_4_amount).unwrap();
+        let alice_account_2_updated = alice_builder_2.finalize();
+        let alice_account_2_updated_comm = alice_account_2_updated
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        let mut alice_builder_3 = AccountStateBuilder::init(alice_account_3.clone());
+        alice_builder_3.update_for_receive();
+        alice_builder_3.update_for_receive();
+        let alice_account_3_updated = alice_builder_3.finalize();
+        let alice_account_3_updated_comm = alice_account_3_updated
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        let alice_nonce = b"alice_nonce";
+
+        let mut alice_proof_builder_1 =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                alice_account_1.clone(),
+                alice_account_1_updated.clone(),
+                alice_account_1_updated_comm,
+                alice_nonce,
+            );
+        alice_proof_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
+        alice_proof_builder_1.add_receive_affirmation(leg_enc_2.clone());
+
+        let mut alice_proof_builder_2 =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                alice_account_2.clone(),
+                alice_account_2_updated.clone(),
+                alice_account_2_updated_comm,
+                alice_nonce,
+            );
+        alice_proof_builder_2.add_receive_affirmation(leg_enc_3.clone());
+        alice_proof_builder_2.add_send_affirmation(leg_4_amount, leg_enc_4.clone());
+
+        let mut alice_proof_builder_3 =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                alice_account_3.clone(),
+                alice_account_3_updated.clone(),
+                alice_account_3_updated_comm,
+                alice_nonce,
+            );
+        alice_proof_builder_3.add_receive_affirmation(leg_enc_5.clone());
+        alice_proof_builder_3.add_receive_affirmation(leg_enc_6.clone());
+
+        let start = Instant::now();
+        let (alice_proof, alice_nullifiers) =
+            MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasPoint,
+                VestaPoint,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                vec![
+                    alice_proof_builder_1,
+                    alice_proof_builder_2,
+                    alice_proof_builder_3,
+                ],
+                paths,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+        let proving_time = start.elapsed();
+
+        assert_eq!(alice_nullifiers.len(), 3);
+
+        let mut alice_verifier_1 = AccountStateTransitionProofVerifier::init(
+            alice_account_1_updated_comm,
+            alice_nullifiers[0],
+            alice_nonce,
+        );
+        alice_verifier_1.add_send_affirmation(leg_enc_1.clone());
+        alice_verifier_1.add_receive_affirmation(leg_enc_2.clone());
+
+        let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+            alice_account_2_updated_comm,
+            alice_nullifiers[1],
+            alice_nonce,
+        );
+        alice_verifier_2.add_receive_affirmation(leg_enc_3.clone());
+        alice_verifier_2.add_send_affirmation(leg_enc_4.clone());
+
+        let mut alice_verifier_3 = AccountStateTransitionProofVerifier::init(
+            alice_account_3_updated_comm,
+            alice_nullifiers[2],
+            alice_nonce,
+        );
+        alice_verifier_3.add_receive_affirmation(leg_enc_5.clone());
+        alice_verifier_3.add_receive_affirmation(leg_enc_6.clone());
+
+        let start = Instant::now();
+        alice_proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![alice_verifier_1, alice_verifier_2, alice_verifier_3],
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                None,
+            )
+            .unwrap();
+        let verification_time = start.elapsed();
+
+        let mut alice_verifier_1 = AccountStateTransitionProofVerifier::init(
+            alice_account_1_updated_comm,
+            alice_nullifiers[0],
+            alice_nonce,
+        );
+        alice_verifier_1.add_send_affirmation(leg_enc_1.clone());
+        alice_verifier_1.add_receive_affirmation(leg_enc_2.clone());
+
+        let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+            alice_account_2_updated_comm,
+            alice_nullifiers[1],
+            alice_nonce,
+        );
+        alice_verifier_2.add_receive_affirmation(leg_enc_3.clone());
+        alice_verifier_2.add_send_affirmation(leg_enc_4.clone());
+
+        let mut alice_verifier_3 = AccountStateTransitionProofVerifier::init(
+            alice_account_3_updated_comm,
+            alice_nullifiers[2],
+            alice_nonce,
+        );
+        alice_verifier_3.add_receive_affirmation(leg_enc_5.clone());
+        alice_verifier_3.add_receive_affirmation(leg_enc_6.clone());
+
+        let start = Instant::now();
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        alice_proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![alice_verifier_1, alice_verifier_2, alice_verifier_3],
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let verification_time_rmc = start.elapsed();
+
+        let proof_size = alice_proof.compressed_size();
+        println!(
+            "6 legs (3 assets, 2 revealed, 2 sends, 4 receives): Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+            proving_time, verification_time, verification_time_rmc, proof_size
         );
     }
 }

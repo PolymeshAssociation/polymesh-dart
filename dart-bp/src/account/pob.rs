@@ -1,11 +1,11 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::leg::{LegEncryption, LegEncryptionRandomness};
+use crate::leg::LegEncryption;
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, Error, ID_LABEL, NONCE_LABEL,
     PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
 };
-use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::{One, Zero};
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::Zero;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::collections::BTreeSet;
@@ -21,6 +21,8 @@ use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrRespons
 
 // TODO: PoB can also benefit from RandomizedMultChecker but not doing it for now
 
+pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
+pub const LEGS_LABEL: &'static [u8; 4] = b"legs";
 pub const TXN_POB_LABEL: &[u8; 20] = b"proof-of-balance-txn";
 pub const PENDING_SENT_AMOUNT_LABEL: &'static [u8; 19] = b"pending_sent_amount";
 pub const PENDING_RECV_AMOUNT_LABEL: &'static [u8; 19] = b"pending_recv_amount";
@@ -92,17 +94,19 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let sk_blinding = G::ScalarField::rand(rng);
         let current_rho_blinding = G::ScalarField::rand(rng);
 
-        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
-        // where C is the account commitment and rho, current_rho and randomness are the witness, rest are instance
+        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness + g_l * sk_enc_inv = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
+        // where C is the account commitment and rho, current_rho, randomness, sk_enc_inv are the witness, rest are instance
         let t_acc = SchnorrCommitment::new(
             &[
                 account_comm_key.rho_gen(),
                 null_gen,
                 account_comm_key.randomness_gen(),
+                account_comm_key.sk_enc_gen(),
             ],
             vec![
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
+                G::ScalarField::rand(rng),
                 G::ScalarField::rand(rng),
             ],
         );
@@ -118,7 +122,12 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let resp_acc = t_acc.response(
-            &[account.rho, account.current_rho, account.randomness],
+            &[
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.sk_enc_inv,
+            ],
             &prover_challenge,
         )?;
         let resp_null = t_null.gen_partial_proof();
@@ -203,6 +212,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.sk_enc_gen(),
             ],
             &y.into_affine(),
             &self.t_acc,
@@ -238,16 +248,12 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PartialPokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
-    /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg
-    pub asset_id: (G, G::ScalarField),
-    /// For proving correctness of twisted Elgamal ciphertext of sender public key. None when prover is sender in no leg.
-    pub pk_send: Option<(G, G::ScalarField)>,
-    /// For proving correctness of twisted Elgamal ciphertext of receiver public key. None when prover is receiver in no leg.
-    pub pk_recv: Option<(G, G::ScalarField)>,
-    /// Proving knowledge of `\sum{r_3}` in `\sum{C_v} - h * \sum{v} = g * \sum{r_3}` where prover is receiver. `\sum{v}` is the total received amount in the legs
-    pub resp_recv_amount: Option<PokDiscreteLog<G>>,
-    /// Proving knowledge of `\sum{r_3}` in `\sum{C_v} - h * \sum{v} = g * \sum{r_3}` where prover is sender. `\sum{v}` is the total sent amount in the legs
-    pub resp_sent_amount: Option<PokDiscreteLog<G>>,
+    /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
+    pub resp_asset_id: Vec<Option<PartialPokDiscreteLog<G>>>,
+    /// Proving relationship `\sum{C_v} - (\sum{R[2]}) * sk_en^{-1} = h * \sum{v}`
+    pub resp_recv_amount: Option<PartialPokDiscreteLog<G>>,
+    /// Proving relationship `\sum{C_v} - (\sum{S[2]}) * sk_en^{-1} = h * \sum{v}`
+    pub resp_sent_amount: Option<PartialPokDiscreteLog<G>>,
 }
 
 impl<G: AffineRepr> PobWithAnyoneProof<G> {
@@ -257,14 +263,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         // Next few fields args can be abstracted in a single argument. Like a map with key as index and value as legs, keys, etc for that index
-        legs: Vec<(LegEncryption<G>, LegEncryptionRandomness<G::ScalarField>)>,
+        legs: Vec<LegEncryption<G>>,
         sender_in_leg_indices: BTreeSet<usize>,
         receiver_in_leg_indices: BTreeSet<usize>,
         pending_sent_amount: Balance,
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        enc_key_gen: G,
         enc_gen: G,
     ) -> Result<Self> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
@@ -280,7 +285,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             pending_recv_amount,
             nonce,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             transcript,
         )
@@ -292,14 +296,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         // Next few fields args can be abstracted in a single argument. Like a map with key as index and value as legs, keys, etc for that index
-        legs: Vec<(LegEncryption<G>, LegEncryptionRandomness<G::ScalarField>)>,
+        legs: Vec<LegEncryption<G>>,
         sender_in_leg_indices: BTreeSet<usize>,
         receiver_in_leg_indices: BTreeSet<usize>,
         pending_sent_amount: Balance,
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        enc_key_gen: G,
         enc_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<Self> {
@@ -307,6 +310,17 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             return Err(Error::ProofGenerationError(
                 "Number of legs and indices for sender and receiver do not match".to_string(),
             ));
+        }
+
+        for leg in &legs {
+            if let Some(revealed_asset_id) = leg.asset_id() {
+                if revealed_asset_id != account.asset_id {
+                    return Err(Error::ProofGenerationError(format!(
+                        "Asset-id mismatch: leg reveals {}, but account has {}",
+                        revealed_asset_id, account.asset_id
+                    )));
+                }
+            }
         }
 
         let num_pending_txns = legs.len();
@@ -322,12 +336,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare.
         // If its not possible then do a membership proof. Prover could hide the commitment by randomizing it with a new blinding (C' = C + B.r')
 
-        // Prover has to prove relations of this form for each leg:
-        // For sender leg: C_{s, 1} - pk = g * r_{1, i}
-        // For receiver leg: C_{r, 1} - pk = g * r_{2, i}
-        // For asset-id: C_{at} - h * at = g * r_{4, i}
-        // Naively proving, this would lead to 3*n relations for n legs but if we use the batch Schnorr protocol
-        // for each of the above 3 relations, we end up with just 3 relations irrespective of number of legs.
+        // `S` and `R` are the ephemeral publics of sender and receiver in the leg
+        // Since asset-id is revealed, for all legs prove `C_{at} - h * at = S[3] * sk_en^{-1}`, here `at` is revealed to the verifier so only 1 witness.
+        // Dont need to prove anything about `C_{s, i}, C_{r, i}` since correctness of `S` and `C` had been proved during leg creation
+        // For amount relation, `\sum{C_v} - \sum{S[2]} * sk_en^{-1} = h * \sum{v}`
+        // For all above i have assumed prover is sender but for receiver, replace `S` with `R`.
 
         add_to_transcript!(
             transcript,
@@ -353,32 +366,27 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         // Add legs separately since it's an array
         for l in &legs {
-            transcript.append(LEGS_LABEL, &l.0);
+            transcript.append(LEGS_LABEL, l);
         }
 
         let nullifier = account.nullifier(&account_comm_key);
 
         let sk_blinding = G::ScalarField::rand(rng);
+        let sk_enc_inv_blinding = G::ScalarField::rand(rng);
         let current_rho_blinding = G::ScalarField::rand(rng);
-        let r_1_blinding = (!sender_in_leg_indices.is_empty()).then(|| G::ScalarField::rand(rng));
-        let r_2_blinding = (!receiver_in_leg_indices.is_empty()).then(|| G::ScalarField::rand(rng));
-        let r_4_blinding = G::ScalarField::rand(rng);
-
-        // Sum of all r_3 where prover is sender
-        let mut sum_r_3_sent = G::ScalarField::zero();
-        // Sum of all r_3 where prover is receiver
-        let mut sum_r_3_recv = G::ScalarField::zero();
 
         let t_acc = SchnorrCommitment::new(
             &[
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.sk_enc_gen(),
             ],
             vec![
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
                 G::ScalarField::rand(rng),
+                sk_enc_inv_blinding,
             ],
         );
         let t_null = PokDiscreteLogProtocol::init(
@@ -390,42 +398,59 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let t_pk =
             PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
 
-        // For proving correctness of twisted Elgamal ciphertext of sender public key. Used when prover is sender in at least 1 leg
-        let t_pk_send = r_1_blinding.map(|blinding| (enc_key_gen * blinding).into_affine());
-        // For proving correctness of twisted Elgamal ciphertext of receiver public key. Used when prover is receiver in at least 1 leg
-        let t_pk_recv = r_2_blinding.map(|blinding| (enc_key_gen * blinding).into_affine());
-
-        // For proving correctness of twisted Elgamal ciphertext of asset-id
-        let t_asset_id = (enc_key_gen * r_4_blinding).into_affine();
+        // For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
+        let mut t_asset_id = Vec::with_capacity(num_pending_txns);
+        let mut eph_pk_bases_for_asset_id = Vec::with_capacity(num_pending_txns);
 
         // Sum of all C_v where prover is sender
         let mut enc_total_send = G::Group::zero();
+        let mut eph_pk_amount_total_send = G::Group::zero();
         // Sum of all C_v where prover is receiver
         let mut enc_total_recv = G::Group::zero();
+        let mut eph_pk_amount_total_recv = G::Group::zero();
 
         for i in 0..num_pending_txns {
-            let LegEncryptionRandomness(_, _, r_3, _) = &legs[i].1;
-
             if receiver_in_leg_indices.contains(&i) {
-                sum_r_3_recv += r_3;
-                enc_total_recv += legs[i].0.ct_amount;
+                eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
+                enc_total_recv += legs[i].ct_amount;
+                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
             } else if sender_in_leg_indices.contains(&i) {
-                sum_r_3_sent += r_3;
-                enc_total_send += legs[i].0.ct_amount;
+                eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
+                enc_total_send += legs[i].ct_amount;
+                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"
                 )));
             }
+
+            t_asset_id.push((!legs[i].is_asset_id_revealed()).then(|| {
+                PokDiscreteLogProtocol::init(
+                    account.sk_enc_inv,
+                    sk_enc_inv_blinding,
+                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
+                )
+            }));
         }
 
-        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is sender. \sum{v} is the total sent amount in the legs
+        let eph_pk_amount_total_send = eph_pk_amount_total_send.into_affine();
+        let eph_pk_amount_total_recv = eph_pk_amount_total_recv.into_affine();
+
+        // Proving knowledge of sk_en^{-1} in \sum{C_v} - h * \sum{v} = \sum{S[2]} * sk_en^{-1} where prover is sender. \sum{v} is the total sent amount in the legs
         let t_sent_amount = (!sender_in_leg_indices.is_empty()).then(|| {
-            PokDiscreteLogProtocol::init(sum_r_3_sent, G::ScalarField::rand(rng), &enc_key_gen)
+            PokDiscreteLogProtocol::init(
+                account.sk_enc_inv,
+                sk_enc_inv_blinding,
+                &eph_pk_amount_total_send,
+            )
         });
-        // Proving knowledge of \sum{r_3} in \sum{C_v} - h * \sum{v} = g * \sum{r_3} where prover is receiver. \sum{v} is the total received amount in the legs
+        // Proving knowledge of sk_en^{-1} in \sum{C_v} - h * \sum{v} = \sum{R[2]} * sk_en^{-1} where prover is receiver. \sum{v} is the total received amount in the legs
         let t_recv_amount = (!receiver_in_leg_indices.is_empty()).then(|| {
-            PokDiscreteLogProtocol::init(sum_r_3_recv, G::ScalarField::rand(rng), &enc_key_gen)
+            PokDiscreteLogProtocol::init(
+                account.sk_enc_inv,
+                sk_enc_inv_blinding,
+                &eph_pk_amount_total_recv,
+            )
         });
 
         t_acc.challenge_contribution(&mut transcript)?;
@@ -436,31 +461,37 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         )?;
         t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript)?;
 
-        t_pk_send
-            .as_ref()
-            .map(|t| transcript.append(b"t_pk_send", t));
-        t_pk_recv
-            .as_ref()
-            .map(|t| transcript.append(b"t_pk_recv", t));
-        transcript.append(b"t_asset_id", &t_asset_id);
+        let minus_h_at = enc_gen.into_group().neg() * G::ScalarField::from(account.asset_id);
+        for i in 0..num_pending_txns {
+            if let Some(t) = &t_asset_id[i] {
+                let y = (legs[i].asset_id_ciphertext().unwrap().into_group() + minus_h_at)
+                    .into_affine();
+                t.challenge_contribution(
+                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
+                    &y,
+                    &mut transcript,
+                )?;
+            }
+        }
 
         if let Some(t) = &t_sent_amount {
             let y = enc_total_send - (enc_gen * G::ScalarField::from(pending_sent_amount));
-            t.challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+            t.challenge_contribution(&eph_pk_amount_total_send, &y.into_affine(), &mut transcript)?;
         }
         if let Some(t) = &t_recv_amount {
             let y = enc_total_recv - (enc_gen * G::ScalarField::from(pending_recv_amount));
-            t.challenge_contribution(&enc_key_gen, &y.into_affine(), &mut transcript)?;
+            t.challenge_contribution(&eph_pk_amount_total_recv, &y.into_affine(), &mut transcript)?;
         }
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        let mut resp_pk_send = r_1_blinding.map(|blinding| blinding);
-        let mut resp_pk_recv = r_2_blinding.map(|blinding| blinding);
-        let mut resp_asset_id = r_4_blinding;
-
         let resp_acc = t_acc.response(
-            &[account.rho, account.current_rho, account.randomness],
+            &[
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.sk_enc_inv,
+            ],
             &challenge,
         )?;
 
@@ -469,26 +500,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let resp_pk = t_pk.gen_proof(&challenge);
 
-        let mut c = challenge;
-        for i in 0..num_pending_txns {
-            let LegEncryptionRandomness(r_1, r_2, _, r_4) = &legs[i].1;
-
-            if receiver_in_leg_indices.contains(&i) {
-                resp_pk_recv = resp_pk_recv.map(|v| v + (c * r_2));
-            } else if sender_in_leg_indices.contains(&i) {
-                resp_pk_send = resp_pk_send.map(|v| v + (c * r_1));
-            } else {
-                return Err(Error::ProofOfBalanceError(format!(
-                    "Could not find index {i} in sent or recv"
-                )));
-            }
-
-            resp_asset_id += c * r_4;
-            c *= challenge;
+        let mut resp_asset_id = Vec::with_capacity(num_pending_txns);
+        for t in t_asset_id.into_iter() {
+            resp_asset_id.push(t.map(|t| t.gen_partial_proof()));
         }
 
-        let resp_sent_amount = t_sent_amount.map(|t| t.gen_proof(&challenge));
-        let resp_recv_amount = t_recv_amount.map(|t| t.gen_proof(&challenge));
+        let resp_sent_amount = t_sent_amount.map(|t| t.gen_partial_proof());
+        let resp_recv_amount = t_recv_amount.map(|t| t.gen_partial_proof());
 
         Ok(Self {
             nullifier,
@@ -496,9 +514,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             resp_acc,
             resp_null,
             resp_pk,
-            asset_id: (t_asset_id, resp_asset_id),
-            pk_recv: t_pk_recv.zip(resp_pk_recv),
-            pk_send: t_pk_send.zip(resp_pk_send),
+            resp_asset_id,
             resp_recv_amount,
             resp_sent_amount,
         })
@@ -519,7 +535,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        enc_key_gen: G,
         enc_gen: G,
     ) -> Result<()> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
@@ -537,7 +552,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             pending_recv_amount,
             nonce,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             transcript,
         )
@@ -558,7 +572,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         pending_recv_amount: Balance,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-        enc_key_gen: G,
         enc_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
@@ -573,11 +586,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ));
         }
         if sender_in_leg_indices.len() > 0 {
-            if self.pk_send.is_none() {
-                return Err(Error::ProofVerificationError(
-                    "No response for sender indices".to_string(),
-                ));
-            }
             if self.resp_sent_amount.is_none() {
                 return Err(Error::ProofVerificationError(
                     "No response for sender amount".to_string(),
@@ -585,15 +593,21 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             }
         }
         if receiver_in_leg_indices.len() > 0 {
-            if self.pk_recv.is_none() {
-                return Err(Error::ProofVerificationError(
-                    "No response for receiver indices".to_string(),
-                ));
-            }
             if self.resp_recv_amount.is_none() {
                 return Err(Error::ProofVerificationError(
                     "No response for receiver amount".to_string(),
                 ));
+            }
+        }
+
+        for leg in &legs {
+            if let Some(revealed_asset_id) = leg.asset_id() {
+                if revealed_asset_id != asset_id {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Asset-id mismatch: leg reveals {}, but expected {}",
+                        revealed_asset_id, asset_id
+                    )));
+                }
             }
         }
 
@@ -640,43 +654,50 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let mut enc_total_send = G::Group::zero();
         let mut enc_total_recv = G::Group::zero();
-        let mut bases_send = Vec::with_capacity(sender_in_leg_indices.len());
-        let mut bases_recv = Vec::with_capacity(receiver_in_leg_indices.len());
-        let mut bases_at = Vec::with_capacity(legs.len());
-
-        let minus_pk = pk.into_group().neg();
+        let mut eph_pk_amount_total_send = G::Group::zero();
+        let mut eph_pk_amount_total_recv = G::Group::zero();
+        let mut eph_pk_bases_for_asset_id = Vec::with_capacity(legs.len());
+        let mut y_asset_id = Vec::with_capacity(legs.len());
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
-                let y = (legs[i].ct_r.into_group() + minus_pk).into_affine();
                 enc_total_recv += legs[i].ct_amount;
-                bases_recv.push(y);
+                eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
+                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
             } else if sender_in_leg_indices.contains(&i) {
-                let y = (legs[i].ct_s.into_group() + minus_pk).into_affine();
                 enc_total_send += legs[i].ct_amount;
-                bases_send.push(y);
+                eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
+                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"
                 )));
             }
 
-            let y = (legs[i].ct_asset_id.into_group() + minus_h_at).into_affine();
-            bases_at.push(y);
+            let y = legs[i]
+                .asset_id_ciphertext()
+                .map(|ct| (ct.into_group() + minus_h_at).into_affine());
+            y_asset_id.push(y);
         }
 
-        self.pk_send
-            .as_ref()
-            .map(|t| transcript.append(b"t_pk_send", &t.0));
-        self.pk_recv
-            .as_ref()
-            .map(|t| transcript.append(b"t_pk_recv", &t.0));
-        transcript.append(b"t_asset_id", &self.asset_id.0);
+        for i in 0..num_pending_txns {
+            if let Some(r) = &self.resp_asset_id[i] {
+                r.challenge_contribution(
+                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
+                    y_asset_id[i].as_ref().unwrap(),
+                    &mut transcript,
+                )?;
+            }
+        }
 
         let y_total_send = if let Some(resp) = &self.resp_sent_amount {
             let y_total_send = (enc_total_send
                 - (enc_gen * G::ScalarField::from(pending_sent_amount)))
             .into_affine();
-            resp.challenge_contribution(&enc_key_gen, &y_total_send, &mut transcript)?;
+            resp.challenge_contribution(
+                &eph_pk_amount_total_send.into_affine(),
+                &y_total_send,
+                &mut transcript,
+            )?;
             Some(y_total_send)
         } else {
             None
@@ -686,7 +707,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             let y_total_recv = (enc_total_recv
                 - (enc_gen * G::ScalarField::from(pending_recv_amount)))
             .into_affine();
-            resp.challenge_contribution(&enc_key_gen, &y_total_recv, &mut transcript)?;
+            resp.challenge_contribution(
+                &eph_pk_amount_total_recv.into_affine(),
+                &y_total_recv,
+                &mut transcript,
+            )?;
             Some(y_total_recv)
         } else {
             None
@@ -705,6 +730,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.sk_enc_gen(),
             ],
             &y.into_affine(),
             &self.t_acc,
@@ -732,60 +758,29 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ));
         }
 
-        let mut challenge_powers = vec![];
-        let mut c = G::ScalarField::one();
-        for _ in 0..num_pending_txns {
-            c *= challenge;
-            challenge_powers.push(c);
-        }
-
-        let mut scalars_send = Vec::with_capacity(sender_in_leg_indices.len());
-        let mut scalars_recv = Vec::with_capacity(receiver_in_leg_indices.len());
-
+        let resp_sk_enc_inv = &self.resp_acc.0[3];
         for i in 0..num_pending_txns {
-            if receiver_in_leg_indices.contains(&i) {
-                scalars_recv.push(challenge_powers[i]);
-            } else if sender_in_leg_indices.contains(&i) {
-                scalars_send.push(challenge_powers[i]);
-            } else {
-                return Err(Error::ProofOfBalanceError(format!(
-                    "Could not find index {i} in sent or recv"
-                )));
+            if let Some(resp) = &self.resp_asset_id[i] {
+                if !resp.verify(
+                    y_asset_id[i].as_ref().unwrap(),
+                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
+                    &challenge,
+                    resp_sk_enc_inv,
+                ) {
+                    return Err(Error::ProofVerificationError(
+                        "Asset-id verification failed".to_string(),
+                    ));
+                }
             }
-        }
-
-        if let Some((t, resp)) = self.pk_send {
-            bases_send.push(enc_key_gen);
-            scalars_send.push(-resp);
-            if t.into_group().neg() != G::Group::msm_unchecked(&bases_send, &scalars_send) {
-                return Err(Error::ProofVerificationError(
-                    "Sender public key verification failed".to_string(),
-                ));
-            }
-        }
-
-        if let Some((t, resp)) = self.pk_recv {
-            bases_recv.push(enc_key_gen);
-            scalars_recv.push(-resp);
-            if t.into_group().neg() != G::Group::msm_unchecked(&bases_recv, &scalars_recv) {
-                return Err(Error::ProofVerificationError(
-                    "Receiver public key verification failed".to_string(),
-                ));
-            }
-        }
-
-        bases_at.push(enc_key_gen);
-        challenge_powers.push(-self.asset_id.1);
-        if self.asset_id.0.into_group().neg()
-            != G::Group::msm_unchecked(&bases_at, &challenge_powers)
-        {
-            return Err(Error::ProofVerificationError(
-                "Asset ID verification failed".to_string(),
-            ));
         }
 
         if let Some(resp) = &self.resp_sent_amount {
-            if !resp.verify(&y_total_send.unwrap(), &enc_key_gen, &challenge) {
+            if !resp.verify(
+                &y_total_send.unwrap(),
+                &eph_pk_amount_total_send.into_affine(),
+                &challenge,
+                resp_sk_enc_inv,
+            ) {
                 return Err(Error::ProofVerificationError(
                     "resp_sent_amount verification failed".to_string(),
                 ));
@@ -793,7 +788,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         }
 
         if let Some(resp) = &self.resp_recv_amount {
-            if !resp.verify(&y_total_recv.unwrap(), &enc_key_gen, &challenge) {
+            if !resp.verify(
+                &y_total_recv.unwrap(),
+                &eph_pk_amount_total_recv.into_affine(),
+                &challenge,
+                resp_sk_enc_inv,
+            ) {
                 return Err(Error::ProofVerificationError(
                     "resp_recv_amount verification failed".to_string(),
                 ));
@@ -808,10 +808,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 mod tests {
     use super::*;
     use crate::account_registration::tests::{new_account, setup_comm_key};
-    use crate::keys::keygen_sig;
-    use crate::leg::Leg;
+    use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use blake2::Blake2b512;
+    use crate::leg::{Leg, LegEncConfig};
     use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
@@ -826,9 +825,11 @@ mod tests {
         let asset_id = 1;
 
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -865,10 +866,10 @@ mod tests {
 
         let account_comm_key = setup_comm_key(b"testing");
 
-        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let enc_gen = PallasA::rand(&mut rng);
 
-        let (((sk, pk), (_, pk_e)), ((_, pk_other), (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+        let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1;
@@ -876,7 +877,7 @@ mod tests {
 
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -884,33 +885,51 @@ mod tests {
         // Create some legs as pending transfers
         let mut legs = vec![];
         // Set this amount in each leg. Just for testing, in practice it could be different
-        let amount = 10;
-        let mut pending_sent_amount = 0;
-        let mut pending_recv_amount = 0;
+        let amount = 10u64;
+        let mut pending_sent_amount = 0u64;
+        let mut pending_recv_amount = 0u64;
         let mut sender_in_leg_indices = BTreeSet::new();
         let mut receiver_in_leg_indices = BTreeSet::new();
         for i in 0..num_pending_txns as usize {
             // for odd i, account is sender, for even i, its receiver
-            let (leg_enc, leg_enc_rand) = if i % 2 == 0 {
+            let leg_enc = if i % 2 == 0 {
                 pending_recv_amount += amount;
                 receiver_in_leg_indices.insert(i);
-                let leg =
-                    Leg::new(pk_other.0, pk.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
-                let (leg_enc, leg_enc_rand) = leg
-                    .encrypt::<_, Blake2b512>(&mut rng, pk_e_other.0, pk_e.0, enc_key_gen, enc_gen)
+                let leg = Leg::new(
+                    pk_e_other.0,
+                    pk_e.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
                     .unwrap();
-                (leg_enc, leg_enc_rand)
+                leg_enc
             } else {
                 pending_sent_amount += amount;
                 sender_in_leg_indices.insert(i);
-                let leg =
-                    Leg::new(pk.0, pk_other.0, vec![(true, pk_a_e.0)], amount, asset_id).unwrap();
-                let (leg_enc, leg_enc_rand) = leg
-                    .encrypt::<_, Blake2b512>(&mut rng, pk_e.0, pk_e_other.0, enc_key_gen, enc_gen)
+                let leg = Leg::new(
+                    pk_e.0,
+                    pk_e_other.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
                     .unwrap();
-                (leg_enc, leg_enc_rand)
+                leg_enc
             };
-            legs.push((leg_enc, leg_enc_rand));
+            legs.push(leg_enc);
         }
 
         let nonce = b"test-nonce";
@@ -929,7 +948,6 @@ mod tests {
             pending_recv_amount,
             nonce,
             account_comm_key.clone(),
-            enc_key_gen,
             enc_gen,
         )
         .unwrap();
@@ -946,14 +964,13 @@ mod tests {
                 id,
                 &pk.0,
                 account_comm,
-                legs.into_iter().map(|l| l.0).collect(),
+                legs,
                 sender_in_leg_indices.clone(),
                 receiver_in_leg_indices.clone(),
                 pending_sent_amount,
                 pending_recv_amount,
                 nonce,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -968,7 +985,137 @@ mod tests {
             verifier_time
         );
     }
-}
 
-pub const COUNTER_LABEL: &'static [u8; 7] = b"counter";
-pub const LEGS_LABEL: &'static [u8; 4] = b"legs";
+    #[test]
+    fn pob_with_anyone_revealed_asset_id() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), ((_, _), (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let num_pending_txns = 20;
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let mut legs = vec![];
+        let amount = 10u64;
+        let mut pending_sent_amount = 0u64;
+        let mut pending_recv_amount = 0u64;
+        let mut sender_in_leg_indices = BTreeSet::new();
+        let mut receiver_in_leg_indices = BTreeSet::new();
+        for i in 0..num_pending_txns as usize {
+            let leg_enc = if i % 2 == 0 {
+                pending_recv_amount += amount;
+                receiver_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e_other.0,
+                    pk_e.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let config = if i % 4 == 0 {
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    }
+                } else {
+                    LegEncConfig::default()
+                };
+                let (leg_enc, _) = leg.encrypt(&mut rng, config, enc_key_gen, enc_gen).unwrap();
+                leg_enc
+            } else {
+                pending_sent_amount += amount;
+                sender_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e.0,
+                    pk_e_other.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let config = if i % 4 == 1 {
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    }
+                } else {
+                    LegEncConfig::default()
+                };
+                let (leg_enc, _) = leg.encrypt(&mut rng, config, enc_key_gen, enc_gen).unwrap();
+                leg_enc
+            };
+            legs.push(leg_enc);
+        }
+
+        let nonce = b"test-nonce";
+
+        let clock = Instant::now();
+
+        let proof = PobWithAnyoneProof::new(
+            &mut rng,
+            &pk.0,
+            &account,
+            account_comm.clone(),
+            legs.clone(),
+            sender_in_leg_indices.clone(),
+            receiver_in_leg_indices.clone(),
+            pending_sent_amount,
+            pending_recv_amount,
+            nonce,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+
+        let prover_time = clock.elapsed();
+
+        let clock = Instant::now();
+
+        proof
+            .verify(
+                asset_id,
+                account.balance,
+                account.counter,
+                id,
+                &pk.0,
+                account_comm,
+                legs,
+                sender_in_leg_indices.clone(),
+                receiver_in_leg_indices.clone(),
+                pending_sent_amount,
+                pending_recv_amount,
+                nonce,
+                account_comm_key,
+                enc_gen,
+            )
+            .unwrap();
+
+        let verifier_time = clock.elapsed();
+
+        println!("For {num_pending_txns} pending txns");
+        println!("total proof size = {}", proof.compressed_size());
+        println!(
+            "total prover time = {:?}, total verifier time = {:?}",
+            prover_time, verifier_time
+        );
+    }
+}

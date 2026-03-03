@@ -9,7 +9,6 @@ use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::{Field, PrimeField, Zero};
@@ -23,10 +22,7 @@ use bulletproofs::r1cs::{
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::mem;
-use curve_tree_relations::curve::curve_check;
-use curve_tree_relations::lookup::Lookup3Bit;
 use curve_tree_relations::range_proof::range_proof;
-use curve_tree_relations::rerandomize::scalar_mult;
 use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::ff::inner_product;
@@ -40,13 +36,15 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{
-    Partial1PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
+    Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
+    PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
+pub const ENC_PK_LABEL: &'static [u8; 6] = b"pk_enc";
 
 /// Proof of encrypted randomness. The randomness is broken into `NUM_CHUNKS` chunks of `CHUNK_BITS` bits each
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
@@ -75,6 +73,7 @@ pub struct EncryptedRandomness<
 /// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+    pub pk_enc_inv: G,
     pub resp_acc_comm: PokPedersenCommitment<G>,
     pub resp_initial_nullifier: PokDiscreteLog<G>,
     /// Bulletproof vector commitment to `sk, initial_rho, current_rho`
@@ -82,6 +81,11 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
     pub t_comm_rho_bp: G,
     pub resp_comm_rho_bp: PartialSchnorrResponse<G>,
     pub resp_pk: PokDiscreteLog<G>,
+    pub resp_pk_enc: PokDiscreteLog<G>,
+    /// Proves `enc_key_gen = pk_enc * sk_enc_inv`
+    pub resp_enc_key_gen: PartialPokDiscreteLog<G>,
+    /// Proves `pk_enc_inv = enc_key_gen * sk_enc_inv`
+    pub resp_pk_enc_inv: PokDiscreteLog<G>,
     /// Called `uppercase Omega` in the report
     pub encrypted_randomness: Option<EncryptedRandomness<G, CHUNK_BITS, NUM_CHUNKS>>,
     pub proof: Option<R1CSProof<G>>,
@@ -104,10 +108,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     /// This is intentionally kept different from the generator for randomness in account commitment to prevent anyone from
     /// learning the next nullifier
     /// The second returned value is the `initial_nullifier` and called `N` in the report.
+    /// The third returned value is `g_sk_enc_inv = enc_key_gen * sk_enc_inv`.
     /// This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
+        pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
@@ -124,6 +130,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let (mut proof, initial_nullifier) = Self::new_with_given_prover(
             rng,
             pk,
+            pk_enc,
             account,
             account_commitment,
             counter,
@@ -145,6 +152,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     pub fn new_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
+        pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
@@ -152,20 +160,21 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
-        // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         prover: &mut Prover<MerlinTranscript, G>,
     ) -> Result<(Self, G)> {
         let _ = Self::CHECK_CHUNK_BITS;
-        ensure_correct_registration_state(account)?;
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let aff_key_gen = account_comm_key.sk_gen();
+        ensure_correct_registration_state(account, pk, pk_enc, aff_key_gen, enc_key_gen)?;
 
         // Need to prove that:
         // 1. rho is generated correctly and current_rho = rho^2
         // 2. balance is 0
         // 3. counter is 0
         // 4. Knowledge of randomness
-        // 5. if T is provided, prove that randomness is encrypted correctly for pk_T
+        // 5. if T is provided, prove that randomness is encrypted correctly for pk_T and enc_pk_inv
 
         let mut transcript_ref = prover.transcript();
         add_to_transcript!(
@@ -178,6 +187,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             account_commitment,
             PK_LABEL,
             pk,
+            ENC_PK_LABEL,
+            pk_enc,
             ID_LABEL,
             account.id
         );
@@ -192,8 +203,19 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut rho_blinding = G::ScalarField::rand(rng);
         let mut current_rho_blinding = G::ScalarField::rand(rng);
         let mut s_blinding = G::ScalarField::rand(rng);
+        let mut sk_enc_blinding = G::ScalarField::rand(rng);
+        let mut sk_enc_inv_blinding = G::ScalarField::rand(rng);
 
-        // For proving Comm - D - initial_nullifier = g_i * rho^2 + g_j * s
+        // Compute pk_enc_inv = enc_key_gen * sk_enc_inv (this will be a public output)
+        let pk_enc_inv = (enc_key_gen * account.sk_enc_inv).into_affine();
+
+        // For proving Comm - D - initial_nullifier - pk_enc_inv = g_i * rho^2 + g_j * s
+        // Since pk_enc_inv is revealed, we can reduce it from the commitment
+        let reduced_acc_comm = (account_commitment.0.into_group()
+            - D
+            - initial_nullifier.into_group()
+            - pk_enc_inv.into_group())
+        .into_affine();
         let comm_protocol = PokPedersenCommitmentProtocol::init(
             account.current_rho,
             current_rho_blinding,
@@ -202,8 +224,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             s_blinding,
             &account_comm_key.randomness_gen(),
         );
-        let reduced_acc_comm =
-            (account_commitment.0.into_group() - D - initial_nullifier.into_group()).into_affine();
         comm_protocol.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
@@ -219,6 +239,28 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &initial_nullifier,
             &mut transcript_ref,
         )?;
+
+        // Prove pk_enc = enc_key_gen * sk_enc
+        let pk_enc_protocol = PokDiscreteLogProtocol::init(
+            account.sk_enc_inv.inverse().unwrap(),
+            sk_enc_blinding,
+            &enc_key_gen,
+        );
+        pk_enc_protocol.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
+
+        // Prove pk_enc_inv = enc_key_gen * sk_enc_inv (partial sigma, shares sk_enc_inv_blinding)
+        let pk_enc_inv_protocol =
+            PokDiscreteLogProtocol::init(account.sk_enc_inv, sk_enc_inv_blinding, &enc_key_gen);
+        pk_enc_inv_protocol.challenge_contribution(
+            &enc_key_gen,
+            &pk_enc_inv,
+            &mut transcript_ref,
+        )?;
+
+        // Prove enc_key_gen = pk_enc * sk_enc_inv (partial sigma, shares sk_enc_inv_blinding)
+        let enc_key_gen_protocol =
+            PokDiscreteLogProtocol::init(account.sk_enc_inv, sk_enc_inv_blinding, &pk_enc);
+        enc_key_gen_protocol.challenge_contribution(&pk_enc, &enc_key_gen, &mut transcript_ref)?;
 
         // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
         // Break randomness `s` in `NUM_CHUNKS` chunks and encrypt each chunk using exponent Elgamal. Then initialize sigma
@@ -319,12 +361,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ],
         );
 
-        let t_pk =
-            PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
 
         sk_blinding.zeroize();
         rho_blinding.zeroize();
         current_rho_blinding.zeroize();
+        sk_enc_blinding.zeroize();
+        sk_enc_inv_blinding.zeroize();
 
         // Commit to each chunk of randomness and prove that each chunk in range using BP
         let (comm_s_chunks_bp, com_s_bp_blinding) =
@@ -345,7 +388,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut transcript_ref = prover.transcript();
 
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
-        t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk, &mut transcript_ref)?;
+        t_pk.challenge_contribution(&aff_key_gen, &pk, &mut transcript_ref)?;
 
         // Take challenge contribution of ciphertext of each chunk
         let (t_comm_s_chunks_bp, combined_s_proto) =
@@ -401,19 +444,22 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 (None, None)
             };
 
-        let prover_challenge = prover
+        let challenge = prover
             .transcript()
             .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        let resp_comm = comm_protocol.gen_proof(&prover_challenge);
-        let resp_initial_nullifier = init_null_protocol.gen_proof(&prover_challenge);
+        let resp_comm = comm_protocol.gen_proof(&challenge);
+        let resp_initial_nullifier = init_null_protocol.gen_proof(&challenge);
+        let resp_pk_enc = pk_enc_protocol.gen_proof(&challenge);
+        let resp_pk_enc_inv = pk_enc_inv_protocol.gen_proof(&challenge);
+        let resp_enc_key_gen = enc_key_gen_protocol.gen_partial_proof();
 
         let mut wits = BTreeMap::new();
         wits.insert(0, com_rho_bp_blinding);
         // Responses for the rest of witnesses will be generated by sigma protocols for initial nullifier, public key and account commitment
-        let resp_comm_rho_bp = t_comm_rho_bp.partial_response(wits, &prover_challenge)?;
+        let resp_comm_rho_bp = t_comm_rho_bp.partial_response(wits, &challenge)?;
 
-        let resp_pk = t_pk.gen_proof(&prover_challenge);
+        let resp_pk = t_pk.gen_proof(&challenge);
 
         let encrypted_randomness =
             if let Some((s_chunks, _, _, ciphertexts, _, eph_proto, enc_proto)) = enc_prep {
@@ -426,7 +472,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     .zip(eph_proto.into_iter())
                     .zip(enc_proto.into_iter())
                 {
-                    resp_eph_pk.push(eph.gen_proof(&prover_challenge));
+                    resp_eph_pk.push(eph.gen_proof(&challenge));
                     // Responses for the witnesses will be generated by sigma protocols for resp_eph_pk (ephemeral pubkey during Elgamal) and
                     // for the Bulletproof commitment to chunks
                     resp_encrypted.push(enc.gen_partial_proof());
@@ -434,14 +480,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 }
 
                 let t_comm_s_chunks_bp = t_comm_s_chunks_bp.unwrap();
-                let resp_comm_s_chunks_bp =
-                    t_comm_s_chunks_bp.response(&wits, &prover_challenge)?;
+                let resp_comm_s_chunks_bp = t_comm_s_chunks_bp.response(&wits, &challenge)?;
                 Zeroize::zeroize(&mut wits);
 
                 // Responses for the witness for randomness is already generated by sigma protocol for account commitment
-                let resp_combined_s = combined_s_proto
-                    .unwrap()
-                    .gen_partial1_proof(&prover_challenge);
+                let resp_combined_s = combined_s_proto.unwrap().gen_partial1_proof(&challenge);
 
                 Some(EncryptedRandomness::<G, CHUNK_BITS, NUM_CHUNKS> {
                     ciphertexts: ciphertexts.try_into().unwrap(),
@@ -458,12 +501,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         Ok((
             Self {
+                pk_enc_inv,
                 resp_acc_comm: resp_comm,
                 resp_initial_nullifier,
                 comm_rho_bp,
                 t_comm_rho_bp: t_comm_rho_bp.t,
                 resp_comm_rho_bp,
                 resp_pk,
+                resp_pk_enc,
+                resp_enc_key_gen,
+                resp_pk_enc_inv,
                 encrypted_randomness,
                 proof: None,
             },
@@ -477,6 +524,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         rng: &mut R,
         id: G::ScalarField,
         pk: &G,
+        pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
@@ -485,7 +533,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
-        // poseidon_config: &PoseidonConfig<G::ScalarField>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
@@ -493,6 +540,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let tuple = self.verify_and_return_tuples(
             id,
             pk,
+            pk_enc,
             asset_id,
             account_commitment,
             counter,
@@ -521,6 +569,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         &self,
         id: G::ScalarField,
         pk: &G,
+        pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
@@ -539,6 +588,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         self.verify_sigma_protocols_and_enforce_constraints(
             id,
             pk,
+            pk_enc,
             asset_id,
             account_commitment,
             counter,
@@ -565,6 +615,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         &self,
         id: G::ScalarField,
         pk: &G,
+        pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
         counter: NullifierSkGenCounter,
@@ -608,17 +659,25 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             account_commitment,
             PK_LABEL,
             pk,
+            ENC_PK_LABEL,
+            pk_enc,
             ID_LABEL,
             id
         );
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // D = pk + g_k * asset_id + g_l * id
         let D = pk.into_group()
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
             + (account_comm_key.id_gen() * id);
 
-        let reduced_acc_comm =
-            (account_commitment.0.into_group() - D - initial_nullifier.into_group()).into_affine();
+        // Reduce g_sk_enc_inv from commitment since it's revealed
+        let reduced_acc_comm = (account_commitment.0.into_group()
+            - D
+            - initial_nullifier.into_group()
+            - self.pk_enc_inv.into_group())
+        .into_affine();
         self.resp_acc_comm.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &account_comm_key.randomness_gen(),
@@ -631,6 +690,18 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &initial_nullifier,
             &mut transcript_ref,
         )?;
+
+        self.resp_pk_enc
+            .challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
+
+        self.resp_pk_enc_inv.challenge_contribution(
+            &enc_key_gen,
+            &self.pk_enc_inv,
+            &mut transcript_ref,
+        )?;
+
+        self.resp_enc_key_gen
+            .challenge_contribution(&pk_enc, &enc_key_gen, &mut transcript_ref)?;
 
         // Take challenge contribution of ciphertext of each chunk
         if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
@@ -666,6 +737,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         self.t_comm_rho_bp
             .serialize_compressed(&mut transcript_ref)?;
+
         self.resp_pk.challenge_contribution(
             &account_comm_key.sk_gen(),
             &pk,
@@ -700,191 +772,118 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             None
         };
 
-        let verifier_challenge =
-            transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let challenge = transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         // Perform all the verifications except bulletproof verification
-        match rmc.as_mut() {
-            Some(rmc_checker) => {
-                // Use RandomizedMultChecker for batched verification
-                self.resp_acc_comm.verify_using_randomized_mult_checker(
-                    reduced_acc_comm,
-                    account_comm_key.current_rho_gen(),
-                    account_comm_key.randomness_gen(),
-                    &verifier_challenge,
-                    rmc_checker,
-                );
-
-                self.resp_initial_nullifier
-                    .verify_using_randomized_mult_checker(
-                        initial_nullifier,
-                        account_comm_key.rho_gen(),
-                        &verifier_challenge,
-                        rmc_checker,
-                    );
-            }
-            None => {
-                // Use individual verification
-                if !self.resp_acc_comm.verify(
-                    &reduced_acc_comm,
-                    &account_comm_key.current_rho_gen(),
-                    &account_comm_key.randomness_gen(),
-                    &verifier_challenge,
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Account commitment verification failed".to_string(),
-                    ));
-                }
-
-                if !self.resp_initial_nullifier.verify(
-                    &initial_nullifier,
-                    &account_comm_key.rho_gen(),
-                    &verifier_challenge,
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Initial nullifier verification failed".to_string(),
-                    ));
-                }
-            }
-        }
+        verify_or_rmc_3!(
+            rmc,
+            self.resp_acc_comm,
+            "Account commitment verification failed",
+            reduced_acc_comm,
+            account_comm_key.current_rho_gen(),
+            account_comm_key.randomness_gen(),
+            &challenge,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_initial_nullifier,
+            "Initial nullifier verification failed",
+            initial_nullifier,
+            account_comm_key.rho_gen(),
+            &challenge,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_pk_enc,
+            "Encryption public key verification failed",
+            pk_enc,
+            enc_key_gen,
+            &challenge,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_pk_enc_inv,
+            "Encryption public key inverse knowledge verification failed",
+            self.pk_enc_inv,
+            enc_key_gen,
+            &challenge,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_enc_key_gen,
+            "Encryption secret key inverse relation verification failed",
+            enc_key_gen,
+            pk_enc,
+            &challenge,
+            &self.resp_pk_enc_inv.response,
+        );
 
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(1, self.resp_pk.response);
         missing_resps.insert(2, self.resp_initial_nullifier.response);
         missing_resps.insert(3, self.resp_acc_comm.response1);
 
-        match rmc.as_mut() {
-            Some(rmc_checker) => {
-                self.resp_comm_rho_bp.verify_using_randomized_mult_checker(
-                    Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens).to_vec(),
-                    self.comm_rho_bp,
-                    self.t_comm_rho_bp,
-                    &verifier_challenge,
-                    missing_resps,
-                    rmc_checker,
-                )?;
-
-                // Use RandomizedMultChecker for public key verification
-                self.resp_pk.verify_using_randomized_mult_checker(
-                    *pk,
-                    account_comm_key.sk_gen(),
-                    &verifier_challenge,
-                    rmc_checker,
-                );
-            }
-            None => {
-                self.resp_comm_rho_bp.is_valid(
-                    &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
-                    &self.comm_rho_bp,
-                    &self.t_comm_rho_bp,
-                    &verifier_challenge,
-                    missing_resps,
-                )?;
-                if !self
-                    .resp_pk
-                    .verify(pk, &account_comm_key.sk_gen(), &verifier_challenge)
-                {
-                    return Err(Error::ProofVerificationError(
-                        "Public key verification failed".to_string(),
-                    ));
-                }
-            }
-        }
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_comm_rho_bp,
+            Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens).to_vec(),
+            self.comm_rho_bp,
+            self.t_comm_rho_bp,
+            &challenge,
+            missing_resps,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_pk,
+            "Public key verification failed",
+            *pk,
+            account_comm_key.sk_gen(),
+            &challenge,
+        );
 
         if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
             // unwrap is fine as its already checked in the beginning
             let enc_rand = self.encrypted_randomness.as_ref().unwrap();
             for i in 0..NUM_CHUNKS {
-                match rmc.as_mut() {
-                    Some(rmc_checker) => {
-                        // Use RandomizedMultChecker for encrypted randomness verification
-                        enc_rand.resp_eph_pk[i].verify_using_randomized_mult_checker(
-                            enc_rand.ciphertexts[i].eph_pk,
-                            *enc_key_gen,
-                            &verifier_challenge,
-                            rmc_checker,
-                        );
-                        enc_rand.resp_encrypted[i].verify_using_randomized_mult_checker(
-                            enc_rand.ciphertexts[i].encrypted,
-                            *pk_T,
-                            *enc_gen,
-                            &verifier_challenge,
-                            &enc_rand.resp_eph_pk[i].response,
-                            &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
-                            rmc_checker,
-                        );
-                    }
-                    None => {
-                        if !enc_rand.resp_eph_pk[i].verify(
-                            &enc_rand.ciphertexts[i].eph_pk,
-                            enc_key_gen,
-                            &verifier_challenge,
-                        ) {
-                            return Err(Error::ProofVerificationError(
-                                "Encrypted randomness verification failed".to_string(),
-                            ));
-                        }
-                        if !enc_rand.resp_encrypted[i].verify(
-                            &enc_rand.ciphertexts[i].encrypted,
-                            pk_T,
-                            enc_gen,
-                            &verifier_challenge,
-                            &enc_rand.resp_eph_pk[i].response,
-                            &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
-                        ) {
-                            return Err(Error::ProofVerificationError(
-                                "Encrypted randomness verification failed".to_string(),
-                            ));
-                        }
-                    }
-                }
+                verify_or_rmc_2!(
+                    rmc,
+                    enc_rand.resp_eph_pk[i],
+                    "Encrypted randomness verification failed",
+                    enc_rand.ciphertexts[i].eph_pk,
+                    *enc_key_gen,
+                    &challenge,
+                );
+                verify_or_rmc_3!(
+                    rmc,
+                    enc_rand.resp_encrypted[i],
+                    "Encrypted randomness verification failed",
+                    enc_rand.ciphertexts[i].encrypted,
+                    *pk_T,
+                    *enc_gen,
+                    &challenge,
+                    &enc_rand.resp_eph_pk[i].response,
+                    &enc_rand.resp_comm_s_chunks_bp.0[i + 1],
+                );
             }
 
-            match rmc {
-                Some(rmc_checker) => {
-                    enc_rand
-                        .resp_comm_s_chunks_bp
-                        .verify_using_randomized_mult_checker(
-                            Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens)
-                                .to_vec(),
-                            enc_rand.comm_s_chunks_bp,
-                            enc_rand.t_comm_s_chunks_bp,
-                            &verifier_challenge,
-                            rmc_checker,
-                        )?;
-                    // Use RandomizedMultChecker for combined randomness verification
-                    enc_rand
-                        .resp_combined_s
-                        .verify_using_randomized_mult_checker(
-                            combined_s_commitment.unwrap(),
-                            *pk_T,
-                            *enc_gen,
-                            &verifier_challenge,
-                            &self.resp_acc_comm.response2,
-                            rmc_checker,
-                        );
-                }
-                None => {
-                    enc_rand.resp_comm_s_chunks_bp.is_valid(
-                        &Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
-                        &enc_rand.comm_s_chunks_bp,
-                        &enc_rand.t_comm_s_chunks_bp,
-                        &verifier_challenge,
-                    )?;
-
-                    if !enc_rand.resp_combined_s.verify(
-                        &combined_s_commitment.unwrap(),
-                        pk_T,
-                        enc_gen,
-                        &verifier_challenge,
-                        &self.resp_acc_comm.response2,
-                    ) {
-                        return Err(Error::ProofVerificationError(
-                            "Combined randomness verification failed".to_string(),
-                        ));
-                    }
-                }
-            }
+            verify_schnorr_resp_or_rmc!(
+                rmc,
+                enc_rand.resp_comm_s_chunks_bp,
+                Self::bp_gens_for_comm_s_chunks(leaf_level_pc_gens, leaf_level_bp_gens).to_vec(),
+                enc_rand.comm_s_chunks_bp,
+                enc_rand.t_comm_s_chunks_bp,
+                &challenge,
+            );
+            verify_or_rmc_3!(
+                rmc,
+                enc_rand.resp_combined_s,
+                "Combined randomness verification failed",
+                combined_s_commitment.unwrap(),
+                *pk_T,
+                *enc_gen,
+                &challenge,
+                &self.resp_acc_comm.response2,
+            );
         }
 
         Ok(())
@@ -972,6 +971,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     }
 }
 
+/*
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnProofAlt<
     G0: SWCurveConfig + Clone + Copy,
@@ -1364,8 +1364,15 @@ impl<
         Ok(())
     }
 }
+*/
 
-fn ensure_correct_registration_state<G: AffineRepr>(account: &AccountState<G>) -> Result<()> {
+fn ensure_correct_registration_state<G: AffineRepr>(
+    account: &AccountState<G>,
+    pk: G,
+    pk_enc: G,
+    aff_key_gen: G,
+    enc_key_gen: G,
+) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
         return Ok(());
@@ -1386,6 +1393,16 @@ fn ensure_correct_registration_state<G: AffineRepr>(account: &AccountState<G>) -
         if account.rho.square() != account.current_rho {
             return Err(Error::RegistrationError(
                 "Rho relation not satisfied".to_string(),
+            ));
+        }
+        if (aff_key_gen * account.sk).into_affine() != pk {
+            return Err(Error::RegistrationError(
+                "Incorrect affirmation secret key".to_string(),
+            ));
+        }
+        if (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine() != pk_enc {
+            return Err(Error::RegistrationError(
+                "Incorrect encryption secret key".to_string(),
             ));
         }
         Ok(())
@@ -1502,7 +1519,7 @@ pub mod tests {
     //     crh::poseidon::{TwoToOneCRH, constraints::TwoToOneCRHGadget},
     //     sponge::poseidon::PoseidonConfig,
     // };
-    use ark_ff::Field;
+    use ark_ff::{Field, One};
     // use ark_r1cs_std::alloc::AllocVar;
     // use ark_r1cs_std::{
     //     R1CSVar,
@@ -1513,14 +1530,12 @@ pub mod tests {
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
     use curve_tree_relations::parameters::SelRerandProofParameters;
-    use curve_tree_relations::rerandomize::build_tables;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasA = ark_pallas::Affine;
-    type VestaA = ark_vesta::Affine;
     type Fr = ark_pallas::Fr;
 
     /*pub fn test_params_for_poseidon_0<R: CryptoRngCore, F: PrimeField>(
@@ -1597,6 +1612,7 @@ pub mod tests {
             hash_to_pallas(label, b"current-rho-gen").into_affine(),
             hash_to_pallas(label, b"randomness-gen").into_affine(),
             hash_to_pallas(label, b"id-gen").into_affine(),
+            hash_to_pallas(label, b"sk-enc-inv-gen").into_affine(),
         ]
     }
 
@@ -1604,7 +1620,8 @@ pub mod tests {
     pub fn new_account<R: CryptoRngCore>(
         rng: &mut R,
         asset_id: AssetId,
-        sk: SigKey<PallasA>,
+        sk_aff: SigKey<PallasA>,
+        sk_enc: DecKey<PallasA>,
         id: Fr,
     ) -> (
         AccountState<PallasA>,
@@ -1613,7 +1630,16 @@ pub mod tests {
     ) {
         let params = test_params_for_poseidon2();
         let counter = 1;
-        let account = AccountState::new(rng, id, sk.0, asset_id, counter, params.clone()).unwrap();
+        let account = AccountState::new(
+            rng,
+            id,
+            sk_aff.0,
+            sk_enc.0,
+            asset_id,
+            counter,
+            params.clone(),
+        )
+        .unwrap();
         (account, counter, params)
     }
 
@@ -1627,15 +1653,21 @@ pub mod tests {
 
         // Issuer creates keys
         let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, _) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
         // User hashes it id onto the field
         let id = Fr::rand(&mut rng);
 
-        let (mut account, c, poseidon_config) = new_account(&mut rng, asset_id, sk_i, id);
+        let (mut account, c, poseidon_config) =
+            new_account(&mut rng, asset_id, sk_i, sk_enc.clone(), id);
         assert_eq!(account.id, id);
         assert_eq!(account.asset_id, asset_id);
         assert_eq!(account.balance, 0);
         assert_eq!(account.counter, 0);
+
+        // Check that sk_enc_inv is indeed the inverse of sk_enc
+        assert!((account.sk_enc_inv * sk_enc.0).is_one());
+
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, c);
         let expected_rho =
             Poseidon_hash_2_simple::<Fr>(account.sk, combined, poseidon_config).unwrap();
@@ -1734,6 +1766,7 @@ pub mod tests {
         let account1 = AccountState::<PallasA>::new_given_randomness(
             id,
             sk1,
+            sk1,
             asset_id,
             counter_n,
             rand1,
@@ -1742,6 +1775,7 @@ pub mod tests {
         .unwrap();
         let account2 = AccountState::<PallasA>::new_given_randomness(
             id,
+            sk1,
             sk1,
             asset_id,
             counter_n,
@@ -1755,6 +1789,7 @@ pub mod tests {
         let account3 = AccountState::<PallasA>::new_given_randomness(
             id,
             sk1,
+            sk1,
             asset_id,
             counter_n,
             rand3,
@@ -1766,6 +1801,7 @@ pub mod tests {
         // Same randomness, different sk
         let account4 = AccountState::<PallasA>::new_given_randomness(
             id,
+            sk2,
             sk2,
             asset_id,
             counter_n,
@@ -1799,16 +1835,23 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let id = Fr::rand(&mut rng);
 
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+
         let clock = Instant::now();
         let (account, nullifier_gen_counter, poseidon_params) =
-            new_account(&mut rng, asset_id, sk_i, id.clone());
+            new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
 
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let pk_enc = (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine();
+
         let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
             &mut rng,
             pk_i.0,
+            pk_enc,
             &account,
             account_comm.clone(),
             nullifier_gen_counter,
@@ -1830,6 +1873,7 @@ pub mod tests {
                 &mut rng,
                 id,
                 &pk_i.0,
+                pk_enc,
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
@@ -1853,6 +1897,7 @@ pub mod tests {
                 &mut rng,
                 id,
                 &pk_i.0,
+                pk_enc,
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
@@ -1904,22 +1949,27 @@ pub mod tests {
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let id = Fr::rand(&mut rng);
 
-        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
         let enc_gen = PallasA::rand(&mut rng);
         let (sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
 
         let clock = Instant::now();
         let (mut account, nullifier_gen_counter, poseidon_params) =
-            new_account(&mut rng, asset_id, sk, id.clone());
+            new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         // Make randomness small to run test faster
         account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
+        let pk_enc = (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine();
+
         let nonce = b"test-nonce-0";
 
-        let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
+        let (reg_proof, nullifier) = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
             &mut rng,
             pk.0,
+            pk_enc,
             &account,
             account_comm.clone(),
             nullifier_gen_counter,
@@ -1941,6 +1991,7 @@ pub mod tests {
                 &mut rng,
                 id,
                 &pk.0,
+                pk_enc,
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
@@ -1965,6 +2016,7 @@ pub mod tests {
                 &mut rng,
                 id,
                 &pk.0,
+                pk_enc,
                 asset_id,
                 &account_comm,
                 nullifier_gen_counter,
@@ -2010,6 +2062,7 @@ pub mod tests {
         println!("decryption time = {:?}", clock.elapsed());
     }
 
+    /*
     #[test]
     fn registration_alt() {
         let mut rng = rand::thread_rng();
@@ -2101,6 +2154,7 @@ pub mod tests {
             account.randomness
         );
     }
+    */
 
     #[test]
     fn test_digits() {
@@ -2281,6 +2335,7 @@ pub mod tests {
         let mut nullifiers_with_pk_T = Vec::new();
         let mut ids = Vec::new();
         let mut pks = Vec::new();
+        let mut pk_encs = Vec::new();
         let mut accounts = Vec::new();
         let mut account_comms = Vec::new();
 
@@ -2288,11 +2343,13 @@ pub mod tests {
             // Create unique keys and account for each proof
             let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let id = Fr::rand(&mut rng);
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
             let account = AccountState::new(
                 &mut rng,
                 id,
                 sk_i.0,
+                sk_enc.0,
                 asset_ids[i],
                 nullifier_gen_counter,
                 poseidon_params.clone(),
@@ -2302,6 +2359,7 @@ pub mod tests {
 
             ids.push(id);
             pks.push(pk_i.0);
+            pk_encs.push(pk_enc.0);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -2310,6 +2368,7 @@ pub mod tests {
             let (reg_proof, nullifier) = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
                 &mut rng,
                 pks[i],
+                pk_encs[i],
                 &accounts[i],
                 account_comms[i],
                 nullifier_gen_counter,
@@ -2334,6 +2393,7 @@ pub mod tests {
                     &mut rng,
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2361,6 +2421,7 @@ pub mod tests {
                 .verify_and_return_tuples(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2369,7 +2430,7 @@ pub mod tests {
                     account_comm_key.clone(),
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
-                    &&poseidon_params,
+                    &poseidon_params,
                     None,
                     &mut rng,
                     None,
@@ -2396,14 +2457,15 @@ pub mod tests {
         );
 
         // Now create proofs with pk_T
-        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen_with_pk_T = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
-        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen_with_pk_T);
 
         for i in 0..batch_size {
             let (reg_proof, nullifier) = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
                 &mut rng,
                 pks[i],
+                pk_encs[i],
                 &accounts[i],
                 account_comms[i],
                 nullifier_gen_counter,
@@ -2412,7 +2474,7 @@ pub mod tests {
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
-                Some((pk_T.0, enc_key_gen, enc_gen)),
+                Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
             )
             .unwrap();
 
@@ -2428,6 +2490,7 @@ pub mod tests {
                     &mut rng,
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2437,7 +2500,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                     None,
                 )
                 .unwrap();
@@ -2455,6 +2518,7 @@ pub mod tests {
                 .verify_and_return_tuples(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2464,7 +2528,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
                     &&poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                     &mut rng,
                     None,
                 )
@@ -2501,6 +2565,7 @@ pub mod tests {
                     .verify_and_return_tuples(
                         ids[i],
                         &pks[i],
+                        pk_encs[i],
                         asset_ids[i],
                         &account_comms[i],
                         nullifier_gen_counter,
@@ -2541,6 +2606,7 @@ pub mod tests {
                     .verify_and_return_tuples(
                         ids[i],
                         &pks[i],
+                        pk_encs[i],
                         asset_ids[i],
                         &account_comms[i],
                         nullifier_gen_counter,
@@ -2550,7 +2616,7 @@ pub mod tests {
                         &account_tree_params.even_parameters.pc_gens(),
                         &account_tree_params.even_parameters.bp_gens(),
                         &poseidon_params,
-                        Some((pk_T.0, enc_key_gen, enc_gen)),
+                        Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                         &mut rng,
                         Some(&mut rmc_with_pk_T),
                     )
@@ -2608,8 +2674,11 @@ pub mod tests {
 
         let mut ids = vec![];
         let mut pks = vec![];
+        let mut pk_encs = vec![];
         let mut accounts = vec![];
         let mut account_comms = vec![];
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Create accounts
         for i in 0..batch_size {
@@ -2617,11 +2686,13 @@ pub mod tests {
             let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let id = Fr::rand(&mut rng);
             ids.push(id);
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
 
             let account = AccountState::new(
                 &mut rng,
                 id,
                 sk_i.0,
+                sk_enc.0,
                 asset_ids[i],
                 nullifier_gen_counter,
                 poseidon_params.clone(),
@@ -2633,19 +2704,20 @@ pub mod tests {
             account_comms.push(account_comm);
 
             pks.push(pk_i.0);
+            pk_encs.push(pk_enc.0);
         }
 
         // Combined proving without pk_T
         let clock = Instant::now();
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
         let mut prover = Prover::new(&account_tree_params.even_parameters.pc_gens(), transcript);
-
         let mut proofs_without_pk_T = vec![];
         let mut nullifiers_without_pk_T = vec![];
         for i in 0..batch_size {
             let (proof, nullifier) = RegTxnProof::<_, 48, 6>::new_with_given_prover(
                 &mut rng,
                 pks[i],
+                pk_encs[i],
                 &accounts[i],
                 account_comms[i].clone(),
                 nullifier_gen_counter,
@@ -2677,6 +2749,7 @@ pub mod tests {
                 .verify_sigma_protocols_and_enforce_constraints(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2718,6 +2791,7 @@ pub mod tests {
                 .verify_sigma_protocols_and_enforce_constraints(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2749,9 +2823,9 @@ pub mod tests {
         let rmc_verification_time_without_pk_T = clock.elapsed();
 
         // Now create proofs with pk_T
-        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_key_gen_with_pk_T = PallasA::rand(&mut rng);
         let enc_gen = PallasA::rand(&mut rng);
-        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen_with_pk_T);
 
         let clock = Instant::now();
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
@@ -2763,6 +2837,7 @@ pub mod tests {
             let (proof, nullifier) = RegTxnProof::<_, 48, 6>::new_with_given_prover(
                 &mut rng,
                 pks[i],
+                pk_encs[i],
                 &accounts[i],
                 account_comms[i].clone(),
                 nullifier_gen_counter,
@@ -2771,7 +2846,7 @@ pub mod tests {
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
                 &poseidon_params,
-                Some((pk_T.0, enc_key_gen, enc_gen)),
+                Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                 &mut prover,
             )
             .unwrap();
@@ -2794,6 +2869,7 @@ pub mod tests {
                 .verify_sigma_protocols_and_enforce_constraints(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2803,7 +2879,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                     &mut verifier,
                     None,
                 )
@@ -2835,6 +2911,7 @@ pub mod tests {
                 .verify_sigma_protocols_and_enforce_constraints(
                     ids[i],
                     &pks[i],
+                    pk_encs[i],
                     asset_ids[i],
                     &account_comms[i],
                     nullifier_gen_counter,
@@ -2844,7 +2921,7 @@ pub mod tests {
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
                     &poseidon_params,
-                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    Some((pk_T.0, enc_key_gen_with_pk_T, enc_gen)),
                     &mut verifier,
                     Some(&mut rmc_with_pk_T),
                 )
@@ -2899,6 +2976,8 @@ pub mod tests {
         );
     }
 
+    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
+
     #[cfg(feature = "ignore_prover_input_sanitation")]
     mod input_sanitation_disabled {
         use super::*;
@@ -2926,8 +3005,11 @@ pub mod tests {
             let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let id = Fr::rand(&mut rng);
 
+            let enc_key_gen = account_comm_key.sk_enc_gen();
+            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+
             let (mut account, nullifier_gen_counter, poseidon_params) =
-                new_account(&mut rng, asset_id, sk_i, id.clone());
+                new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
 
             // Set non-zero balance - this should cause proof verification to fail
             account.balance = 100;
@@ -2936,10 +3018,13 @@ pub mod tests {
 
             let nonce = b"test-nonce-0";
 
+            let pk_enc = (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine();
+
             // With ignore_prover_input_sanitation, proof creation should succeed
             let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
                 &mut rng,
                 pk_i.0,
+                pk_enc,
                 &account,
                 account_comm.clone(),
                 nullifier_gen_counter,
@@ -2958,6 +3043,7 @@ pub mod tests {
                         &mut rng,
                         id,
                         &pk_i.0,
+                        pk_enc,
                         asset_id,
                         &account_comm,
                         nullifier_gen_counter,
@@ -2972,6 +3058,215 @@ pub mod tests {
                     )
                     .is_err()
             );
+        }
+
+        #[test]
+        fn registration_with_incorrect_keys() {
+            let mut rng = rand::thread_rng();
+
+            // Setup begins
+            const NUM_GENS: usize = 1 << 12;
+
+            let account_tree_params =
+                SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                    NUM_GENS as u32,
+                    NUM_GENS as u32,
+                )
+                .unwrap();
+
+            let account_comm_key = setup_comm_key(b"testing");
+            let enc_key_gen = account_comm_key.sk_enc_gen();
+
+            let asset_id = 1;
+            let id = Fr::rand(&mut rng);
+            let nullifier_gen_counter = 1;
+            let poseidon_params = test_params_for_poseidon2();
+
+            // Wrong affirmation secret key in account state
+            {
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_wrong, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+
+                // Create account with wrong affirmation key
+                let account = AccountState::new(
+                    &mut rng,
+                    id,
+                    sk_wrong.0,
+                    sk_enc.0,
+                    asset_id,
+                    nullifier_gen_counter,
+                    poseidon_params.clone(),
+                )
+                .unwrap();
+
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce-1";
+
+                // Proof creation succeeds with ignore_prover_input_sanitation
+                let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
+                    &mut rng,
+                    pk_i.0,
+                    pk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                )
+                .unwrap();
+
+                // Verification should fail because pk doesn't match account.sk
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            &pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nullifier,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            None,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+
+            // Wrong encryption secret key in account state
+            {
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let (sk_enc_wrong, _) = keygen_enc(&mut rng, enc_key_gen);
+
+                // Create account with wrong encryption key inverse
+                let account = AccountState::new(
+                    &mut rng,
+                    id,
+                    sk_i.0,
+                    sk_enc_wrong.0,
+                    asset_id,
+                    nullifier_gen_counter,
+                    poseidon_params.clone(),
+                )
+                .unwrap();
+
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce-2";
+
+                // Proof creation succeeds with ignore_prover_input_sanitation
+                let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
+                    &mut rng,
+                    pk_i.0,
+                    pk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                )
+                .unwrap();
+
+                // Verification should fail because pk_enc doesn't match account.sk_enc_inv
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            &pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nullifier,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            None,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+
+            // Encryption secret key used directly (not inverted)
+
+            {
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+
+                // Create account with encryption key NOT inverted
+                let account = AccountState::new(
+                    &mut rng,
+                    id,
+                    sk_i.0,
+                    sk_enc.0.inverse().unwrap(), // Providing inverse so that account state does not inverse
+                    asset_id,
+                    nullifier_gen_counter,
+                    poseidon_params.clone(),
+                )
+                .unwrap();
+
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce-3";
+
+                // Proof creation succeeds with ignore_prover_input_sanitation
+                let (reg_proof, nullifier) = RegTxnProof::<_, 48, 6>::new(
+                    &mut rng,
+                    pk_i.0,
+                    pk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                )
+                .unwrap();
+
+                // Verification should fail because account.sk_enc_inv is not the inverse of sk_enc
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            &pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nullifier,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            None,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
         }
     }
 }

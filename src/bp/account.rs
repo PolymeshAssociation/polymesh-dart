@@ -7,6 +7,7 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
+use ark_ff::Field;
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
@@ -50,7 +51,9 @@ impl AccountState {
     pub fn bp_state(
         &self,
         account: &AccountKeyPair,
+        enc_key: &EncryptionSecretKey,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        let sk_enc_inv = enc_key.0.0.inverse().ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
         let state = BPAccountState {
             sk: account.secret.0.0,
             id: self.identity.decode()?,
@@ -60,13 +63,14 @@ impl AccountState {
             rho: self.rho.decode()?,
             current_rho: self.current_rho.decode()?,
             randomness: self.randomness.decode()?,
+            sk_enc_inv,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
     }
 
-    pub fn commitment(&self, account: &AccountKeyPair) -> Result<AccountStateCommitment, Error> {
-        let (_state, commitment) = self.bp_state(account)?;
+    pub fn commitment(&self, account: &AccountKeyPair, enc_key: &EncryptionSecretKey) -> Result<AccountStateCommitment, Error> {
+        let (_state, commitment) = self.bp_state(account, enc_key)?;
         AccountStateCommitment::from_affine(commitment.0)
     }
 
@@ -211,12 +215,12 @@ pub struct AccountAssetState {
 
 impl AccountAssetState {
     pub fn new(
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<Self, Error> {
-        let current_state = account.account_state(asset_id, counter, identity)?;
+        let current_state = keys.account_state(asset_id, counter, identity)?;
         Ok(Self {
             current_state,
             pending_state: None,
@@ -225,9 +229,9 @@ impl AccountAssetState {
 
     pub fn current_commitment(
         &self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
     ) -> Result<AccountStateCommitment, Error> {
-        self.current_state.commitment(account)
+        self.current_state.commitment(&keys.acct, &keys.enc.secret)
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -236,17 +240,17 @@ impl AccountAssetState {
 
     pub fn bp_current_state(
         &self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        self.current_state.bp_state(account)
+        self.current_state.bp_state(&keys.acct, &keys.enc.secret)
     }
 
     fn state_change(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         update: impl FnOnce(&BPAccountState) -> Result<BPAccountState, Error>,
     ) -> Result<AccountAssetStateChange, Error> {
-        let (current_state, current_commitment) = self.bp_current_state(account)?;
+        let (current_state, current_commitment) = self.bp_current_state(keys)?;
 
         // Update the state.
         let new_state = update(&current_state)?;
@@ -265,72 +269,72 @@ impl AccountAssetState {
 
     pub fn mint(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_mint(amount)?))
+        self.state_change(keys, |state| Ok(state.get_state_for_mint(amount)?))
     }
 
     pub fn get_sender_affirm_state(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_send(amount)?))
+        self.state_change(keys, |state| Ok(state.get_state_for_send(amount)?))
     }
 
     pub fn get_receiver_affirm_state(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_receive()))
+        self.state_change(keys, |state| Ok(state.get_state_for_receive()))
     }
 
     pub fn get_instant_sender_affirm_state(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
+        self.state_change(keys, |state| {
             Ok(state.get_state_for_irreversible_send(amount)?)
         })
     }
 
     pub fn get_instant_receiver_affirm_state(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
+        self.state_change(keys, |state| {
             Ok(state.get_state_for_irreversible_receive(amount)?)
         })
     }
 
     pub fn get_state_for_claiming_received(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
+        self.state_change(keys, |state| {
             Ok(state.get_state_for_claiming_received(amount)?)
         })
     }
 
     pub fn get_state_for_reversing_send(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
+        self.state_change(keys, |state| {
             Ok(state.get_state_for_reversing_send(amount)?)
         })
     }
 
     pub fn get_state_for_decreasing_counter(
         &mut self,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
+        self.state_change(keys, |state| {
             Ok(state.get_state_for_decreasing_counter(None)?)
         })
     }
@@ -360,7 +364,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     #[cfg(feature = "parallel")]
     pub fn new<R: RngCore + CryptoRng + Sync + Send + Clone>(
         rng: &mut R,
-        account_assets: &[(AccountKeyPair, AssetId, NullifierSkGenCounter)],
+        account_assets: &[(AccountKeys, AssetId, NullifierSkGenCounter)],
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
@@ -398,7 +402,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     #[cfg(not(feature = "parallel"))]
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account_assets: &[(AccountKeyPair, AssetId, NullifierSkGenCounter)],
+        account_assets: &[(AccountKeys, AssetId, NullifierSkGenCounter)],
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
@@ -527,7 +531,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AccountAssetRegistrationProof {
-    pub account: AccountPublicKey,
+    pub account: AccountPublicKeys,
     pub asset_id: AssetId,
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
@@ -540,20 +544,20 @@ impl AccountAssetRegistrationProof {
     /// Generate a new account state for an asset and a registration proof for it.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        keys: &AccountKeys,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
-        let pk = account.public;
-        let account_state = account.init_asset_state(asset_id, counter, identity)?;
-        let (bp_state, commitment) = account_state.bp_current_state(account)?;
+        let account_state = keys.init_asset_state(asset_id, counter, identity)?;
+        let (bp_state, commitment) = account_state.bp_current_state(keys)?;
         let params = poseidon_params();
         let gens = dart_gens();
         let (proof, nullifier) = account_registration::RegTxnProof::new(
             rng,
-            pk.get_affine()?,
+            keys.acct.public.get_affine()?,
+            keys.enc.public.get_affine()?,
             &bp_state,
             commitment,
             counter,
@@ -566,7 +570,7 @@ impl AccountAssetRegistrationProof {
         )?;
         Ok((
             Self {
-                account: pk,
+                account: keys.public_keys(),
                 asset_id,
                 counter,
                 account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
@@ -594,7 +598,8 @@ impl AccountAssetRegistrationProof {
         proof.verify(
             rng,
             id,
-            &self.account.get_affine()?,
+            &self.account.acct.get_affine()?,
+            self.account.enc.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,
@@ -625,7 +630,8 @@ impl AccountAssetRegistrationProof {
 
         Ok(proof.verify_and_return_tuples(
             id,
-            &self.account.get_affine()?,
+            &self.account.acct.get_affine()?,
+            self.account.enc.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,

@@ -16,7 +16,7 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
-use ark_std::{UniformRand, vec, vec::Vec};
+use ark_std::{UniformRand, format, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -335,9 +335,10 @@ pub fn ensure_correct_account_state<G: AffineRepr>(
             ));
         }
         if old_state.asset_id != new_state.asset_id {
-            return Err(Error::ProofGenerationError(
-                "Asset ID mismatch between old and new account states".to_string(),
-            ));
+            return Err(Error::ProofGenerationError(format!(
+                "Asset ID mismatch between old and new account states: old = {}, new = {}",
+                old_state.asset_id, new_state.asset_id
+            )));
         }
         if has_balance_decreased {
             if new_state.balance != old_state.balance - amount {
@@ -864,95 +865,56 @@ impl<
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_leaf.0[0]);
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                self.resp_leaf.verify_using_randomized_mult_checker(
-                    Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
-                    y_affine,
-                    self.t_r_leaf,
-                    &challenge,
-                    rmc,
-                )?;
-                self.resp_acc_new.verify_using_randomized_mult_checker(
-                    Self::acc_new_gens(account_comm_key).to_vec(),
-                    y_new_affine,
-                    self.t_acc_new,
-                    &challenge,
-                    missing_resps,
-                    rmc,
-                )?;
-                // rho matches the one in nullifier
-                self.resp_null.verify_using_randomized_mult_checker(
-                    nullifier,
-                    nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[1],
-                    rmc,
-                );
-                self.resp_pk
-                    .verify_using_randomized_mult_checker(pk, pk_gen, &challenge, rmc);
-                // Amount matches the one in response for leaf
-                self.resp_bp.verify_using_randomized_mult_checker(
-                    self.comm_new_bal,
-                    account_tree_params.even_parameters.sl_params.pc_gens().B,
-                    account_tree_params
-                        .even_parameters
-                        .sl_params
-                        .pc_gens()
-                        .B_blinding,
-                    &challenge,
-                    &self.resp_leaf.0[0],
-                    rmc,
-                );
-            }
-            None => {
-                self.resp_leaf.is_valid(
-                    &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-                    &y_affine,
-                    &self.t_r_leaf,
-                    &challenge,
-                )?;
-                self.resp_acc_new.is_valid(
-                    &Self::acc_new_gens(account_comm_key),
-                    &y_new_affine,
-                    &self.t_acc_new,
-                    &challenge,
-                    missing_resps,
-                )?;
-                // rho matches the one in nullifier
-                if !self.resp_null.verify(
-                    &nullifier,
-                    &nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[1],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Nullifier verification failed".to_string(),
-                    ));
-                }
-                if !self.resp_pk.verify(&pk, &pk_gen, &challenge) {
-                    return Err(Error::ProofVerificationError(
-                        "Issuer public key verification failed".to_string(),
-                    ));
-                }
-                // Amount matches the one in response for leaf
-                if !self.resp_bp.verify(
-                    &self.comm_new_bal,
-                    &account_tree_params.even_parameters.sl_params.pc_gens().B,
-                    &account_tree_params
-                        .even_parameters
-                        .sl_params
-                        .pc_gens()
-                        .B_blinding,
-                    &challenge,
-                    &self.resp_leaf.0[0],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Sigma protocol for Bulletproof commitment failed".to_string(),
-                    ));
-                }
-            }
-        }
+        verify_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_leaf,
+            Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
+            y_affine,
+            self.t_r_leaf,
+            &challenge,
+        );
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_acc_new,
+            Self::acc_new_gens(account_comm_key).to_vec(),
+            y_new_affine,
+            self.t_acc_new,
+            &challenge,
+            missing_resps,
+        );
+        // rho matches the one in nullifier
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_null,
+            "Nullifier verification failed",
+            nullifier,
+            nullifier_gen,
+            &challenge,
+            &self.resp_leaf.0[1],
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_pk,
+            "Issuer public key verification failed",
+            pk,
+            pk_gen,
+            &challenge,
+        );
+        // Amount matches the one in response for leaf
+        verify_or_rmc_3!(
+            rmc,
+            self.resp_bp,
+            "Sigma protocol for Bulletproof commitment failed",
+            self.comm_new_bal,
+            account_tree_params.even_parameters.sl_params.pc_gens().B,
+            account_tree_params
+                .even_parameters
+                .sl_params
+                .pc_gens()
+                .B_blinding,
+            &challenge,
+            &self.resp_leaf.0[0],
+        );
         Ok(())
     }
 
@@ -1383,87 +1345,47 @@ impl<
         missing_resps.insert(0, self.resp_leaf.0[0]);
         missing_resps.insert(1, self.resp_leaf.0[1]);
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                self.resp_leaf.verify_using_randomized_mult_checker(
-                    Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
-                    y_affine,
-                    self.t_r_leaf,
-                    &challenge,
-                    rmc,
-                )?;
-                self.resp_acc_new.verify_using_randomized_mult_checker(
-                    Self::acc_new_gens(account_comm_key).to_vec(),
-                    y_new_affine,
-                    self.t_acc_new,
-                    &challenge,
-                    missing_resps,
-                    rmc,
-                )?;
-                // rho matches the one in nullifier
-                self.resp_null.verify_using_randomized_mult_checker(
-                    nullifier,
-                    nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[2],
-                    rmc,
-                );
-                self.resp_bp.verify_using_randomized_mult_checker(
-                    self.comm_new_bal,
-                    account_tree_params.even_parameters.sl_params.pc_gens().B,
-                    account_tree_params
-                        .even_parameters
-                        .sl_params
-                        .pc_gens()
-                        .B_blinding,
-                    &challenge,
-                    &self.resp_leaf.0[1],
-                    rmc,
-                );
-            }
-            None => {
-                self.resp_leaf.is_valid(
-                    &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-                    &y_affine,
-                    &self.t_r_leaf,
-                    &challenge,
-                )?;
-                self.resp_acc_new.is_valid(
-                    &Self::acc_new_gens(account_comm_key),
-                    &y_new_affine,
-                    &self.t_acc_new,
-                    &challenge,
-                    missing_resps,
-                )?;
-                // rho matches the one in nullifier
-                if !self.resp_null.verify(
-                    &nullifier,
-                    &nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[2],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Nullifier verification failed".to_string(),
-                    ));
-                }
-
-                if !self.resp_bp.verify(
-                    &self.comm_new_bal,
-                    &account_tree_params.even_parameters.sl_params.pc_gens().B,
-                    &account_tree_params
-                        .even_parameters
-                        .sl_params
-                        .pc_gens()
-                        .B_blinding,
-                    &challenge,
-                    &self.resp_leaf.0[1],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Sigma protocol for Bulletproof commitment failed".to_string(),
-                    ));
-                }
-            }
-        }
+        verify_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_leaf,
+            Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
+            y_affine,
+            self.t_r_leaf,
+            &challenge,
+        );
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_acc_new,
+            Self::acc_new_gens(account_comm_key).to_vec(),
+            y_new_affine,
+            self.t_acc_new,
+            &challenge,
+            missing_resps,
+        );
+        // rho matches the one in nullifier
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_null,
+            "Nullifier verification failed",
+            nullifier,
+            nullifier_gen,
+            &challenge,
+            &self.resp_leaf.0[2],
+        );
+        verify_or_rmc_3!(
+            rmc,
+            self.resp_bp,
+            "Sigma protocol for Bulletproof commitment failed",
+            self.comm_new_bal,
+            account_tree_params.even_parameters.sl_params.pc_gens().B,
+            account_tree_params
+                .even_parameters
+                .sl_params
+                .pc_gens()
+                .B_blinding,
+            &challenge,
+            &self.resp_leaf.0[1],
+        );
 
         get_verification_tuples_with_rng(
             even_verifier,
@@ -1597,7 +1519,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1748,7 +1670,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -1904,7 +1826,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
@@ -2102,8 +2024,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 64;
-            let (account_tree_params, account_comm_key, _, _) =
-                setup_gens_new::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 
@@ -2185,8 +2106,7 @@ pub mod tests {
             // Setup begins
             const NUM_GENS: usize = 1 << 13; // minimum sufficient power of 2 (for height 4 curve tree)
             const L: usize = 64;
-            let (account_tree_params, account_comm_key, _, _) =
-                setup_gens_new::<NUM_GENS>(b"testing");
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
             let asset_id = 1;
 

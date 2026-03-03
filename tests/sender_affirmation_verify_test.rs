@@ -54,6 +54,9 @@ fn test_sender_affirmation_verify() {
             receiver: investor1_acct.public_keys(),
             asset,
             amount: 500,
+            config: LegConfig::default(),
+            public_enc_keys: vec![],
+            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, chain.asset_tree())
         .unwrap();
@@ -66,19 +69,18 @@ fn test_sender_affirmation_verify() {
     chain.end_block().unwrap();
     account_tree.apply_updates(&chain).unwrap();
 
-    let leg_enc = settlement.legs[0].leg_enc.clone();
-    let (_, leg_enc_rand) = leg_enc
-        .decrypt_with_randomness(LegRole::sender(), &issuer_acct.keys())
+    let leg_enc = settlement.legs[0].leg_enc().clone();
+    let _ = leg_enc
+        .decrypt(LegRole::sender(), &issuer_acct.keys())
         .unwrap();
     let mut issuer_asset_state = issuer_acct.get_account_asset_state(asset_id).unwrap();
 
     let proof = SenderAffirmationProof::new(
         &mut rng,
-        &issuer_acct.keys().acct,
+        &issuer_acct.keys(),
         &leg_ref,
         500,
         &leg_enc,
-        &leg_enc_rand,
         &mut issuer_asset_state,
         account_tree.prover_account_tree(),
     )

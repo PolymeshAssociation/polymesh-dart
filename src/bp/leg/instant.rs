@@ -167,11 +167,10 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -195,7 +194,6 @@ impl<
             rng,
             amount,
             leg_enc.decode()?,
-            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -204,7 +202,6 @@ impl<
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -247,7 +244,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -306,11 +302,10 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -334,7 +329,6 @@ impl<
             rng,
             amount,
             leg_enc.decode()?,
-            leg_enc_rand.decode()?,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -343,7 +337,6 @@ impl<
             ctx.as_bytes(),
             tree_lookup.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
 
@@ -386,7 +379,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;

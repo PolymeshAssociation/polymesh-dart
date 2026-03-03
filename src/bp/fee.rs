@@ -18,8 +18,8 @@ use super::encode::*;
 use super::*;
 use crate::*;
 use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
+    pallas::{Point as PallasPoint},
+    vesta::{Point as VestaPoint},
 };
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;

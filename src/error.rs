@@ -12,6 +12,10 @@ pub enum Error {
     #[error("DART Bulletproofs error: {0}")]
     DartBulletproofsError(#[from] polymesh_dart_bp::Error),
 
+    /// Proof generation error.
+    #[error("Proof generation error: {0}")]
+    ProofGenerationError(String),
+
     /// Curve tree error.
     #[error("Curve tree error: {0:?}")]
     CurveTreeError(#[from] curve_tree_relations::error::Error),
@@ -111,6 +115,10 @@ pub enum Error {
     /// RMC failed to verify.
     #[error("RMC failed to verify")]
     RMCVerifyError,
+
+    /// Error during crypto operation.
+    #[error("Error during crypto operation: {0}")]
+    CryptoError(String),
 }
 
 impl From<ark_serialize::SerializationError> for Error {

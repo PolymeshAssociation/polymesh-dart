@@ -14,9 +14,9 @@ use ark_std::{
     vec::Vec,
 };
 use bulletproofs::r1cs::VerificationTuple;
+use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
 
-use blake2::Blake2b512;
 use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
@@ -279,21 +279,27 @@ impl Leg {
     pub fn encrypt<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
+        config: bp_leg::LegEncConfig,
         sender: EncryptionPublicKey,
         receiver: EncryptionPublicKey,
-        asset_keys: &[(bool, PallasA)],
+        asset_enc_keys: Vec<PallasA>,
+        asset_med_keys: Vec<(u8, PallasA)>,
+        public_enc_keys: Vec<PallasA>,
+        public_med_keys: Vec<(u8, PallasA)>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
         let leg = bp_leg::Leg::new(
-            self.sender.get_affine()?,
-            self.receiver.get_affine()?,
-            asset_keys.into(),
-            self.amount,
-            self.asset_id,
-        )?;
-        let (leg_enc, leg_enc_rand) = leg.encrypt::<_, Blake2b512>(
-            rng,
             sender.get_affine()?,
             receiver.get_affine()?,
+            self.amount,
+            self.asset_id,
+            asset_enc_keys,
+            asset_med_keys,
+            public_enc_keys,
+            public_med_keys,
+        )?;
+        let (leg_enc, leg_enc_rand) = leg.encrypt(
+            rng,
+            config,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
@@ -321,6 +327,38 @@ impl Leg {
     }
 }
 
+/// Configuration for a leg's encryption and proof generation.
+///
+/// This mirrors [`polymesh_dart_bp::leg::LegEncConfig`] but derives SCALE codec traits
+/// so it can be serialized as part of `LegBuilder`.
+#[derive(Clone, Copy, Debug, Encode, Decode, TypeInfo, PartialEq, Eq, DecodeWithMemTracking)]
+pub struct LegConfig {
+    /// If `true`, sender can decrypt receiver's pk and vice versa.
+    pub parties_see_each_other: bool,
+    /// If `true`, asset-id is revealed in the leg else a curve-tree membership proof in the asset
+    /// tree is created
+    pub reveal_asset_id: bool,
+}
+
+impl Default for LegConfig {
+    /// By default, both parties see each other and the asset-id is hidden.
+    fn default() -> Self {
+        Self {
+            parties_see_each_other: true,
+            reveal_asset_id: false,
+        }
+    }
+}
+
+impl From<LegConfig> for bp_leg::LegEncConfig {
+    fn from(c: LegConfig) -> Self {
+        Self {
+            parties_see_each_other: c.parties_see_each_other,
+            reveal_asset_id: c.reveal_asset_id,
+        }
+    }
+}
+
 /// A helper type to build the encrypted leg and its proof in the Dart BP protocol.
 ///
 /// This builder type is different from the `Leg` type, which represents the decrypted leg details.
@@ -335,21 +373,33 @@ pub struct LegBuilder {
     pub receiver: AccountPublicKeys,
     pub asset: AssetState,
     pub amount: Balance,
+    /// Encryption and proof configuration for this leg.
+    pub config: LegConfig,
+    /// Public encryption keys specified by the leg creator (not tied to the asset).
+    pub public_enc_keys: Vec<EncryptionPublicKey>,
+    /// Public mediator keys specified by the leg creator (not tied to the asset).
+    /// Each entry is (index into public_enc_keys, mediator_affirmation_key).
+    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
 }
 
 impl LegBuilder {
-    /// Creates a new leg with the given sender, receiver, asset ID, amount, and optional mediator.
+    /// Creates a new leg with the given sender, receiver, asset ID, amount, and public keys.
     pub fn new(
         sender: AccountPublicKeys,
         receiver: AccountPublicKeys,
         asset: AssetState,
         amount: Balance,
+        public_enc_keys: Vec<EncryptionPublicKey>,
+        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
     ) -> Self {
         Self {
             sender,
             receiver,
             asset,
             amount,
+            config: LegConfig::default(),
+            public_enc_keys,
+            public_med_keys,
         }
     }
 
@@ -366,29 +416,256 @@ impl LegBuilder {
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
-    ) -> Result<SettlementLegProof<C>, Error> {
-        let asset_data = self.asset.asset_data()?;
-
+    ) -> Result<AnySettlementLegProof<C>, Error> {
         let leg = Leg::new(
             self.sender.acct,
             self.receiver.acct,
             self.asset.asset_id,
             self.amount,
         )?;
-        let (leg, leg_enc, leg_enc_rand) =
-            leg.encrypt(rng, self.sender.enc, self.receiver.enc, &asset_data.keys)?;
-
-        let leg_proof = SettlementLegProof::new(
+        let enc_keys: Vec<PallasA> = self
+            .asset
+            .auditors
+            .iter()
+            .map(|a| a.get_affine())
+            .collect::<Result<_, _>>()?;
+        let med_keys: Vec<(u8, PallasA)> = self
+            .asset
+            .mediators
+            .iter()
+            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
+        let public_enc_keys: Vec<PallasA> = self
+            .public_enc_keys
+            .iter()
+            .map(|pk| pk.get_affine())
+            .collect::<Result<_, _>>()?;
+        let public_med_keys: Vec<(u8, PallasA)> = self
+            .public_med_keys
+            .iter()
+            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
+        let (leg, leg_enc, leg_enc_rand) = leg.encrypt(
             rng,
-            leg,
-            leg_enc,
-            &leg_enc_rand,
-            asset_data,
-            ctx,
-            asset_tree,
+            self.config.into(),
+            self.sender.enc,
+            self.receiver.enc,
+            enc_keys,
+            med_keys,
+            public_enc_keys,
+            public_med_keys,
         )?;
 
-        Ok(leg_proof)
+        if self.config.reveal_asset_id {
+            let leg_proof = SettlementLegProofRevealedAssetId::new(
+                rng,
+                self.sender,
+                self.receiver,
+                leg,
+                leg_enc,
+                &leg_enc_rand,
+                self.public_enc_keys.clone(),
+                self.public_med_keys.clone(),
+                ctx,
+            )?;
+            Ok(AnySettlementLegProof::RevealedAssetId(leg_proof))
+        } else {
+            let asset_data = self.asset.asset_data()?;
+            let leg_proof = SettlementLegProof::new(
+                rng,
+                self.sender,
+                self.receiver,
+                leg,
+                leg_enc,
+                &leg_enc_rand,
+                asset_data,
+                self.public_enc_keys.clone(),
+                self.public_med_keys.clone(),
+                ctx,
+                asset_tree,
+            )?;
+            Ok(AnySettlementLegProof::HiddenAssetId(leg_proof))
+        }
+    }
+}
+
+/// A settlement leg proof that can be either hidden-asset-id or revealed-asset-id.
+///
+/// When the asset-id is hidden, the proof includes a curve tree membership proof.
+/// When the asset-id is revealed, a simpler proof (`PublicAssetLegCreationProof`) is used instead.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+    /// Asset ID is hidden; uses `SettlementLegProof` with curve-tree membership.
+    HiddenAssetId(SettlementLegProof<C>),
+    /// Asset ID is publicly revealed; uses `SettlementLegProofRevealedAssetId`.
+    RevealedAssetId(SettlementLegProofRevealedAssetId),
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <VestaParameters as CurveConfig>::ScalarField,
+            F1 = <PallasParameters as CurveConfig>::ScalarField,
+            P0 = VestaParameters,
+            P1 = PallasParameters,
+        >,
+> AnySettlementLegProof<C>
+{
+    pub fn sender(&self) -> AccountPublicKeys {
+        match self {
+            Self::HiddenAssetId(p) => p.sender,
+            Self::RevealedAssetId(p) => p.sender,
+        }
+    }
+
+    pub fn receiver(&self) -> AccountPublicKeys {
+        match self {
+            Self::HiddenAssetId(p) => p.receiver,
+            Self::RevealedAssetId(p) => p.receiver,
+        }
+    }
+
+    pub fn leg_enc(&self) -> &LegEncrypted {
+        match self {
+            Self::HiddenAssetId(p) => &p.leg_enc,
+            Self::RevealedAssetId(p) => &p.leg_enc,
+        }
+    }
+
+    pub fn mediator_count(&self) -> Result<usize, Error> {
+        match self {
+            Self::HiddenAssetId(p) => p.mediator_count(),
+            Self::RevealedAssetId(p) => p.mediator_count(),
+        }
+    }
+
+    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
+        match self {
+            Self::HiddenAssetId(p) => p.get_mediator_ids(),
+            Self::RevealedAssetId(p) => p.get_mediator_ids(),
+        }
+    }
+
+    /// Extract asset keys if the asset ID is revealed, otherwise return None.
+    fn get_asset_keys_if_revealed(
+        &self,
+        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
+    ) -> Result<
+        Option<(
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+        )>,
+        Error,
+    > {
+        match self {
+            Self::HiddenAssetId(_) => Ok(None),
+            Self::RevealedAssetId(proof) => {
+                // Try to decode the leg encryption and extract the revealed asset ID
+                let leg_enc = self.leg_enc().decode()?;
+                if let bp_leg::AssetIdEncryption::Revealed(asset_id) = leg_enc.ct_asset_id {
+                    let asset = asset_lookup(asset_id)?;
+                    let asset_data = asset.asset_data()?;
+                    
+                    let public_enc_keys: Vec<PallasA> = proof
+                        .public_enc_keys
+                        .iter()
+                        .map(|pk| pk.get_affine())
+                        .collect::<Result<_, _>>()?;
+                    let public_med_keys: Vec<(u8, PallasA)> = proof
+                        .public_med_keys
+                        .iter()
+                        .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+                        .collect::<Result<_, Error>>()?;
+                    
+                    Ok(Some((
+                        asset_data.enc_keys.clone(),
+                        asset_data.med_keys.clone(),
+                        public_enc_keys,
+                        public_med_keys,
+                    )))
+                } else {
+                    Err(Error::ProofGenerationError(
+                        "Asset ID not revealed in RevealedAssetId proof".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        asset_keys: Option<(
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+        )>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        match self {
+            Self::HiddenAssetId(p) => p.verify(ctx, root, rng),
+            Self::RevealedAssetId(p) => {
+                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys.ok_or_else(|| {
+                    Error::ProofGenerationError("Asset keys required for revealed asset ID proof".into())
+                })?;
+                p.verify(
+                    ctx,
+                    enc_keys,
+                    med_keys,
+                    public_enc_keys,
+                    public_med_keys,
+                    rng,
+                )
+            }
+        }
+    }
+
+    pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        asset_keys: Option<(
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+            Vec<PallasA>,
+            Vec<(u8, PallasA)>,
+        )>,
+        rng: &mut R,
+    ) -> Result<
+        (
+            VerificationTuple<Affine<C::P0>>,
+            VerificationTuple<Affine<C::P1>>,
+        ),
+        Error,
+    > {
+        match self {
+            Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng),
+            Self::RevealedAssetId(p) => {
+                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys.ok_or_else(|| {
+                    Error::ProofGenerationError("Asset keys required for revealed asset ID proof".into())
+                })?;
+                let odd_tuple = p.batched_verify(
+                    ctx,
+                    enc_keys,
+                    med_keys,
+                    public_enc_keys,
+                    public_med_keys,
+                    rng,
+                )?;
+                // Create an empty verification tuple for Vesta (even) since revealed asset ID
+                // proofs only operate on Pallas curve.
+                let even_tuple = VerificationTuple {
+                    proof_dependent_points: vec![],
+                    proof_dependent_scalars: vec![],
+                    proof_independent_scalars: vec![],
+                };
+                Ok((even_tuple, odd_tuple))
+            }
+        }
     }
 }
 
@@ -510,7 +787,7 @@ pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeCon
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     pub root_block: BlockNumber,
 
-    pub legs: BoundedVec<SettlementLegProof<C>, T::MaxSettlementLegs>,
+    pub legs: BoundedVec<AnySettlementLegProof<C>, T::MaxSettlementLegs>,
 }
 
 impl<
@@ -529,7 +806,7 @@ impl<
 
     /// Get leg and sender, receiver and mediator affirmation counts.
     pub fn count_leg_affirmations(&self) -> Result<SettlementCounts, Error> {
-        let mut leg_count = 0;
+        let mut leg_count: u64 = 0;
         let mut mediator_count = 0;
 
         for leg_aff in &self.legs {
@@ -538,9 +815,9 @@ impl<
         }
 
         Ok(SettlementCounts {
-            leg_count,
-            sender_count: leg_count as u64,
-            receiver_count: leg_count as u64,
+            leg_count: leg_count as u32,
+            sender_count: leg_count,
+            receiver_count: leg_count,
             mediator_count,
         })
     }
@@ -549,6 +826,7 @@ impl<
     pub fn verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &(impl Fn(AssetId) -> Result<AssetState, Error> + Sync + Send),
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
@@ -565,7 +843,8 @@ impl<
             || rng.clone(),
             |rng, (idx, leg)| {
                 let ctx = (memo, idx as u8).encode();
-                leg.verify(&ctx, &root, rng)
+                let asset_keys = leg.get_asset_keys_if_revealed(asset_lookup)?;
+                leg.verify(&ctx, &root, asset_keys, rng)
             },
         )?;
         Ok(())
@@ -575,6 +854,7 @@ impl<
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
@@ -587,7 +867,8 @@ impl<
         let root = root.root_node()?;
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            leg.verify(&ctx, &root, rng)?;
+            let asset_keys = leg.get_asset_keys_if_revealed(asset_lookup)?;
+            leg.verify(&ctx, &root, asset_keys, rng)?;
         }
         Ok(())
     }
@@ -596,11 +877,12 @@ impl<
     pub fn batched_verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &(impl Fn(AssetId) -> Result<AssetState, Error> + Sync + Send),
         rng: &mut R,
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, rng);
+            return self.verify(asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.
@@ -621,7 +903,8 @@ impl<
                 || rng.clone(),
                 |rng, (idx, leg)| {
                     let ctx = (memo, idx as u8).encode();
-                    leg.batched_verify(&ctx, &root, rng)
+                    let asset_keys = leg.get_asset_keys_if_revealed(asset_lookup)?;
+                    leg.batched_verify(&ctx, &root, asset_keys, rng)
                 },
             )
             .collect::<Result<Vec<_>, Error>>()?;
@@ -651,11 +934,12 @@ impl<
     pub fn batched_verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
         rng: &mut R,
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, rng);
+            return self.verify(asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.
@@ -671,7 +955,8 @@ impl<
         let mut odd_tuples = Vec::with_capacity(batch_size);
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
-            let (even, odd) = leg.batched_verify(&ctx, &root, rng)?;
+            let asset_keys = leg.get_asset_keys_if_revealed(asset_lookup)?;
+            let (even, odd) = leg.batched_verify(&ctx, &root, asset_keys, rng)?;
             even_tuples.push(even);
             odd_tuples.push(odd);
         }
@@ -691,7 +976,7 @@ impl<
     }
 }
 
-type BPSettlementTxnProof<C> = bp_leg::proofs::LegCreationProof<
+type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
     ASSET_TREE_L,
     <C as CurveTreeConfig>::F1,
     <C as CurveTreeConfig>::F0,
@@ -706,7 +991,13 @@ type BPSettlementTxnProof<C> = bp_leg::proofs::LegCreationProof<
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+    pub sender: AccountPublicKeys,
+    pub receiver: AccountPublicKeys,
     pub leg_enc: LegEncrypted,
+    /// Public encryption keys specified by the leg creator (not tied to the asset).
+    pub public_enc_keys: Vec<EncryptionPublicKey>,
+    /// Public mediator keys specified by the leg creator (not tied to the asset).
+    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
 
     inner: WrappedCanonical<BPSettlementTxnProof<C>>,
 }
@@ -722,18 +1013,22 @@ impl<
 {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
+        sender: AccountPublicKeys,
+        receiver: AccountPublicKeys,
         leg: bp_leg::Leg<PallasA>,
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
         asset_data: AssetCommitmentData,
+        public_enc_keys: Vec<EncryptionPublicKey>,
+        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let asset_path = asset_tree.get_path_to_leaf_index(leg.asset_id as LeafIndex)?;
+        let asset_path = asset_tree.get_path_to_leaf_index(leg.core.asset_id as LeafIndex)?;
         let asset_comm_params = get_asset_commitment_parameters();
         let root = asset_tree.root()?.root_node()?;
 
-        let proof = bp_leg::proofs::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
+        let proof = bp_leg::leg_proof::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
             rng,
             leg,
             leg_enc.decode()?,
@@ -749,7 +1044,11 @@ impl<
         )?;
 
         Ok(Self {
+            sender,
+            receiver,
             leg_enc,
+            public_enc_keys,
+            public_med_keys,
 
             inner: WrappedCanonical::wrap(&proof)?,
         })
@@ -778,10 +1077,23 @@ impl<
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
 
+        let public_enc_keys: Vec<PallasA> = self
+            .public_enc_keys
+            .iter()
+            .map(|pk| pk.get_affine())
+            .collect::<Result<_, _>>()?;
+        let public_med_keys: Vec<(u8, PallasA)> = self
+            .public_med_keys
+            .iter()
+            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
+
         proof.verify(
             rng,
             leg_enc.clone(),
             &root,
+            public_enc_keys,
+            public_med_keys,
             ctx,
             C::parameters(),
             asset_comm_params,
@@ -815,9 +1127,23 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
+        
+        let public_enc_keys: Vec<PallasA> = self
+            .public_enc_keys
+            .iter()
+            .map(|pk| pk.get_affine())
+            .collect::<Result<_, _>>()?;
+        let public_med_keys: Vec<(u8, PallasA)> = self
+            .public_med_keys
+            .iter()
+            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
+        
         let tuples = proof.verify_and_return_tuples(
             leg_enc.clone(),
             &root,
+            public_enc_keys,
+            public_med_keys,
             ctx,
             C::parameters(),
             asset_comm_params,
@@ -827,6 +1153,153 @@ impl<
             None,
         )?;
         Ok(tuples)
+    }
+}
+
+/// Settlement leg proof with revealed asset ID using PublicAssetLegCreationProof.
+///
+/// Returns the leaf-level PedersenGens for the Pallas curve, used by
+/// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
+fn get_leaf_level_pc_gens() -> PedersenGens<PallasA> {
+    get_pallas_layer_parameters().pc_gens().clone()
+}
+
+/// Returns the leaf-level BulletproofGens for the Pallas curve, used by
+/// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
+fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
+    get_pallas_layer_parameters().bp_gens().clone()
+}
+
+/// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
+/// The auditor and mediator public keys are also known to the verifier.
+#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+pub struct SettlementLegProofRevealedAssetId {
+    pub sender: AccountPublicKeys,
+    pub receiver: AccountPublicKeys,
+    pub leg_enc: LegEncrypted,
+    /// Public encryption keys specified by the leg creator (not tied to the asset).
+    pub public_enc_keys: Vec<EncryptionPublicKey>,
+    /// Public mediator keys specified by the leg creator (not tied to the asset).
+    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
+
+    inner: WrappedCanonical<
+        bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
+    >,
+}
+
+impl SettlementLegProofRevealedAssetId {
+    pub(crate) fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        sender: AccountPublicKeys,
+        receiver: AccountPublicKeys,
+        leg: bp_leg::Leg<PallasA>,
+        leg_enc: LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
+        public_enc_keys: Vec<EncryptionPublicKey>,
+        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
+        ctx: &[u8],
+    ) -> Result<Self, Error> {
+        let leaf_level_pc_gens = get_leaf_level_pc_gens();
+        let leaf_level_bp_gens = get_leaf_level_bp_gens();
+
+        let proof = bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof::new(
+            rng,
+            leg,
+            leg_enc.decode()?,
+            leg_enc_rand.decode()?,
+            ctx,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
+        )?;
+
+        Ok(Self {
+            sender,
+            receiver,
+            leg_enc,
+            public_enc_keys,
+            public_med_keys,
+
+            inner: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
+    pub fn mediator_count(&self) -> Result<usize, Error> {
+        self.leg_enc.mediator_count()
+    }
+
+    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
+        self.leg_enc.get_mediator_ids()
+    }
+
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        enc_keys: Vec<PallasA>,
+        med_keys: Vec<(u8, PallasA)>,
+        public_enc_keys: Vec<PallasA>,
+        public_med_keys: Vec<(u8, PallasA)>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        let leaf_level_pc_gens = get_leaf_level_pc_gens();
+        let leaf_level_bp_gens = get_leaf_level_bp_gens();
+        let leg_enc = self.leg_enc.decode()?;
+        log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
+        let proof = self.inner.decode()?;
+
+        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+
+        proof.verify(
+            rng,
+            leg_enc,
+            enc_keys,
+            med_keys,
+            public_enc_keys,
+            public_med_keys,
+            ctx,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
+            Some(&mut rmc),
+        )?;
+        if !rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        enc_keys: Vec<PallasA>,
+        med_keys: Vec<(u8, PallasA)>,
+        public_enc_keys: Vec<PallasA>,
+        public_med_keys: Vec<(u8, PallasA)>,
+        rng: &mut R,
+    ) -> Result<VerificationTuple<PallasA>, Error> {
+        let leaf_level_pc_gens = get_leaf_level_pc_gens();
+        let leaf_level_bp_gens = get_leaf_level_bp_gens();
+        let leg_enc = self.leg_enc.decode()?;
+        let proof = self.inner.decode()?;
+
+        let tuple = proof.verify_and_return_tuples(
+            leg_enc,
+            enc_keys,
+            med_keys,
+            public_enc_keys,
+            public_med_keys,
+            ctx,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
+            rng,
+            None,
+        )?;
+
+        Ok(tuple)
     }
 }
 
@@ -875,12 +1348,8 @@ impl LegEncrypted {
 
     pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
         let leg_enc = self.decode()?;
-        let mediators = leg_enc
-            .eph_pk_auds_meds
-            .iter()
-            .enumerate()
-            .filter(|(_idx, (is_auditor, _pk))| !is_auditor)
-            .map(|(idx, _)| idx as MediatorId)
+        let mediators = (0..leg_enc.eph_pk_med_keys.len())
+            .map(|idx| idx as MediatorId)
             .collect();
         Ok(mediators)
     }
@@ -900,6 +1369,7 @@ impl LegEncrypted {
                 key_index,
                 leg_enc.decrypt_given_key_with_limits(
                     &keys.secret.0.0,
+                    false,
                     key_index,
                     enc_gen,
                     max_asset_id,
@@ -908,11 +1378,12 @@ impl LegEncrypted {
             )
         } else {
             // No key index provided, try all key indices until one works.
-            let max_keys = leg_enc.eph_pk_auds_meds.len();
+            let max_keys = leg_enc.eph_pk_enc_keys.len();
             let mut idx = 0;
             loop {
                 if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
                     &keys.secret.0.0,
+                    false,
                     idx,
                     enc_gen,
                     max_asset_id,
@@ -929,10 +1400,15 @@ impl LegEncrypted {
             }
         };
 
-        let leg_role = if leg_enc.eph_pk_auds_meds[key_index].0 {
-            LegRole::auditor(key_index as u8)
-        } else {
+        // Check if this key index is in the mediator keys
+        let is_mediator = leg_enc
+            .eph_pk_med_keys
+            .iter()
+            .any(|(idx, _)| *idx as usize == key_index);
+        let leg_role = if is_mediator {
             LegRole::mediator(key_index as u8)
+        } else {
+            LegRole::auditor(key_index as u8)
         };
         Ok((
             Leg {
@@ -943,43 +1419,6 @@ impl LegEncrypted {
             },
             leg_role,
         ))
-    }
-
-    pub fn get_encryption_randomness(
-        &self,
-        role: LegRole,
-        keys: &EncryptionKeyPair,
-    ) -> Result<LegEncryptionRandomness, Error> {
-        let (rand, _leg_enc, _) = self.bp_decrypt_randomness_and_leg(role.kind, keys)?;
-        LegEncryptionRandomness::new(rand)
-    }
-
-    fn bp_decrypt_randomness_and_leg(
-        &self,
-        kind: LegRoleKind,
-        keys: &EncryptionKeyPair,
-    ) -> Result<
-        (
-            bp_leg::LegEncryptionRandomness<PallasScalar>,
-            bp_leg::LegEncryption<PallasA>,
-            bool,
-        ),
-        Error,
-    > {
-        let is_sender = match kind {
-            LegRoleKind::Sender => true,
-            LegRoleKind::Receiver => false,
-            _ => {
-                return Err(Error::LegDecryptionError(format!(
-                    "Invalid role for encryption randomness: {:?}",
-                    kind
-                )));
-            }
-        };
-        let leg_enc = self.decode()?;
-        let randomness =
-            leg_enc.get_encryption_randomness::<Blake2b512>(&keys.secret.0.0, is_sender)?;
-        Ok((randomness, leg_enc, is_sender))
     }
 
     /// Try to decrypt the leg as either sender or receiver.
@@ -1001,36 +1440,31 @@ impl LegEncrypted {
     /// Senders/receivers should use `try_decrypt` instead.
     /// Auditors/mediators should use `try_decrypt_with_key` instead.
     pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
-        let enc_key_gen = dart_gens().enc_key_gen();
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
             LegRole {
                 kind: LegRoleKind::Sender,
                 ..
             } => {
-                let (rand, leg_enc, _) =
-                    self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
-                leg_enc.decrypt_given_r_checked(
-                    rand,
-                    enc_key_gen,
-                    enc_gen,
-                    keys.acct.public.get_affine()?,
-                    true,
-                )?
+                let leg_enc = self.decode()?;
+                let (sender, receiver_opt, asset_id, amount) =
+                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
+                let receiver = receiver_opt.ok_or_else(|| {
+                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
+                })?;
+                (sender, receiver, asset_id, amount)
             }
             LegRole {
                 kind: LegRoleKind::Receiver,
                 ..
             } => {
-                let (rand, leg_enc, _) =
-                    self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
-                leg_enc.decrypt_given_r_checked(
-                    rand,
-                    enc_key_gen,
-                    enc_gen,
-                    keys.acct.public.get_affine()?,
-                    false,
-                )?
+                let leg_enc = self.decode()?;
+                let (sender_opt, receiver, asset_id, amount) =
+                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
+                let sender = sender_opt.ok_or_else(|| {
+                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
+                })?;
+                (sender, receiver, asset_id, amount)
             }
             LegRole {
                 kind: LegRoleKind::Auditor,
@@ -1041,7 +1475,8 @@ impl LegEncrypted {
                 index: Some(idx),
             } => {
                 let leg_enc = self.decode()?;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, idx as usize, enc_gen)?
+                let is_public = false;
+                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
             }
             _ => {
                 return Err(Error::LegDecryptionError(
@@ -1057,52 +1492,65 @@ impl LegEncrypted {
         })
     }
 
-    pub fn decrypt_with_randomness(
+    /// Decrypt the leg and return it with the provided sender/receiver account public keys.
+    /// This is preferred over `decrypt()` as it ensures the correct account keys are returned.
+    pub fn decrypt_with_keys(
         &self,
         role: LegRole,
         keys: &AccountKeys,
-    ) -> Result<(Leg, LegEncryptionRandomness), Error> {
-        let enc_key_gen = dart_gens().enc_key_gen();
+        sender_keys: AccountPublicKeys,
+        receiver_keys: AccountPublicKeys,
+    ) -> Result<Leg, Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc, _) = self.bp_decrypt_randomness_and_leg(role.kind, &keys.enc)?;
-        let (sender, receiver, asset_id, amount) = leg_enc.decrypt_given_r_checked(
-            rand.clone(),
-            enc_key_gen,
-            enc_gen,
-            keys.acct.public.get_affine()?,
-            role.is_sender(),
-        )?;
-        Ok((
-            Leg {
-                sender: AccountPublicKey::from_affine(sender)?,
-                receiver: AccountPublicKey::from_affine(receiver)?,
-                asset_id,
-                amount,
-            },
-            LegEncryptionRandomness::new(rand)?,
-        ))
-    }
-
-    pub fn decrypt_with_randomness_checked(
-        &self,
-        role: LegRole,
-        keys: &EncryptionKeyPair,
-        account_pk: &AccountPublicKey,
-    ) -> Result<(Leg, LegEncryptionRandomness), Error> {
-        let enc_key_gen = dart_gens().enc_key_gen();
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        let (rand, leg_enc, is_sender) = self.bp_decrypt_randomness_and_leg(role.kind, keys)?;
-        let pk = account_pk.get_affine()?;
-        let (sender, receiver, asset_id, amount) =
-            leg_enc.decrypt_given_r_checked(rand.clone(), enc_key_gen, enc_gen, pk, is_sender)?;
-        Ok((
-            Leg {
-                sender: AccountPublicKey::from_affine(sender)?,
-                receiver: AccountPublicKey::from_affine(receiver)?,
-                asset_id,
-                amount,
-            },
-            LegEncryptionRandomness::new(rand)?,
-        ))
+        // Decrypt to get asset_id and amount
+        let (_, _, asset_id, amount) = match role {
+            LegRole {
+                kind: LegRoleKind::Sender,
+                ..
+            } => {
+                let leg_enc = self.decode()?;
+                let (sender, receiver_opt, asset_id, amount) =
+                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
+                let receiver = receiver_opt.ok_or_else(|| {
+                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
+                })?;
+                (sender, receiver, asset_id, amount)
+            }
+            LegRole {
+                kind: LegRoleKind::Receiver,
+                ..
+            } => {
+                let leg_enc = self.decode()?;
+                let (sender_opt, receiver, asset_id, amount) =
+                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
+                let sender = sender_opt.ok_or_else(|| {
+                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
+                })?;
+                (sender, receiver, asset_id, amount)
+            }
+            LegRole {
+                kind: LegRoleKind::Auditor,
+                index: Some(idx),
+            }
+            | LegRole {
+                kind: LegRoleKind::Mediator,
+                index: Some(idx),
+            } => {
+                let leg_enc = self.decode()?;
+                let is_public = false;
+                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
+            }
+            _ => {
+                return Err(Error::LegDecryptionError(
+                    "Invalid role for leg decryption".to_string(),
+                ));
+            }
+        };
+        Ok(Leg {
+            sender: sender_keys.acct,
+            receiver: receiver_keys.acct,
+            asset_id,
+            amount,
+        })
     }
 }

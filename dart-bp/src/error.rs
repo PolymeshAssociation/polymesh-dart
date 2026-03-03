@@ -137,6 +137,26 @@ pub enum Error {
     /// Different number of encryptions or proofs for auditor keys
     #[error("Expected {0} but found {1}")]
     EncryptionOrProofsNotPresentForAllKeys(usize, usize),
+
+    /// No recipients provided for encryption key distribution
+    #[error("No recipients provided for encryption key distribution")]
+    NoRecipients,
+
+    /// Mismatched recipient count
+    #[error("Mismatched recipient count")]
+    MismatchedRecipientCount,
+
+    /// Mismatched chunk count
+    #[error("Mismatched chunk count")]
+    MismatchedChunkCount,
+
+    /// Invalid recipient index
+    #[error("Invalid recipient index")]
+    InvalidRecipientIndex,
+
+    /// Missing proof
+    #[error("Missing proof")]
+    MissingProof,
 }
 
 impl Error {

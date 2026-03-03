@@ -182,6 +182,7 @@ impl<
         let mut new_rho_blinding = F0::rand(rng);
         let mut old_s_blinding = F0::rand(rng);
         let mut new_s_blinding = F0::rand(rng);
+        let mut sk_enc_inv_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.current_rho_gen();
         let pk_gen = account_comm_key.sk_gen();
@@ -203,6 +204,7 @@ impl<
                 initial_rho_blinding,
                 old_rho_blinding,
                 old_s_blinding,
+                sk_enc_inv_blinding,
                 F0::rand(rng),
             ],
         );
@@ -216,6 +218,7 @@ impl<
                 initial_rho_blinding,
                 new_rho_blinding,
                 new_s_blinding,
+                sk_enc_inv_blinding,
             ],
         );
 
@@ -235,7 +238,7 @@ impl<
         let _ = transcript;
 
         let mut comm_bp_blinding = F0::rand(rng);
-        let (comm_bp, vars) = even_prover.commit_vec(
+        let (comm_bp, mut vars) = even_prover.commit_vec(
             &[
                 account.rho,
                 account.current_rho,
@@ -246,7 +249,7 @@ impl<
             comm_bp_blinding,
             account_tree_params.even_parameters.bp_gens(),
         );
-        enforce_constraints_for_randomness_relations(&mut even_prover, vars);
+        enforce_constraints_for_randomness_relations(&mut even_prover, &mut vars);
 
         let mut transcript = even_prover.transcript();
 
@@ -275,6 +278,7 @@ impl<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.sk_enc_inv,
             rerandomization,
         ];
         let resp_leaf = t_r_leaf.response(&wits, &prover_challenge)?;
@@ -303,6 +307,7 @@ impl<
         new_rho_blinding.zeroize();
         old_s_blinding.zeroize();
         new_s_blinding.zeroize();
+        sk_enc_inv_blinding.zeroize();
         comm_bp_blinding.zeroize();
         rerandomization.zeroize();
 
@@ -463,8 +468,8 @@ impl<
         // Drop reference to borrow even_verifier below
         let _ = verifier_transcript;
 
-        let vars = even_verifier.commit_vec(5, self.comm_bp);
-        enforce_constraints_for_randomness_relations(&mut even_verifier, vars);
+        let mut vars = even_verifier.commit_vec(5, self.comm_bp);
+        enforce_constraints_for_randomness_relations(&mut even_verifier, &mut vars);
 
         let mut verifier_transcript = even_verifier.transcript();
 
@@ -504,6 +509,7 @@ impl<
         missing_resps.insert(0, self.resp_leaf.0[0]);
         missing_resps.insert(1, self.resp_leaf.0[1]);
         missing_resps.insert(2, self.resp_leaf.0[2]);
+        missing_resps.insert(5, self.resp_leaf.0[5]);
         self.resp_acc_new.is_valid(
             &Self::acc_new_gens(account_comm_key),
             &y.into_affine(),
@@ -571,6 +577,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.sk_enc_gen(),
             B_blinding,
         ]
     }
@@ -584,6 +591,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.sk_enc_gen(),
         ]
     }
 
@@ -608,7 +616,7 @@ mod tests {
     use super::*;
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
-    use crate::keys::keygen_sig;
+    use crate::keys::{keygen_enc, keygen_sig};
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
@@ -625,15 +633,16 @@ mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, _, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
 
         // Issuer creates keys
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, _) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
         let id = PallasFr::rand(&mut rng);
-        let (account, _, _) = new_account(&mut rng, asset_id, sk_i, id.clone());
+        let (account, _, _) = new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,

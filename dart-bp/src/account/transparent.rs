@@ -197,6 +197,7 @@ impl<
         let mut old_s_blinding = F0::rand(rng);
         let mut new_s_blinding = F0::rand(rng);
         let mut id_blinding = F0::rand(rng);
+        let mut sk_enc_inv_blinding = F0::rand(rng);
 
         let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
@@ -211,6 +212,7 @@ impl<
                 old_rho_blinding,
                 old_s_blinding,
                 id_blinding,
+                sk_enc_inv_blinding,
                 F0::rand(rng),
             ],
         );
@@ -225,6 +227,7 @@ impl<
                 new_rho_blinding,
                 new_s_blinding,
                 id_blinding,
+                sk_enc_inv_blinding,
             ],
         );
 
@@ -274,7 +277,7 @@ impl<
         let _ = transcript;
 
         let mut comm_bp_blinding = F0::rand(rng);
-        let (comm_bp, vars) = if has_balance_decreased {
+        let (comm_bp, mut vars) = if has_balance_decreased {
             let (comm_bp, mut vars) = even_prover.commit_vec(
                 &[
                     account.rho,
@@ -309,7 +312,7 @@ impl<
                 &account_tree_params.even_parameters.bp_gens(),
             )
         };
-        enforce_constraints_for_randomness_relations(even_prover, vars);
+        enforce_constraints_for_randomness_relations(even_prover, &mut vars);
 
         let mut transcript = even_prover.transcript();
 
@@ -352,6 +355,7 @@ impl<
             account.current_rho,
             account.randomness,
             account.id,
+            account.sk_enc_inv,
             rerandomization,
         ];
         let resp_leaf = t_r_leaf.response(&wits, &challenge)?;
@@ -383,6 +387,7 @@ impl<
         old_s_blinding.zeroize();
         new_s_blinding.zeroize();
         id_blinding.zeroize();
+        sk_enc_inv_blinding.zeroize();
         comm_bp_blinding.zeroize();
         rerandomization.zeroize();
         r.zeroize();
@@ -617,7 +622,7 @@ impl<
 
         let _ = transcript;
 
-        let vars = if has_balance_decreased {
+        let mut vars = if has_balance_decreased {
             let mut vars = even_verifier.commit_vec(6, self.comm_bp);
             let new_bal_var = vars.pop().unwrap();
             range_proof(even_verifier, new_bal_var.into(), None, BALANCE_BITS.into())?;
@@ -626,7 +631,7 @@ impl<
             even_verifier.commit_vec(5, self.comm_bp)
         };
 
-        enforce_constraints_for_randomness_relations(even_verifier, vars);
+        enforce_constraints_for_randomness_relations(even_verifier, &mut vars);
 
         let mut transcript = even_verifier.transcript();
 
@@ -651,6 +656,7 @@ impl<
         missing_resps_acc_new.insert(2, self.resp_leaf.0[2]);
         missing_resps_acc_new.insert(3, self.resp_leaf.0[3]);
         missing_resps_acc_new.insert(6, self.resp_leaf.0[6]);
+        missing_resps_acc_new.insert(7, self.resp_leaf.0[7]);
 
         let mut missing_resps_bp = BTreeMap::new();
         missing_resps_bp.insert(1, self.resp_leaf.0[3]);
@@ -662,133 +668,67 @@ impl<
             missing_resps_bp.insert(6, self.resp_leaf.0[1]);
         }
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                self.resp_leaf.verify_using_randomized_mult_checker(
-                    Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
-                    y.into_affine(),
-                    self.t_r_leaf,
-                    &challenge,
-                    rmc,
-                )?;
-                self.resp_acc_new.verify_using_randomized_mult_checker(
-                    Self::acc_new_gens(account_comm_key.clone()).to_vec(),
-                    y_new.into_affine(),
-                    self.t_acc_new,
-                    &challenge,
-                    missing_resps_acc_new,
-                    rmc,
-                )?;
-                self.resp_null.verify_using_randomized_mult_checker(
-                    nullifier,
-                    nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[4],
-                    rmc,
-                );
-                self.resp_enc.verify_using_randomized_mult_checker(
-                    self.encrypted_pubkeys.encrypted,
-                    enc_key_gen,
-                    sk_gen,
-                    &challenge,
-                    &self.resp_leaf.0[0],
-                    rmc,
-                );
-                for (i, r) in self.resp_eph_pk.iter().enumerate() {
-                    r.verify_using_randomized_mult_checker(
-                        self.encrypted_pubkeys.eph_pk[i],
-                        auditor_keys[i],
-                        &challenge,
-                        &self.resp_enc.response1,
-                        rmc,
-                    );
-                }
-                if has_balance_decreased {
-                    self.resp_bp.verify_using_randomized_mult_checker(
-                        Self::bp_gens_vec_bal_decr(account_tree_params).to_vec(),
-                        self.comm_bp,
-                        self.t_bp,
-                        &challenge,
-                        missing_resps_bp,
-                        rmc,
-                    )?;
-                } else {
-                    self.resp_bp.verify_using_randomized_mult_checker(
-                        Self::bp_gens_vec(account_tree_params).to_vec(),
-                        self.comm_bp,
-                        self.t_bp,
-                        &challenge,
-                        missing_resps_bp,
-                        rmc,
-                    )?;
-                }
-            }
-            None => {
-                self.resp_leaf.is_valid(
-                    &Self::leaf_gens(account_comm_key.clone(), account_tree_params),
-                    &y.into_affine(),
-                    &self.t_r_leaf,
-                    &challenge,
-                )?;
-                self.resp_acc_new.is_valid(
-                    &Self::acc_new_gens(account_comm_key.clone()),
-                    &y_new.into_affine(),
-                    &self.t_acc_new,
-                    &challenge,
-                    missing_resps_acc_new,
-                )?;
-                if !self.resp_null.verify(
-                    &nullifier,
-                    &nullifier_gen,
-                    &challenge,
-                    &self.resp_leaf.0[4],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Nullifier proof verification failed".to_string(),
-                    ));
-                }
-                if !self.resp_enc.verify(
-                    &self.encrypted_pubkeys.encrypted,
-                    &enc_key_gen,
-                    &sk_gen,
-                    &challenge,
-                    &self.resp_leaf.0[0],
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Account public key encryption verification failed".to_string(),
-                    ));
-                }
-                for (i, r) in self.resp_eph_pk.iter().enumerate() {
-                    if !r.verify(
-                        &self.encrypted_pubkeys.eph_pk[i],
-                        &auditor_keys[i],
-                        &challenge,
-                        &self.resp_enc.response1,
-                    ) {
-                        return Err(Error::ProofVerificationError(
-                            "Ephemeral public key encryption verification failed".to_string(),
-                        ));
-                    }
-                }
-                if has_balance_decreased {
-                    self.resp_bp.is_valid(
-                        &Self::bp_gens_vec_bal_decr(account_tree_params),
-                        &self.comm_bp,
-                        &self.t_bp,
-                        &challenge,
-                        missing_resps_bp,
-                    )?;
-                } else {
-                    self.resp_bp.is_valid(
-                        &Self::bp_gens_vec(account_tree_params),
-                        &self.comm_bp,
-                        &self.t_bp,
-                        &challenge,
-                        missing_resps_bp,
-                    )?;
-                }
-            }
+        verify_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_leaf,
+            Self::leaf_gens(account_comm_key.clone(), account_tree_params).to_vec(),
+            y.into_affine(),
+            self.t_r_leaf,
+            &challenge,
+        );
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_acc_new,
+            Self::acc_new_gens(account_comm_key.clone()).to_vec(),
+            y_new.into_affine(),
+            self.t_acc_new,
+            &challenge,
+            missing_resps_acc_new,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_null,
+            "Nullifier proof verification failed",
+            nullifier,
+            nullifier_gen,
+            &challenge,
+            &self.resp_leaf.0[4],
+        );
+        verify_or_rmc_3!(
+            rmc,
+            self.resp_enc,
+            "Account public key encryption verification failed",
+            self.encrypted_pubkeys.encrypted,
+            enc_key_gen,
+            sk_gen,
+            &challenge,
+            &self.resp_leaf.0[0],
+        );
+        for (i, r) in self.resp_eph_pk.iter().enumerate() {
+            verify_or_rmc_2!(
+                rmc,
+                r,
+                "Ephemeral public key encryption verification failed",
+                self.encrypted_pubkeys.eph_pk[i],
+                auditor_keys[i],
+                &challenge,
+                &self.resp_enc.response1,
+            );
         }
+        let bp_gens_vec = if has_balance_decreased {
+            Self::bp_gens_vec_bal_decr(account_tree_params).to_vec()
+        } else {
+            Self::bp_gens_vec(account_tree_params).to_vec()
+        };
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_bp,
+            bp_gens_vec,
+            self.comm_bp,
+            self.t_bp,
+            &challenge,
+            missing_resps_bp,
+        );
 
         Ok(())
     }
@@ -805,6 +745,7 @@ impl<
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
             account_comm_key.id_gen(),
+            account_comm_key.sk_enc_gen(),
             account_tree_params.even_parameters.pc_gens().B_blinding,
         ]
     }
@@ -820,6 +761,7 @@ impl<
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
             account_comm_key.id_gen(),
+            account_comm_key.sk_enc_gen(),
         ]
     }
 
@@ -1325,9 +1267,9 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 12;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let asset_id = 1;
         let num_auditor_keys = 2;
         let auditor_keys = (0..num_auditor_keys)
@@ -1339,8 +1281,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 100;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1419,8 +1362,9 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 12;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let asset_id = 1;
         let num_auditor_keys = 2;
@@ -1433,8 +1377,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id.clone());
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 50;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1513,12 +1458,13 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let withdraw_amount = 30;
         let batch_size = 10;
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let num_auditor_keys = 2;
         let auditor_keys = (0..num_auditor_keys)
@@ -1534,8 +1480,9 @@ mod tests {
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -1712,12 +1659,13 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 16;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let withdraw_amount = 30;
         let batch_size = 10;
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let num_auditor_keys = 2;
         let auditor_keys = (0..num_auditor_keys)
@@ -1733,8 +1681,9 @@ mod tests {
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -1929,12 +1878,13 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let deposit_amount = 25;
         let batch_size = 10;
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let num_auditor_keys = 2;
         let auditor_keys = (0..num_auditor_keys)
@@ -1950,8 +1900,9 @@ mod tests {
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -2128,12 +2079,13 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 16;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, _) =
-            setup_gens_new::<NUM_GENS>(b"testing");
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
         let deposit_amount = 25;
         let batch_size = 10;
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let num_auditor_keys = 2;
         let auditor_keys = (0..num_auditor_keys)
@@ -2149,8 +2101,9 @@ mod tests {
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, id);
+            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 

@@ -1,8 +1,7 @@
 use crate::poseidon_impls::poseidon_2::{Poseidon_hash_2_simple, Poseidon2Params};
 use crate::{Error, error::Result};
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::{Field, Zero};
+use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::string::ToString;
@@ -12,6 +11,22 @@ use polymesh_dart_common::{
 };
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+pub const NUM_GENERATORS: usize = 9;
+
+// The account commitment has g * {sk_{en}}^{-1}. This is safe as it's called Inverse Diffie Hellman assumption and [this paper](https://ink.library.smu.edu.sg/cgi/viewcontent.cgi?params=/context/sis_research/article/2082/&path_info=Bao2003_VariationsOfDiffie_HellmanProblem_pv.pdf)
+// shows DDH implies Inverse Diffie Hellman assumption. See section 3.1 and 3.2 where InvDDH ⇐ SDDH and SDDH ⇐ DDH, where SDDH is the square decisional Diffie-Hellman problem
+
+// Constants for index of each item in the account commitment
+pub(crate) const SK_GEN_INDEX: usize = 0;
+pub(crate) const BALANCE_GEN_INDEX: usize = 1;
+pub(crate) const COUNTER_GEN_INDEX: usize = 2;
+pub(crate) const ASSET_ID_GEN_INDEX: usize = 3;
+pub(crate) const RHO_GEN_INDEX: usize = 4;
+pub(crate) const CURRENT_RHO_GEN_INDEX: usize = 5;
+pub(crate) const RANDOMNESS_GEN_INDEX: usize = 6;
+pub(crate) const ID_GEN_INDEX: usize = 7;
+pub(crate) const SK_ENC_INV_GEN_INDEX: usize = 8;
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
@@ -41,6 +56,9 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
     /// between them is not proven in any of the proofs
     fn id_gen(&self) -> G;
 
+    /// Returns the generator for the inverse of encryption secret key
+    fn sk_enc_gen(&self) -> G;
+
     fn as_gens(&self) -> [G; NUM_GENERATORS] {
         [
             self.sk_gen(),
@@ -51,6 +69,20 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.current_rho_gen(),
             self.randomness_gen(),
             self.id_gen(),
+            self.sk_enc_gen(),
+        ]
+    }
+
+    fn as_gens_without_asset_id(&self) -> [G; NUM_GENERATORS - 1] {
+        [
+            self.sk_gen(),
+            self.balance_gen(),
+            self.counter_gen(),
+            self.rho_gen(),
+            self.current_rho_gen(),
+            self.randomness_gen(),
+            self.id_gen(),
+            self.sk_enc_gen(),
         ]
     }
 
@@ -65,6 +97,22 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.current_rho_gen(),
             self.randomness_gen(),
             self.id_gen(),
+            self.sk_enc_gen(),
+            blinding,
+        ]
+    }
+
+    /// Used for re-randomized leaf
+    fn as_gens_with_blinding_without_asset_id(&self, blinding: G) -> [G; NUM_GENERATORS] {
+        [
+            self.sk_gen(),
+            self.balance_gen(),
+            self.counter_gen(),
+            self.rho_gen(),
+            self.current_rho_gen(),
+            self.randomness_gen(),
+            self.id_gen(),
+            self.sk_enc_gen(),
             blinding,
         ]
     }
@@ -72,35 +120,39 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
 
 impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     fn sk_gen(&self) -> G {
-        self[0]
+        self[SK_GEN_INDEX]
     }
 
     fn balance_gen(&self) -> G {
-        self[1]
+        self[BALANCE_GEN_INDEX]
     }
 
     fn counter_gen(&self) -> G {
-        self[2]
+        self[COUNTER_GEN_INDEX]
     }
 
     fn asset_id_gen(&self) -> G {
-        self[3]
+        self[ASSET_ID_GEN_INDEX]
     }
 
     fn rho_gen(&self) -> G {
-        self[4]
+        self[RHO_GEN_INDEX]
     }
 
     fn current_rho_gen(&self) -> G {
-        self[5]
+        self[CURRENT_RHO_GEN_INDEX]
     }
 
     fn randomness_gen(&self) -> G {
-        self[6]
+        self[RANDOMNESS_GEN_INDEX]
     }
 
     fn id_gen(&self) -> G {
-        self[7]
+        self[ID_GEN_INDEX]
+    }
+
+    fn sk_enc_gen(&self) -> G {
+        self[SK_ENC_INV_GEN_INDEX]
     }
 }
 
@@ -239,6 +291,7 @@ pub struct AccountState<G: AffineRepr> {
     pub rho: G::ScalarField,
     pub current_rho: G::ScalarField,
     pub randomness: G::ScalarField,
+    pub sk_enc_inv: G::ScalarField,
 }
 
 // TODO: Add an account state batch abstraction that prevents manual update of field done in tests
@@ -250,18 +303,28 @@ where
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         id: G::ScalarField, // User can hash its string ID onto the field
-        sk: G::ScalarField,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         poseidon_config: Poseidon2Params<G::ScalarField>,
     ) -> Result<Self> {
         let randomness = G::ScalarField::rand(rng);
-        Self::new_given_randomness(id, sk, asset_id, counter, randomness, poseidon_config)
+        Self::new_given_randomness(
+            id,
+            sk_aff,
+            sk_enc,
+            asset_id,
+            counter,
+            randomness,
+            poseidon_config,
+        )
     }
 
     pub fn new_given_randomness(
         id: G::ScalarField, // User can hash its string ID onto the field
-        sk: G::ScalarField,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         randomness: G::ScalarField,
@@ -270,22 +333,25 @@ where
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
+        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let combined = Self::concat_asset_id_counter(asset_id, counter);
-        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk, combined, poseidon_config)?;
+        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk_aff, combined, poseidon_config)?;
         let current_rho = rho.square();
 
         Ok(Self {
             id,
-            sk,
+            sk: sk_aff,
             balance: 0,
             counter: 0,
             asset_id,
             rho,
             current_rho,
             randomness,
+            sk_enc_inv,
         })
     }
 
+    /*
     /// To be used when using [`RegTxnProofAlt`]
     pub fn new_alt<
         R: CryptoRngCore,
@@ -315,6 +381,7 @@ where
         let randomness = p_2.x().unwrap();
         let current_rho = rho.square();
 
+        let sk_enc_inv = sk.inverse().ok_or(Error::InvertingZero)?;
         Ok((
             Self {
                 id,
@@ -325,11 +392,13 @@ where
                 rho,
                 current_rho,
                 randomness,
+                sk_enc_inv,
             },
             r_1,
             r_2,
         ))
     }
+    */
 
     pub fn commit(
         &self,
@@ -346,6 +415,7 @@ where
                 self.current_rho,
                 self.randomness,
                 self.id,
+                self.sk_enc_inv,
             ],
         )
         .map_err(Error::size_mismatch)?;
@@ -457,5 +527,3 @@ where
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
-
-pub const NUM_GENERATORS: usize = 8;

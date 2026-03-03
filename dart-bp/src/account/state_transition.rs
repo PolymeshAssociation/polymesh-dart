@@ -6,7 +6,7 @@ use crate::account::{
     BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig,
 };
 use crate::leg::LegEncryption;
-use crate::leg::LegEncryptionRandomness;
+use crate::leg::PartyEphemeralPublicKey;
 use crate::util::{
     BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
 };
@@ -47,8 +47,8 @@ pub struct AccountStateTransitionProofBuilder<
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub(crate) legs: Vec<LegProverConfig<F0, G0>>,
-    pub(crate) balance_changes: Vec<BalanceChangeConfig<F0, G0>>,
+    pub(crate) legs: Vec<LegProverConfig<G0>>,
+    pub(crate) balance_changes: Vec<BalanceChangeConfig<G0>>,
     pub(crate) net_counter_change: i32,
     pub(crate) account: AccountState<Affine<G0>>,
     pub(crate) updated_account: AccountState<Affine<G0>>,
@@ -91,149 +91,117 @@ impl<
         self.updated_account_commitment
     }
 
-    pub fn add_send_affirmation(
-        &mut self,
-        amount: Balance,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_send_affirmation(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
         let ct_amount = leg_enc.ct_amount;
-        let r_3 = leg_enc_rand.2;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
             ct_amount,
-            r_3,
+            eph_pk_amount,
             has_balance_decreased: true,
         });
 
         self.net_counter_change += 1;
     }
 
-    pub fn add_receive_affirmation(
-        &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_receive_affirmation(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_changed: false,
         });
 
         self.net_counter_change += 1;
     }
 
-    pub fn add_claim_received(
-        &mut self,
-        amount: Balance,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_claim_received(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
         let ct_amount = leg_enc.ct_amount;
-        let r_3 = leg_enc_rand.2;
+        let eph_pk = leg_enc.eph_pk_r.clone();
+        let eph_pk_amount = eph_pk.2;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
             ct_amount,
-            r_3,
+            eph_pk_amount,
             has_balance_decreased: false,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_sender_counter_update(
-        &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_sender_counter_update(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_changed: false,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_sender_reverse(
-        &mut self,
-        amount: Balance,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_sender_reverse(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
         let ct_amount = leg_enc.ct_amount;
-        let r_3 = leg_enc_rand.2;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
             ct_amount,
-            r_3,
+            eph_pk_amount,
             has_balance_decreased: false,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_receiver_reverse(
-        &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_receiver_reverse(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_changed: false,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_irreversible_send(
-        &mut self,
-        amount: Balance,
-        leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
-    ) {
+    pub fn add_irreversible_send(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
         let ct_amount = leg_enc.ct_amount;
-        let r_3 = leg_enc_rand.2;
+        let eph_pk = leg_enc.eph_pk_s.clone();
+        let eph_pk_amount = eph_pk.2;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
             ct_amount,
-            r_3,
+            eph_pk_amount,
             has_balance_decreased: true,
         });
     }
@@ -242,154 +210,178 @@ impl<
         &mut self,
         amount: Balance,
         leg_enc: LegEncryption<Affine<G0>>,
-        leg_enc_rand: LegEncryptionRandomness<F0>,
     ) {
         let ct_amount = leg_enc.ct_amount;
-        let r_3 = leg_enc_rand.2;
+        let eph_pk = leg_enc.eph_pk_r.clone();
+        let eph_pk_amount = eph_pk.2;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc,
-            randomness: leg_enc_rand,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
             ct_amount,
-            r_3,
+            eph_pk_amount,
             has_balance_decreased: false,
         });
     }
 
-    // pub fn finalize<R: CryptoRngCore>(
-    //     self,
-    //     rng: &mut R,
-    //     leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    //     root: &Root<L, 1, G0, G1>,
-    //     account_tree_params: &SelRerandProofParameters<G0, G1>,
-    //     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    //     enc_key_gen: Affine<G0>,
-    //     enc_gen: Affine<G0>,
-    // ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-    //     let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-    //     let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-    //     let mut even_prover = Prover::new(
-    //         account_tree_params.even_parameters.pc_gens(),
-    //         even_transcript,
-    //     );
-    //     let mut odd_prover =
-    //         Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
-    //
-    //     let (mut proof, nullifier) = self.finalize_with_given_prover(
-    //         rng,
-    //         leaf_path,
-    //         root,
-    //         account_tree_params,
-    //         account_comm_key,
-    //         enc_key_gen,
-    //         enc_gen,
-    //         &mut even_prover,
-    //         &mut odd_prover,
-    //     )?;
-    //
-    //     let bp_gens = account_tree_params.bp_gens();
-    //     let (even_proof, odd_proof) =
-    //         prove_with_rng(even_prover, odd_prover, bp_gens.0, bp_gens.1, rng)?;
-    //
-    //     proof.common_proof.r1cs_proof = Some(BPProof {
-    //         even_proof,
-    //         odd_proof,
-    //     });
-    //
-    //     Ok((proof, nullifier))
-    // }
+    pub fn finalize<
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        self,
+        rng: &mut R,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_gen: Affine<G0>,
+    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_prover = Prover::new(
+            &account_tree_params.even_parameters.pc_gens(),
+            even_transcript,
+        );
+        let mut odd_prover = Prover::new(
+            &account_tree_params.odd_parameters.pc_gens(),
+            odd_transcript,
+        );
 
-    // pub fn finalize_with_given_prover<'a, R: CryptoRngCore>(
-    //     self,
-    //     rng: &mut R,
-    //     leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    //     root: &Root<L, 1, G0, G1>,
-    //     account_tree_params: &'a SelRerandProofParameters<G0, G1>,
-    //     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    //     enc_key_gen: Affine<G0>,
-    //     enc_gen: Affine<G0>,
-    //     even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
-    //     odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
-    // ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-    //     self.pre_finalize_checks()?;
-    //
-    //     let common_prover = CommonStateChangeProver::init_with_given_prover(
-    //         rng,
-    //         self.legs.clone(),
-    //         &self.account,
-    //         &self.updated_account,
-    //         self.updated_account_commitment,
-    //         leaf_path,
-    //         root,
-    //         &self.nonce,
-    //         account_tree_params,
-    //         account_comm_key,
-    //         enc_key_gen,
-    //         enc_gen,
-    //         even_prover,
-    //         odd_prover,
-    //     )?;
-    //
-    //     self.generate_proof_given_common_prover(
-    //         rng,
-    //         common_prover,
-    //         account_tree_params,
-    //         enc_key_gen,
-    //         enc_gen,
-    //         even_prover,
-    //     )
-    // }
+        let (mut proof, nullifier) = self
+            .finalize_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                leaf_path,
+                root,
+                account_tree_params,
+                account_comm_key,
+                enc_gen,
+                &mut even_prover,
+                &mut odd_prover,
+            )?;
 
-    // /// Creates a proof when the account leaf has already been re-randomized externally.
-    // /// This is useful for batched proving when proving multiple account paths at once.
-    // pub fn finalize_with_given_prover_with_rerandomized_leaf<'a, R: CryptoRngCore>(
-    //     self,
-    //     rng: &mut R,
-    //     leaf_rerandomization: F0,
-    //     account_tree_params: &'a SelRerandProofParameters<G0, G1>,
-    //     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-    //     enc_key_gen: Affine<G0>,
-    //     enc_gen: Affine<G0>,
-    //     even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
-    // ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-    //     self.pre_finalize_checks()?;
-    //     let common_prover = CommonStateChangeProver::init_with_given_prover_with_rerandomized_leaf(
-    //         rng,
-    //         self.legs.clone(),
-    //         &self.account,
-    //         &self.updated_account,
-    //         self.updated_account_commitment,
-    //         leaf_rerandomization,
-    //         &self.nonce,
-    //         account_tree_params,
-    //         account_comm_key,
-    //         enc_key_gen,
-    //         enc_gen,
-    //         even_prover,
-    //     )?;
-    //
-    //     self.generate_proof_given_common_prover(
-    //         rng,
-    //         common_prover,
-    //         account_tree_params,
-    //         enc_key_gen,
-    //         enc_gen,
-    //         even_prover,
-    //     )
-    // }
+        let (even_proof, odd_proof) = prove_with_rng(
+            even_prover,
+            odd_prover,
+            &account_tree_params.even_parameters.bp_gens(),
+            &account_tree_params.odd_parameters.bp_gens(),
+            rng,
+        )?;
 
-    /*fn generate_proof_given_common_prover<'a, R: CryptoRngCore>(
+        proof.common_proof.r1cs_proof = Some(BPProof {
+            even_proof,
+            odd_proof,
+        });
+
+        Ok((proof, nullifier))
+    }
+
+    pub fn finalize_with_given_prover<
+        'a,
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        self,
+        rng: &mut R,
+        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
+        root: &Root<L, 1, G0, G1>,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
+    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
+        self.pre_finalize_checks()?;
+
+        let common_prover =
+            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+                rng,
+                self.legs.clone(),
+                &self.account,
+                &self.updated_account,
+                self.updated_account_commitment,
+                leaf_path,
+                root,
+                &self.nonce,
+                account_tree_params,
+                account_comm_key,
+                enc_gen,
+                even_prover,
+                odd_prover,
+            )?;
+
+        self.generate_proof_given_common_prover(
+            rng,
+            common_prover,
+            account_tree_params,
+            enc_gen,
+            even_prover,
+        )
+    }
+
+    /// Creates a proof when the account leaf has already been re-randomized externally.
+    /// This is useful for batched proving when proving multiple account paths at once.
+    pub fn finalize_with_given_prover_with_rerandomized_leaf<
+        'a,
+        R: CryptoRngCore,
+        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
+        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        self,
+        rng: &mut R,
+        leaf_rerandomization: F0,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        enc_gen: Affine<G0>,
+        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
+    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
+        self.pre_finalize_checks()?;
+
+        let common_prover = CommonStateChangeProver::init_with_given_prover_with_rerandomized_leaf(
+            rng,
+            self.legs.clone(),
+            &self.account,
+            &self.updated_account,
+            self.updated_account_commitment,
+            leaf_rerandomization,
+            &self.nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            even_prover,
+        )?;
+
+        self.generate_proof_given_common_prover(
+            rng,
+            common_prover,
+            account_tree_params,
+            enc_gen,
+            even_prover,
+        )
+    }
+
+    fn generate_proof_given_common_prover<
+        'a,
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
         self,
         rng: &mut R,
         common_prover: CommonStateChangeProver<'a, L, F0, F1, G0, G1>,
-        account_tree_params: &'a SelRerandProofParameters<G0, G1>,
-        enc_key_gen: Affine<G0>,
+        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
@@ -404,10 +396,10 @@ impl<
                 &self.updated_account,
                 common_prover.old_balance_blinding,
                 common_prover.new_balance_blinding,
+                common_prover.sk_enc_inv_blinding,
                 even_prover,
-                account_tree_params.even_parameters.pc_gens(),
-                account_tree_params.even_parameters.bp_gens(),
-                enc_key_gen,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
                 enc_gen,
             )?)
         } else {
@@ -434,7 +426,7 @@ impl<
             },
             nullifier,
         ))
-    }*/
+    }
 
     pub(crate) fn pre_finalize_checks(&self) -> Result<()> {
         #[cfg(feature = "ignore_prover_input_sanitation")]
@@ -502,9 +494,10 @@ impl<
     }
 
     pub fn add_send_affirmation(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(true),
             has_counter_decreased: Some(false),
         });
@@ -512,9 +505,10 @@ impl<
     }
 
     pub fn add_receive_affirmation(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: None,
             has_counter_decreased: Some(false),
         });
@@ -522,9 +516,10 @@ impl<
     }
 
     pub fn add_claim_received(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: Some(false),
             has_counter_decreased: Some(true),
         });
@@ -532,9 +527,10 @@ impl<
     }
 
     pub fn add_sender_counter_update(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: None,
             has_counter_decreased: Some(true),
         });
@@ -542,9 +538,10 @@ impl<
     }
 
     pub fn add_sender_reverse(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(false),
             has_counter_decreased: Some(true),
         });
@@ -552,9 +549,10 @@ impl<
     }
 
     pub fn add_receiver_reverse(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: None,
             has_counter_decreased: Some(true),
         });
@@ -562,469 +560,23 @@ impl<
     }
 
     pub fn add_irreversible_send(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_s = leg_enc.eph_pk_s.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: true,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(true),
             has_counter_decreased: None,
         });
     }
 
     pub fn add_irreversible_receive(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
+        let eph_pk_r = leg_enc.eph_pk_r.clone();
         self.legs.push(LegVerifierConfig {
             encryption: leg_enc,
-            is_sender: false,
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: Some(false),
             has_counter_decreased: None,
         });
-    }
-
-    /*pub fn verify<R: CryptoRngCore>(
-        self,
-        rng: &mut R,
-        proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
-        root: &Root<L, 1, G0, G1>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        mut rmc: Option<(
-            &mut RandomizedMultChecker<Affine<G0>>,
-            &mut RandomizedMultChecker<Affine<G1>>,
-        )>,
-    ) -> Result<()> {
-        let rmc_0 = match rmc.as_mut() {
-            Some((rmc_0, _)) => Some(&mut **rmc_0),
-            None => None,
-        };
-
-        let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
-            proof,
-            root,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rng,
-            rmc_0,
-        )?;
-
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-            ),
-        }
-    }*/
-
-    /*pub fn verify_and_return_tuples<R: CryptoRngCore>(
-        self,
-        proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
-        root: &Root<L, 1, G0, G1>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.pre_verify_checks(proof)?;
-
-        let mut verifier = StateChangeVerifier::init(
-            &proof.common_proof,
-            self.legs.clone(),
-            root,
-            self.updated_account_commitment,
-            self.nullifier,
-            &self.nonce,
-            account_tree_params,
-            &account_comm_key,
-            enc_key_gen,
-            enc_gen,
-        )?;
-
-        let mut even_verifier = verifier.even_verifier.take().unwrap();
-        let odd_verifier = verifier.odd_verifier.take().unwrap();
-
-        self.verify_sigma_protocols_given_state_change_verifier(
-            proof,
-            verifier,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            &mut even_verifier,
-            rmc,
-        )?;
-
-        let r1cs_proof =
-            proof.common_proof.r1cs_proof.as_ref().ok_or_else(|| {
-                Error::ProofVerificationError("R1CS proof is missing".to_string())
-            })?;
-
-        get_verification_tuples_with_rng(
-            even_verifier,
-            odd_verifier,
-            &r1cs_proof.even_proof,
-            &r1cs_proof.odd_proof,
-            rng,
-        )
-    }
-
-    pub fn enforce_constraints_and_verify_only_sigma_protocols(
-        self,
-        proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
-        root: &Root<L, 1, G0, G1>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-        odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<()> {
-        self.pre_verify_checks(proof)?;
-
-        let verifier = StateChangeVerifier::init_with_given_verifier(
-            &proof.common_proof,
-            self.legs.clone(),
-            root,
-            self.updated_account_commitment,
-            self.nullifier,
-            &self.nonce,
-            account_tree_params,
-            &account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_verifier,
-            odd_verifier,
-        )?;
-
-        self.verify_sigma_protocols_given_state_change_verifier(
-            proof,
-            verifier,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_verifier,
-            rmc,
-        )
-    }*/
-
-    /*/// Verifies the proof when the account leaf has already been re-randomized externally.
-    /// This is useful for batched verification when verifying multiple account paths at once.
-    /// `rerandomized_leaf` - The re-randomized leaf obtained from external batched curve tree operations.
-    pub fn enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf(
-        self,
-        proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
-        rerandomized_leaf: Affine<G0>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<()> {
-        self.pre_verify_checks(proof)?;
-
-        let verifier = StateChangeVerifier::init_with_given_verifier_with_rerandomized_leaf(
-            &proof.common_proof,
-            self.legs.clone(),
-            self.updated_account_commitment,
-            self.nullifier,
-            rerandomized_leaf,
-            &self.nonce,
-            &account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_verifier,
-        )?;
-
-        self.verify_sigma_protocols_given_state_change_verifier(
-            proof,
-            verifier,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_verifier,
-            rmc,
-        )
-    }
-
-    fn verify_sigma_protocols_given_state_change_verifier(
-        self,
-        proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
-        mut verifier: StateChangeVerifier<L, F0, F1, G0, G1>,
-        account_tree_params: &SelRerandProofParameters<G0, G1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-    ) -> Result<()> {
-        if let Some(balance_proof) = &proof.balance_proof {
-            let ct_amounts: Vec<Affine<G0>> = self
-                .legs
-                .iter()
-                .filter(|l| l.has_balance_decreased.is_some())
-                .map(|l| l.encryption.ct_amount)
-                .collect();
-
-            verifier.init_balance_change_verification_with_given_verifier(
-                balance_proof,
-                &ct_amounts,
-                enc_key_gen,
-                enc_gen,
-                even_verifier,
-            )?;
-        }
-
-        let challenge = even_verifier
-            .transcript()
-            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-
-        let leg_encs: Vec<LegEncryption<Affine<G0>>> =
-            self.legs.iter().map(|l| l.encryption.clone()).collect();
-
-        verifier.verify_sigma_protocols(
-            &proof.common_proof,
-            proof.balance_proof.as_ref(),
-            &challenge,
-            leg_encs,
-            self.updated_account_commitment,
-            self.nullifier,
-            account_tree_params,
-            &account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            rmc,
-        )
-    }*/
-}
-
-impl<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
-{
-    pub fn finalize_new<
-        R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
-        self,
-        rng: &mut R,
-        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-        root: &Root<L, 1, G0, G1>,
-        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
-        let mut even_prover = Prover::new(
-            &account_tree_params.even_parameters.pc_gens(),
-            even_transcript,
-        );
-        let mut odd_prover = Prover::new(
-            &account_tree_params.odd_parameters.pc_gens(),
-            odd_transcript,
-        );
-
-        let (mut proof, nullifier) = self
-            .finalize_with_given_prover_new::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                leaf_path,
-                root,
-                account_tree_params,
-                account_comm_key,
-                enc_key_gen,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
-
-        let (even_proof, odd_proof) = prove_with_rng(
-            even_prover,
-            odd_prover,
-            &account_tree_params.even_parameters.bp_gens(),
-            &account_tree_params.odd_parameters.bp_gens(),
-            rng,
-        )?;
-
-        proof.common_proof.r1cs_proof = Some(BPProof {
-            even_proof,
-            odd_proof,
-        });
-
-        Ok((proof, nullifier))
-    }
-
-    pub fn finalize_with_given_prover_new<
-        'a,
-        R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
-        self,
-        rng: &mut R,
-        leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-        root: &Root<L, 1, G0, G1>,
-        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
-        odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
-    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        self.pre_finalize_checks()?;
-
-        let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                self.legs.clone(),
-                &self.account,
-                &self.updated_account,
-                self.updated_account_commitment,
-                leaf_path,
-                root,
-                &self.nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_key_gen,
-                enc_gen,
-                even_prover,
-                odd_prover,
-            )?;
-
-        self.generate_proof_given_common_prover_new(
-            rng,
-            common_prover,
-            account_tree_params,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-        )
-    }
-
-    /// Creates a proof when the account leaf has already been re-randomized externally.
-    /// This is useful for batched proving when proving multiple account paths at once.
-    pub fn finalize_with_given_prover_with_rerandomized_leaf_new<
-        'a,
-        R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
-        self,
-        rng: &mut R,
-        leaf_rerandomization: F0,
-        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
-    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        self.pre_finalize_checks()?;
-        let common_prover = CommonStateChangeProver::init_with_given_prover_with_rerandomized_leaf(
-            rng,
-            self.legs.clone(),
-            &self.account,
-            &self.updated_account,
-            self.updated_account_commitment,
-            leaf_rerandomization,
-            &self.nonce,
-            account_tree_params,
-            account_comm_key,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-        )?;
-
-        self.generate_proof_given_common_prover_new(
-            rng,
-            common_prover,
-            account_tree_params,
-            enc_key_gen,
-            enc_gen,
-            even_prover,
-        )
-    }
-
-    fn generate_proof_given_common_prover_new<
-        'a,
-        R: CryptoRngCore,
-        Parameters0: DiscreteLogParameters,
-        Parameters1: DiscreteLogParameters,
-    >(
-        self,
-        rng: &mut R,
-        common_prover: CommonStateChangeProver<'a, L, F0, F1, G0, G1>,
-        account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        enc_key_gen: Affine<G0>,
-        enc_gen: Affine<G0>,
-        even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
-    ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        let nullifier = common_prover.nullifier;
-        let has_balance_changed = !self.balance_changes.is_empty();
-
-        let balance_prover = if has_balance_changed {
-            Some(BalanceChangeProver::init(
-                rng,
-                self.balance_changes,
-                &self.account,
-                &self.updated_account,
-                common_prover.old_balance_blinding,
-                common_prover.new_balance_blinding,
-                even_prover,
-                &account_tree_params.even_parameters.pc_gens(),
-                &account_tree_params.even_parameters.bp_gens(),
-                enc_key_gen,
-                enc_gen,
-            )?)
-        } else {
-            None
-        };
-
-        let transcript = even_prover.transcript();
-        let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-
-        let common_proof = common_prover.generate_sigma_responses(
-            &self.account,
-            &self.updated_account,
-            &challenge,
-        )?;
-
-        let balance_proof = balance_prover
-            .map(|bp| bp.gen_proof(&challenge))
-            .transpose()?;
-
-        Ok((
-            AccountStateTransitionProof {
-                common_proof,
-                balance_proof,
-            },
-            nullifier,
-        ))
     }
 }
 
@@ -1036,7 +588,7 @@ impl<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AccountStateTransitionProofVerifier<L, F0, F1, G0, G1>
 {
-    pub fn verify_new<
+    pub fn verify<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
@@ -1047,7 +599,6 @@ impl<
         root: &Root<L, 1, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         mut rmc: Option<(
             &mut RandomizedMultChecker<Affine<G0>>,
@@ -1060,12 +611,11 @@ impl<
         };
 
         let (even_tuple, odd_tuple) = self
-            .verify_and_return_tuples_new::<_, Parameters0, Parameters1>(
+            .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 proof,
                 root,
                 account_tree_params,
                 account_comm_key,
-                enc_key_gen,
                 enc_gen,
                 rng,
                 rmc_0,
@@ -1074,7 +624,7 @@ impl<
         handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
-    pub fn verify_and_return_tuples_new<
+    pub fn verify_and_return_tuples<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
@@ -1084,12 +634,11 @@ impl<
         root: &Root<L, 1, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        self.pre_verify_checks_new(proof)?;
+        self.pre_verify_checks(proof)?;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &proof.common_proof,
@@ -1100,19 +649,17 @@ impl<
             &self.nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
         )?;
 
         let mut even_verifier = verifier.even_verifier.take().unwrap();
         let odd_verifier = verifier.odd_verifier.take().unwrap();
 
-        self.verify_sigma_protocols_given_state_change_verifier_new(
+        self.verify_sigma_protocols_given_state_change_verifier(
             proof,
             verifier,
             account_tree_params,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             &mut even_verifier,
             rmc,
@@ -1132,7 +679,7 @@ impl<
         )
     }
 
-    pub fn enforce_constraints_and_verify_only_sigma_protocols_new<
+    pub fn enforce_constraints_and_verify_only_sigma_protocols<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1141,13 +688,12 @@ impl<
         root: &Root<L, 1, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.pre_verify_checks_new(proof)?;
+        self.pre_verify_checks(proof)?;
 
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &proof.common_proof,
@@ -1158,18 +704,16 @@ impl<
             &self.nonce,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             odd_verifier,
         )?;
 
-        self.verify_sigma_protocols_given_state_change_verifier_new(
+        self.verify_sigma_protocols_given_state_change_verifier(
             proof,
             verifier,
             account_tree_params,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             rmc,
@@ -1179,7 +723,7 @@ impl<
     /// Verifies the proof when the account leaf has already been re-randomized externally.
     /// This is useful for batched verification when verifying multiple account paths at once.
     /// `rerandomized_leaf` - The re-randomized leaf obtained from external batched curve tree operations.
-    pub fn enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf_new<
+    pub fn enforce_constraints_and_verify_only_sigma_protocols_with_rerandomized_leaf<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1188,12 +732,11 @@ impl<
         rerandomized_leaf: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        self.pre_verify_checks_new(proof)?;
+        self.pre_verify_checks(proof)?;
 
         let verifier = StateChangeVerifier::init_with_given_verifier_with_rerandomized_leaf(
             &proof.common_proof,
@@ -1203,24 +746,22 @@ impl<
             rerandomized_leaf,
             &self.nonce,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
         )?;
 
-        self.verify_sigma_protocols_given_state_change_verifier_new(
+        self.verify_sigma_protocols_given_state_change_verifier(
             proof,
             verifier,
             account_tree_params,
             account_comm_key,
-            enc_key_gen,
             enc_gen,
             even_verifier,
             rmc,
         )
     }
 
-    fn verify_sigma_protocols_given_state_change_verifier_new<
+    fn verify_sigma_protocols_given_state_change_verifier<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1229,23 +770,32 @@ impl<
         mut verifier: StateChangeVerifier<L, F0, F1, G0, G1>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
-        enc_key_gen: Affine<G0>,
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         if let Some(balance_proof) = &proof.balance_proof {
-            let ct_amounts: Vec<Affine<G0>> = self
+            // Filter legs and corresponding prover_is_sender entries together
+            let ct_amounts: Vec<_> = self
                 .legs
                 .iter()
-                .filter(|l| l.has_balance_decreased.is_some())
-                .map(|l| l.encryption.ct_amount)
+                .zip(verifier.prover_is_sender.iter())
+                .filter(|(l, _)| l.has_balance_decreased.is_some())
+                .map(|(l, is_sender)| {
+                    (
+                        l.encryption.ct_amount,
+                        if *is_sender {
+                            l.encryption.eph_pk_s.2
+                        } else {
+                            l.encryption.eph_pk_r.2
+                        },
+                    )
+                })
                 .collect();
 
             verifier.init_balance_change_verification_with_given_verifier(
                 balance_proof,
                 &ct_amounts,
-                enc_key_gen,
                 enc_gen,
                 even_verifier,
             )?;
@@ -1267,13 +817,12 @@ impl<
             self.nullifier,
             account_tree_params,
             &account_comm_key,
-            enc_key_gen,
             enc_gen,
             rmc,
         )
     }
 
-    fn pre_verify_checks_new(
+    fn pre_verify_checks(
         &self,
         proof: &AccountStateTransitionProof<L, F0, F1, G0, G1>,
     ) -> Result<()> {
@@ -1313,15 +862,14 @@ mod tests {
     use crate::account::AccountStateBuilder;
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
-    use crate::leg::Leg;
     use crate::leg::tests::setup_keys;
-    use crate::util::{prove_with_rng, verify_with_rng};
+    use crate::leg::{Leg, LegEncConfig};
+    use crate::util::{prove_with_rng, verify_rmc, verify_with_rng};
     use ark_ec_divisors::curves::{
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
     use ark_std::UniformRand;
-    use blake2::Blake2b512;
     use bulletproofs::r1cs::{Prover, Verifier};
     use curve_tree_relations::curve_tree::CurveTree;
     use rand::thread_rng;
@@ -1330,6 +878,7 @@ mod tests {
     type PallasParameters = ark_pallas::PallasConfig;
     type VestaParameters = ark_vesta::VestaConfig;
     type PallasFr = ark_pallas::Fr;
+    type VestaFr = ark_vesta::Fr;
 
     const TXN_EVEN_LABEL: &'static [u8] = b"PolymeshTransactionEven";
     const TXN_ODD_LABEL: &'static [u8] = b"PolymeshTransactionOdd";
@@ -1340,15 +889,15 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let tree_height = 6;
 
         // Setup keys for Alice, Bob, Carol, and auditor
-        let (
-            ((_sk_alice, pk_alice), (_, pk_alice_e)),
-            ((_sk_bob, pk_bob), (_, pk_bob_e)),
-            ((sk_carol, pk_carol), (_, pk_carol_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let ((_, (_, pk_alice_e)), (_, (_, pk_bob_e)), ((sk_carol, _), (sk_carol_e, pk_carol_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1356,190 +905,216 @@ mod tests {
         let alice_send_amount = 100u64;
         let bob_send_amount = 200u64;
 
-        // Create legs
-        let leg_1 = Leg::new(
-            pk_alice.0,
-            pk_carol.0,
-            vec![(true, pk_auditor_e.0)],
-            alice_send_amount,
-            asset_id,
-        )
-        .unwrap();
-        let (leg_enc_1, leg_enc_rand_1) = leg_1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_carol_e.0, enc_key_gen, enc_gen)
+        let mut test_with_config = |reveal_asset_id: bool| {
+            let conf = LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id,
+            };
+
+            // Create legs
+            let leg_1 = Leg::new(
+                pk_alice_e.0,
+                pk_carol_e.0,
+                alice_send_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc_1, _) = leg_1
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
+
+            let leg_2 = Leg::new(
+                pk_bob_e.0,
+                pk_carol_e.0,
+                bob_send_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc_2, _) = leg_2
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
+
+            // Create Carol's account
+            let carol_id = PallasFr::rand(&mut rng);
+            let (mut carol_account, _, _) = new_account(
+                &mut rng,
+                asset_id,
+                sk_carol.clone(),
+                sk_carol_e.clone(),
+                carol_id,
+            );
+            carol_account.balance = 500;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &carol_account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                tree_height,
+            )
             .unwrap();
 
-        let leg_2 = Leg::new(
-            pk_bob.0,
-            pk_carol.0,
-            vec![(true, pk_auditor_e.0)],
-            bob_send_amount,
-            asset_id,
-        )
-        .unwrap();
-        let (leg_enc_2, leg_enc_rand_2) = leg_2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_bob_e.0, pk_carol_e.0, enc_key_gen, enc_gen)
-            .unwrap();
+            println!("With L={L}, height={tree_height}, reveal_asset_id={reveal_asset_id}");
 
-        // Create Carol's account
-        let carol_id = PallasFr::rand(&mut rng);
-        let (mut carol_account, _, _) = new_account(&mut rng, asset_id, sk_carol, carol_id);
-        carol_account.balance = 500;
+            let carol_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let account_tree_root = account_tree.root_node();
+            let nonce_1 = b"carol_nonce_1";
+            let nonce_2 = b"carol_nonce_2";
 
-        let account_tree = get_tree_with_account_comm::<L, _>(
-            &carol_account,
-            account_comm_key.clone(),
-            &account_tree_params,
-            6,
-        )
-        .unwrap();
+            // Carol receives from both:
+            let mut builder = AccountStateBuilder::init(carol_account.clone());
+            builder.update_for_receive();
+            builder.update_for_receive();
+            let carol_receives = builder.finalize();
+            let carol_receives_comm = carol_receives.commit(account_comm_key.clone()).unwrap();
 
-        let carol_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-        let account_tree_root = account_tree.root_node();
-        let nonce_1 = b"carol_nonce_1";
-        let nonce_2 = b"carol_nonce_2";
-
-        // Carol receives from both:
-        let mut builder = AccountStateBuilder::init(carol_account.clone());
-        builder.update_for_receive();
-        builder.update_for_receive();
-        let carol_receives = builder.finalize();
-        let carol_receives_comm = carol_receives.commit(account_comm_key.clone()).unwrap();
-
-        // Carol creates multi-leg proof for receive affirmations
-        let mut carol_builder_1 =
-            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+            // Carol creates multi-leg proof for receive affirmations
+            let mut carol_builder_1 = AccountStateTransitionProofBuilder::<
+                L,
+                _,
+                _,
+                PallasParameters,
+                VestaParameters,
+            >::init(
                 carol_account.clone(),
                 carol_receives.clone(),
                 carol_receives_comm,
                 nonce_1,
             );
-        carol_builder_1.add_receive_affirmation(leg_enc_1.clone(), leg_enc_rand_1.clone());
-        carol_builder_1.add_receive_affirmation(leg_enc_2.clone(), leg_enc_rand_2.clone());
+            carol_builder_1.add_receive_affirmation(leg_enc_1.clone());
+            carol_builder_1.add_receive_affirmation(leg_enc_2.clone());
 
-        let start = Instant::now();
-        let (carol_proof_1, carol_nullifier_1) = carol_builder_1
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                carol_leaf_path.clone(),
-                &account_tree_root,
-                &account_tree_params,
+            let start = Instant::now();
+            let (carol_proof_1, carol_nullifier_1) = carol_builder_1
+                .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                    &mut rng,
+                    carol_leaf_path.clone(),
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .unwrap();
+            let proving_time_1 = start.elapsed();
+
+            // Verify Carol's first proof
+            let mut carol_verifier_1 = AccountStateTransitionProofVerifier::init(
+                carol_receives_comm,
+                carol_nullifier_1,
+                nonce_1,
+            );
+            carol_verifier_1.add_receive_affirmation(leg_enc_1.clone());
+            carol_verifier_1.add_receive_affirmation(leg_enc_2.clone());
+
+            let start = Instant::now();
+            carol_verifier_1
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &carol_proof_1,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verification_time_1 = start.elapsed();
+            let proof_size_1 = carol_proof_1.compressed_size();
+            println!(
+                "Carol proof 1 (2 receive affirmations): proving time = {:?}, verification time = {:?}, proof size = {} bytes",
+                proving_time_1, verification_time_1, proof_size_1
+            );
+
+            // Now Carol claims from both
+            let mut builder = AccountStateBuilder::init(carol_receives.clone());
+            builder
+                .update_for_claiming_received(alice_send_amount)
+                .unwrap();
+            builder
+                .update_for_claiming_received(bob_send_amount)
+                .unwrap();
+            let carol_final = builder.finalize();
+            let carol_final_comm = carol_final.commit(account_comm_key.clone()).unwrap();
+
+            // Update the tree with Carol's new state after receives
+            let account_tree_2 = get_tree_with_account_comm::<L, _>(
+                &carol_receives,
                 account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
+                &account_tree_params,
+                6,
             )
             .unwrap();
-        let proving_time_1 = start.elapsed();
+            let carol_leaf_path_2 = account_tree_2.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let account_tree_root_2 = account_tree_2.root_node();
 
-        // Verify Carol's first proof
-        let mut carol_verifier_1 = AccountStateTransitionProofVerifier::init(
-            carol_receives_comm,
-            carol_nullifier_1,
-            nonce_1,
-        );
-        carol_verifier_1.add_receive_affirmation(leg_enc_1.clone());
-        carol_verifier_1.add_receive_affirmation(leg_enc_2.clone());
-
-        let start = Instant::now();
-        carol_verifier_1
-            .verify_new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                &carol_proof_1,
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verification_time_1 = start.elapsed();
-        let proof_size_1 = carol_proof_1.compressed_size();
-        println!(
-            "Carol proof 1 (2 receive affirmations): proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time_1, verification_time_1, proof_size_1
-        );
-
-        // Now Carol claims from both
-        let mut builder = AccountStateBuilder::init(carol_receives.clone());
-        builder
-            .update_for_claiming_received(alice_send_amount)
-            .unwrap();
-        builder
-            .update_for_claiming_received(bob_send_amount)
-            .unwrap();
-        let carol_final = builder.finalize();
-        let carol_final_comm = carol_final.commit(account_comm_key.clone()).unwrap();
-
-        // Update the tree with Carol's new state after receives
-        let account_tree_2 = get_tree_with_account_comm::<L, _>(
-            &carol_receives,
-            account_comm_key.clone(),
-            &account_tree_params,
-            6,
-        )
-        .unwrap();
-        let carol_leaf_path_2 = account_tree_2.get_path_to_leaf_for_proof(0, 0).unwrap();
-        let account_tree_root_2 = account_tree_2.root_node();
-
-        // Carol creates multi-leg proof for claims
-        let mut carol_builder_2 =
-            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+            // Carol creates multi-leg proof for claims
+            let mut carol_builder_2 = AccountStateTransitionProofBuilder::<
+                L,
+                _,
+                _,
+                PallasParameters,
+                VestaParameters,
+            >::init(
                 carol_receives.clone(),
                 carol_final.clone(),
                 carol_final_comm,
                 nonce_2,
             );
-        carol_builder_2.add_claim_received(
-            alice_send_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
-        carol_builder_2.add_claim_received(
-            bob_send_amount,
-            leg_enc_2.clone(),
-            leg_enc_rand_2.clone(),
-        );
+            carol_builder_2.add_claim_received(alice_send_amount, leg_enc_1.clone());
+            carol_builder_2.add_claim_received(bob_send_amount, leg_enc_2.clone());
 
-        let start = Instant::now();
-        let (carol_proof_2, carol_nullifier_2) = carol_builder_2
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                carol_leaf_path_2.clone(),
-                &account_tree_root_2,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
-            )
-            .unwrap();
-        let proving_time_2 = start.elapsed();
+            let start = Instant::now();
+            let (carol_proof_2, carol_nullifier_2) = carol_builder_2
+                .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                    &mut rng,
+                    carol_leaf_path_2.clone(),
+                    &account_tree_root_2,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .unwrap();
+            let proving_time_2 = start.elapsed();
 
-        // Verify Carol's second proof
-        let mut carol_verifier_2 =
-            AccountStateTransitionProofVerifier::init(carol_final_comm, carol_nullifier_2, nonce_2);
-        carol_verifier_2.add_claim_received(leg_enc_1.clone());
-        carol_verifier_2.add_claim_received(leg_enc_2.clone());
+            // Verify Carol's second proof
+            let mut carol_verifier_2 = AccountStateTransitionProofVerifier::init(
+                carol_final_comm,
+                carol_nullifier_2,
+                nonce_2,
+            );
+            carol_verifier_2.add_claim_received(leg_enc_1.clone());
+            carol_verifier_2.add_claim_received(leg_enc_2.clone());
 
-        let start = Instant::now();
-        carol_verifier_2
-            .verify_new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                &carol_proof_2,
-                &account_tree_root_2,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verification_time_2 = start.elapsed();
-        let proof_size_2 = carol_proof_2.compressed_size();
-        println!(
-            "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time_2, verification_time_2, proof_size_2
-        );
+            let start = Instant::now();
+            carol_verifier_2
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &carol_proof_2,
+                    &account_tree_root_2,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verification_time_2 = start.elapsed();
+            let proof_size_2 = carol_proof_2.compressed_size();
+            println!(
+                "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
+                proving_time_2, verification_time_2, proof_size_2
+            );
+        };
+
+        test_with_config(false);
+
+        test_with_config(true);
     }
 
     #[test]
@@ -1548,14 +1123,15 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice, Bob, Carol, and auditor
         let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((_, pk_bob), (_, pk_bob_e)),
-            ((_, pk_carol), (_, pk_carol_e)),
+            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
@@ -1566,32 +1142,39 @@ mod tests {
 
         // Create legs
         let leg_1 = Leg::new(
-            pk_alice.0,
-            pk_bob.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_bob_e.0,
             alice_to_bob_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_1, leg_enc_rand_1) = leg_1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_1, _) = leg_1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_2 = Leg::new(
-            pk_carol.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_carol_e.0,
+            pk_alice_e.0,
             carol_to_alice_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_2, leg_enc_rand_2) = leg_2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_carol_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) = new_account(&mut rng, asset_id, sk_alice, alice_id);
+        let (mut alice_account, _, _) =
+            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
         // Alice sends and receives
@@ -1622,22 +1205,17 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(
-            alice_to_bob_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
-        alice_builder.add_receive_affirmation(leg_enc_2.clone(), leg_enc_rand_2.clone());
+        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
+        alice_builder.add_receive_affirmation(leg_enc_2.clone());
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1651,13 +1229,12 @@ mod tests {
 
         let start = Instant::now();
         alice_verifier
-            .verify_new::<_, PallasParams, VestaParams>(
+            .verify::<_, PallasParams, VestaParams>(
                 &mut rng,
                 &alice_proof,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -1689,22 +1266,17 @@ mod tests {
                 alice_final_comm,
                 nonce_2,
             );
-        alice_builder_2.add_claim_received(
-            carol_to_alice_amount,
-            leg_enc_2.clone(),
-            leg_enc_rand_2.clone(),
-        );
-        alice_builder_2.add_sender_counter_update(leg_enc_1.clone(), leg_enc_rand_1.clone());
+        alice_builder_2.add_claim_received(carol_to_alice_amount, leg_enc_2.clone());
+        alice_builder_2.add_sender_counter_update(leg_enc_1.clone());
 
         let start = Instant::now();
         let (alice_proof_2, alice_nullifier_2) = alice_builder_2
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path_2.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1718,13 +1290,12 @@ mod tests {
 
         let start = Instant::now();
         alice_verifier_2
-            .verify_new::<_, PallasParams, VestaParams>(
+            .verify::<_, PallasParams, VestaParams>(
                 &mut rng,
                 &alice_proof_2,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -1743,17 +1314,14 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice, Bob, Carol, Dave, and auditor
-        let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((_, pk_bob), (_, pk_bob_e)),
-            ((_, pk_carol), (_, pk_carol_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
-        let ((_, pk_dave), (_, pk_dave_e)) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
+        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, (_, pk_dave_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1765,56 +1333,69 @@ mod tests {
 
         // Create legs
         let leg_1 = Leg::new(
-            pk_alice.0,
-            pk_bob.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_bob_e.0,
             alice_to_bob_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_1, leg_enc_rand_1) = leg_1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_1, _) = leg_1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_2 = Leg::new(
-            pk_carol.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_carol_e.0,
+            pk_alice_e.0,
             carol_to_alice_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_2, leg_enc_rand_2) = leg_2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_carol_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_3 = Leg::new(
-            pk_alice.0,
-            pk_dave.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_dave_e.0,
             alice_to_dave_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_3, leg_enc_rand_3) = leg_3
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_dave_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_3, _) = leg_3
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_4 = Leg::new(
-            pk_bob.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_bob_e.0,
+            pk_alice_e.0,
             bob_to_alice_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_4, leg_enc_rand_4) = leg_4
-            .encrypt::<_, Blake2b512>(&mut rng, pk_bob_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_4, _) = leg_4
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) = new_account(&mut rng, asset_id, sk_alice, alice_id);
+        let (mut alice_account, _, _) =
+            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1847,28 +1428,19 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(
-            alice_to_bob_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
-        alice_builder.add_receive_affirmation(leg_enc_2.clone(), leg_enc_rand_2.clone());
-        alice_builder.add_sender_reverse(
-            alice_to_dave_amount,
-            leg_enc_3.clone(),
-            leg_enc_rand_3.clone(),
-        );
-        alice_builder.add_receiver_reverse(leg_enc_4.clone(), leg_enc_rand_4.clone());
+        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
+        alice_builder.add_receive_affirmation(leg_enc_2.clone());
+        alice_builder.add_sender_reverse(alice_to_dave_amount, leg_enc_3.clone());
+        alice_builder.add_receiver_reverse(leg_enc_4.clone());
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -1884,13 +1456,12 @@ mod tests {
 
         let start = Instant::now();
         alice_verifier
-            .verify_new::<_, PallasParams, VestaParams>(
+            .verify::<_, PallasParams, VestaParams>(
                 &mut rng,
                 &alice_proof,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -1909,15 +1480,13 @@ mod tests {
 
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice, Bob, Carol, and auditor
-        let (
-            ((sk_alice, pk_alice), (_, pk_alice_e)),
-            ((_, pk_bob), (_, pk_bob_e)),
-            ((_, pk_carol), (_, pk_carol_e)),
-        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1927,32 +1496,39 @@ mod tests {
 
         // Create legs
         let leg_1 = Leg::new(
-            pk_alice.0,
-            pk_bob.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_bob_e.0,
             alice_to_bob_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_1, leg_enc_rand_1) = leg_1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_1, _) = leg_1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_2 = Leg::new(
-            pk_carol.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_carol_e.0,
+            pk_alice_e.0,
             carol_to_alice_amount,
             asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_2, leg_enc_rand_2) = leg_2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_carol_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) = new_account(&mut rng, asset_id, sk_alice, alice_id);
+        let (mut alice_account, _, _) =
+            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1985,26 +1561,17 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_irreversible_send(
-            alice_to_bob_amount,
-            leg_enc_1.clone(),
-            leg_enc_rand_1.clone(),
-        );
-        alice_builder.add_irreversible_receive(
-            carol_to_alice_amount,
-            leg_enc_2.clone(),
-            leg_enc_rand_2.clone(),
-        );
+        alice_builder.add_irreversible_send(alice_to_bob_amount, leg_enc_1.clone());
+        alice_builder.add_irreversible_receive(carol_to_alice_amount, leg_enc_2.clone());
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
             )
             .unwrap();
@@ -2018,13 +1585,12 @@ mod tests {
 
         let start = Instant::now();
         alice_verifier
-            .verify_new::<_, PallasParams, VestaParams>(
+            .verify::<_, PallasParams, VestaParams>(
                 &mut rng,
                 &alice_proof,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 None,
             )
@@ -2039,16 +1605,16 @@ mod tests {
 
     #[test]
     fn test_combined_multi_asset_proofs() {
-        use ark_serialize::CanonicalSerialize;
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 14;
         const L: usize = 64;
-        let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
-            setup_gens_new::<NUM_GENS>(b"test");
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice and Bob
-        let (((sk_alice, pk_alice), (_, pk_alice_e)), ((_, pk_bob), (_, pk_bob_e)), _) =
+        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), _) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
@@ -2062,62 +1628,79 @@ mod tests {
 
         // Create legs for asset 1
         let leg_1_asset1 = Leg::new(
-            pk_alice.0,
-            pk_bob.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_bob_e.0,
             amount_1,
             asset_id_1,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_1_asset1, leg_enc_rand_1_asset1) = leg_1_asset1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_1_asset1, _) = leg_1_asset1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_2_asset1 = Leg::new(
-            pk_bob.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_bob_e.0,
+            pk_alice_e.0,
             amount_2,
             asset_id_1,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_2_asset1, leg_enc_rand_2_asset1) = leg_2_asset1
-            .encrypt::<_, Blake2b512>(&mut rng, pk_bob_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_2_asset1, _) = leg_2_asset1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         // Create legs for asset 2
         let leg_1_asset2 = Leg::new(
-            pk_alice.0,
-            pk_bob.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_alice_e.0,
+            pk_bob_e.0,
             amount_3,
             asset_id_2,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_1_asset2, leg_enc_rand_1_asset2) = leg_1_asset2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_alice_e.0, pk_bob_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_1_asset2, _) = leg_1_asset2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         let leg_2_asset2 = Leg::new(
-            pk_bob.0,
-            pk_alice.0,
-            vec![(true, pk_auditor_e.0)],
+            pk_bob_e.0,
+            pk_alice_e.0,
             amount_4,
             asset_id_2,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
         )
         .unwrap();
-        let (leg_enc_2_asset2, leg_enc_rand_2_asset2) = leg_2_asset2
-            .encrypt::<_, Blake2b512>(&mut rng, pk_bob_e.0, pk_alice_e.0, enc_key_gen, enc_gen)
+        let (leg_enc_2_asset2, _) = leg_2_asset2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
         // Create Alice's accounts for both assets
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account_asset1, _, _) =
-            new_account(&mut rng, asset_id_1, sk_alice.clone(), alice_id);
+        let (mut alice_account_asset1, _, _) = new_account(
+            &mut rng,
+            asset_id_1,
+            sk_alice.clone(),
+            sk_alice_e.clone(),
+            alice_id,
+        );
         alice_account_asset1.balance = 1000;
 
         let (mut alice_account_asset2, _, _) =
-            new_account(&mut rng, asset_id_2, sk_alice, alice_id);
+            new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id);
         alice_account_asset2.balance = 2000;
 
         // Commit both Alice accounts and create a single account tree with both
@@ -2179,13 +1762,8 @@ mod tests {
                 alice_updated_comm_asset1,
                 nonce_alice_1,
             );
-        alice_builder_asset1.add_send_affirmation(
-            amount_1,
-            leg_enc_1_asset1.clone(),
-            leg_enc_rand_1_asset1.clone(),
-        );
-        alice_builder_asset1
-            .add_receive_affirmation(leg_enc_2_asset1.clone(), leg_enc_rand_2_asset1.clone());
+        alice_builder_asset1.add_send_affirmation(amount_1, leg_enc_1_asset1.clone());
+        alice_builder_asset1.add_receive_affirmation(leg_enc_2_asset1.clone());
 
         let mut alice_builder_asset2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -2194,24 +1772,18 @@ mod tests {
                 alice_updated_comm_asset2,
                 nonce_alice_2,
             );
-        alice_builder_asset2.add_send_affirmation(
-            amount_3,
-            leg_enc_1_asset2.clone(),
-            leg_enc_rand_1_asset2.clone(),
-        );
-        alice_builder_asset2
-            .add_receive_affirmation(leg_enc_2_asset2.clone(), leg_enc_rand_2_asset2.clone());
+        alice_builder_asset2.add_send_affirmation(amount_3, leg_enc_1_asset2.clone());
+        alice_builder_asset2.add_receive_affirmation(leg_enc_2_asset2.clone());
 
         let start = Instant::now();
 
         let (alice_proof_asset1, alice_nullifier_1) = alice_builder_asset1
-            .finalize_with_given_prover_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_path_asset1.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -2219,13 +1791,12 @@ mod tests {
             .unwrap();
 
         let (alice_proof_asset2, alice_nullifier_2) = alice_builder_asset2
-            .finalize_with_given_prover_new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
                 &mut rng,
                 alice_path_asset2.clone(),
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 &mut even_prover,
                 &mut odd_prover,
@@ -2260,12 +1831,11 @@ mod tests {
         alice_verifier_1.add_receive_affirmation(leg_enc_2_asset1.clone());
 
         alice_verifier_1
-            .enforce_constraints_and_verify_only_sigma_protocols_new::<PallasParams, VestaParams>(
+            .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
                 &alice_proof_asset1,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 &mut even_verifier,
                 &mut odd_verifier,
@@ -2282,12 +1852,11 @@ mod tests {
         alice_verifier_2.add_receive_affirmation(leg_enc_2_asset2.clone());
 
         alice_verifier_2
-            .enforce_constraints_and_verify_only_sigma_protocols_new::<PallasParams, VestaParams>(
+            .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
                 &alice_proof_asset2,
                 &account_tree_root,
                 &account_tree_params,
                 account_comm_key.clone(),
-                enc_key_gen,
                 enc_gen,
                 &mut even_verifier,
                 &mut odd_verifier,
@@ -2319,6 +1888,257 @@ mod tests {
         println!(
             "Proving time = {:?}, verification time = {:?}, total size = {} bytes",
             proving_time, verification_time, total_proof_size
+        );
+    }
+
+    #[test]
+    fn test_five_legs_mixed_revealed_asset_ids() {
+        // Affirmation proof over 5 legs, in some prover is sender, in some it is receiver. Some of the legs reveal asset-id, some dont
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let ((_, (_, pk_dave_e)), (_, (_, pk_eve_e)), (_, (_, pk_frank_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1u32;
+        let alice_to_bob_amount = 100u64;
+        let alice_to_carol_amount = 150u64;
+        let dave_to_alice_amount = 200u64;
+        let eve_to_alice_amount = 250u64;
+        let frank_to_alice_amount = 300u64;
+
+        // Asset-id is revealed, Alice is sender
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Asset-id is hidden, Alice is sender
+        let leg_2 = Leg::new(
+            pk_alice_e.0,
+            pk_carol_e.0,
+            alice_to_carol_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Asset-id is revealed, Alice is receiver
+        let leg_3 = Leg::new(
+            pk_dave_e.0,
+            pk_alice_e.0,
+            dave_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_3, _) = leg_3
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Asset-id is hidden, Alice is receiver
+        let leg_4 = Leg::new(
+            pk_eve_e.0,
+            pk_alice_e.0,
+            eve_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_4, _) = leg_4
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Asset-id is hidden, Alice is receiver
+        let leg_5 = Leg::new(
+            pk_frank_e.0,
+            pk_alice_e.0,
+            frank_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_5, _) = leg_5
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _) =
+            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &alice_account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let account_tree_root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let mut builder = AccountStateBuilder::init(alice_account.clone());
+        builder.update_for_send(alice_to_bob_amount).unwrap();
+        builder.update_for_send(alice_to_carol_amount).unwrap();
+        builder.update_for_receive();
+        builder.update_for_receive();
+        builder.update_for_receive();
+        let alice_updated = builder.finalize();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let mut alice_builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                alice_account.clone(),
+                alice_updated.clone(),
+                alice_updated_comm,
+                nonce,
+            );
+        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
+        alice_builder.add_send_affirmation(alice_to_carol_amount, leg_enc_2.clone());
+        alice_builder.add_receive_affirmation(leg_enc_3.clone());
+        alice_builder.add_receive_affirmation(leg_enc_4.clone());
+        alice_builder.add_receive_affirmation(leg_enc_5.clone());
+
+        let start = Instant::now();
+        let (alice_proof, alice_nullifier) = alice_builder
+            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+        let proving_time = start.elapsed();
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_send_affirmation(leg_enc_1.clone());
+        alice_verifier.add_send_affirmation(leg_enc_2.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_3.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_4.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_5.clone());
+
+        let start = Instant::now();
+        alice_verifier
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                &alice_proof,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                None,
+            )
+            .unwrap();
+        let verification_time = start.elapsed();
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_send_affirmation(leg_enc_1.clone());
+        alice_verifier.add_send_affirmation(leg_enc_2.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_3.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_4.clone());
+        alice_verifier.add_receive_affirmation(leg_enc_5.clone());
+
+        let start = Instant::now();
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        alice_verifier
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                &alice_proof,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        let verification_time_rmc = start.elapsed();
+
+        let proof_size = alice_proof.compressed_size();
+        println!(
+            "5 legs (2 send [1 revealed, 1 hidden], 3 receive [1 revealed, 2 hidden]): Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+            proving_time, verification_time, verification_time_rmc, proof_size
         );
     }
 }

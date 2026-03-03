@@ -54,6 +54,9 @@ pub const TXN_EVEN_LABEL: &'static [u8; 14] = b"txn-even-level";
 pub const TXN_CHALLENGE_LABEL: &'static [u8; 13] = b"txn-challenge";
 pub const BALANCE_LABEL: &'static [u8; 7] = b"balance";
 
+#[macro_use]
+mod macros;
+
 pub mod keys;
 pub mod util;
 
@@ -64,6 +67,7 @@ pub mod poseidon_impls;
 
 pub mod discrete_log;
 pub mod fee_account;
+pub mod key_distribution;
 pub mod leg;
 
 pub use error::Error;

@@ -2,6 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use polymesh_dart::*;
+use polymesh_dart_bp::leg::LegEncConfig;
 
 fn decrypt_benchmark(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
@@ -19,7 +20,16 @@ fn decrypt_benchmark(c: &mut Criterion) {
         let leg =
             Leg::new(sender.acct, receiver.acct, asset_id, amount).expect("Failed to create leg");
         let (_leg, leg_enc, _leg_enc_rand) = leg
-            .encrypt(&mut rng, sender.enc, receiver.enc, &[])
+            .encrypt(
+                &mut rng,
+                LegEncConfig::default(),
+                sender.enc,
+                receiver.enc,
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            )
             .expect("Failed to encrypt leg");
 
         group.bench_with_input(
@@ -78,7 +88,16 @@ fn decrypt_benchmark(c: &mut Criterion) {
         let leg =
             Leg::new(sender.acct, receiver.acct, asset_id, amount).expect("Failed to create leg");
         let (_leg, leg_enc, _leg_enc_rand) = leg
-            .encrypt(&mut rng, sender.enc, receiver.enc, &[])
+            .encrypt(
+                &mut rng,
+                LegEncConfig::default(),
+                sender.enc,
+                receiver.enc,
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            )
             .expect("Failed to encrypt leg");
 
         Some((amount, leg_enc, format!("{:>19}", s_amount)))

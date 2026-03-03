@@ -244,18 +244,10 @@ impl AccountKeyPair {
         randomness
     }
 
-    /// Initializes a new asset state for the account.
-    pub fn init_asset_state(
-        &self,
-        asset_id: AssetId,
-        counter: NullifierSkGenCounter,
-        identity: &[u8],
-    ) -> Result<AccountAssetState, Error> {
-        AccountAssetState::new(&self, asset_id, counter, identity)
-    }
-
+    /// Creates an account state for the given asset, counter, and identity.
     pub fn account_state(
         &self,
+        enc_key: &EncryptionSecretKey,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
@@ -266,6 +258,7 @@ impl AccountKeyPair {
         let state = BPAccountState::new_given_randomness(
             id,
             self.secret.0.0,
+            enc_key.0.0,
             asset_id,
             counter,
             randomness,
@@ -362,7 +355,17 @@ impl AccountKeys {
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<AccountAssetState, Error> {
-        self.acct.init_asset_state(asset_id, counter, identity)
+        AccountAssetState::new(self, asset_id, counter, identity)
+    }
+
+    /// Creates an account state for the given asset, counter, and identity.
+    pub fn account_state(
+        &self,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+    ) -> Result<AccountState, Error> {
+        self.acct.account_state(&self.enc.secret, asset_id, counter, identity)
     }
 
     /// Returns the public keys for the account.

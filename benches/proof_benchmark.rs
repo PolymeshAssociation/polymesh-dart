@@ -27,7 +27,7 @@ fn proof_benchmark(c: &mut Criterion) {
     let ctx = b"benchmark";
 
     let asset_id = 0 as _;
-    let asset_state = AssetState::new(asset_id, &[mediator_acct.enc], &[]);
+    let asset_state = AssetState::new(asset_id, &[(0u8, mediator_acct.acct)], &[]);
 
     // Create the asset.
     asset_tree
@@ -40,7 +40,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let (_proof, mut _account_state) = AccountAssetRegistrationProof::new(
                 &mut rng,
-                black_box(&issuer_keys.acct),
+                black_box(&issuer_keys),
                 asset_id,
                 0,
                 ctx,
@@ -53,7 +53,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let (proof, mut account_state) = AccountAssetRegistrationProof::new(
         &mut rng,
-        black_box(&issuer_keys.acct),
+        black_box(&issuer_keys),
         asset_id,
         0,
         ctx,
@@ -64,7 +64,7 @@ fn proof_benchmark(c: &mut Criterion) {
         .commit_pending_state()
         .expect("Failed to commit pending state");
     let current_commitment = account_state
-        .current_commitment(&issuer_keys.acct)
+        .current_commitment(&issuer_keys)
         .expect("Failed to get current commitment");
     let leaf = current_commitment
         .as_leaf_value()
@@ -86,7 +86,7 @@ fn proof_benchmark(c: &mut Criterion) {
     for num_proofs in [1u32, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 100] {
         let mut account_assets = Vec::with_capacity(NUM_PROOFS);
         for idx in 0..num_proofs {
-            account_assets.push((issuer_keys.acct.clone(), idx as AssetId, 0));
+            account_assets.push((issuer_keys.clone(), idx as AssetId, 0));
         }
         let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
             &mut rng,
@@ -120,7 +120,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Register the investor's account state.
     let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::new(
         &mut rng,
-        &investor_keys.acct,
+        &investor_keys,
         asset_id,
         0,
         ctx,
@@ -131,7 +131,7 @@ fn proof_benchmark(c: &mut Criterion) {
         .commit_pending_state()
         .expect("Failed to commit pending state");
     let current_commitment = investor_account_state
-        .current_commitment(&investor_keys.acct)
+        .current_commitment(&investor_keys)
         .expect("Failed to get current commitment");
     let leaf = current_commitment
         .as_leaf_value()
@@ -152,7 +152,7 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof = AssetMintingProof::new(
                 &mut rng,
-                &issuer_keys.acct,
+                &issuer_keys,
                 &mut account_state,
                 &account_tree,
                 mint_amount,
@@ -164,7 +164,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof = AssetMintingProof::new(
         &mut rng,
-        &issuer_keys.acct,
+        &issuer_keys,
         &mut account_state,
         &account_tree,
         mint_amount,
@@ -205,6 +205,9 @@ fn proof_benchmark(c: &mut Criterion) {
                     receiver: investor1_acct,
                     asset: asset_state.clone(),
                     amount: leg_amount,
+                    config: LegConfig::default(),
+                    public_enc_keys: vec![],
+                    public_med_keys: vec![],
                 }))
                 .encrypt_and_prove(&mut rng, &asset_tree.tree)
                 .expect("Failed to create settlement");
@@ -218,6 +221,9 @@ fn proof_benchmark(c: &mut Criterion) {
             receiver: investor1_acct,
             asset: asset_state.clone(),
             amount: leg_amount,
+            config: LegConfig::default(),
+            public_enc_keys: vec![],
+            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, &asset_tree.tree)
         .expect("Failed to create settlement");
@@ -227,15 +233,16 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("SettlementProof verify", |b| {
         b.iter(|| {
             settlement
-                .verify(black_box(&asset_root), &mut rng)
+                .verify(
+                    black_box(&asset_root),
+                    &|_id| Ok(asset_state.clone()),
+                    &mut rng,
+                )
                 .expect("Failed to verify settlement proof");
         })
     });
 
-    let leg_enc = settlement.legs[0].leg_enc.clone();
-    let leg_enc_rand = leg_enc
-        .get_encryption_randomness(LegRole::sender(), &issuer_keys.enc)
-        .expect("Failed to decrypt sender's secret key");
+    let leg_enc = settlement.legs[0].leg_enc().clone();
     let leg_ref = LegRef::new(settlement_ref, 0 as _);
 
     // Benchmark: Generate of sender affirmation proof.
@@ -243,11 +250,10 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: SenderAffirmationProof = SenderAffirmationProof::new(
                 &mut rng,
-                &issuer_keys.acct,
+                &issuer_keys,
                 &leg_ref,
                 leg_amount,
                 &leg_enc,
-                &leg_enc_rand,
                 &mut account_state,
                 &account_tree,
             )
@@ -258,11 +264,10 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: SenderAffirmationProof = SenderAffirmationProof::new(
         &mut rng,
-        &issuer_keys.acct,
+        &issuer_keys,
         &leg_ref,
         leg_amount,
         &leg_enc,
-        &leg_enc_rand,
         &mut account_state,
         &account_tree,
     )
@@ -287,11 +292,10 @@ fn proof_benchmark(c: &mut Criterion) {
             let mut account_state = account_state.clone();
             SenderAffirmationProof::new(
                 &mut rng,
-                &issuer_keys.acct,
+                &issuer_keys,
                 &leg_ref,
                 leg_amount,
                 &leg_enc,
-                &leg_enc_rand,
                 &mut account_state,
                 &account_tree,
             )
@@ -306,11 +310,10 @@ fn proof_benchmark(c: &mut Criterion) {
             proofs.push(
                 SenderAffirmationProof::new(
                     &mut rng,
-                    &issuer_keys.acct,
+                    &issuer_keys,
                     &leg_ref,
                     leg_amount,
                     &leg_enc,
-                    &leg_enc_rand,
                     &mut account_state,
                     &account_tree,
                 )
@@ -371,10 +374,9 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
                 &mut rng,
-                &investor_keys.acct,
+                &investor_keys,
                 &leg_ref,
                 &leg_enc,
-                &leg_enc_rand,
                 &mut investor_account_state,
                 &account_tree,
             )
@@ -385,10 +387,9 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: ReceiverAffirmationProof = ReceiverAffirmationProof::new(
         &mut rng,
-        &investor_keys.acct,
+        &investor_keys,
         &leg_ref,
         &leg_enc,
-        &leg_enc_rand,
         &mut investor_account_state,
         &account_tree,
     )
@@ -425,9 +426,8 @@ fn proof_benchmark(c: &mut Criterion) {
             let _proof = MediatorAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
-                asset_id,
                 &leg_enc,
-                &mediator_keys.enc,
+                &mediator_keys,
                 0,
                 true,
             )
@@ -439,9 +439,8 @@ fn proof_benchmark(c: &mut Criterion) {
     let proof = MediatorAffirmationProof::new(
         &mut rng,
         &leg_ref,
-        asset_id,
         &leg_enc,
-        &mediator_keys.enc,
+        &mediator_keys,
         0,
         true,
     )
@@ -461,11 +460,10 @@ fn proof_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let _proof: ReceiverClaimProof = ReceiverClaimProof::new(
                 &mut rng,
-                &investor_keys.acct,
+                &investor_keys,
                 &leg_ref,
                 leg_amount,
                 &leg_enc,
-                &leg_enc_rand,
                 &mut investor_account_state,
                 &account_tree,
             )
@@ -476,11 +474,10 @@ fn proof_benchmark(c: &mut Criterion) {
     // Generate a proof to benchmark verification.
     let proof: ReceiverClaimProof = ReceiverClaimProof::new(
         &mut rng,
-        &investor_keys.acct,
+        &investor_keys,
         &leg_ref,
         leg_amount,
         &leg_enc,
-        &leg_enc_rand,
         &mut investor_account_state,
         &account_tree,
     )
