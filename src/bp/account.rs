@@ -3,7 +3,7 @@ use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use codec::{Decode, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
@@ -33,7 +33,7 @@ pub trait AccountStateUpdate {
     fn root_block(&self) -> BlockNumber;
 }
 
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct AccountState {
@@ -100,6 +100,7 @@ impl TryFrom<BPAccountState> for AccountState {
     MaxEncodedLen,
     Encode,
     Decode,
+    DecodeWithMemTracking,
     TypeInfo,
     Debug,
     PartialEq,
@@ -121,7 +122,18 @@ impl AccountStateNullifier {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
+#[derive(
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountStateCommitment(CompressedAffine);
@@ -190,7 +202,7 @@ impl AccountAssetStateChange {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountAssetState {
     pub current_state: AccountState,
@@ -337,7 +349,7 @@ impl AccountAssetState {
 /// Batched account asset registration proof.
 ///
 /// This is used to register multiple account/asset pairs in a single proof.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedAccountAssetRegistrationProof<T: DartLimits = ()> {
     pub proofs: BoundedVec<AccountAssetRegistrationProof, T::MaxAccountAssetRegProofs>,
@@ -513,7 +525,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,

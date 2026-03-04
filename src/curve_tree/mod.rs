@@ -20,7 +20,7 @@ use ark_ec_divisors::curves::{
     pallas::{PallasParams, Point as PallasPoint},
     vesta::{Point as VestaPoint, VestaParams},
 };
-use codec::{Decode, Encode};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use curve_tree_relations::parameters::{
     SelRerandProofParametersNew, SingleLayerParameters, SingleLayerProofParametersNew,
 };
@@ -210,6 +210,7 @@ pub trait CurveTreeConfig:
     + core::fmt::Debug
     + Encode
     + Decode
+    + DecodeWithMemTracking
     + TypeInfo
     + Send
     + Sync
@@ -250,7 +251,7 @@ pub trait CurveTreeConfig:
 // NOTE: Currently build_parameters uses unsafe but its also called from unsafe code except in tests or
 // the in-memory backend so nowhere serious. This approach will soon be phased out anyway.
 
-#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct AssetTreeConfig;
 impl CurveTreeConfig for AssetTreeConfig {
     const L: usize = ASSET_TREE_L;
@@ -285,7 +286,7 @@ impl CurveTreeConfig for AssetTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct AccountTreeConfig;
 impl CurveTreeConfig for AccountTreeConfig {
     const L: usize = ACCOUNT_TREE_L;
@@ -320,7 +321,7 @@ impl CurveTreeConfig for AccountTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct FeeAccountTreeConfig;
 impl CurveTreeConfig for FeeAccountTreeConfig {
     const L: usize = FEE_ACCOUNT_TREE_L;
@@ -355,7 +356,7 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct WrappedCurveTreeParameters(Vec<u8>);
 
 impl WrappedCurveTreeParameters {
@@ -691,7 +692,7 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
     }
 }
 
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct CompressedCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub commitments: [CompressedAffine; M],

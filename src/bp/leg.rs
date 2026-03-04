@@ -4,7 +4,7 @@ use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use codec::{Decode, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
@@ -37,7 +37,7 @@ pub mod instant;
 pub use instant::*;
 
 /// Counts of the legs and sender/receiver affirmations in a settlement (batched or instant).
-#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct SettlementCounts {
     pub leg_count: u32,
     pub sender_count: u64,
@@ -53,7 +53,18 @@ impl SettlementCounts {
 
 /// The settlement reference is the hash of the settlement creation proof.
 #[derive(
-    Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -79,7 +90,18 @@ impl core::str::FromStr for SettlementRef {
 }
 
 #[derive(
-    Copy, Clone, Debug, Default, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash,
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -118,7 +140,19 @@ impl LegRef {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LegRoleKind {
@@ -138,7 +172,19 @@ impl LegRoleKind {
     }
 }
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LegRole {
@@ -185,7 +231,19 @@ impl LegRole {
 }
 
 /// The decrypted leg details in the Dart BP protocol.
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
@@ -271,7 +329,7 @@ impl Leg {
 ///
 /// The leg builder holds the necessary information to create a leg, encrypt it, and generate the proof.
 /// It is used as part of the settlement building process.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking)]
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
     pub receiver: AccountPublicKeys,
@@ -334,7 +392,7 @@ impl LegBuilder {
     }
 }
 
-#[derive(Clone, Encode, Decode)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking)]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
@@ -446,7 +504,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T, C))]
 pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
@@ -645,7 +703,7 @@ type BPSettlementTxnProof<C> = bp_leg::proofs::LegCreationProof<
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
@@ -775,7 +833,7 @@ impl<
 pub type WrappedLegEncryptionRandomness =
     WrappedCanonical<bp_leg::LegEncryptionRandomness<PallasScalar>>;
 
-#[derive(Clone, Encode, Decode)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -795,7 +853,7 @@ impl LegEncryptionRandomness {
 pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>;
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]

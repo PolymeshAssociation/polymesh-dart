@@ -1,5 +1,6 @@
 use codec::{
-    Decode, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input, MaxEncodedLen, Output,
+    Decode, DecodeWithMemTracking, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input,
+    MaxEncodedLen, Output,
 };
 use scale_info::{Path, Type, TypeInfo, build::Fields};
 
@@ -84,6 +85,8 @@ macro_rules! impl_scale_and_type_info {
                 dest.write(&buf[..]);
             }
         }
+
+        impl $(< $( $impl_generics )* >)? codec::DecodeWithMemTracking for $type $(< $( $generics )* >)? {}
 
         impl $(< $( $impl_generics )* >)? Decode for $type $(< $( $generics )* >)? {
             fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
@@ -187,6 +190,7 @@ pub type BaseField = [u8; ARK_EC_BASE_FIELD_SIZE];
     MaxEncodedLen,
     Encode,
     Decode,
+    DecodeWithMemTracking,
     Default,
     TypeInfo,
     PartialEq,
@@ -238,7 +242,18 @@ pub const ARK_EC_POINT_SIZE: usize = 32;
 pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
 
 #[derive(
-    Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash, PartialOrd, Ord,
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -465,6 +480,8 @@ impl<T: CanonicalSerialize> Encode for WrappedCanonical<T> {
         self.wrapped.encode_to(dest);
     }
 }
+
+impl<T: CanonicalDeserialize> codec::DecodeWithMemTracking for WrappedCanonical<T> {}
 
 impl<T: CanonicalDeserialize> Decode for WrappedCanonical<T> {
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {

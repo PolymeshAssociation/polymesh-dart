@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use ark_std::{collections::BTreeMap, vec::Vec};
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 
-use codec::{Decode, Encode};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 
 use super::common::*;
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
     error::*,
 };
 
-#[derive(Clone, Encode, Decode)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking)]
 pub struct MultiLeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     paths: BTreeMap<LeafIndex, WrappedCanonical<CurveTreePath<L, C>>>,
     leaf_lookup: BTreeMap<CompressedAffine, LeafIndex>,

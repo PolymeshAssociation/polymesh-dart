@@ -4,19 +4,31 @@ use ark_std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use bounded_collections::BoundedVec;
-use codec::{Decode, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use crate::curve_tree::CompressedCurveTreeRoot;
 
 use super::*;
 
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ProofHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
 /// A single batched proof (no identity).
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub enum BatchedProof<T: DartLimits = ()> {
     CreateSettlement(SettlementProof<T>),
@@ -32,7 +44,7 @@ pub enum BatchedProof<T: DartLimits = ()> {
 }
 
 /// A batch of DART proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedProofs<T: DartLimits = ()> {
     pub proofs: BoundedVec<BatchedProof<T>, T::MaxBatchedProofs>,

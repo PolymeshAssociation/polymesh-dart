@@ -1,4 +1,4 @@
-use codec::{Decode, Encode};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info::TypeInfo;
 
 use rand_core::{CryptoRng, RngCore};
@@ -16,7 +16,7 @@ use polymesh_dart_common::{LegId, MediatorId};
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConfig> {
     /// The sender's affirmation proof.
     pub sender: Option<SenderAffirmationProof<C>>,
@@ -27,7 +27,7 @@ pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConf
 /// A batched settlement proof allows including the sender and receiver affirmation proofs
 /// with the settlement creation proof to reduce the number of transactions
 /// required to finalize a settlement.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedSettlementProof<
     T: DartLimits = (),
@@ -112,7 +112,7 @@ type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
 >;
 
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -256,7 +256,7 @@ type BPAffirmAsReceiverTxnProof<C> = bp_account::AffirmAsReceiverTxnProof<
 >;
 
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -388,7 +388,7 @@ type BPClaimReceivedTxnProof<C> = bp_account::ClaimReceivedTxnProof<
 >;
 
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -522,7 +522,7 @@ type BPSenderCounterUpdateTxnProof<C> = bp_account::SenderCounterUpdateTxnProof<
 >;
 
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -654,7 +654,7 @@ type BPSenderReverseTxnProof<C> = bp_account::SenderReverseTxnProof<
 >;
 
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
@@ -780,7 +780,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
 }
 
 /// Mediator affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,

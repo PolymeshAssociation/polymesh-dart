@@ -62,7 +62,7 @@ serde_json = { version = "1.0", default-features = false }
 serde_arrays = { version = "0.2", default-features = false }
 
 # Substrate/SCALE deps.
-bounded-collections = { version = "0.1.4", default-features = false }
+bounded-collections = { version = "0.3.2", default-features = false }
 codec = { package = "parity-scale-codec", version = "3.2.2", default-features = false }
 scale-info = { version = "2.0", default-features = false }
 
@@ -118,7 +118,7 @@ scale-info = { workspace = true, default-features = false, features = [
     "derive",
 ] }
 bounded-collections = { workspace = true, default-features = false }
-sp-io = { version = "44.0.0", default-features = false, optional = true }
+sp-io = { git = "https://github.com/PolymeshAssociation/polkadot-sdk", branch = "polymesh-v8-stable2512", default-features = false, optional = true }
 
 # serde support
 serde = { workspace = true, default-features = false, features = [

@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use codec::{Decode, Encode};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
@@ -16,7 +16,7 @@ use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as Vest
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
 /// Represents the state of an asset in the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetState<T: DartLimits = ()> {
     pub asset_id: AssetId,
@@ -104,7 +104,7 @@ type BPMintTxnProof<C> = MintTxnProof<
 >;
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.

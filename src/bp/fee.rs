@@ -9,7 +9,7 @@ use bulletproofs::r1cs::VerificationTuple;
 use curve_tree_relations::curve_tree::Root;
 
 use bounded_collections::BoundedVec;
-use codec::{Decode, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use rand_core::{CryptoRng, RngCore, SeedableRng as _};
@@ -35,7 +35,7 @@ pub trait FeeAccountStateUpdate {
     fn root_block(&self) -> BlockNumber;
 }
 
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct FeeAccountState {
@@ -103,6 +103,7 @@ impl TryFrom<BPFeeAccountState> for FeeAccountState {
     MaxEncodedLen,
     Encode,
     Decode,
+    DecodeWithMemTracking,
     TypeInfo,
     Debug,
     PartialEq,
@@ -124,7 +125,18 @@ impl FeeAccountStateNullifier {
     }
 }
 
-#[derive(Copy, Clone, MaxEncodedLen, Encode, Decode, TypeInfo, Debug, PartialEq, Eq)]
+#[derive(
+    Copy,
+    Clone,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct FeeAccountStateCommitment(CompressedAffine);
@@ -195,7 +207,7 @@ impl FeeAccountAssetStateChange {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FeeAccountAssetState {
     pub current_state: FeeAccountState,
@@ -288,7 +300,7 @@ impl FeeAccountAssetState {
 }
 
 /// Fee account registration proof to initialize an account for an fee payment asset.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct FeeAccountRegistrationProof {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
@@ -348,7 +360,7 @@ impl FeeAccountRegistrationProof {
 }
 
 /// A batch of Fee account registration proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedFeeAccountRegistrationProof<T: DartLimits = ()> {
     pub proofs: BoundedVec<FeeAccountRegistrationProof, T::MaxFeeAccountRegProofs>,
@@ -462,7 +474,7 @@ type BPFeeAccountTopupTxnProof<C> = bp_fee_account::FeeAccountTopupTxnProof<
 >;
 
 /// Fee payment account topup proof.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub account: AccountPublicKey,
@@ -590,7 +602,7 @@ impl<
 }
 
 /// A batch of Fee account topup proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T, C))]
 pub struct BatchedFeeAccountTopupProof<
     T: DartLimits = (),
@@ -854,7 +866,7 @@ type BPFeePaymentProof<C> = bp_fee_account::FeePaymentProof<
 >;
 
 /// Fee payment proof.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub asset_id: AssetId,
@@ -957,7 +969,7 @@ impl<
 }
 
 /// Fee payment + batch of proofs.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T, C))]
 pub struct FeePaymentWithBatchedProofs<
     T: DartLimits = (),

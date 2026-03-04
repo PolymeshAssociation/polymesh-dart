@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use codec::{Decode, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -31,6 +31,7 @@ pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
     MaxEncodedLen,
     Encode,
     Decode,
+    DecodeWithMemTracking,
     Default,
     TypeInfo,
     Debug,
@@ -107,7 +108,9 @@ impl EncryptionSecretKey {
 }
 
 /// The encryption key pair, consisting of the public and secret keys.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(
+    Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Zeroize, ZeroizeOnDrop,
+)]
 pub struct EncryptionKeyPair {
     #[zeroize(skip)]
     pub public: EncryptionPublicKey,
@@ -132,6 +135,7 @@ impl EncryptionKeyPair {
     MaxEncodedLen,
     Encode,
     Decode,
+    DecodeWithMemTracking,
     Default,
     TypeInfo,
     Debug,
@@ -201,7 +205,9 @@ impl AccountPublicKey {
 pub struct AccountSecretKey(pub(crate) bp_keys::SigKey<PallasA>);
 
 /// The account key pair, consisting of the public and secret keys.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(
+    Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Zeroize, ZeroizeOnDrop,
+)]
 pub struct AccountKeyPair {
     #[zeroize(skip)]
     pub public: AccountPublicKey,
@@ -270,7 +276,19 @@ impl AccountKeyPair {
 }
 
 /// The pair of public keys for an account: the encryption public key and the account public key.
-#[derive(Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, TypeInfo, PartialEq, Eq, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    MaxEncodedLen,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    PartialEq,
+    Eq,
+    Hash,
+)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
@@ -314,7 +332,9 @@ impl MasterSeed {
 }
 
 /// The pair of key pairs for an account: the encryption key pair and the account key pair.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(
+    Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Zeroize, ZeroizeOnDrop,
+)]
 pub struct AccountKeys {
     pub enc: EncryptionKeyPair,
     pub acct: AccountKeyPair,
@@ -357,7 +377,7 @@ impl AccountKeys {
 /// DART account registration proof.
 ///
 /// This is used to prove knowledge of the secret keys (account and encryption keys) for 1 or more DART accounts.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
@@ -427,7 +447,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 }
 
 /// Encryption key registration proof for auditors and mediators.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,

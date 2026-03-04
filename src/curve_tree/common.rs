@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
-use codec::{Decode, Encode};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use curve_tree_relations::single_level_select_and_rerandomize::*;
 use scale_info::TypeInfo;
 
@@ -11,7 +11,20 @@ use super::*;
 use crate::error::*;
 
 /// Node position.
-#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 pub struct NodePosition {
     /// Level of the node in the tree.
     #[codec(compact)]
@@ -73,7 +86,20 @@ impl NodePosition {
 }
 
 /// Location of a node in the tree.
-#[derive(Copy, Clone, Encode, Decode, TypeInfo, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Copy,
+    Clone,
+    Encode,
+    Decode,
+    DecodeWithMemTracking,
+    TypeInfo,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 pub enum NodeLocation<const L: usize> {
     Leaf(#[codec(compact)] LeafIndex), // Leaf nodes are identified by their index
     Odd(NodePosition),
@@ -280,7 +306,7 @@ pub fn update_inner_node<
     Ok(new_x_coords)
 }
 
-#[derive(Copy, Clone, Encode, Decode)]
+#[derive(Copy, Clone, Encode, Decode, DecodeWithMemTracking)]
 pub enum CompressedChildCommitments<const M: usize> {
     Leaf(CompressedAffine),
     Inner([CompressedAffine; M]),
@@ -326,7 +352,7 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
     }
 }
 
-#[derive(Clone, Encode, Decode, TypeInfo, Debug)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug)]
 pub struct CompressedXCoords<const M: usize> {
     pub x_coords: [CompressedBaseField; M],
 }
@@ -365,7 +391,7 @@ impl<const M: usize> CompressedXCoords<M> {
     }
 }
 
-#[derive(Clone, Encode, Decode, TypeInfo, Debug)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug)]
 #[scale_info(skip_type_params(C))]
 pub struct CompressedInner<const M: usize, C: CurveTreeConfig> {
     pub is_even: bool,
@@ -1278,7 +1304,7 @@ macro_rules! impl_curve_tree_with_backend {
     };
 }
 
-#[derive(Clone, Copy, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Copy, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CompressedLeafValue<C: CurveTreeConfig> {
