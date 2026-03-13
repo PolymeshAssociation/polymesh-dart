@@ -300,6 +300,8 @@ impl<G> AccountState<G>
 where
     G: AffineRepr,
 {
+    /// `sk_aff` is the affirmation secret key
+    /// `sk_enc` is the encryption secret key
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         id: G::ScalarField, // User can hash its string ID onto the field

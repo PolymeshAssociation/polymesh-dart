@@ -73,6 +73,7 @@ pub struct EncryptedRandomness<
 /// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+    /// `pk_enc_inv = enc_key_gen * sk_enc^{-1}`
     pub pk_enc_inv: G,
     pub resp_acc_comm: PokPedersenCommitment<G>,
     pub resp_initial_nullifier: PokDiscreteLog<G>,
@@ -80,11 +81,11 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
     pub comm_rho_bp: G,
     pub t_comm_rho_bp: G,
     pub resp_comm_rho_bp: PartialSchnorrResponse<G>,
-    pub resp_pk: PokDiscreteLog<G>,
+    pub resp_pk_aff: PokDiscreteLog<G>,
     pub resp_pk_enc: PokDiscreteLog<G>,
-    /// Proves `enc_key_gen = pk_enc * sk_enc_inv`
+    /// Proves `enc_key_gen = pk_enc * sk_enc^{-1}`
     pub resp_enc_key_gen: PartialPokDiscreteLog<G>,
-    /// Proves `pk_enc_inv = enc_key_gen * sk_enc_inv`
+    /// Proves `pk_enc_inv = enc_key_gen * sk_enc^{-1}`
     pub resp_pk_enc_inv: PokDiscreteLog<G>,
     /// Called `uppercase Omega` in the report
     pub encrypted_randomness: Option<EncryptedRandomness<G, CHUNK_BITS, NUM_CHUNKS>>,
@@ -104,15 +105,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 == NUM_CHUNKS)
     );
 
+    /// `pk_aff` is the affirmation public key
+    /// `pk_enc` is the encryption public key
     /// `T` are the public key `pk_T`, generator used when creating key `pk_T` and the generator used to encrypt randomness chunk.
     /// This is intentionally kept different from the generator for randomness in account commitment to prevent anyone from
     /// learning the next nullifier
     /// The second returned value is the `initial_nullifier` and called `N` in the report.
-    /// The third returned value is `g_sk_enc_inv = enc_key_gen * sk_enc_inv`.
     /// This helps during account freezing to remove `g_i * rho` term from account state commitment.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
+        pk_aff: G,
         pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
@@ -129,7 +131,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
         let (mut proof, initial_nullifier) = Self::new_with_given_prover(
             rng,
-            pk,
+            pk_aff,
             pk_enc,
             account,
             account_commitment,
@@ -151,7 +153,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
     pub fn new_with_given_prover<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
+        pk_aff: G,
         pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
@@ -167,14 +169,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let _ = Self::CHECK_CHUNK_BITS;
         let enc_key_gen = account_comm_key.sk_enc_gen();
         let aff_key_gen = account_comm_key.sk_gen();
-        ensure_correct_registration_state(account, pk, pk_enc, aff_key_gen, enc_key_gen)?;
+        ensure_correct_registration_state(account, pk_aff, pk_enc, aff_key_gen, enc_key_gen)?;
 
         // Need to prove that:
         // 1. rho is generated correctly and current_rho = rho^2
         // 2. balance is 0
         // 3. counter is 0
         // 4. Knowledge of randomness
-        // 5. if T is provided, prove that randomness is encrypted correctly for pk_T and enc_pk_inv
+        // 5. pk_enc = enc_key_gen * sk_enc
+        // 6. pk_enc_inv = enc_key_gen * sk_enc^{-1}
+        // 7. if T is provided, prove that randomness is encrypted correctly for pk_T and enc_pk_inv
 
         let mut transcript_ref = prover.transcript();
         add_to_transcript!(
@@ -186,7 +190,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
-            pk,
+            pk_aff,
             ENC_PK_LABEL,
             pk_enc,
             ID_LABEL,
@@ -195,8 +199,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let initial_nullifier = account.initial_nullifier(&account_comm_key);
 
-        // D = pk + g_k * asset_id + g_l * id
-        let D = pk.into_group()
+        // D = pk_aff + g_k * asset_id + g_l * id
+        let D = pk_aff.into_group()
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
             + (account_comm_key.id_gen() * account.id);
 
@@ -206,7 +210,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut sk_enc_blinding = G::ScalarField::rand(rng);
         let mut sk_enc_inv_blinding = G::ScalarField::rand(rng);
 
-        // Compute pk_enc_inv = enc_key_gen * sk_enc_inv (this will be a public output)
+        // Compute pk_enc_inv = enc_key_gen * sk_enc^{-1} (this will be a public output)
         let pk_enc_inv = (enc_key_gen * account.sk_enc_inv).into_affine();
 
         // For proving Comm - D - initial_nullifier - pk_enc_inv = g_i * rho^2 + g_j * s
@@ -248,7 +252,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         );
         pk_enc_protocol.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
 
-        // Prove pk_enc_inv = enc_key_gen * sk_enc_inv (partial sigma, shares sk_enc_inv_blinding)
+        // Prove pk_enc_inv = enc_key_gen * sk_enc^{-1} (partial sigma, shares sk_enc_inv_blinding)
         let pk_enc_inv_protocol =
             PokDiscreteLogProtocol::init(account.sk_enc_inv, sk_enc_inv_blinding, &enc_key_gen);
         pk_enc_inv_protocol.challenge_contribution(
@@ -257,7 +261,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &mut transcript_ref,
         )?;
 
-        // Prove enc_key_gen = pk_enc * sk_enc_inv (partial sigma, shares sk_enc_inv_blinding)
+        // Prove enc_key_gen = pk_enc * sk_enc^{-1} (partial sigma, shares sk_enc_inv_blinding)
         let enc_key_gen_protocol =
             PokDiscreteLogProtocol::init(account.sk_enc_inv, sk_enc_inv_blinding, &pk_enc);
         enc_key_gen_protocol.challenge_contribution(&pk_enc, &enc_key_gen, &mut transcript_ref)?;
@@ -361,7 +365,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ],
         );
 
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
+        let t_pk_aff = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
 
         sk_blinding.zeroize();
         rho_blinding.zeroize();
@@ -388,7 +392,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut transcript_ref = prover.transcript();
 
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
-        t_pk.challenge_contribution(&aff_key_gen, &pk, &mut transcript_ref)?;
+        t_pk_aff.challenge_contribution(&aff_key_gen, &pk_aff, &mut transcript_ref)?;
 
         // Take challenge contribution of ciphertext of each chunk
         let (t_comm_s_chunks_bp, combined_s_proto) =
@@ -459,7 +463,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // Responses for the rest of witnesses will be generated by sigma protocols for initial nullifier, public key and account commitment
         let resp_comm_rho_bp = t_comm_rho_bp.partial_response(wits, &challenge)?;
 
-        let resp_pk = t_pk.gen_proof(&challenge);
+        let resp_pk_aff = t_pk_aff.gen_proof(&challenge);
 
         let encrypted_randomness =
             if let Some((s_chunks, _, _, ciphertexts, _, eph_proto, enc_proto)) = enc_prep {
@@ -507,7 +511,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 comm_rho_bp,
                 t_comm_rho_bp: t_comm_rho_bp.t,
                 resp_comm_rho_bp,
-                resp_pk,
+                resp_pk_aff,
                 resp_pk_enc,
                 resp_enc_key_gen,
                 resp_pk_enc_inv,
@@ -519,11 +523,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     }
 
     /// Create a new verifier and verify the given proof
+    /// `pk_aff` is the affirmation public key
+    /// `pk_enc` is the encryption public key
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
         id: G::ScalarField,
-        pk: &G,
+        pk_aff: &G,
         pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
@@ -539,7 +545,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     ) -> Result<()> {
         let tuple = self.verify_and_return_tuples(
             id,
-            pk,
+            pk_aff,
             pk_enc,
             asset_id,
             account_commitment,
@@ -568,7 +574,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         id: G::ScalarField,
-        pk: &G,
+        pk_aff: &G,
         pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
@@ -587,7 +593,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut verifier = Verifier::new(verifier_transcript);
         self.verify_sigma_protocols_and_enforce_constraints(
             id,
-            pk,
+            pk_aff,
             pk_enc,
             asset_id,
             account_commitment,
@@ -614,7 +620,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         id: G::ScalarField,
-        pk: &G,
+        pk_aff: &G,
         pk_enc: G,
         asset_id: AssetId,
         account_commitment: &AccountStateCommitment<G>,
@@ -658,7 +664,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
-            pk,
+            pk_aff,
             ENC_PK_LABEL,
             pk_enc,
             ID_LABEL,
@@ -668,11 +674,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // D = pk + g_k * asset_id + g_l * id
-        let D = pk.into_group()
+        let D = pk_aff.into_group()
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
             + (account_comm_key.id_gen() * id);
 
-        // Reduce g_sk_enc_inv from commitment since it's revealed
+        // Reduce pk_enc_inv from commitment since it's revealed
         let reduced_acc_comm = (account_commitment.0.into_group()
             - D
             - initial_nullifier.into_group()
@@ -738,9 +744,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         self.t_comm_rho_bp
             .serialize_compressed(&mut transcript_ref)?;
 
-        self.resp_pk.challenge_contribution(
+        self.resp_pk_aff.challenge_contribution(
             &account_comm_key.sk_gen(),
-            &pk,
+            &pk_aff,
             &mut transcript_ref,
         )?;
 
@@ -819,7 +825,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         );
 
         let mut missing_resps = BTreeMap::new();
-        missing_resps.insert(1, self.resp_pk.response);
+        missing_resps.insert(1, self.resp_pk_aff.response);
         missing_resps.insert(2, self.resp_initial_nullifier.response);
         missing_resps.insert(3, self.resp_acc_comm.response1);
 
@@ -834,9 +840,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         );
         verify_or_rmc_2!(
             rmc,
-            self.resp_pk,
+            self.resp_pk_aff,
             "Public key verification failed",
-            *pk,
+            *pk_aff,
             account_comm_key.sk_gen(),
             &challenge,
         );

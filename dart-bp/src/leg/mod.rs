@@ -193,9 +193,9 @@ impl<
     Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
 )]
 pub struct LegCore<G: AffineRepr> {
-    /// Public key of sender
+    /// Encryption public key of sender
     pub pk_s: G,
-    /// Public key of receiver
+    /// Encryption public key of receiver
     pub pk_r: G,
     pub amount: Balance,
     pub asset_id: AssetId,
@@ -215,7 +215,7 @@ pub struct Leg<G: AffineRepr> {
     /// These keys are whats stored along the asset-id in [`AssetData`] and are hidden from verifier unless explicitly revealed
     /// A leg cannot have zero encryption keys but non-zero mediator affirmation keys.
     pub med_keys: Vec<(u8, G)>,
-    /// Encryption keys for which `LegCore` will be encrypted.
+    /// Encryption keys for which [`LegCore`] will be encrypted.
     /// These keys are not stored along the asset-id in [`AssetData`] but provided by the leg creator and are always revealed to the verifier
     pub public_enc_keys: Vec<G>,
     /// List of pairs of the form `(enc-key-index, mediator-affirmation-key)` where `enc-key-index` is the index
@@ -412,6 +412,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let ct_r = (enc_key_gen * r2 + pk_r_enc).into_affine();
         let ct_amount = (enc_key_gen * r3 + enc_gen * amount).into_affine();
 
+        // Encrypt asset-id if it isn't revealed
         let ct_asset_id = if config.reveal_asset_id {
             AssetIdEncryption::Revealed(self.core.asset_id)
         } else {
@@ -420,6 +421,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             )
         };
 
+        // If parties are allowed to see each other create ephemeral public keys for those parts else skip
         let cross_pk = if config.parties_see_each_other {
             (
                 Some((pk_s_enc * r2).into_affine()),
