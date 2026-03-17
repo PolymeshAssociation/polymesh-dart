@@ -17,10 +17,7 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 use super::encode::*;
 use super::*;
 use crate::*;
-use ark_ec_divisors::curves::{
-    pallas::{Point as PallasPoint},
-    vesta::{Point as VestaPoint},
-};
+use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::fee_account as bp_fee_account;

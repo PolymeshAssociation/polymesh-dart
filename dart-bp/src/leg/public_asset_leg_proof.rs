@@ -427,7 +427,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             if let Some(p) = &eph_pk_s_r_proto {
                 p.challenge_contribution(
                     &leg_enc.eph_pk_s.0,
-                    &leg_enc.eph_pk_s.1.unwrap(),
+                    &leg_enc.eph_pk_s.1.ok_or_else(|| {
+                        Error::IncompatibleLegAndLegEncryption(
+                            "Missing sender-to-receiver ephemeral key".into(),
+                        )
+                    })?,
                     &mut transcript_ref,
                 )?;
             }
@@ -435,7 +439,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             if let Some(p) = &eph_pk_r_s_proto {
                 p.challenge_contribution(
                     &leg_enc.eph_pk_r.1,
-                    &leg_enc.eph_pk_r.0.unwrap(),
+                    &leg_enc.eph_pk_r.0.ok_or_else(|| {
+                        Error::IncompatibleLegAndLegEncryption(
+                            "Missing receiver-to-sender ephemeral key".into(),
+                        )
+                    })?,
                     &mut transcript_ref,
                 )?;
             }
@@ -754,14 +762,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
         if self.resp_ct_meds.len() != med_keys.len() {
             return Err(Error::ProofVerificationError(format!(
-                "resp_ct_meds.len() != enc_keys.len() ({} != {})",
+                "resp_ct_meds.len() != med_keys.len() ({} != {})",
                 self.resp_ct_meds.len(),
                 med_keys.len()
             )));
         }
         if self.resp_eph_pk_meds.len() != med_keys.len() {
             return Err(Error::ProofVerificationError(format!(
-                "resp_eph_pk_meds.len() != enc_keys.len() ({} != {})",
+                "resp_eph_pk_meds.len() != med_keys.len() ({} != {})",
                 self.resp_eph_pk_meds.len(),
                 med_keys.len()
             )));
@@ -789,7 +797,114 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
+        if leg_enc.ct_meds.len() != med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.ct_meds.len() != med_keys.len() ({} != {})",
+                leg_enc.ct_meds.len(),
+                med_keys.len()
+            )));
+        }
+        if leg_enc.eph_pk_med_keys.len() != med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_med_keys.len() != med_keys.len() ({} != {})",
+                leg_enc.eph_pk_med_keys.len(),
+                med_keys.len()
+            )));
+        }
+        if leg_enc.ct_public_meds.len() != public_med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.ct_public_meds.len() != public_med_keys.len() ({} != {})",
+                leg_enc.ct_public_meds.len(),
+                public_med_keys.len()
+            )));
+        }
+        if leg_enc.eph_pk_public_med_keys.len() != public_med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_public_med_keys.len() != public_med_keys.len() ({} != {})",
+                leg_enc.eph_pk_public_med_keys.len(),
+                public_med_keys.len()
+            )));
+        }
+        if leg_enc.eph_pk_enc_keys.len() != enc_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_enc_keys.len() != enc_keys.len() ({} != {})",
+                leg_enc.eph_pk_enc_keys.len(),
+                enc_keys.len()
+            )));
+        }
+        if leg_enc.eph_pk_public_enc_keys.len() != public_enc_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_public_enc_keys.len() != public_enc_keys.len() ({} != {})",
+                leg_enc.eph_pk_public_enc_keys.len(),
+                public_enc_keys.len()
+            )));
+        }
+
+        for (i, (idx, _)) in med_keys.iter().enumerate() {
+            if (*idx as usize) >= enc_keys.len() {
+                return Err(Error::ProofVerificationError(format!(
+                    "med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
+                    *idx,
+                    enc_keys.len()
+                )));
+            }
+            if leg_enc.eph_pk_med_keys[i].0 != *idx {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_med_keys[{i}].0 ({}) != med_keys[{i}].0 ({})",
+                    leg_enc.eph_pk_med_keys[i].0, *idx
+                )));
+            }
+        }
+        for (i, (idx, _)) in public_med_keys.iter().enumerate() {
+            if (*idx as usize) >= public_enc_keys.len() {
+                return Err(Error::ProofVerificationError(format!(
+                    "public_med_keys[{i}].0 index {} out of range for public_enc_keys.len() {}",
+                    *idx,
+                    public_enc_keys.len()
+                )));
+            }
+            if leg_enc.eph_pk_public_med_keys[i].0 != *idx {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_public_med_keys[{i}].0 ({}) != public_med_keys[{i}].0 ({})",
+                    leg_enc.eph_pk_public_med_keys[i].0, *idx
+                )));
+            }
+        }
+
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
+
+        if parties_see_each_other {
+            if self.resp_eph_pk_s_r.is_none() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
+                ));
+            }
+            if self.resp_eph_pk_r_s.is_none() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
+                ));
+            }
+        } else {
+            if self.resp_eph_pk_s_r.is_some() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is false but resp_eph_pk_s_r is present".to_string(),
+                ));
+            }
+            if self.resp_eph_pk_r_s.is_some() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is false but resp_eph_pk_r_s is present".to_string(),
+                ));
+            }
+        }
+
+        let required_resp_comm_len = if parties_see_each_other { 11 } else { 9 };
+        if self.resp_comm_r_i_amount.0.len() < required_resp_comm_len {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_comm_r_i_amount response length is {} but expected at least {}",
+                self.resp_comm_r_i_amount.0.len(),
+                required_resp_comm_len
+            )));
+        }
 
         let vars = verifier.commit_vec(
             8 + if parties_see_each_other { 2 } else { 0 },
@@ -832,20 +947,30 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &mut transcript_ref,
         )?;
 
-        if let Some(resp) = &self.resp_eph_pk_s_r {
-            resp.challenge_contribution(
-                &leg_enc.eph_pk_s.0,
-                &leg_enc.eph_pk_s.1.unwrap(),
-                &mut transcript_ref,
-            )?;
-        }
+        if parties_see_each_other {
+            let resp = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
+                )
+            })?;
+            let eph_pk_s_r = leg_enc.eph_pk_s.1.ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing".to_string(),
+                )
+            })?;
+            resp.challenge_contribution(&leg_enc.eph_pk_s.0, &eph_pk_s_r, &mut transcript_ref)?;
 
-        if let Some(resp) = &self.resp_eph_pk_r_s {
-            resp.challenge_contribution(
-                &leg_enc.eph_pk_r.1,
-                &leg_enc.eph_pk_r.0.unwrap(),
-                &mut transcript_ref,
-            )?;
+            let resp = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
+                )
+            })?;
+            let eph_pk_r_s = leg_enc.eph_pk_r.0.ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing".to_string(),
+                )
+            })?;
+            resp.challenge_contribution(&leg_enc.eph_pk_r.1, &eph_pk_r_s, &mut transcript_ref)?;
         }
 
         let y_ct_meds = (0..leg_enc.ct_meds.len())
@@ -991,31 +1116,45 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         );
 
         if parties_see_each_other {
-            // Verify S[1] = S[0] * r_2/r_1
-            if let Some(resp) = &self.resp_eph_pk_s_r {
-                verify_or_rmc_2!(
-                    rmc,
-                    resp,
-                    "resp_eph_pk_s_r verification failed",
-                    leg_enc.eph_pk_s.1.unwrap(),
-                    leg_enc.eph_pk_s.0,
-                    &challenge,
-                    &self.resp_comm_r_i_amount.0[9],
-                );
-            }
+            let resp = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
+                )
+            })?;
+            let eph_pk_s_r = leg_enc.eph_pk_s.1.ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing".to_string(),
+                )
+            })?;
+            verify_or_rmc_2!(
+                rmc,
+                resp,
+                "resp_eph_pk_s_r verification failed",
+                eph_pk_s_r,
+                leg_enc.eph_pk_s.0,
+                &challenge,
+                &self.resp_comm_r_i_amount.0[9],
+            );
 
-            // Verify R[0] = R[1] * r_1/r_2
-            if let Some(resp) = &self.resp_eph_pk_r_s {
-                verify_or_rmc_2!(
-                    rmc,
-                    resp,
-                    "resp_eph_pk_r_s verification failed",
-                    leg_enc.eph_pk_r.0.unwrap(),
-                    leg_enc.eph_pk_r.1,
-                    &challenge,
-                    &self.resp_comm_r_i_amount.0[10],
-                );
-            }
+            let resp = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
+                )
+            })?;
+            let eph_pk_r_s = leg_enc.eph_pk_r.0.ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing".to_string(),
+                )
+            })?;
+            verify_or_rmc_2!(
+                rmc,
+                resp,
+                "resp_eph_pk_r_s verification failed",
+                eph_pk_r_s,
+                leg_enc.eph_pk_r.1,
+                &challenge,
+                &self.resp_comm_r_i_amount.0[10],
+            );
         }
 
         // Verify mediator ciphertexts and ephemeral keys

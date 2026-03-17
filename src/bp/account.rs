@@ -53,7 +53,11 @@ impl AccountState {
         account: &AccountKeyPair,
         enc_key: &EncryptionSecretKey,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        let sk_enc_inv = enc_key.0.0.inverse().ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
+        let sk_enc_inv = enc_key
+            .0
+            .0
+            .inverse()
+            .ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
         let state = BPAccountState {
             sk: account.secret.0.0,
             id: self.identity.decode()?,
@@ -69,7 +73,11 @@ impl AccountState {
         Ok((state, commitment))
     }
 
-    pub fn commitment(&self, account: &AccountKeyPair, enc_key: &EncryptionSecretKey) -> Result<AccountStateCommitment, Error> {
+    pub fn commitment(
+        &self,
+        account: &AccountKeyPair,
+        enc_key: &EncryptionSecretKey,
+    ) -> Result<AccountStateCommitment, Error> {
         let (_state, commitment) = self.bp_state(account, enc_key)?;
         AccountStateCommitment::from_affine(commitment.0)
     }
@@ -227,10 +235,7 @@ impl AccountAssetState {
         })
     }
 
-    pub fn current_commitment(
-        &self,
-        keys: &AccountKeys,
-    ) -> Result<AccountStateCommitment, Error> {
+    pub fn current_commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
         self.current_state.commitment(&keys.acct, &keys.enc.secret)
     }
 
@@ -325,9 +330,10 @@ impl AccountAssetState {
         keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| {
-            Ok(state.get_state_for_reversing_send(amount)?)
-        })
+        self.state_change(
+            keys,
+            |state| Ok(state.get_state_for_reversing_send(amount)?),
+        )
     }
 
     pub fn get_state_for_decreasing_counter(
@@ -612,6 +618,9 @@ impl AccountAssetRegistrationProof {
             None,
             Some(&mut rmc),
         )?;
+        if !rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
         Ok(())
     }
 
@@ -626,9 +635,10 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
+        // A better approach is to not create RandomizedMultChecker here but outside and pass in
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
 
-        Ok(proof.verify_and_return_tuples(
+        let tuple = proof.verify_and_return_tuples(
             id,
             &self.account.acct.get_affine()?,
             self.account.enc.get_affine()?,
@@ -644,6 +654,11 @@ impl AccountAssetRegistrationProof {
             None,
             rng,
             Some(&mut rmc),
-        )?)
+        )?;
+
+        if !rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        Ok(tuple)
     }
 }

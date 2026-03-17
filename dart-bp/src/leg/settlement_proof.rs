@@ -435,6 +435,21 @@ impl<
             ));
         }
 
+        if !public_enc_keys.is_empty() && public_enc_keys.len() != num_legs {
+            return Err(Error::ProofVerificationError(format!(
+                "public_enc_keys.len() must be 0 or num_legs ({}), got {}",
+                num_legs,
+                public_enc_keys.len()
+            )));
+        }
+        if !public_med_keys.is_empty() && public_med_keys.len() != num_legs {
+            return Err(Error::ProofVerificationError(format!(
+                "public_med_keys.len() must be 0 or num_legs ({}), got {}",
+                num_legs,
+                public_med_keys.len()
+            )));
+        }
+
         let num_hidden_asset_legs = leg_encs
             .iter()
             .filter(|enc| !enc.is_asset_id_revealed())
@@ -498,6 +513,14 @@ impl<
                 RE_RANDOMIZED_PATH_LABEL,
                 re_randomized_path
             );
+        }
+
+        if all_rerandomized_leaves.len() != num_hidden_asset_legs {
+            return Err(Error::ProofVerificationError(format!(
+                "Number of rerandomized leaves ({}) does not match number of hidden asset-id legs ({})",
+                all_rerandomized_leaves.len(),
+                num_hidden_asset_legs
+            )));
         }
 
         // Verify each leg proof based on its type

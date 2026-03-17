@@ -568,14 +568,13 @@ impl<
             ));
         }
 
-        let _ = self
-            .re_randomized_path
+        self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
                 even_verifier,
                 odd_verifier,
                 account_tree_params,
-            );
+            )?;
 
         let mut transcript = even_verifier.transcript();
 
@@ -661,9 +660,31 @@ impl<
         let mut missing_resps_bp = BTreeMap::new();
         missing_resps_bp.insert(1, self.resp_leaf.0[3]);
         missing_resps_bp.insert(2, self.resp_leaf.0[4]);
-        missing_resps_bp.insert(3, self.resp_acc_new.responses[&4]);
+        let resp_acc_new_4 = self
+            .resp_acc_new
+            .responses
+            .get(&4)
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "Missing resp_acc_new response for key 4 (transparent account proof)"
+                        .to_string(),
+                )
+            })?;
+        missing_resps_bp.insert(3, resp_acc_new_4);
         missing_resps_bp.insert(4, self.resp_leaf.0[5]);
-        missing_resps_bp.insert(5, self.resp_acc_new.responses[&5]);
+        let resp_acc_new_5 = self
+            .resp_acc_new
+            .responses
+            .get(&5)
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "Missing resp_acc_new response for key 5 (transparent account proof)"
+                        .to_string(),
+                )
+            })?;
+        missing_resps_bp.insert(5, resp_acc_new_5);
         if has_balance_decreased {
             missing_resps_bp.insert(6, self.resp_leaf.0[1]);
         }

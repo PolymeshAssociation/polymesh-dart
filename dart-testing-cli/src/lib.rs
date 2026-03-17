@@ -1042,16 +1042,23 @@ impl DartTestingDb {
         rng: &mut R,
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
-        let mut asset_states: std::collections::HashMap<AssetId, AssetState> = std::collections::HashMap::new();
+        let mut asset_states: std::collections::HashMap<AssetId, AssetState> =
+            std::collections::HashMap::new();
         for leg_proof in settlement.legs.iter() {
             if let AnySettlementLegProof::RevealedAssetId(_) = leg_proof {
-                let leg_enc = leg_proof.leg_enc().decode().map_err(|e| anyhow!("{:?}", e))?;
-                if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) = leg_enc.ct_asset_id {
+                let leg_enc = leg_proof
+                    .leg_enc()
+                    .decode()
+                    .map_err(|e| anyhow!("{:?}", e))?;
+                if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) =
+                    leg_enc.ct_asset_id
+                {
                     if !asset_states.contains_key(&asset_id) {
                         let asset_info = self.get_asset_by_id(asset_id)?;
                         let mediators = asset_info.mediators()?;
                         let auditors = asset_info.auditors()?;
-                        asset_states.insert(asset_id, AssetState::new(asset_id, &mediators, &auditors));
+                        asset_states
+                            .insert(asset_id, AssetState::new(asset_id, &mediators, &auditors));
                     }
                 }
             }
@@ -1061,7 +1068,10 @@ impl DartTestingDb {
             &self.asset_roots,
             &|asset_id| {
                 asset_states.get(&asset_id).cloned().ok_or_else(|| {
-                    polymesh_dart::Error::ProofGenerationError(format!("Asset {} not found", asset_id))
+                    polymesh_dart::Error::ProofGenerationError(format!(
+                        "Asset {} not found",
+                        asset_id
+                    ))
                 })
             },
             rng,
@@ -1132,13 +1142,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::sender(),
             proof_action,
-            |account_keys,
-             leg_ref,
-             leg_enc,
-             leg,
-             account_state,
-             account_tree,
-             rng| {
+            |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 if leg.asset_id() != asset_id || leg.amount() != amount {
                     return Err(anyhow!("Leg details don't match provided asset_id/amount"));
                 }
@@ -1203,13 +1207,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::sender(),
             proof_action,
-            |account_keys,
-             leg_ref,
-             leg_enc,
-             _leg,
-             account_state,
-             account_tree,
-             rng| {
+            |account_keys, leg_ref, leg_enc, _leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::new(
                     rng,
@@ -1269,13 +1267,7 @@ impl DartTestingDb {
             leg_index,
             LegRole::sender(),
             proof_action,
-            |account_keys,
-             leg_ref,
-             leg_enc,
-             leg,
-             account_state,
-             account_tree,
-             rng| {
+            |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
                 Ok(SenderReversalProof::new(
@@ -1418,14 +1410,7 @@ impl DartTestingDb {
             let leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
-            MediatorAffirmationProof::new(
-                rng,
-                &leg_ref,
-                &encrypted_leg,
-                &account_keys,
-                0,
-                accept,
-            )?
+            MediatorAffirmationProof::new(rng, &leg_ref, &encrypted_leg, &account_keys, 0, accept)?
         };
 
         // If proof action is to generate only, save proof and return

@@ -1,13 +1,16 @@
 use codec::{Decode, Encode};
 use scale_info::TypeInfo;
 
-use polymesh_dart_bp::key_distribution;
-use rand_core::{CryptoRng, RngCore};
-use ark_ec::{AffineRepr};
+use super::{
+    AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
+    dart_gens,
+};
+use crate::{PallasA, PallasScalar, WrappedCanonical};
+use ark_ec::AffineRepr;
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use crate::{PallasA, PallasScalar, WrappedCanonical};
-use super::{dart_gens, CurveTreeParameters, AccountTreeConfig, EncryptionPublicKey, EncryptionSecretKey, Error};
+use polymesh_dart_bp::key_distribution;
+use rand_core::{CryptoRng, RngCore};
 
 /// Wraps [`key_distribution::KeyDistributionProof`], proving that a secret key has been
 /// correctly split and encrypted under each recipient's public key.
@@ -70,7 +73,8 @@ impl KeyDistributionProof {
     ) -> Result<(), Error> {
         let proof = self.inner.decode()?;
         let pk = self.public_key.get_affine()?;
-        let rec_pks: Vec<PallasA> = self.recipient_pks
+        let rec_pks: Vec<PallasA> = self
+            .recipient_pks
             .iter()
             .map(|k| k.get_affine())
             .collect::<Result<_, _>>()?;

@@ -344,7 +344,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -475,7 +474,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -604,7 +602,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
@@ -735,7 +732,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;

@@ -301,7 +301,13 @@ pub fn generate_schnorr_responses_for_balance_change<
     PartialSchnorrResponse<Affine<G0>>,
     Vec<PartialPokPedersenCommitment<Affine<G0>>>,
 )> {
-    assert_eq!(t_leg_amount.len(), amount.len());
+    if t_leg_amount.len() != amount.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "Balance-change response generation: t_leg_amount.len() ({}) != amount.len() ({})",
+            t_leg_amount.len(),
+            amount.len()
+        )));
+    }
 
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_bal_blinding);
@@ -703,16 +709,22 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     Vec<LegAccountLinkProtocol<G0>>,
     SchnorrCommitment<Affine<G0>>,
 )> {
-    // assert is fine since its an internal function and expects correct lengths
-    assert_eq!(leg_enc.len(), is_sender.len());
+    if leg_enc.len() != is_sender.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "Common state-change commitment generation: leg_enc.len() ({}) != is_sender.len() ({})",
+            leg_enc.len(),
+            is_sender.len()
+        )));
+    }
 
     let nullifier = old_account.nullifier(account_comm_key);
 
     let is_asset_id_revealed = asset_id_blinding.is_none();
 
     let mut sk_enc_blinding = is_asset_id_revealed.then(|| F0::rand(rng));
-    // sk_enc_inv is chosen to be non-zero so unwrap is fine
-    let mut sk_enc = is_asset_id_revealed.then(|| old_account.sk_enc_inv.inverse().unwrap());
+    let mut sk_enc = is_asset_id_revealed
+        .then(|| old_account.sk_enc_inv.inverse().ok_or(Error::InvertingZero))
+        .transpose()?;
 
     let h_at = is_asset_id_revealed.then(|| enc_gen * G0::ScalarField::from(asset_id));
 
@@ -1017,9 +1029,27 @@ pub(crate) fn generate_sigma_t_values_for_balance_change<
     SchnorrCommitment<Affine<G0>>,
     Vec<PokPedersenCommitmentProtocol<Affine<G0>>>,
 )> {
-    assert_eq!(amount.len(), amount_blinding.len());
-    assert_eq!(ct_amount.len(), amount_blinding.len());
-    assert_eq!(ct_amount.len(), eph_pk_amount.len());
+    if amount.len() != amount_blinding.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "Balance-change commitment generation: amount.len() ({}) != amount_blinding.len() ({})",
+            amount.len(),
+            amount_blinding.len()
+        )));
+    }
+    if ct_amount.len() != amount_blinding.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "Balance-change commitment generation: ct_amount.len() ({}) != amount_blinding.len() ({})",
+            ct_amount.len(),
+            amount_blinding.len()
+        )));
+    }
+    if ct_amount.len() != eph_pk_amount.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "Balance-change commitment generation: ct_amount.len() ({}) != eph_pk_amount.len() ({})",
+            ct_amount.len(),
+            eph_pk_amount.len()
+        )));
+    }
     // +2 for old account balance and new account balance
     let mut gens = bp_gens_for_vec_commitment(2 + amount.len() as u32, bp_gens);
     // Schnorr commitment for proving knowledge of amount, old account balance and new account balance in Bulletproof commitment
@@ -1157,7 +1187,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
         // if asset-id is revealed, BP also proves the inverse relation between sk_enc_inv and sk_enc
         wits.insert(
             SK_ENC_INV_GEN_INDEX - 1,
-            account.sk_enc_inv.inverse().unwrap(),
+            account.sk_enc_inv.inverse().ok_or(Error::InvertingZero)?,
         );
     }
     let resp_bp = t_bp_randomness_relations.partial_response(wits, &prover_challenge)?;
@@ -1191,8 +1221,20 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_gen: Affine<G0>,
 ) -> Result<()> {
-    assert_eq!(leg_enc.len(), is_sender.len());
-    assert_eq!(leg_enc.len(), resp_leg_link.len());
+    if leg_enc.len() != is_sender.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: leg_enc.len() = {}, is_sender.len() = {}",
+            leg_enc.len(),
+            is_sender.len()
+        )));
+    }
+    if leg_enc.len() != resp_leg_link.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: leg_enc.len() = {}, resp_leg_link.len() = {}",
+            leg_enc.len(),
+            resp_leg_link.len()
+        )));
+    }
 
     let enc_key_gen = account_comm_key.sk_enc_gen();
 
@@ -1236,9 +1278,23 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
                 resp.challenge_contribution(&eph_pk_base, &enc_key_gen, &y, &mut transcript)?;
             } else {
                 // Asset id not revealed in this leg
-                let eph_pk_base = leg_enc.eph_pk_asset_id(*is_sender).unwrap();
-                let y =
-                    leg_enc.asset_id_ciphertext().as_ref().unwrap().into_group() - h_at.unwrap();
+                let eph_pk_base = leg_enc.eph_pk_asset_id(*is_sender).ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Expected eph_pk_asset_id for leg {i} (asset-id hidden in this leg)"
+                    ))
+                })?;
+                let ct = leg_enc.asset_id_ciphertext().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Expected asset_id_ciphertext for leg {i} (asset-id hidden in this leg)"
+                    ))
+                })?;
+                let h_at = h_at.ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "asset_id was revealed in at least one leg but no asset_id was provided"
+                            .to_string(),
+                    )
+                })?;
+                let y = ct.into_group() - h_at;
                 let resp = resp_leg_link[i].dl().ok_or_else(|| Error::ProofVerificationError(
                     format!("Asset id is not revealed in leg {i} but response for leg-link is not provided")
                 ))?;
@@ -1246,7 +1302,11 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
             }
         } else {
             // Asset id is not revealed in any leg
-            let eph_pk_base = leg_enc.eph_pk_asset_id(*is_sender).unwrap();
+            let eph_pk_base = leg_enc.eph_pk_asset_id(*is_sender).ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Expected eph_pk_asset_id for leg {i} (asset-id hidden in all legs)"
+                ))
+            })?;
             let resp = resp_leg_link[i].pc().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Asset id is not revealed in leg {i} but response for leg-link is not provided"
@@ -1255,7 +1315,11 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
             resp.challenge_contribution(
                 &eph_pk_base,
                 &enc_gen,
-                &leg_enc.asset_id_ciphertext().unwrap(),
+                &leg_enc.asset_id_ciphertext().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Expected asset_id_ciphertext for leg {i} (asset-id hidden in all legs)"
+                    ))
+                })?,
                 &mut transcript,
             )?;
         }
@@ -1273,7 +1337,13 @@ pub(crate) fn take_challenge_contrib_of_sigma_t_values_for_balance_change<
     enc_gen: Affine<G0>,
     mut verifier_transcript: &mut MerlinTranscript,
 ) -> Result<()> {
-    assert_eq!(ct_amount.len(), resp_leg_amount.len());
+    if ct_amount.len() != resp_leg_amount.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched amount vector lengths: ct_amount.len() = {}, resp_leg_amount.len() = {}",
+            ct_amount.len(),
+            resp_leg_amount.len()
+        )));
+    }
     t_comm_bp_bal.serialize_compressed(&mut verifier_transcript)?;
     for (resp_leg_amount, (ct_amount, eph_pk_amount)) in
         resp_leg_amount.iter().zip(ct_amount.iter())
@@ -1312,9 +1382,27 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     enc_gen: Affine<G0>,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<Option<AssetId>> {
-    assert_eq!(leg_enc.len(), is_sender.len());
-    assert_eq!(leg_enc.len(), has_counter_decreased.len());
-    assert_eq!(leg_enc.len(), resp_leg_link.len());
+    if leg_enc.len() != is_sender.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: leg_enc.len() = {}, is_sender.len() = {}",
+            leg_enc.len(),
+            is_sender.len()
+        )));
+    }
+    if leg_enc.len() != has_counter_decreased.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: leg_enc.len() = {}, has_counter_decreased.len() = {}",
+            leg_enc.len(),
+            has_counter_decreased.len()
+        )));
+    }
+    if leg_enc.len() != resp_leg_link.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: leg_enc.len() = {}, resp_leg_link.len() = {}",
+            leg_enc.len(),
+            resp_leg_link.len()
+        )));
+    }
 
     let mut asset_id = None;
     for l in leg_enc {
@@ -1325,6 +1413,19 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                 "All legs must have the same asset id".to_string(),
             ));
         }
+    }
+
+    let required_resp_leaf_len = if asset_id.is_none() {
+        SK_ENC_INV_GEN_INDEX + 1
+    } else {
+        SK_ENC_INV_GEN_INDEX
+    };
+    if resp_leaf.0.len() < required_resp_leaf_len {
+        return Err(Error::ProofVerificationError(format!(
+            "Common state-change sigma verification: resp_leaf response length is {} but expected at least {}",
+            resp_leaf.0.len(),
+            required_resp_leaf_len
+        )));
     }
 
     let enc_key_gen = account_comm_key.sk_enc_gen();
@@ -1341,12 +1442,11 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             .to_vec()
     };
 
-    let y = if asset_id.is_none() {
-        *re_randomized_leaf
-    } else {
-        (*re_randomized_leaf
-            - (account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id.unwrap())))
-        .into_affine()
+    let y = match asset_id {
+        None => *re_randomized_leaf,
+        Some(asset_id) => (*re_randomized_leaf
+            - (account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id)))
+        .into_affine(),
     };
     verify_schnorr_resp_or_rmc!(
         rmc,
@@ -1382,7 +1482,13 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         0
     } else {
         // If asset-id is revealed, then its knowledge in new account commitment is not being proven and new account commitment has to be reduced accordingly
-        y -= account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id.unwrap());
+        let asset_id = asset_id.ok_or_else(|| {
+            Error::ProofVerificationError(
+                "Common state-change sigma verification: expected asset_id to be present"
+                    .to_string(),
+            )
+        })?;
+        y -= account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id);
         1
     };
     // Since response for asset id is not present, adjust indices of remaining responses accordingly
@@ -1429,18 +1535,26 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         if asset_id.is_none() {
             // Asset id is not revealed in any leg
 
-            // unwrap is fine as the check is done in outer function
-            let eph_pk_base = leg_enc[i].eph_pk_asset_id(is_sender[i]).unwrap();
+            let eph_pk_base = leg_enc[i].eph_pk_asset_id(is_sender[i]).ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Asset id is not revealed in any leg but leg {i} is missing eph_pk_asset_id"
+                ))
+            })?;
             let resp = resp_leg_link[i].pc().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Asset id is not revealed in leg {i} but response for leg-link is not provided"
+                ))
+            })?;
+            let ct_asset_id = leg_enc[i].asset_id_ciphertext().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Asset id is not revealed in any leg but leg {i} is missing asset-id ciphertext"
                 ))
             })?;
             verify_or_rmc_3!(
                 rmc,
                 resp,
                 format!("Leg link verification failed for leg {i}"),
-                leg_enc[i].asset_id_ciphertext().unwrap(),
+                ct_asset_id,
                 eph_pk_base,
                 enc_gen,
                 verifier_challenge,
@@ -1457,6 +1571,12 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                         "Asset id is revealed in leg {i} but response for leg-link is not provided"
                     ))
                 })?;
+                let resp_sk_enc = resp_bp.responses.get(&7).ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "Asset id is revealed but response for sk_enc is missing from resp_bp"
+                            .to_string(),
+                    )
+                })?;
                 verify_or_rmc_3!(
                     rmc,
                     resp,
@@ -1466,17 +1586,27 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                     enc_key_gen,
                     verifier_challenge,
                     &resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed], // sk_enc^{-1} offset decreased since asset id is revealed
-                    &resp_bp.responses[&7],                                             // sk_enc
+                    resp_sk_enc,                                                        // sk_enc
                 );
             } else {
                 // Asset id not revealed in this leg
-                let eph_pk_base = leg_enc[i].eph_pk_asset_id(is_sender[i]).unwrap();
-                let y = leg_enc[i]
-                    .asset_id_ciphertext()
-                    .as_ref()
-                    .unwrap()
-                    .into_group()
-                    - h_at.unwrap();
+                let eph_pk_base = leg_enc[i].eph_pk_asset_id(is_sender[i]).ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Asset id is not revealed in leg {i} but eph_pk_asset_id is missing"
+                    ))
+                })?;
+                let ct_asset_id = leg_enc[i].asset_id_ciphertext().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Asset id is not revealed in leg {i} but asset-id ciphertext is missing"
+                    ))
+                })?;
+                let h_at = h_at.ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "Asset id is expected to be known (h_at) when any leg reveals the asset id"
+                            .to_string(),
+                    )
+                })?;
+                let y = ct_asset_id.into_group() - h_at;
                 let resp = resp_leg_link[i].dl().ok_or_else(|| Error::ProofVerificationError(
                     format!("Asset id is not revealed in leg {i} but response for leg-link is not provided")
                 ))?;
@@ -1496,15 +1626,27 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     let mut missing_resps = BTreeMap::new();
     missing_resps.insert(1, resp_leaf.0[4 - offset_when_asset_id_revealed]);
     missing_resps.insert(2, resp_leaf.0[5 - offset_when_asset_id_revealed]);
-    missing_resps.insert(
-        3,
-        resp_acc_new.responses[&(5 - offset_when_asset_id_revealed)],
-    );
+    let resp_acc_new_3 = resp_acc_new
+        .responses
+        .get(&(5 - offset_when_asset_id_revealed))
+        .ok_or_else(|| {
+            Error::ProofVerificationError(
+                "Common state-change sigma verification: missing response for new account randomness"
+                    .to_string(),
+            )
+        })?;
+    missing_resps.insert(3, *resp_acc_new_3);
     missing_resps.insert(4, resp_leaf.0[6 - offset_when_asset_id_revealed]);
-    missing_resps.insert(
-        5,
-        resp_acc_new.responses[&(6 - offset_when_asset_id_revealed)],
-    );
+    let resp_acc_new_5 = resp_acc_new
+        .responses
+        .get(&(6 - offset_when_asset_id_revealed))
+        .ok_or_else(|| {
+            Error::ProofVerificationError(
+                "Common state-change sigma verification: missing response for new account current_rho"
+                    .to_string(),
+            )
+        })?;
+    missing_resps.insert(5, *resp_acc_new_5);
 
     let bp_ver_gens = if asset_id.is_none() {
         bp_gens_vec_for_randomness_relations(pc_gens, bp_gens).to_vec()
@@ -1542,7 +1684,20 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
     enc_gen: Affine<G0>,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<()> {
-    assert_eq!(leg_enc.len(), resp_leg_amount.len());
+    if leg_enc.len() != resp_leg_amount.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Balance-change sigma verification: leg_enc.len() ({}) != resp_leg_amount.len() ({})",
+            leg_enc.len(),
+            resp_leg_amount.len()
+        )));
+    }
+    if is_sender.len() != leg_enc.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Balance-change sigma verification: is_sender.len() ({}) != leg_enc.len() ({})",
+            is_sender.len(),
+            leg_enc.len()
+        )));
+    }
 
     let mut gens = bp_gens_for_vec_commitment(2 + resp_leg_amount.len() as u32, bp_gens);
     let mut missing_resps = BTreeMap::new();
@@ -1571,6 +1726,16 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
         } else {
             leg_enc[i].eph_pk_r.2
         };
+        let resp_bp_balance_i = resp_comm_bp_bal
+            .responses
+            .get(&(1 + i))
+            .ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Balance-change sigma verification: missing bp balance response for index {} (key {})",
+                    i,
+                    1 + i
+                ))
+            })?;
         verify_or_rmc_3!(
             rmc,
             resp_leg_amount[i],
@@ -1580,7 +1745,7 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
             enc_gen,
             verifier_challenge,
             &resp_sk_enc_inv,
-            &resp_comm_bp_bal.responses[&(1 + i)],
+            resp_bp_balance_i,
         );
     }
 

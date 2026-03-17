@@ -365,7 +365,8 @@ impl AccountKeys {
         counter: NullifierSkGenCounter,
         identity: &[u8],
     ) -> Result<AccountState, Error> {
-        self.acct.account_state(&self.enc.secret, asset_id, counter, identity)
+        self.acct
+            .account_state(&self.enc.secret, asset_id, counter, identity)
     }
 
     /// Returns the public keys for the account.

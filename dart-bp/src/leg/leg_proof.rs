@@ -1191,6 +1191,12 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
+        let asset_id_ciphertext = leg_enc.asset_id_ciphertext().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "leg_enc.ct_asset_id must be ciphertext for LegCreationProof".to_string(),
+            )
+        })?;
+
         if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
             return Err(Error::InsufficientCommitmentKeyLength(
                 asset_comm_params.comm_key.len(),
@@ -1199,6 +1205,83 @@ impl<
         }
         let num_enc_keys = self.resp_eph_pk_enc.len();
         let num_med_keys = self.resp_eph_pk_meds.len();
+
+        if leg_enc.eph_pk_enc_keys.len() != num_enc_keys {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_enc_keys.len() != resp_eph_pk_enc.len() ({} != {})",
+                leg_enc.eph_pk_enc_keys.len(),
+                num_enc_keys
+            )));
+        }
+        if leg_enc.ct_meds.len() != num_med_keys {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.ct_meds.len() != resp_eph_pk_meds.len() ({} != {})",
+                leg_enc.ct_meds.len(),
+                num_med_keys
+            )));
+        }
+        if leg_enc.eph_pk_med_keys.len() != num_med_keys {
+            return Err(Error::ProofVerificationError(format!(
+                "leg_enc.eph_pk_med_keys.len() != resp_eph_pk_meds.len() ({} != {})",
+                leg_enc.eph_pk_med_keys.len(),
+                num_med_keys
+            )));
+        }
+
+        if self.resp_ct_public_meds.len() != self.resp_eph_pk_public_meds.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_ct_public_meds.len() != resp_eph_pk_public_meds.len() ({} != {})",
+                self.resp_ct_public_meds.len(),
+                self.resp_eph_pk_public_meds.len()
+            )));
+        }
+        if self.resp_ct_public_meds.len() != leg_enc.ct_public_meds.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_ct_public_meds.len() != leg_enc.ct_public_meds.len() ({} != {})",
+                self.resp_ct_public_meds.len(),
+                leg_enc.ct_public_meds.len()
+            )));
+        }
+        if self.resp_ct_public_meds.len() != leg_enc.eph_pk_public_med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_ct_public_meds.len() != leg_enc.eph_pk_public_med_keys.len() ({} != {})",
+                self.resp_ct_public_meds.len(),
+                leg_enc.eph_pk_public_med_keys.len()
+            )));
+        }
+        if self.resp_ct_public_meds.len() != public_med_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_ct_public_meds.len() != public_med_keys.len() ({} != {})",
+                self.resp_ct_public_meds.len(),
+                public_med_keys.len()
+            )));
+        }
+
+        if self.resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() ({} != {})",
+                self.resp_eph_pk_public_enc.len(),
+                leg_enc.eph_pk_public_enc_keys.len()
+            )));
+        }
+        if self.resp_eph_pk_public_enc.len() != public_enc_keys.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_eph_pk_public_enc.len() != public_enc_keys.len() ({} != {})",
+                self.resp_eph_pk_public_enc.len(),
+                public_enc_keys.len()
+            )));
+        }
+
+        for (i, (idx, _)) in public_med_keys.iter().enumerate() {
+            if (*idx as usize) >= public_enc_keys.len() {
+                return Err(Error::ProofVerificationError(format!(
+                    "public_med_keys[{i}].0 is out of bounds for public_enc_keys ({} >= {})",
+                    *idx,
+                    public_enc_keys.len()
+                )));
+            }
+        }
+
         if self.re_randomized_points.len() != num_enc_keys + num_med_keys + 1 {
             return Err(Error::DifferentNumberOfRandomizedPointsAndResponses(
                 self.re_randomized_points.len(),
@@ -1207,6 +1290,72 @@ impl<
         }
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
+        if parties_see_each_other {
+            if self.resp_eph_pk_s_r.is_none() || self.resp_eph_pk_r_s.is_none() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is true but resp_eph_pk_s_r/resp_eph_pk_r_s is missing"
+                        .to_string(),
+                ));
+            }
+            if leg_enc.eph_pk_s.1.is_none() || leg_enc.eph_pk_r.0.is_none() {
+                return Err(Error::ProofVerificationError(
+                    "parties_see_each_other is true but leg_enc.eph_pk_s.1/leg_enc.eph_pk_r.0 is missing"
+                        .to_string(),
+                ));
+            }
+        } else if self.resp_eph_pk_s_r.is_some() || self.resp_eph_pk_r_s.is_some() {
+            return Err(Error::ProofVerificationError(
+                "parties_see_each_other is false but resp_eph_pk_s_r/resp_eph_pk_r_s is present"
+                    .to_string(),
+            ));
+        }
+
+        let eph_pk_s_at = leg_enc.eph_pk_s.3.clone().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "leg_enc.eph_pk_s.3 must be present when asset-id is encrypted".to_string(),
+            )
+        })?;
+        let eph_pk_r_at = leg_enc.eph_pk_r.3.clone().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "leg_enc.eph_pk_r.3 must be present when asset-id is encrypted".to_string(),
+            )
+        })?;
+
+        for i in 0..num_enc_keys {
+            if leg_enc.eph_pk_enc_keys[i].3.is_none() {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                )));
+            }
+        }
+
+        for i in 0..num_med_keys {
+            let idx = leg_enc.eph_pk_med_keys[i].0 as usize;
+            if idx >= num_enc_keys {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
+                    idx, num_enc_keys
+                )));
+            }
+        }
+
+        for i in 0..public_med_keys.len() {
+            let idx = public_med_keys[i].0 as usize;
+            if idx >= leg_enc.eph_pk_public_enc_keys.len() {
+                return Err(Error::ProofVerificationError(format!(
+                    "public_med_keys[{i}].0 is out of bounds for leg_enc.eph_pk_public_enc_keys ({} >= {})",
+                    idx,
+                    leg_enc.eph_pk_public_enc_keys.len()
+                )));
+            }
+            if idx != leg_enc.eph_pk_public_med_keys[i].0 as usize {
+                return Err(Error::ProofVerificationError(format!(
+                    "public_med_keys[{i}].0 != leg_enc.eph_pk_public_med_keys[{i}].0 ({} != {})",
+                    idx, leg_enc.eph_pk_public_med_keys[i].0
+                )));
+            }
+        }
+
         // If ct_s and ct_r need to be decrypted.
         let sender_receiver_decryption_needed = parties_see_each_other || num_enc_keys > 0;
 
@@ -1291,7 +1440,7 @@ impl<
         self.resp_asset_id_enc.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
-            &leg_enc.asset_id_ciphertext().unwrap(),
+            &asset_id_ciphertext,
             &mut transcript,
         )?;
 
@@ -1303,7 +1452,7 @@ impl<
 
         self.resp_eph_pk_s_at.challenge_contribution(
             &leg_enc.eph_pk_s.0,
-            leg_enc.eph_pk_s.3.as_ref().unwrap(),
+            &eph_pk_s_at,
             &mut transcript,
         )?;
 
@@ -1315,27 +1464,46 @@ impl<
 
         self.resp_eph_pk_r_at.challenge_contribution(
             &leg_enc.eph_pk_r.1,
-            leg_enc.eph_pk_r.3.as_ref().unwrap(),
+            &eph_pk_r_at,
             &mut transcript,
         )?;
 
         if parties_see_each_other {
-            self.resp_eph_pk_s_r
-                .as_ref()
-                .unwrap()
-                .challenge_contribution(
-                    &leg_enc.eph_pk_s.0,
-                    leg_enc.eph_pk_s.1.as_ref().unwrap(),
-                    &mut transcript,
-                )?;
-            self.resp_eph_pk_r_s
-                .as_ref()
-                .unwrap()
-                .challenge_contribution(
-                    &leg_enc.eph_pk_r.1,
-                    leg_enc.eph_pk_r.0.as_ref().unwrap(),
-                    &mut transcript,
-                )?;
+            let resp_eph_pk_s_r = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_s_r must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_r_s must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let eph_pk_s_r = leg_enc.eph_pk_s.1.clone().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let eph_pk_r_s = leg_enc.eph_pk_r.0.clone().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+
+            resp_eph_pk_s_r.challenge_contribution(
+                &leg_enc.eph_pk_s.0,
+                &eph_pk_s_r,
+                &mut transcript,
+            )?;
+            resp_eph_pk_r_s.challenge_contribution(
+                &leg_enc.eph_pk_r.1,
+                &eph_pk_r_s,
+                &mut transcript,
+            )?;
         }
 
         for i in 0..num_enc_keys {
@@ -1363,7 +1531,11 @@ impl<
             )?;
             p_4.challenge_contribution(
                 &leg_enc.eph_pk_enc_keys[i].0,
-                leg_enc.eph_pk_enc_keys[i].3.as_ref().unwrap(),
+                leg_enc.eph_pk_enc_keys[i].3.as_ref().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                    ))
+                })?,
                 &mut transcript,
             )?;
         }
@@ -1486,7 +1658,7 @@ impl<
             rmc,
             self.resp_asset_id_enc,
             "resp_asset_id_enc verification failed",
-            leg_enc.asset_id_ciphertext().unwrap(),
+            asset_id_ciphertext,
             enc_key_gen,
             enc_gen,
             &challenge,
@@ -1518,7 +1690,7 @@ impl<
             rmc,
             self.resp_eph_pk_s_at,
             "resp_eph_pk_s_at verification failed",
-            leg_enc.eph_pk_s.3.unwrap(),
+            eph_pk_s_at,
             leg_enc.eph_pk_s.0,
             &challenge,
             &self.resp_comm_r_i_amount.0[10],
@@ -1528,27 +1700,52 @@ impl<
             rmc,
             self.resp_eph_pk_r_at,
             "resp_eph_pk_r_at verification failed",
-            leg_enc.eph_pk_r.3.unwrap(),
+            eph_pk_r_at,
             leg_enc.eph_pk_r.1,
             &challenge,
             &self.resp_comm_r_i_amount.0[11],
         );
 
         if parties_see_each_other {
+            let resp_eph_pk_s_r = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_s_r must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_r_s must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let eph_pk_s_r = leg_enc.eph_pk_s.1.clone().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+            let eph_pk_r_s = leg_enc.eph_pk_r.0.clone().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
+                        .to_string(),
+                )
+            })?;
+
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_s_r.as_ref().unwrap(),
+                resp_eph_pk_s_r,
                 "resp_eph_pk_s_r verification failed",
-                leg_enc.eph_pk_s.1.unwrap(),
+                eph_pk_s_r,
                 leg_enc.eph_pk_s.0,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[12],
             );
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_r_s.as_ref().unwrap(),
+                resp_eph_pk_r_s,
                 "resp_eph_pk_r_s verification failed",
-                leg_enc.eph_pk_r.0.unwrap(),
+                eph_pk_r_s,
                 leg_enc.eph_pk_r.1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[13],
@@ -1601,7 +1798,11 @@ impl<
                 rmc,
                 p_4,
                 format!("resp_eph_pk_enc[{}].4 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].3.unwrap(),
+                leg_enc.eph_pk_enc_keys[i].3.clone().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                    ))
+                })?,
                 leg_enc.eph_pk_enc_keys[i].0,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[10],
@@ -1614,7 +1815,14 @@ impl<
                 + asset_comm_params.j_0
                 + (asset_comm_params.j_1 * F0::from(leg_enc.eph_pk_med_keys[i].0))
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
-            let base = leg_enc.eph_pk_enc_keys[leg_enc.eph_pk_med_keys[i].0 as usize].0;
+            let med_key_idx = leg_enc.eph_pk_med_keys[i].0 as usize;
+            if med_key_idx >= num_enc_keys {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
+                    med_key_idx, num_enc_keys
+                )));
+            }
+            let base = leg_enc.eph_pk_enc_keys[med_key_idx].0;
 
             verify_or_rmc_3!(
                 rmc,
@@ -1645,6 +1853,51 @@ impl<
                 base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
+            );
+        }
+
+        // Verify public mediator ciphertexts
+        for i in 0..self.resp_ct_public_meds.len() {
+            let y = leg_enc.ct_public_meds[i] - public_med_keys[i].1.into_group();
+            verify_or_rmc_2!(
+                rmc,
+                self.resp_ct_public_meds[i],
+                format!("resp_ct_public_meds[{}] verification failed", i),
+                y.into_affine(),
+                enc_key_gen,
+                &challenge,
+            );
+        }
+
+        // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
+        for i in 0..self.resp_eph_pk_public_enc.len() {
+            let (p_0, p_1, p_2) = &self.resp_eph_pk_public_enc[i];
+            verify_or_rmc_2!(
+                rmc,
+                p_0,
+                format!("resp_eph_pk_public_enc[{}].0 verification failed", i),
+                leg_enc.eph_pk_public_enc_keys[i].0,
+                public_enc_keys[i],
+                &challenge,
+                &self.resp_comm_r_i_amount.0[2],
+            );
+            verify_or_rmc_2!(
+                rmc,
+                p_1,
+                format!("resp_eph_pk_public_enc[{}].1 verification failed", i),
+                leg_enc.eph_pk_public_enc_keys[i].1,
+                public_enc_keys[i],
+                &challenge,
+                &self.resp_comm_r_i_amount.0[3],
+            );
+            verify_or_rmc_2!(
+                rmc,
+                p_2,
+                format!("resp_eph_pk_public_enc[{}].2 verification failed", i),
+                leg_enc.eph_pk_public_enc_keys[i].2,
+                public_enc_keys[i],
+                &challenge,
+                &self.resp_comm_r_i_amount.0[4],
             );
         }
 

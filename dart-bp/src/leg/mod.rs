@@ -335,9 +335,13 @@ pub struct LegEncryption<G: AffineRepr> {
     pub eph_pk_public_enc_keys: Vec<EphemeralPublicKey<G>>,
     /// Ephemeral encryption public keys for mediators in the order they appear in `ct_meds`.
     /// The index corresponds to the encryption key from [`AssetData`].
+    ///
+    /// Invariant: `ct_meds.len() == eph_pk_med_keys.len()`.
     pub eph_pk_med_keys: Vec<(u8, G)>,
     /// Ephemeral encryption public keys for mediators in the order they appear in `ct_public_meds`.
     /// The index corresponds to the encryption key passed by leg creator.
+    ///
+    /// Invariant: `ct_public_meds.len() == eph_pk_public_med_keys.len()`.
     pub eph_pk_public_med_keys: Vec<(u8, G)>,
 }
 
@@ -694,109 +698,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 
         Ok((sender, receiver, asset_id, amount))
     }
-
-    /*    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given r_i
-    pub fn decrypt_given_r(
-        &self,
-        r: LegEncryptionRandomness<F>,
-        enc_key_gen: G,
-        enc_gen: G,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        self.decrypt_given_r_with_limits(r, enc_key_gen, enc_gen, None, None)
-    }
-
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given r_i
-    pub fn decrypt_given_r_with_limits(
-        &self,
-        r: LegEncryptionRandomness<F>,
-        enc_key_gen: G,
-        enc_gen: G,
-        max_asset_id: Option<AssetId>,
-        max_amount: Option<Balance>,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        let LegEncryptionRandomness { r_1: mut r_1, r_2: mut r_2, r_3: mut r_3, r_4: r_4_opt } = r;
-        let enc_key_gen = enc_key_gen.into_group();
-        let enc_gen = enc_gen.into_group();
-        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
-
-        // Decrypt or get revealed asset-id first as they will fail quickly if the wrong `r_i` is used.
-        let asset_id = match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => *asset_id,
-            AssetIdEncryption::Encrypted(ct) => {
-                let mut r_4 = r_4_opt
-                    .ok_or_else(|| Error::DecryptionFailed("Missing r_4 for asset ID decryption".into()))?;
-                let result = self.decrypt_asset_id_given_r(&r_4, *ct, enc_key_gen, enc_gen, max_asset_id)? as AssetId;
-                Zeroize::zeroize(&mut r_4);
-                result
-            }
-        };
-        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen, max_amount)?;
-
-        let sender = Self::decrypt_as_group_element_given_r(&r_1, self.ct_s, enc_key_gen);
-        let receiver = Self::decrypt_as_group_element_given_r(&r_2, self.ct_r, enc_key_gen);
-
-        Zeroize::zeroize(&mut r_1);
-        Zeroize::zeroize(&mut r_2);
-        Zeroize::zeroize(&mut r_3);
-
-        Ok((
-            sender.into_affine(),
-            receiver.into_affine(),
-            asset_id,
-            amount,
-        ))
-    }
-
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given r_i
-    pub fn decrypt_given_r_checked(
-        &self,
-        r: LegEncryptionRandomness<F>,
-        enc_key_gen: G,
-        enc_gen: G,
-        pk: G,
-        is_sender: bool,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        let LegEncryptionRandomness { r_1: mut r_1, r_2: mut r_2, r_3: mut r_3, r_4: mut r_4 } = r;
-        let enc_key_gen = enc_key_gen.into_group();
-
-        // Check that decrypted sender/receiver matches `pk`
-        let (sender, receiver) = if is_sender {
-            let sender =
-                Self::decrypt_as_group_element_given_r(&r_1, self.ct_s, enc_key_gen).into_affine();
-            if pk != sender {
-                return Err(Error::DecryptionFailed(
-                    "Decrypted sender pk does not match".into(),
-                ));
-            }
-            let receiver =
-                Self::decrypt_as_group_element_given_r(&r_2, self.ct_r, enc_key_gen).into_affine();
-            (sender, receiver)
-        } else {
-            let receiver =
-                Self::decrypt_as_group_element_given_r(&r_2, self.ct_r, enc_key_gen).into_affine();
-            if pk != receiver {
-                return Err(Error::DecryptionFailed(
-                    "Decrypted receiver pk does not match".into(),
-                ));
-            }
-            let sender =
-                Self::decrypt_as_group_element_given_r(&r_1, self.ct_s, enc_key_gen).into_affine();
-            (sender, receiver)
-        };
-
-        let enc_gen = enc_gen.into_group();
-        let asset_id =
-            self.decrypt_asset_id_given_r(&r_4, enc_key_gen, enc_gen, MAX_ASSET_ID)? as AssetId;
-        let amount = self.decrypt_amount_given_r(&r_3, enc_key_gen, enc_gen, MAX_BALANCE)?;
-
-        Zeroize::zeroize(&mut r_1);
-        Zeroize::zeroize(&mut r_2);
-        Zeroize::zeroize(&mut r_3);
-        Zeroize::zeroize(&mut r_4);
-
-        Ok((sender, receiver, asset_id, amount))
-    }*/
 
     /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
     /// `key_index` is the index of auditor/mediator key in [`AssetData`]

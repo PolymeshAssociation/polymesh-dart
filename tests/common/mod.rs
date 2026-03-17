@@ -415,14 +415,8 @@ impl DartUserAccountInner {
 
         // Create the mediator affirmation proof.
         log::info!("Mediator generate affirmation proof");
-        let proof = MediatorAffirmationProof::new(
-            rng,
-            leg_ref,
-            &leg_data.enc,
-            &self.keys,
-            0,
-            accept,
-        )?;
+        let proof =
+            MediatorAffirmationProof::new(rng, leg_ref, &leg_data.enc, &self.keys, 0, accept)?;
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())

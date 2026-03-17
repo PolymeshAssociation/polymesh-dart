@@ -326,7 +326,13 @@ impl<
             rerandomized_leaves.extend(re_randomized_path.path.get_rerandomized_leaves());
         }
 
-        debug_assert!(rerandomized_leaves.len() == self.account_proofs.len());
+        if rerandomized_leaves.len() != self.account_proofs.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "Batched curve-tree rerandomization produced {} rerandomized leaves but there are {} account proofs",
+                rerandomized_leaves.len(),
+                self.account_proofs.len()
+            )));
+        }
 
         // Verify each account state transition proof
         for (i, verifier) in account_verifiers.into_iter().enumerate() {

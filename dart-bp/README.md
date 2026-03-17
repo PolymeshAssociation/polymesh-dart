@@ -58,6 +58,20 @@ cd dart-bp
 make pdf
 
 # Output will be: docs/dart-bp-specification.pdf
+
+```
+
+## ⚠️ Testing-only Feature Flags
+
+This crate includes a feature flag intended solely for negative testing of verifier robustness.
+
+- `ignore_prover_input_sanitation`: disables various prover-side input checks/sanitation so tests can intentionally generate malformed or inconsistent prover data.
+  - Purpose: ensure verifiers *reject* bad inputs cleanly (returning `Error::ProofVerificationError(...)`) rather than panicking.
+  - Do **not** enable this feature in production builds. Release builds will fail to compile if this feature is enabled.
+
+Example:
+```bash
+cargo test -p polymesh-dart-bp --features ignore_prover_input_sanitation
 ```
 
 ## 🔄 Continuous Integration

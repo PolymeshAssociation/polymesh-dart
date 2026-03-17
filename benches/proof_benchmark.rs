@@ -436,15 +436,9 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let proof = MediatorAffirmationProof::new(
-        &mut rng,
-        &leg_ref,
-        &leg_enc,
-        &mediator_keys,
-        0,
-        true,
-    )
-    .expect("Failed to generate mediator affirmation proof");
+    let proof =
+        MediatorAffirmationProof::new(&mut rng, &leg_ref, &leg_enc, &mediator_keys, 0, true)
+            .expect("Failed to generate mediator affirmation proof");
 
     // Benchmark: Verify mediator affirmation proof.
     c.bench_function("MediatorAffirmationProof verify", |b| {

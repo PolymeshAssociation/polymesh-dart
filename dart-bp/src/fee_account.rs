@@ -100,8 +100,11 @@ impl<G: AffineRepr> FeeAccountState<G> {
     }
 
     pub fn get_state_for_topup<R: CryptoRngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
-        if amount + self.balance > MAX_FEE_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        let new_balance = amount
+            .checked_add(self.balance)
+            .ok_or_else(|| Error::AmountTooLarge(u64::MAX))?;
+        if new_balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(new_balance));
         }
         let mut new_state = self.clone();
         new_state.balance += amount;
@@ -779,14 +782,13 @@ impl<
             ));
         }
 
-        let _ = self
-            .re_randomized_path
+        self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
                 even_verifier,
                 odd_verifier,
                 account_tree_params,
-            );
+            )?;
 
         let mut transcript = even_verifier.transcript();
 
@@ -1269,14 +1271,13 @@ impl<
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
 
-        let _ = self
-            .re_randomized_path
+        self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
                 &mut even_verifier,
                 &mut odd_verifier,
                 account_tree_params,
-            );
+            )?;
 
         let mut transcript = even_verifier.transcript();
 

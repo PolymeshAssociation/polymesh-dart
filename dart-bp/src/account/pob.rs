@@ -249,6 +249,11 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub resp_null: PartialPokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
     /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
+    ///
+    /// Structural invariants (enforced by the verifier):
+    /// - `resp_asset_id.len() == legs.len()`
+    /// - `resp_asset_id[i].is_some()` iff the corresponding leg hides the asset ID
+    ///   (i.e., iff `!legs[i].is_asset_id_revealed()`)
     pub resp_asset_id: Vec<Option<PartialPokDiscreteLog<G>>>,
     /// Proving relationship `\sum{C_v} - (\sum{R[2]}) * sk_en^{-1} = h * \sum{v}`
     pub resp_recv_amount: Option<PartialPokDiscreteLog<G>>,
@@ -576,15 +581,24 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
         if legs.len() != counter as usize {
-            return Err(Error::ProofGenerationError(
+            return Err(Error::ProofVerificationError(
                 "Number of legs and counter do not match".to_string(),
             ));
         }
         if legs.len() != (sender_in_leg_indices.len() + receiver_in_leg_indices.len()) {
-            return Err(Error::ProofGenerationError(
+            return Err(Error::ProofVerificationError(
                 "Number of legs and indices for sender and receiver do not match".to_string(),
             ));
         }
+
+        if self.resp_asset_id.len() != legs.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_asset_id length mismatch: expected {}, got {}",
+                legs.len(),
+                self.resp_asset_id.len()
+            )));
+        }
+
         if sender_in_leg_indices.len() > 0 {
             if self.resp_sent_amount.is_none() {
                 return Err(Error::ProofVerificationError(
@@ -677,16 +691,58 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 .asset_id_ciphertext()
                 .map(|ct| (ct.into_group() + minus_h_at).into_affine());
             y_asset_id.push(y);
+
+            let expects_asset_id_proof = !legs[i].is_asset_id_revealed();
+            let has_resp = self.resp_asset_id[i].is_some();
+            if expects_asset_id_proof != has_resp {
+                return Err(Error::ProofVerificationError(format!(
+                    "resp_asset_id presence mismatch at leg {}: expected {}, got {}",
+                    i, expects_asset_id_proof, has_resp
+                )));
+            }
+            if expects_asset_id_proof {
+                if eph_pk_bases_for_asset_id[i].is_none() {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Missing asset-id ephemeral key for hidden-asset leg {}",
+                        i
+                    )));
+                }
+                if y_asset_id[i].is_none() {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Missing asset-id ciphertext for hidden-asset leg {}",
+                        i
+                    )));
+                }
+            }
         }
 
         for i in 0..num_pending_txns {
-            if let Some(r) = &self.resp_asset_id[i] {
-                r.challenge_contribution(
-                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
-                    y_asset_id[i].as_ref().unwrap(),
-                    &mut transcript,
-                )?;
+            if legs[i].is_asset_id_revealed() {
+                continue;
             }
+            let resp = self
+                .resp_asset_id
+                .get(i)
+                .and_then(|r| r.as_ref())
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Missing resp_asset_id for hidden-asset leg {}",
+                        i
+                    ))
+                })?;
+            let base = eph_pk_bases_for_asset_id[i].as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing asset-id ephemeral key for hidden-asset leg {}",
+                    i
+                ))
+            })?;
+            let y = y_asset_id[i].as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing asset-id ciphertext relation input for hidden-asset leg {}",
+                    i
+                ))
+            })?;
+            resp.challenge_contribution(base, y, &mut transcript)?;
         }
 
         let y_total_send = if let Some(resp) = &self.resp_sent_amount {
@@ -760,17 +816,35 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let resp_sk_enc_inv = &self.resp_acc.0[3];
         for i in 0..num_pending_txns {
-            if let Some(resp) = &self.resp_asset_id[i] {
-                if !resp.verify(
-                    y_asset_id[i].as_ref().unwrap(),
-                    eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
-                    &challenge,
-                    resp_sk_enc_inv,
-                ) {
-                    return Err(Error::ProofVerificationError(
-                        "Asset-id verification failed".to_string(),
-                    ));
-                }
+            if legs[i].is_asset_id_revealed() {
+                continue;
+            }
+            let resp = self
+                .resp_asset_id
+                .get(i)
+                .and_then(|r| r.as_ref())
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Missing resp_asset_id for hidden-asset leg {}",
+                        i
+                    ))
+                })?;
+            let base = eph_pk_bases_for_asset_id[i].as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing asset-id ephemeral key for hidden-asset leg {}",
+                    i
+                ))
+            })?;
+            let y = y_asset_id[i].as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing asset-id ciphertext relation input for hidden-asset leg {}",
+                    i
+                ))
+            })?;
+            if !resp.verify(y, base, &challenge, resp_sk_enc_inv) {
+                return Err(Error::ProofVerificationError(
+                    "Asset-id verification failed".to_string(),
+                ));
             }
         }
 
@@ -1116,6 +1190,362 @@ mod tests {
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time, verifier_time
+        );
+    }
+
+    #[test]
+    fn pob_with_anyone_missing_resp_asset_id_on_hidden_leg_fails() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let num_pending_txns = 10;
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let mut legs = vec![];
+        let amount = 10u64;
+        let mut pending_sent_amount = 0u64;
+        let mut pending_recv_amount = 0u64;
+        let mut sender_in_leg_indices = BTreeSet::new();
+        let mut receiver_in_leg_indices = BTreeSet::new();
+        for i in 0..num_pending_txns as usize {
+            let leg_enc = if i % 2 == 0 {
+                pending_recv_amount += amount;
+                receiver_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e_other.0,
+                    pk_e.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                    .unwrap();
+                leg_enc
+            } else {
+                pending_sent_amount += amount;
+                sender_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e.0,
+                    pk_e_other.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                    .unwrap();
+                leg_enc
+            };
+            legs.push(leg_enc);
+        }
+
+        let nonce = b"test-nonce";
+
+        let mut proof = PobWithAnyoneProof::new(
+            &mut rng,
+            &pk.0,
+            &account,
+            account_comm.clone(),
+            legs.clone(),
+            sender_in_leg_indices.clone(),
+            receiver_in_leg_indices.clone(),
+            pending_sent_amount,
+            pending_recv_amount,
+            nonce,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+
+        // All legs are hidden-asset-id with default config; dropping one response should fail.
+        proof.resp_asset_id[0] = None;
+
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    account_comm,
+                    legs,
+                    sender_in_leg_indices,
+                    receiver_in_leg_indices,
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key,
+                    enc_gen,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pob_with_anyone_extra_resp_asset_id_on_revealed_leg_fails() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), ((_, _), (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let num_pending_txns = 12;
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let mut legs = vec![];
+        let amount = 10u64;
+        let mut pending_sent_amount = 0u64;
+        let mut pending_recv_amount = 0u64;
+        let mut sender_in_leg_indices = BTreeSet::new();
+        let mut receiver_in_leg_indices = BTreeSet::new();
+        for i in 0..num_pending_txns as usize {
+            let leg_enc = if i % 2 == 0 {
+                pending_recv_amount += amount;
+                receiver_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e_other.0,
+                    pk_e.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let config = if i % 4 == 0 {
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    }
+                } else {
+                    LegEncConfig::default()
+                };
+                let (leg_enc, _) = leg.encrypt(&mut rng, config, enc_key_gen, enc_gen).unwrap();
+                leg_enc
+            } else {
+                pending_sent_amount += amount;
+                sender_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e.0,
+                    pk_e_other.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let config = if i % 4 == 1 {
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    }
+                } else {
+                    LegEncConfig::default()
+                };
+                let (leg_enc, _) = leg.encrypt(&mut rng, config, enc_key_gen, enc_gen).unwrap();
+                leg_enc
+            };
+            legs.push(leg_enc);
+        }
+
+        let nonce = b"test-nonce";
+
+        let mut proof = PobWithAnyoneProof::new(
+            &mut rng,
+            &pk.0,
+            &account,
+            account_comm.clone(),
+            legs.clone(),
+            sender_in_leg_indices.clone(),
+            receiver_in_leg_indices.clone(),
+            pending_sent_amount,
+            pending_recv_amount,
+            nonce,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+
+        // Find one revealed leg and one hidden leg response; copy hidden response into revealed slot.
+        let revealed_idx = legs
+            .iter()
+            .position(|l| l.is_asset_id_revealed())
+            .expect("test requires at least one revealed leg");
+        let hidden_idx = legs
+            .iter()
+            .position(|l| !l.is_asset_id_revealed())
+            .expect("test requires at least one hidden leg");
+        let hidden_resp = proof.resp_asset_id[hidden_idx]
+            .as_ref()
+            .expect("hidden leg should have asset-id response")
+            .clone();
+        proof.resp_asset_id[revealed_idx] = Some(hidden_resp);
+
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    account_comm,
+                    legs,
+                    sender_in_leg_indices,
+                    receiver_in_leg_indices,
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key,
+                    enc_gen,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pob_with_anyone_resp_asset_id_len_mismatch_fails() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let num_pending_txns = 6;
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let mut legs = vec![];
+        let amount = 10u64;
+        let mut pending_sent_amount = 0u64;
+        let mut pending_recv_amount = 0u64;
+        let mut sender_in_leg_indices = BTreeSet::new();
+        let mut receiver_in_leg_indices = BTreeSet::new();
+        for i in 0..num_pending_txns as usize {
+            let leg_enc = if i % 2 == 0 {
+                pending_recv_amount += amount;
+                receiver_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e_other.0,
+                    pk_e.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                    .unwrap();
+                leg_enc
+            } else {
+                pending_sent_amount += amount;
+                sender_in_leg_indices.insert(i);
+                let leg = Leg::new(
+                    pk_e.0,
+                    pk_e_other.0,
+                    amount,
+                    asset_id,
+                    vec![pk_a_e.0],
+                    vec![],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, _) = leg
+                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                    .unwrap();
+                leg_enc
+            };
+            legs.push(leg_enc);
+        }
+
+        let nonce = b"test-nonce";
+
+        let mut proof = PobWithAnyoneProof::new(
+            &mut rng,
+            &pk.0,
+            &account,
+            account_comm.clone(),
+            legs.clone(),
+            sender_in_leg_indices.clone(),
+            receiver_in_leg_indices.clone(),
+            pending_sent_amount,
+            pending_recv_amount,
+            nonce,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+
+        proof.resp_asset_id.pop();
+
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    account_comm,
+                    legs,
+                    sender_in_leg_indices,
+                    receiver_in_leg_indices,
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key,
+                    enc_gen,
+                )
+                .is_err()
         );
     }
 }

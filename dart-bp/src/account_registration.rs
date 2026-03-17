@@ -176,9 +176,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // 2. balance is 0
         // 3. counter is 0
         // 4. Knowledge of randomness
-        // 5. pk_enc = enc_key_gen * sk_enc
-        // 6. pk_enc_inv = enc_key_gen * sk_enc^{-1}
-        // 7. if T is provided, prove that randomness is encrypted correctly for pk_T and enc_pk_inv
+        // 5. pk_aff = pk_gen * sk_aff
+        // 6. pk_enc = enc_key_gen * sk_enc
+        // 7. pk_enc_inv = enc_key_gen * sk_enc^{-1}
+        // 8. if T is provided, prove that randomness is encrypted correctly for pk_T and enc_pk_inv
 
         let mut transcript_ref = prover.transcript();
         add_to_transcript!(
@@ -210,7 +211,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut sk_enc_blinding = G::ScalarField::rand(rng);
         let mut sk_enc_inv_blinding = G::ScalarField::rand(rng);
 
-        // Compute pk_enc_inv = enc_key_gen * sk_enc^{-1} (this will be a public output)
+        // Compute pk_enc_inv = enc_key_gen * sk_enc^{-1} (this will be public)
         let pk_enc_inv = (enc_key_gen * account.sk_enc_inv).into_affine();
 
         // For proving Comm - D - initial_nullifier - pk_enc_inv = g_i * rho^2 + g_j * s
@@ -246,7 +247,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         // Prove pk_enc = enc_key_gen * sk_enc
         let pk_enc_protocol = PokDiscreteLogProtocol::init(
-            account.sk_enc_inv.inverse().unwrap(),
+            account.sk_enc_inv.inverse().ok_or(Error::InvertingZero)?,
             sk_enc_blinding,
             &enc_key_gen,
         );
@@ -1406,7 +1407,9 @@ fn ensure_correct_registration_state<G: AffineRepr>(
                 "Incorrect affirmation secret key".to_string(),
             ));
         }
-        if (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine() != pk_enc {
+        if (enc_key_gen * account.sk_enc_inv.inverse().ok_or(Error::InvertingZero)?).into_affine()
+            != pk_enc
+        {
             return Err(Error::RegistrationError(
                 "Incorrect encryption secret key".to_string(),
             ));

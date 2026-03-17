@@ -203,8 +203,18 @@ impl<
         challenge: &F0,
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters0>,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
-        let even_prover = self.even_prover.take().unwrap();
-        let odd_prover = self.odd_prover.take().unwrap();
+        let even_prover = self.even_prover.take().ok_or_else(|| {
+            Error::ProofGenerationError(
+                "even_prover is missing or already consumed; use init() or avoid reusing the prover"
+                    .to_string(),
+            )
+        })?;
+        let odd_prover = self.odd_prover.take().ok_or_else(|| {
+            Error::ProofGenerationError(
+                "odd_prover is missing or already consumed; use init() or avoid reusing the prover"
+                    .to_string(),
+            )
+        })?;
 
         let mut proof = self.generate_sigma_responses(account, updated_account, challenge)?;
 
@@ -543,7 +553,12 @@ impl<
         ct_amount: &[(Affine<G0>, Affine<G0>)],
         enc_gen: Affine<G0>,
     ) -> Result<()> {
-        let mut even_verifier = self.even_verifier.take().unwrap();
+        let mut even_verifier = self.even_verifier.take().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "even_verifier is missing or already consumed; use init() or init_with_given_verifier*"
+                    .to_string(),
+            )
+        })?;
         self.init_balance_change_verification_with_given_verifier(
             proof,
             ct_amount,
@@ -625,8 +640,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let even_verifier = self.even_verifier.take().unwrap();
-        let odd_verifier = self.odd_verifier.take().unwrap();
+        let even_verifier = self.even_verifier.take().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "even_verifier is missing or already consumed".to_string(),
+            )
+        })?;
+        let odd_verifier = self.odd_verifier.take().ok_or_else(|| {
+            Error::ProofVerificationError("odd_verifier is missing or already consumed".to_string())
+        })?;
 
         self.verify_sigma_protocols(
             common_state_change_proof,
@@ -689,7 +710,7 @@ impl<
             ROOT_LABEL,
             root,
             RE_RANDOMIZED_PATH_LABEL,
-            proof.re_randomized_path.as_ref().unwrap(),
+            re_randomized_path,
         );
 
         Self::init_with_given_verifier_with_rerandomized_leaf(
@@ -923,10 +944,34 @@ impl<
                 &balance_change_proof.t_comm_bp_bal,
                 &balance_change_proof.resp_comm_bp_bal,
                 &challenge,
-                common_state_change_proof.resp_leaf.0[BALANCE_GEN_INDEX],
-                common_state_change_proof.resp_acc_new.responses[&BALANCE_GEN_INDEX],
-                common_state_change_proof.resp_leaf.0
-                    [SK_ENC_INV_GEN_INDEX - asset_id.is_some() as usize], // adjust response index for sk_enc^{-1} if asset-id is revealed
+                *common_state_change_proof
+                    .resp_leaf
+                    .0
+                    .get(BALANCE_GEN_INDEX)
+                    .ok_or_else(|| {
+                        Error::ProofVerificationError(format!(
+                            "Missing resp_leaf response at BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
+                        ))
+                    })?,
+                *common_state_change_proof
+                    .resp_acc_new
+                    .responses
+                    .get(&BALANCE_GEN_INDEX)
+                    .ok_or_else(|| {
+                        Error::ProofVerificationError(format!(
+                            "Missing resp_acc_new response for BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
+                        ))
+                    })?,
+                *common_state_change_proof
+                    .resp_leaf
+                    .0
+                    .get(SK_ENC_INV_GEN_INDEX - asset_id.is_some() as usize)
+                    .ok_or_else(|| {
+                        Error::ProofVerificationError(format!(
+                            "Missing resp_leaf response for sk_enc_inv index {}",
+                            SK_ENC_INV_GEN_INDEX - asset_id.is_some() as usize
+                        ))
+                    })?, // adjust response index for sk_enc^{-1} if asset-id is revealed
                 pc_gens,
                 bp_gens,
                 enc_gen,

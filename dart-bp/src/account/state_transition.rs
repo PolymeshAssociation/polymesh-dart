@@ -652,8 +652,18 @@ impl<
             enc_gen,
         )?;
 
-        let mut even_verifier = verifier.even_verifier.take().unwrap();
-        let odd_verifier = verifier.odd_verifier.take().unwrap();
+        let mut even_verifier = verifier.even_verifier.take().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "even_verifier is missing or already consumed; use init() or init_with_given_verifier*"
+                    .to_string(),
+            )
+        })?;
+        let odd_verifier = verifier.odd_verifier.take().ok_or_else(|| {
+            Error::ProofVerificationError(
+                "odd_verifier is missing or already consumed; use init() or init_with_given_verifier*"
+                    .to_string(),
+            )
+        })?;
 
         self.verify_sigma_protocols_given_state_change_verifier(
             proof,

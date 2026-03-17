@@ -1856,8 +1856,10 @@ fn large_settlement_verification() {
     let amount = 100;
     let nonce = b"test-nonce";
 
-    // Reduced num_legs as per user request to avoid "Not enough labels" error
-    let num_legs = 30;
+    // NOTE: The upstream `bulletproofs` fork used here has a fixed cap on transcript labels
+    // for the `t` polynomial (`util::T_LABELS.len() == 401`), which limits the number of
+    // vector commitments per aggregated R1CS proof. Keep this test below that cap.
+    let num_legs = 20;
     let mut legs = Vec::with_capacity(num_legs);
     let mut leg_encs = Vec::with_capacity(num_legs);
     let mut leg_enc_rands = Vec::with_capacity(num_legs);
@@ -2012,7 +2014,8 @@ fn combined_settlement_verification() {
     let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
     let amount = 100;
 
-    let batch_size = 3;
+    // See note in `large_settlement_verification` about the `t` polynomial label cap.
+    let batch_size = 2;
     let mut nonces = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
         nonces.push(format!("nonce_{}", i).into_bytes());

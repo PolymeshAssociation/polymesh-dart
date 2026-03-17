@@ -567,7 +567,7 @@ impl<
                 if let bp_leg::AssetIdEncryption::Revealed(asset_id) = leg_enc.ct_asset_id {
                     let asset = asset_lookup(asset_id)?;
                     let asset_data = asset.asset_data()?;
-                    
+
                     let public_enc_keys: Vec<PallasA> = proof
                         .public_enc_keys
                         .iter()
@@ -578,7 +578,7 @@ impl<
                         .iter()
                         .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
                         .collect::<Result<_, Error>>()?;
-                    
+
                     Ok(Some((
                         asset_data.enc_keys.clone(),
                         asset_data.med_keys.clone(),
@@ -609,9 +609,12 @@ impl<
         match self {
             Self::HiddenAssetId(p) => p.verify(ctx, root, rng),
             Self::RevealedAssetId(p) => {
-                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys.ok_or_else(|| {
-                    Error::ProofGenerationError("Asset keys required for revealed asset ID proof".into())
-                })?;
+                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys
+                    .ok_or_else(|| {
+                        Error::ProofGenerationError(
+                            "Asset keys required for revealed asset ID proof".into(),
+                        )
+                    })?;
                 p.verify(
                     ctx,
                     enc_keys,
@@ -645,9 +648,12 @@ impl<
         match self {
             Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng),
             Self::RevealedAssetId(p) => {
-                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys.ok_or_else(|| {
-                    Error::ProofGenerationError("Asset keys required for revealed asset ID proof".into())
-                })?;
+                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys
+                    .ok_or_else(|| {
+                        Error::ProofGenerationError(
+                            "Asset keys required for revealed asset ID proof".into(),
+                        )
+                    })?;
                 let odd_tuple = p.batched_verify(
                     ctx,
                     enc_keys,
@@ -1127,7 +1133,7 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
-        
+
         let public_enc_keys: Vec<PallasA> = self
             .public_enc_keys
             .iter()
@@ -1138,7 +1144,7 @@ impl<
             .iter()
             .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
             .collect::<Result<_, Error>>()?;
-        
+
         let tuples = proof.verify_and_return_tuples(
             leg_enc.clone(),
             &root,

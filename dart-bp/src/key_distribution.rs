@@ -74,6 +74,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 == NUM_CHUNKS)
     );
 
+    /// `sk` is the secret key being (in encrypted form) shared and `pk` is the corresponding public key, i.e. `pk = sk * enc_key_gen`
+    /// `sk` is encrypted for each of `recipient_pks`
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         sk: G::ScalarField,
@@ -259,6 +261,23 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         if self.recipient_cts.len() != recipient_pks.len() {
             return Err(Error::MismatchedRecipientCount);
+        }
+
+        if self.resp_recipient_cts.len() != recipient_pks.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "Mismatched recipient count in responses: resp_recipient_cts.len() = {}, recipient_pks.len() = {}",
+                self.resp_recipient_cts.len(),
+                recipient_pks.len()
+            )));
+        }
+
+        // Keep response/ciphertext vectors aligned as well.
+        if self.resp_recipient_cts.len() != self.recipient_cts.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "Mismatched recipient count between responses and ciphertexts: resp_recipient_cts.len() = {}, recipient_cts.len() = {}",
+                self.resp_recipient_cts.len(),
+                self.recipient_cts.len()
+            )));
         }
 
         let mut transcript = MerlinTranscript::new(ENC_KEY_DIST_LABEL);
