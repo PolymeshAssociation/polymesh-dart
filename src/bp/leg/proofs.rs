@@ -501,6 +501,126 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     }
 }
 
+type BPReceiverCounterUpdateTxnProof<C> = bp_account::ReceiverCounterUpdateTxnProof<
+    ACCOUNT_TREE_L,
+    <C as CurveTreeConfig>::F0,
+    <C as CurveTreeConfig>::F1,
+    <C as CurveTreeConfig>::P0,
+    <C as CurveTreeConfig>::P1,
+>;
+
+/// Receiver counter update proof in the Dart BP protocol.
+///
+/// This is used for updating the receiver's account state after a settlement has been rejected.
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(C))]
+pub struct ReceiverCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
+    pub leg_ref: LegRef,
+    pub root_block: BlockNumber,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
+
+    inner: WrappedCanonical<BPReceiverCounterUpdateTxnProof<C>>,
+}
+
+impl<
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> ReceiverCounterUpdateProof<C>
+{
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        account: &AccountKeyPair,
+        leg_ref: &LegRef,
+        leg_enc: &LegEncrypted,
+        leg_enc_rand: &LegEncryptionRandomness,
+        account_asset: &mut AccountAssetState,
+        tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+    ) -> Result<Self, Error> {
+        // Generate a new account state for decreasing the counter.
+        let state_change = account_asset.get_state_for_decreasing_counter(account)?;
+        let updated_account_state_commitment = state_change.commitment()?;
+        let current_account_path = state_change.get_path(&tree_lookup)?;
+
+        let root_block = tree_lookup.get_block_number()?;
+        let root = tree_lookup.root()?;
+        let root = root.root_node()?;
+
+        let ctx = leg_ref.context();
+        let (proof, nullifier) =
+            bp_account::ReceiverCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+                rng,
+                leg_enc.decode()?,
+                leg_enc_rand.decode()?,
+                &state_change.current_state,
+                &state_change.new_state,
+                state_change.new_commitment,
+                current_account_path,
+                &root,
+                ctx.as_bytes(),
+                tree_lookup.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+            )?;
+
+        Ok(Self {
+            leg_ref: leg_ref.clone(),
+            root_block: try_block_number(root_block)?,
+            updated_account_state_commitment,
+            nullifier: AccountStateNullifier::from_affine(nullifier)?,
+
+            inner: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: &LegEncrypted,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        // Get the curve tree root.
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for receiver counter update proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+
+        let ctx = self.leg_ref.context();
+        let proof = self.inner.decode()?;
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let rmc = Some((&mut even_rmc, &mut odd_rmc));
+        proof.verify(
+            rng,
+            leg_enc.decode()?,
+            &root,
+            self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
+            ctx.as_bytes(),
+            tree_roots.params(),
+            dart_gens().account_comm_key(),
+            dart_gens().enc_key_gen(),
+            dart_gens().leg_asset_value_gen(),
+            rmc,
+        )?;
+        if !even_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        if !odd_rmc.verify() {
+            return Err(Error::RMCVerifyError);
+        }
+        Ok(())
+    }
+}
+
 type BPSenderCounterUpdateTxnProof<C> = bp_account::SenderCounterUpdateTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
