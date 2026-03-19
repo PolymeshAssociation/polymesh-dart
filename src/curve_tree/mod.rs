@@ -21,7 +21,7 @@ use ark_ec_divisors::curves::{
     vesta::{Point as VestaPoint, VestaParams},
 };
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use curve_tree_relations::parameters::{
+pub use curve_tree_relations::parameters::{
     SelRerandProofParametersNew, SingleLayerParameters, SingleLayerProofParametersNew,
 };
 use scale_info::TypeInfo;
@@ -181,23 +181,20 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 
 #[cfg(not(feature = "parallel"))]
 fn get_pallas_and_vesta_layer_parameters() -> (
-    SingleLayerProofParametersNew<PallasParameters, VestaParams>,
-    SingleLayerProofParametersNew<VestaParameters, PallasParams>,
+    &'static SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+    &'static SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
-    (
-        get_pallas_layer_parameters().clone(),
-        get_vesta_layer_parameters().clone(),
-    )
+    (get_pallas_layer_parameters(), get_vesta_layer_parameters())
 }
 
 #[cfg(feature = "parallel")]
 fn get_pallas_and_vesta_layer_parameters() -> (
-    SingleLayerProofParametersNew<PallasParameters, VestaParams>,
-    SingleLayerProofParametersNew<VestaParameters, PallasParams>,
+    &'static SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+    &'static SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
     rayon::join(
-        || get_pallas_layer_parameters().clone(),
-        || get_vesta_layer_parameters().clone(),
+        || get_pallas_layer_parameters(),
+        || get_vesta_layer_parameters(),
     )
 }
 
@@ -271,8 +268,8 @@ impl CurveTreeConfig for AssetTreeConfig {
     -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandProofParametersNew {
-            even_parameters: vesta_params,
-            odd_parameters: pallas_params,
+            even_parameters: (*vesta_params).clone(),
+            odd_parameters: (*pallas_params).clone(),
         }
     }
 
@@ -306,8 +303,8 @@ impl CurveTreeConfig for AccountTreeConfig {
     -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandProofParametersNew {
-            odd_parameters: vesta_params,
-            even_parameters: pallas_params,
+            odd_parameters: (*vesta_params).clone(),
+            even_parameters: (*pallas_params).clone(),
         }
     }
 
@@ -341,8 +338,8 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     -> SelRerandProofParametersNew<Self::P0, Self::P1, Self::DLogParams0, Self::DLogParams1> {
         let (pallas_params, vesta_params) = get_pallas_and_vesta_layer_parameters();
         SelRerandProofParametersNew {
-            odd_parameters: vesta_params,
-            even_parameters: pallas_params,
+            odd_parameters: (*vesta_params).clone(),
+            even_parameters: (*pallas_params).clone(),
         }
     }
 
