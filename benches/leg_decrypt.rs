@@ -28,7 +28,6 @@ fn decrypt_benchmark(c: &mut Criterion) {
                 vec![],
                 vec![],
                 vec![],
-                vec![],
             )
             .expect("Failed to encrypt leg");
 
@@ -93,7 +92,6 @@ fn decrypt_benchmark(c: &mut Criterion) {
                 LegEncConfig::default(),
                 sender.enc,
                 receiver.enc,
-                vec![],
                 vec![],
                 vec![],
                 vec![],

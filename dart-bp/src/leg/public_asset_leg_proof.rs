@@ -49,8 +49,6 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G>>>,
     pub resp_ct_meds: Vec<PokDiscreteLog<Affine<G>>>,
     pub resp_eph_pk_meds: Vec<PartialPokDiscreteLog<Affine<G>>>,
-    pub resp_ct_public_meds: Vec<PokDiscreteLog<Affine<G>>>,
-    pub resp_eph_pk_public_meds: Vec<PartialPokDiscreteLog<Affine<G>>>,
     /// Proof of correctness of ephemeral public keys of asset auditors.
     pub resp_eph_pk_enc: Vec<(
         PartialPokDiscreteLog<Affine<G>>,
@@ -159,7 +157,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_3 = leg_enc_rand.r3;
 
         let r_meds = leg_enc_rand.r_meds.clone();
-        let r_public_meds = leg_enc_rand.r_public_meds.clone();
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
 
@@ -182,9 +179,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_1_r_2_inv_blinding = parties_see_each_other.then(|| G::ScalarField::rand(rng));
 
         let mut r_meds_blindings = (0..r_meds.len())
-            .map(|_| G::ScalarField::rand(rng))
-            .collect::<Vec<_>>();
-        let mut r_public_meds_blindings = (0..r_public_meds.len())
             .map(|_| G::ScalarField::rand(rng))
             .collect::<Vec<_>>();
 
@@ -254,8 +248,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut ct_meds_proto = Vec::with_capacity(leg_enc.ct_meds.len());
         let mut eph_pk_meds_proto = Vec::with_capacity(leg_enc.ct_meds.len());
         let mut eph_pk_enc_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
-        let mut ct_public_meds_proto = Vec::with_capacity(leg_enc.ct_public_meds.len());
-        let mut eph_pk_public_meds_proto = Vec::with_capacity(leg_enc.ct_public_meds.len());
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg_enc.eph_pk_public_enc_keys.len());
 
         for i in 0..leg_enc.ct_meds.len() {
@@ -282,21 +274,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 PokDiscreteLogProtocol::init(r_1, r_1_blinding, &leg.enc_keys[i]),
                 PokDiscreteLogProtocol::init(r_2, r_2_blinding, &leg.enc_keys[i]),
                 PokDiscreteLogProtocol::init(r_3, r_3_blinding, &leg.enc_keys[i]),
-            ));
-        }
-
-        for i in 0..leg_enc.ct_public_meds.len() {
-            // For proving ct_m[i] - pk_m[i] = enc_key_gen * r_public_meds[i]
-            ct_public_meds_proto.push(PokDiscreteLogProtocol::init(
-                r_public_meds[i],
-                r_public_meds_blindings[i],
-                &enc_key_gen,
-            ));
-            // For proving M[i] = pk_en[i] * r_public_meds[i]
-            eph_pk_public_meds_proto.push(PokDiscreteLogProtocol::init(
-                r_public_meds[i],
-                r_public_meds_blindings[i],
-                &leg.public_enc_keys[leg.public_med_keys[i].0 as usize],
             ));
         }
 
@@ -386,7 +363,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Zeroize::zeroize(&mut r_1_r_2_inv_blinding);
 
         Zeroize::zeroize(&mut r_meds_blindings);
-        Zeroize::zeroize(&mut r_public_meds_blindings);
 
         {
             let mut transcript_ref = prover.transcript();
@@ -483,23 +459,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 )?;
             }
 
-            let y_ct_public_meds = (0..leg_enc.ct_public_meds.len())
-                .map(|i| leg_enc.ct_public_meds[i] - leg.public_med_keys[i].1)
-                .collect::<Vec<_>>();
-            let y_ct_public_meds = Projective::normalize_batch(&y_ct_public_meds);
-            for i in 0..leg_enc.ct_public_meds.len() {
-                ct_public_meds_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &y_ct_public_meds[i],
-                    &mut transcript_ref,
-                )?;
-                eph_pk_public_meds_proto[i].challenge_contribution(
-                    &leg.public_enc_keys[leg.public_med_keys[i].0 as usize],
-                    &leg_enc.eph_pk_public_med_keys[i].1,
-                    &mut transcript_ref,
-                )?;
-            }
-
             for i in 0..leg_enc.eph_pk_public_enc_keys.len() {
                 eph_pk_public_enc_proto[i].0.challenge_contribution(
                     &leg.public_enc_keys[i],
@@ -543,14 +502,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             .into_iter()
             .map(|p| p.gen_partial_proof())
             .collect();
-        let resp_ct_public_meds = ct_public_meds_proto
-            .into_iter()
-            .map(|p| p.gen_proof(&challenge))
-            .collect();
-        let resp_eph_pk_public_meds = eph_pk_public_meds_proto
-            .into_iter()
-            .map(|p| p.gen_partial_proof())
-            .collect();
 
         let resp_eph_pk_enc = eph_pk_enc_proto
             .into_iter()
@@ -590,8 +541,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp_eph_pk_r_s,
             resp_ct_meds,
             resp_eph_pk_meds,
-            resp_ct_public_meds,
-            resp_eph_pk_public_meds,
             resp_eph_pk_enc,
             resp_eph_pk_public_enc,
             comm_r_i_amount,
@@ -612,7 +561,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
-        public_med_keys: Vec<(u8, Affine<G>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
@@ -625,7 +573,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             nonce,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
@@ -655,7 +602,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
-        public_med_keys: Vec<(u8, Affine<G>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
@@ -671,7 +617,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             nonce,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
@@ -699,7 +644,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
-        public_med_keys: Vec<(u8, Affine<G>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
@@ -723,7 +667,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
             enc_key_gen,
@@ -739,7 +682,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
-        public_med_keys: Vec<(u8, Affine<G>)>, // (index in public_enc_keys, mediator affirmation key)
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
         enc_key_gen: Affine<G>,
@@ -782,20 +724,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 public_enc_keys.len()
             )));
         }
-        if self.resp_ct_public_meds.len() != public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_public_meds.len() != public_med_keys.len() ({} != {})",
-                self.resp_ct_public_meds.len(),
-                public_med_keys.len()
-            )));
-        }
-        if self.resp_eph_pk_public_meds.len() != public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_eph_pk_public_meds.len() != public_med_keys.len() ({} != {})",
-                self.resp_eph_pk_public_meds.len(),
-                public_med_keys.len()
-            )));
-        }
 
         if leg_enc.ct_meds.len() != med_keys.len() {
             return Err(Error::ProofVerificationError(format!(
@@ -811,20 +739,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 med_keys.len()
             )));
         }
-        if leg_enc.ct_public_meds.len() != public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "leg_enc.ct_public_meds.len() != public_med_keys.len() ({} != {})",
-                leg_enc.ct_public_meds.len(),
-                public_med_keys.len()
-            )));
-        }
-        if leg_enc.eph_pk_public_med_keys.len() != public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "leg_enc.eph_pk_public_med_keys.len() != public_med_keys.len() ({} != {})",
-                leg_enc.eph_pk_public_med_keys.len(),
-                public_med_keys.len()
-            )));
-        }
+
         if leg_enc.eph_pk_enc_keys.len() != enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_enc_keys.len() != enc_keys.len() ({} != {})",
@@ -852,21 +767,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 ({}) != med_keys[{i}].0 ({})",
                     leg_enc.eph_pk_med_keys[i].0, *idx
-                )));
-            }
-        }
-        for (i, (idx, _)) in public_med_keys.iter().enumerate() {
-            if (*idx as usize) >= public_enc_keys.len() {
-                return Err(Error::ProofVerificationError(format!(
-                    "public_med_keys[{i}].0 index {} out of range for public_enc_keys.len() {}",
-                    *idx,
-                    public_enc_keys.len()
-                )));
-            }
-            if leg_enc.eph_pk_public_med_keys[i].0 != *idx {
-                return Err(Error::ProofVerificationError(format!(
-                    "leg_enc.eph_pk_public_med_keys[{i}].0 ({}) != public_med_keys[{i}].0 ({})",
-                    leg_enc.eph_pk_public_med_keys[i].0, *idx
                 )));
             }
         }
@@ -978,11 +878,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             .collect::<Vec<_>>();
         let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
 
-        let y_ct_public_meds = (0..leg_enc.ct_public_meds.len())
-            .map(|i| leg_enc.ct_public_meds[i] - public_med_keys[i].1)
-            .collect::<Vec<_>>();
-        let y_ct_public_meds = Projective::normalize_batch(&y_ct_public_meds);
-
         for i in 0..self.resp_ct_meds.len() {
             self.resp_ct_meds[i].challenge_contribution(
                 &enc_key_gen,
@@ -1012,20 +907,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             self.resp_eph_pk_enc[i].2.challenge_contribution(
                 &enc_keys[i],
                 &leg_enc.eph_pk_enc_keys[i].2,
-                &mut transcript_ref,
-            )?;
-        }
-
-        for i in 0..self.resp_ct_public_meds.len() {
-            self.resp_ct_public_meds[i].challenge_contribution(
-                &enc_key_gen,
-                &y_ct_public_meds[i],
-                &mut transcript_ref,
-            )?;
-            // M[i] = pk_en[public_med_keys[i].0] * r_public_meds[i]
-            self.resp_eph_pk_public_meds[i].challenge_contribution(
-                &public_enc_keys[public_med_keys[i].0 as usize],
-                &leg_enc.eph_pk_public_med_keys[i].1,
                 &mut transcript_ref,
             )?;
         }
@@ -1211,29 +1092,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             );
         }
 
-        // Verify public mediator ciphertexts and ephemeral keys
-        for i in 0..self.resp_ct_public_meds.len() {
-            verify_or_rmc_2!(
-                rmc,
-                self.resp_ct_public_meds[i],
-                format!("resp_ct_public_meds[{}] verification failed", i),
-                y_ct_public_meds[i],
-                enc_key_gen,
-                &challenge,
-            );
-
-            // M[i] = pk_en[public_med_keys[i].0] * r_public_meds[i]
-            verify_or_rmc_2!(
-                rmc,
-                self.resp_eph_pk_public_meds[i],
-                format!("resp_eph_pk_public_meds[{}] verification failed", i),
-                leg_enc.eph_pk_public_med_keys[i].1,
-                public_enc_keys[public_med_keys[i].0 as usize],
-                &challenge,
-                &self.resp_ct_public_meds[i].response,
-            );
-        }
-
         // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
         for i in 0..self.resp_eph_pk_public_enc.len() {
             verify_or_rmc_2!(
@@ -1398,7 +1256,6 @@ mod tests {
         let num_enc_keys = 2;
         let num_mediators = 2;
         let num_public_enc_keys = 1;
-        let num_public_mediators = 1;
 
         let keys_enc = (0..num_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
@@ -1408,9 +1265,6 @@ mod tests {
             .collect::<Vec<_>>();
         let keys_public_enc = (0..num_public_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
-            .collect::<Vec<_>>();
-        let keys_public_mediator = (0..num_public_mediators)
-            .map(|_| keygen_sig(&mut rng, sig_key_gen))
             .collect::<Vec<_>>();
 
         let amount = 100;
@@ -1424,11 +1278,6 @@ mod tests {
             .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
             .collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
-        let public_med_keys: Vec<_> = keys_public_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_public_enc_keys as u8, k.0))
-            .collect();
 
         let leg = Leg::new(
             pk_s_e.0,
@@ -1438,7 +1287,6 @@ mod tests {
             enc_keys.clone(),
             med_keys.clone(),
             public_enc_keys.clone(),
-            public_med_keys.clone(),
         )
         .unwrap();
 
@@ -1483,7 +1331,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
@@ -1503,7 +1350,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
@@ -1562,7 +1408,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
@@ -1582,7 +1427,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
@@ -1620,7 +1464,6 @@ mod tests {
         let num_enc_keys = 3;
         let num_mediators = 2;
         let num_public_enc_keys = 2;
-        let num_public_mediators = 1;
 
         let keys_enc = (0..num_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
@@ -1631,9 +1474,6 @@ mod tests {
         let keys_public_enc = (0..num_public_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
-        let keys_public_mediator = (0..num_public_mediators)
-            .map(|_| keygen_sig(&mut rng, sig_key_gen))
-            .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
         let med_keys: Vec<_> = keys_mediator
@@ -1642,11 +1482,6 @@ mod tests {
             .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
             .collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
-        let public_med_keys: Vec<_> = keys_public_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_public_enc_keys as u8, k.0))
-            .collect();
 
         // Create multiple legs and proofs
         let mut legs = Vec::new();
@@ -1671,7 +1506,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
             )
             .unwrap();
 
@@ -1718,7 +1552,6 @@ mod tests {
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
-                    public_med_keys.clone(),
                     &nonces[i],
                     &leaf_level_pc_gens,
                     &leaf_level_bp_gens,
@@ -1742,7 +1575,6 @@ mod tests {
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
-                    public_med_keys.clone(),
                     &nonces[i],
                     &leaf_level_pc_gens,
                     &leaf_level_bp_gens,
@@ -1799,7 +1631,6 @@ mod tests {
         let num_enc_keys = 3;
         let num_mediators = 2;
         let num_public_enc_keys = 2;
-        let num_public_mediators = 1;
 
         let keys_enc = (0..num_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
@@ -1810,9 +1641,6 @@ mod tests {
         let keys_public_enc = (0..num_public_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
-        let keys_public_mediator = (0..num_public_mediators)
-            .map(|_| keygen_sig(&mut rng, sig_key_gen))
-            .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
         let med_keys: Vec<_> = keys_mediator
@@ -1821,11 +1649,6 @@ mod tests {
             .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
             .collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
-        let public_med_keys: Vec<_> = keys_public_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_public_enc_keys as u8, k.0))
-            .collect();
 
         let mut legs = Vec::with_capacity(BATCH_SIZE);
         let mut leg_encs = Vec::with_capacity(BATCH_SIZE);
@@ -1845,7 +1668,6 @@ mod tests {
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
             )
             .unwrap();
 
@@ -1909,7 +1731,6 @@ mod tests {
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
-                    public_med_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
                     &leaf_level_bp_gens,

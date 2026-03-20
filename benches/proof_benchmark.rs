@@ -207,7 +207,6 @@ fn proof_benchmark(c: &mut Criterion) {
                     amount: leg_amount,
                     config: LegConfig::default(),
                     public_enc_keys: vec![],
-                    public_med_keys: vec![],
                 }))
                 .encrypt_and_prove(&mut rng, &asset_tree.tree)
                 .expect("Failed to create settlement");
@@ -223,7 +222,6 @@ fn proof_benchmark(c: &mut Criterion) {
             amount: leg_amount,
             config: LegConfig::default(),
             public_enc_keys: vec![],
-            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, &asset_tree.tree)
         .expect("Failed to create settlement");

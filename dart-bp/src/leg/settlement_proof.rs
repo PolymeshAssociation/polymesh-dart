@@ -309,7 +309,6 @@ impl<
         enc_keys: Vec<Vec<Affine<G0>>>,
         med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
-        public_med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -332,7 +331,6 @@ impl<
                 enc_keys,
                 med_keys,
                 public_enc_keys,
-                public_med_keys,
                 nonce,
                 tree_parameters,
                 asset_comm_params,
@@ -360,7 +358,6 @@ impl<
         enc_keys: Vec<Vec<Affine<G0>>>,
         med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
-        public_med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -380,7 +377,6 @@ impl<
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -418,7 +414,6 @@ impl<
         enc_keys: Vec<Vec<Affine<G0>>>,
         med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
-        public_med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -440,13 +435,6 @@ impl<
                 "public_enc_keys.len() must be 0 or num_legs ({}), got {}",
                 num_legs,
                 public_enc_keys.len()
-            )));
-        }
-        if !public_med_keys.is_empty() && public_med_keys.len() != num_legs {
-            return Err(Error::ProofVerificationError(format!(
-                "public_med_keys.len() must be 0 or num_legs ({}), got {}",
-                num_legs,
-                public_med_keys.len()
             )));
         }
 
@@ -533,11 +521,6 @@ impl<
             } else {
                 public_enc_keys[i].clone()
             };
-            let leg_public_med_keys = if public_med_keys.is_empty() {
-                vec![]
-            } else {
-                public_med_keys[i].clone()
-            };
 
             match &self.leg_proofs[i] {
                 LegProof::HiddenAssetProof(proof) => {
@@ -550,7 +533,6 @@ impl<
                         leg_encs[i].clone(),
                         all_rerandomized_leaves[hidden_asset_idx],
                         leg_public_enc_keys,
-                        leg_public_med_keys,
                         tree_parameters,
                         asset_comm_params,
                         enc_key_gen,
@@ -574,7 +556,6 @@ impl<
                         enc_keys[revealed_asset_idx].clone(),
                         med_keys[revealed_asset_idx].clone(),
                         leg_public_enc_keys,
-                        leg_public_med_keys,
                         &tree_parameters.odd_parameters.pc_gens(),
                         &tree_parameters.odd_parameters.bp_gens(),
                         enc_key_gen,

@@ -1,6 +1,6 @@
 use crate::account::common::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
-use crate::account::state::NUM_GENERATORS;
+use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -180,6 +180,7 @@ impl<
         let mut initial_rho_blinding = F0::rand(rng);
         let mut old_rho_blinding = F0::rand(rng);
         let mut new_rho_blinding = F0::rand(rng);
+        let mut initial_s_blinding = F0::rand(rng);
         let mut old_s_blinding = F0::rand(rng);
         let mut new_s_blinding = F0::rand(rng);
         let mut sk_enc_inv_blinding = F0::rand(rng);
@@ -203,6 +204,7 @@ impl<
                 counter_blinding,
                 initial_rho_blinding,
                 old_rho_blinding,
+                initial_s_blinding,
                 old_s_blinding,
                 sk_enc_inv_blinding,
                 F0::rand(rng),
@@ -217,6 +219,7 @@ impl<
                 counter_blinding,
                 initial_rho_blinding,
                 new_rho_blinding,
+                initial_s_blinding,
                 new_s_blinding,
                 sk_enc_inv_blinding,
             ],
@@ -244,7 +247,8 @@ impl<
                 account.current_rho,
                 updated_account.current_rho,
                 account.randomness,
-                updated_account.randomness,
+                account.current_randomness,
+                updated_account.current_randomness,
             ],
             comm_bp_blinding,
             account_tree_params.even_parameters.bp_gens(),
@@ -263,6 +267,7 @@ impl<
                 initial_rho_blinding,
                 old_rho_blinding,
                 new_rho_blinding,
+                initial_s_blinding,
                 old_s_blinding,
                 new_s_blinding,
             ],
@@ -278,6 +283,7 @@ impl<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.current_randomness,
             account.sk_enc_inv,
             rerandomization,
         ];
@@ -286,8 +292,12 @@ impl<
 
         // Response for other witnesses will already be generated in sigma protocol for leaf
         let mut wits = BTreeMap::new();
-        wits.insert(3, updated_account.current_rho);
-        wits.insert(4, updated_account.randomness);
+        // -2 since sk (proved in pk) and asset id knowledge is not being proven
+        wits.insert(CURRENT_RHO_GEN_INDEX - 2, updated_account.current_rho);
+        wits.insert(
+            CURRENT_RANDOMNESS_GEN_INDEX - 2,
+            updated_account.current_randomness,
+        );
         let resp_acc_new = t_acc_new.partial_response(wits, &prover_challenge)?;
 
         // Response for witness will already be generated in sigma protocol for leaf
@@ -305,6 +315,7 @@ impl<
         initial_rho_blinding.zeroize();
         old_rho_blinding.zeroize();
         new_rho_blinding.zeroize();
+        initial_s_blinding.zeroize();
         old_s_blinding.zeroize();
         new_s_blinding.zeroize();
         sk_enc_inv_blinding.zeroize();
@@ -468,7 +479,7 @@ impl<
         // Drop reference to borrow even_verifier below
         let _ = verifier_transcript;
 
-        let mut vars = even_verifier.commit_vec(5, self.comm_bp);
+        let mut vars = even_verifier.commit_vec(6, self.comm_bp);
         enforce_constraints_for_randomness_relations(&mut even_verifier, &mut vars);
 
         let mut verifier_transcript = even_verifier.transcript();
@@ -509,7 +520,8 @@ impl<
         missing_resps.insert(0, self.resp_leaf.0[0]);
         missing_resps.insert(1, self.resp_leaf.0[1]);
         missing_resps.insert(2, self.resp_leaf.0[2]);
-        missing_resps.insert(5, self.resp_leaf.0[5]);
+        missing_resps.insert(4, self.resp_leaf.0[4]);
+        missing_resps.insert(6, self.resp_leaf.0[6]);
         self.resp_acc_new.is_valid(
             &Self::acc_new_gens(account_comm_key),
             &y.into_affine(),
@@ -542,7 +554,8 @@ impl<
         missing_resps.insert(2, self.resp_leaf.0[3]);
         missing_resps.insert(3, self.resp_acc_new.responses[&3]);
         missing_resps.insert(4, self.resp_leaf.0[4]);
-        missing_resps.insert(5, self.resp_acc_new.responses[&4]);
+        missing_resps.insert(5, self.resp_leaf.0[5]);
+        missing_resps.insert(6, self.resp_acc_new.responses[&5]);
         self.resp_bp.is_valid(
             &Self::bp_gens_vec(
                 account_tree_params.even_parameters.pc_gens(),
@@ -577,6 +590,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
             account_comm_key.sk_enc_gen(),
             B_blinding,
         ]
@@ -591,6 +605,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
             account_comm_key.sk_enc_gen(),
         ]
     }
@@ -598,10 +613,11 @@ impl<
     fn bp_gens_vec(
         pc_gens: &PedersenGens<Affine<G0>>,
         bp_gens: &BulletproofGens<Affine<G0>>,
-    ) -> [Affine<G0>; 6] {
-        let mut gens = bp_gens_for_vec_commitment(5, bp_gens);
+    ) -> [Affine<G0>; 7] {
+        let mut gens = bp_gens_for_vec_commitment(6, bp_gens);
         [
             pc_gens.B_blinding,
+            gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
@@ -621,7 +637,6 @@ mod tests {
         pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
         vesta::VestaParams,
     };
-    use ark_ff::Field;
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
     use std::time::Instant;
@@ -665,7 +680,11 @@ mod tests {
             updated_account.current_rho,
             account.current_rho * account.rho
         );
-        assert_eq!(updated_account.randomness, account.randomness.square());
+        assert_eq!(updated_account.randomness, account.randomness);
+        assert_eq!(
+            updated_account.current_randomness,
+            account.current_randomness * account.randomness
+        );
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();

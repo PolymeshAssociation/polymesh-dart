@@ -1042,7 +1042,6 @@ fn single_shot_settlement() {
             leg_enc.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -1110,7 +1109,6 @@ fn single_shot_settlement() {
         .verify_and_return_tuples(
             leg_enc.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -1333,7 +1331,6 @@ fn single_shot_combined_create_and_send() {
             leg_enc.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -1410,7 +1407,6 @@ fn single_shot_combined_create_and_send() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -1646,7 +1642,6 @@ fn single_shot_combined_create_and_recv() {
             leg_enc.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -1731,7 +1726,6 @@ fn single_shot_combined_create_and_recv() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2223,7 +2217,6 @@ fn single_shot_swap() {
             leg_enc_1.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -2239,7 +2232,6 @@ fn single_shot_swap() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc_2.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2507,7 +2499,6 @@ fn single_shot_settlement_asset_id_revealed() {
             vec![leg.enc_keys[0]],
             vec![],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -2714,7 +2705,6 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
             vec![leg.enc_keys[0]],
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -2943,7 +2933,6 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
             vec![leg.enc_keys[0]],
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -3360,7 +3349,6 @@ fn single_shot_swap_asset_id_revealed() {
             vec![leg_1.enc_keys[0]],
             vec![],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -3378,7 +3366,6 @@ fn single_shot_swap_asset_id_revealed() {
             &mut rng,
             leg_enc_2.clone(),
             vec![leg_2.enc_keys[0]],
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -3697,7 +3684,6 @@ fn swap_settlement_asset_id_revealed() {
             vec![leg_1.enc_keys[0]],
             vec![],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -3715,7 +3701,6 @@ fn swap_settlement_asset_id_revealed() {
             &mut rng,
             leg_enc_2.clone(),
             vec![leg_2.enc_keys[0]],
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -4985,7 +4970,6 @@ fn combined_create_and_send() {
             leg_enc.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -5041,7 +5025,6 @@ fn combined_create_and_send() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -5780,7 +5763,6 @@ fn swap_settlement() {
             leg_enc_1.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -5796,7 +5778,6 @@ fn swap_settlement() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc_2.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -5840,7 +5821,6 @@ fn swap_settlement() {
             leg_enc_1.clone(),
             &asset_tree_root,
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -5856,7 +5836,6 @@ fn swap_settlement() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc_2.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -5911,7 +5890,6 @@ fn swap_settlement() {
         sk_e.0,
         sk_m.0,
         accept,
-        false,
         index_in_asset_data,
         nonce,
         &account_comm_key.sk_gen(),
@@ -5925,7 +5903,6 @@ fn swap_settlement() {
         sk_e.0,
         sk_m.0,
         accept,
-        false,
         index_in_asset_data,
         nonce,
         &account_comm_key.sk_gen(),
@@ -5942,7 +5919,6 @@ fn swap_settlement() {
         .verify_with_given_transcript(
             leg_enc_1.clone(),
             accept,
-            false,
             index_in_asset_data,
             nonce,
             account_comm_key.sk_gen(),
@@ -5955,7 +5931,6 @@ fn swap_settlement() {
         .verify_with_given_transcript(
             leg_enc_2.clone(),
             accept,
-            false,
             index_in_asset_data,
             nonce,
             account_comm_key.sk_gen(),
@@ -5974,7 +5949,6 @@ fn swap_settlement() {
         .verify_with_given_transcript(
             leg_enc_1.clone(),
             accept,
-            false,
             index_in_asset_data,
             nonce,
             account_comm_key.sk_gen(),
@@ -5987,7 +5961,6 @@ fn swap_settlement() {
         .verify_with_given_transcript(
             leg_enc_2.clone(),
             accept,
-            false,
             index_in_asset_data,
             nonce,
             account_comm_key.sk_gen(),
@@ -7606,7 +7579,6 @@ fn multi_asset_settlement() {
             vec![],
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -7667,7 +7639,6 @@ fn multi_asset_settlement() {
         .verify_and_return_tuples(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             vec![],
@@ -7950,7 +7921,6 @@ fn multi_asset_combined_create_and_send() {
             vec![],
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -8045,7 +8015,6 @@ fn multi_asset_combined_create_and_send() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             vec![],
@@ -8352,7 +8321,6 @@ fn multi_asset_combined_create_and_recv() {
             vec![],
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -8450,7 +8418,6 @@ fn multi_asset_combined_create_and_recv() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             vec![],
@@ -8907,17 +8874,7 @@ pub fn setup_leg_with_conf<R: CryptoRngCore>(
     } else {
         vec![]
     };
-    let leg = Leg::new(
-        pk_s_e,
-        pk_r_e,
-        amount,
-        asset_id,
-        enc_keys,
-        med_keys,
-        vec![],
-        vec![],
-    )
-    .unwrap();
+    let leg = Leg::new(pk_s_e, pk_r_e, amount, asset_id, enc_keys, med_keys, vec![]).unwrap();
     let (leg_enc, leg_enc_rand) = leg.encrypt(rng, conf, enc_key_gen, enc_gen).unwrap();
     (leg, leg_enc, leg_enc_rand)
 }
@@ -9463,17 +9420,7 @@ pub fn setup_public_asset_leg<R: CryptoRngCore>(
     } else {
         vec![]
     };
-    let leg = Leg::new(
-        pk_s_e,
-        pk_r_e,
-        amount,
-        asset_id,
-        enc_keys,
-        med_keys,
-        vec![],
-        vec![],
-    )
-    .unwrap();
+    let leg = Leg::new(pk_s_e, pk_r_e, amount, asset_id, enc_keys, med_keys, vec![]).unwrap();
     let (leg_enc, leg_enc_rand) = leg.encrypt(rng, conf, enc_key_gen, enc_gen).unwrap();
     (leg, leg_enc, leg_enc_rand)
 }

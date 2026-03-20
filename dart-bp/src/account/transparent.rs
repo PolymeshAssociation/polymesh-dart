@@ -1,6 +1,6 @@
 use crate::account::common::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
-use crate::account::state::NUM_GENERATORS;
+use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -196,6 +196,7 @@ impl<
         let mut new_rho_blinding = F0::rand(rng);
         let mut old_s_blinding = F0::rand(rng);
         let mut new_s_blinding = F0::rand(rng);
+        let mut initial_s_blinding = F0::rand(rng);
         let mut id_blinding = F0::rand(rng);
         let mut sk_enc_inv_blinding = F0::rand(rng);
 
@@ -210,6 +211,7 @@ impl<
                 counter_blinding,
                 initial_rho_blinding,
                 old_rho_blinding,
+                initial_s_blinding,
                 old_s_blinding,
                 id_blinding,
                 sk_enc_inv_blinding,
@@ -225,6 +227,7 @@ impl<
                 counter_blinding,
                 initial_rho_blinding,
                 new_rho_blinding,
+                initial_s_blinding,
                 new_s_blinding,
                 id_blinding,
                 sk_enc_inv_blinding,
@@ -284,7 +287,8 @@ impl<
                     account.current_rho,
                     updated_account.current_rho,
                     account.randomness,
-                    updated_account.randomness,
+                    account.current_randomness,
+                    updated_account.current_randomness,
                     updated_account.balance.into(),
                 ],
                 comm_bp_blinding,
@@ -306,7 +310,8 @@ impl<
                     account.current_rho,
                     updated_account.current_rho,
                     account.randomness,
-                    updated_account.randomness,
+                    account.current_randomness,
+                    updated_account.current_randomness,
                 ],
                 comm_bp_blinding,
                 &account_tree_params.even_parameters.bp_gens(),
@@ -324,6 +329,7 @@ impl<
                     initial_rho_blinding,
                     old_rho_blinding,
                     new_rho_blinding,
+                    initial_s_blinding,
                     old_s_blinding,
                     new_s_blinding,
                     new_balance_blinding,
@@ -337,6 +343,7 @@ impl<
                     initial_rho_blinding,
                     old_rho_blinding,
                     new_rho_blinding,
+                    initial_s_blinding,
                     old_s_blinding,
                     new_s_blinding,
                 ],
@@ -354,6 +361,7 @@ impl<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.current_randomness,
             account.id,
             account.sk_enc_inv,
             rerandomization,
@@ -362,8 +370,12 @@ impl<
         Zeroize::zeroize(&mut wits);
 
         let mut wits = BTreeMap::new();
-        wits.insert(4, updated_account.current_rho);
-        wits.insert(5, updated_account.randomness);
+        // -1 because asset-id is revealed
+        wits.insert(CURRENT_RHO_GEN_INDEX - 1, updated_account.current_rho);
+        wits.insert(
+            CURRENT_RANDOMNESS_GEN_INDEX - 1,
+            updated_account.current_randomness,
+        );
         let resp_acc_new = t_acc_new.partial_response(wits, &challenge)?;
 
         let resp_null = t_null.gen_partial_proof();
@@ -386,6 +398,7 @@ impl<
         new_rho_blinding.zeroize();
         old_s_blinding.zeroize();
         new_s_blinding.zeroize();
+        initial_s_blinding.zeroize();
         id_blinding.zeroize();
         sk_enc_inv_blinding.zeroize();
         comm_bp_blinding.zeroize();
@@ -622,12 +635,12 @@ impl<
         let _ = transcript;
 
         let mut vars = if has_balance_decreased {
-            let mut vars = even_verifier.commit_vec(6, self.comm_bp);
+            let mut vars = even_verifier.commit_vec(7, self.comm_bp);
             let new_bal_var = vars.pop().unwrap();
             range_proof(even_verifier, new_bal_var.into(), None, BALANCE_BITS.into())?;
             vars
         } else {
-            even_verifier.commit_vec(5, self.comm_bp)
+            even_verifier.commit_vec(6, self.comm_bp)
         };
 
         enforce_constraints_for_randomness_relations(even_verifier, &mut vars);
@@ -654,8 +667,9 @@ impl<
         missing_resps_acc_new.insert(1, self.resp_leaf.0[1]);
         missing_resps_acc_new.insert(2, self.resp_leaf.0[2]);
         missing_resps_acc_new.insert(3, self.resp_leaf.0[3]);
-        missing_resps_acc_new.insert(6, self.resp_leaf.0[6]);
+        missing_resps_acc_new.insert(5, self.resp_leaf.0[5]); // randomness (base s), same in old and new
         missing_resps_acc_new.insert(7, self.resp_leaf.0[7]);
+        missing_resps_acc_new.insert(8, self.resp_leaf.0[8]);
 
         let mut missing_resps_bp = BTreeMap::new();
         missing_resps_bp.insert(1, self.resp_leaf.0[3]);
@@ -673,20 +687,21 @@ impl<
             })?;
         missing_resps_bp.insert(3, resp_acc_new_4);
         missing_resps_bp.insert(4, self.resp_leaf.0[5]);
-        let resp_acc_new_5 = self
+        missing_resps_bp.insert(5, self.resp_leaf.0[6]); // old current_randomness
+        let resp_acc_new_6 = self
             .resp_acc_new
             .responses
-            .get(&5)
+            .get(&6)
             .copied()
             .ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "Missing resp_acc_new response for key 5 (transparent account proof)"
+                    "Missing resp_acc_new response for key 6 (transparent account proof)"
                         .to_string(),
                 )
             })?;
-        missing_resps_bp.insert(5, resp_acc_new_5);
+        missing_resps_bp.insert(6, resp_acc_new_6);
         if has_balance_decreased {
-            missing_resps_bp.insert(6, self.resp_leaf.0[1]);
+            missing_resps_bp.insert(7, self.resp_leaf.0[1]);
         }
 
         verify_schnorr_resp_or_rmc!(
@@ -765,6 +780,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
             account_comm_key.id_gen(),
             account_comm_key.sk_enc_gen(),
             account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -781,6 +797,7 @@ impl<
             account_comm_key.rho_gen(),
             account_comm_key.current_rho_gen(),
             account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
             account_comm_key.id_gen(),
             account_comm_key.sk_enc_gen(),
         ]
@@ -791,11 +808,12 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-    ) -> [Affine<G0>; 7] {
+    ) -> [Affine<G0>; 8] {
         let mut gens =
-            bp_gens_for_vec_commitment(6, &account_tree_params.even_parameters.bp_gens());
+            bp_gens_for_vec_commitment(7, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
+            gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
@@ -807,11 +825,12 @@ impl<
 
     fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-    ) -> [Affine<G0>; 6] {
+    ) -> [Affine<G0>; 7] {
         let mut gens =
-            bp_gens_for_vec_commitment(5, &account_tree_params.even_parameters.bp_gens());
+            bp_gens_for_vec_commitment(6, &account_tree_params.even_parameters.bp_gens());
         [
             account_tree_params.even_parameters.pc_gens().B_blinding,
+            gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),

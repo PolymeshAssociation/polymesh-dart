@@ -56,7 +56,6 @@ fn test_sender_affirmation_verify() {
             amount: 500,
             config: LegConfig::default(),
             public_enc_keys: vec![],
-            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, chain.asset_tree())
         .unwrap();

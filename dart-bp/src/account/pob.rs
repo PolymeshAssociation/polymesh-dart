@@ -94,18 +94,20 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let sk_blinding = G::ScalarField::rand(rng);
         let current_rho_blinding = G::ScalarField::rand(rng);
 
-        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness + g_l * sk_enc_inv = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
-        // where C is the account commitment and rho, current_rho, randomness, sk_enc_inv are the witness, rest are instance
+        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness + g_k2 * current_randomness + g_l * sk_enc_inv = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
+        // where C is the account commitment and rho, current_rho, randomness, current_randomness, sk_enc_inv are the witness, rest are instance
         let t_acc = SchnorrCommitment::new(
             &[
                 account_comm_key.rho_gen(),
                 null_gen,
                 account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
                 account_comm_key.sk_enc_gen(),
             ],
             vec![
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
+                G::ScalarField::rand(rng),
                 G::ScalarField::rand(rng),
                 G::ScalarField::rand(rng),
             ],
@@ -126,6 +128,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 account.rho,
                 account.current_rho,
                 account.randomness,
+                account.current_randomness,
                 account.sk_enc_inv,
             ],
             &prover_challenge,
@@ -212,6 +215,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
                 account_comm_key.sk_enc_gen(),
             ],
             &y.into_affine(),
@@ -385,11 +389,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
                 account_comm_key.sk_enc_gen(),
             ],
             vec![
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
+                G::ScalarField::rand(rng),
                 G::ScalarField::rand(rng),
                 sk_enc_inv_blinding,
             ],
@@ -495,6 +501,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 account.rho,
                 account.current_rho,
                 account.randomness,
+                account.current_randomness,
                 account.sk_enc_inv,
             ],
             &challenge,
@@ -786,6 +793,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
                 account_comm_key.sk_enc_gen(),
             ],
             &y.into_affine(),
@@ -814,7 +822,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ));
         }
 
-        let resp_sk_enc_inv = &self.resp_acc.0[3];
+        let resp_sk_enc_inv = &self.resp_acc.0[4];
         for i in 0..num_pending_txns {
             if legs[i].is_asset_id_revealed() {
                 continue;
@@ -977,7 +985,6 @@ mod tests {
                     vec![pk_a_e.0],
                     vec![],
                     vec![],
-                    vec![],
                 )
                 .unwrap();
                 let (leg_enc, _) = leg
@@ -993,7 +1000,6 @@ mod tests {
                     amount,
                     asset_id,
                     vec![pk_a_e.0],
-                    vec![],
                     vec![],
                     vec![],
                 )
@@ -1099,7 +1105,6 @@ mod tests {
                     vec![pk_a_e.0],
                     vec![],
                     vec![],
-                    vec![],
                 )
                 .unwrap();
                 let config = if i % 4 == 0 {
@@ -1121,7 +1126,6 @@ mod tests {
                     amount,
                     asset_id,
                     vec![pk_a_e.0],
-                    vec![],
                     vec![],
                     vec![],
                 )
@@ -1232,7 +1236,6 @@ mod tests {
                     vec![pk_a_e.0],
                     vec![],
                     vec![],
-                    vec![],
                 )
                 .unwrap();
                 let (leg_enc, _) = leg
@@ -1248,7 +1251,6 @@ mod tests {
                     amount,
                     asset_id,
                     vec![pk_a_e.0],
-                    vec![],
                     vec![],
                     vec![],
                 )
@@ -1343,7 +1345,6 @@ mod tests {
                     vec![pk_a_e.0],
                     vec![],
                     vec![],
-                    vec![],
                 )
                 .unwrap();
                 let config = if i % 4 == 0 {
@@ -1365,7 +1366,6 @@ mod tests {
                     amount,
                     asset_id,
                     vec![pk_a_e.0],
-                    vec![],
                     vec![],
                     vec![],
                 )
@@ -1478,7 +1478,6 @@ mod tests {
                     vec![pk_a_e.0],
                     vec![],
                     vec![],
-                    vec![],
                 )
                 .unwrap();
                 let (leg_enc, _) = leg
@@ -1494,7 +1493,6 @@ mod tests {
                     amount,
                     asset_id,
                     vec![pk_a_e.0],
-                    vec![],
                     vec![],
                     vec![],
                 )

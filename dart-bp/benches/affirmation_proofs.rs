@@ -31,6 +31,7 @@ fn setup_comm_key(label: &[u8]) -> impl AccountCommitmentKeyTrait<PallasA> {
         hash_to_pallas(label, b"rho-gen").into_affine(),
         hash_to_pallas(label, b"current-rho-gen").into_affine(),
         hash_to_pallas(label, b"randomness-gen").into_affine(),
+        hash_to_pallas(label, b"current-randomness-gen").into_affine(),
         hash_to_pallas(label, b"id-gen").into_affine(),
         hash_to_pallas(label, b"sk-enc-inv-gen").into_affine(),
     ]
@@ -116,7 +117,6 @@ fn create_leg_and_encryption<R: rand_core::CryptoRngCore>(
         amount,
         asset_id,
         vec![pk_a_e.0],
-        vec![],
         vec![],
         vec![],
     )

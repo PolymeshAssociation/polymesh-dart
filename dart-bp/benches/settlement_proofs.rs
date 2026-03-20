@@ -201,7 +201,6 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc, leg_enc_rand) = leg
@@ -284,7 +283,6 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                     vec![],
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -308,7 +306,6 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &root,
-                    vec![],
                     vec![],
                     vec![],
                     vec![],
@@ -420,7 +417,6 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
                 vec![pk_a_e.0],
                 vec![],
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc, leg_enc_rand) = leg
@@ -484,7 +480,6 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
                     .verify_and_return_tuples(
                         all_leg_encs[i].clone(),
                         &root,
-                        vec![],
                         vec![],
                         vec![],
                         vec![],
@@ -585,7 +580,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -724,7 +718,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     vec![],
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -748,7 +741,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &mut local_rng,
                     leg_encs.clone(),
                     &asset_tree_root,
-                    vec![],
                     vec![],
                     vec![],
                     vec![],
@@ -923,7 +915,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     vec![],
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -1016,7 +1007,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 .verify_and_return_tuples(
                     leg_encs.clone(),
                     &asset_tree_root,
-                    vec![],
                     vec![],
                     vec![],
                     vec![],

@@ -45,6 +45,7 @@ pub struct AccountState {
     pub rho: WrappedCanonical<PallasScalar>,
     pub current_rho: WrappedCanonical<PallasScalar>,
     pub randomness: WrappedCanonical<PallasScalar>,
+    pub current_randomness: WrappedCanonical<PallasScalar>,
 }
 
 impl AccountState {
@@ -67,6 +68,7 @@ impl AccountState {
             rho: self.rho.decode()?,
             current_rho: self.current_rho.decode()?,
             randomness: self.randomness.decode()?,
+            current_randomness: self.current_randomness.decode()?,
             sk_enc_inv,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
@@ -102,6 +104,7 @@ impl TryFrom<BPAccountState> for AccountState {
             rho: WrappedCanonical::wrap(&state.rho)?,
             current_rho: WrappedCanonical::wrap(&state.current_rho)?,
             randomness: WrappedCanonical::wrap(&state.randomness)?,
+            current_randomness: WrappedCanonical::wrap(&state.current_randomness)?,
         })
     }
 }
@@ -541,7 +544,6 @@ pub struct AccountAssetRegistrationProof {
     pub asset_id: AssetId,
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
-    pub nullifier: AccountStateNullifier,
 
     inner: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
@@ -560,7 +562,7 @@ impl AccountAssetRegistrationProof {
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
         let params = poseidon_params();
         let gens = dart_gens();
-        let (proof, nullifier) = account_registration::RegTxnProof::new(
+        let proof = account_registration::RegTxnProof::new(
             rng,
             keys.acct.public.get_affine()?,
             keys.enc.public.get_affine()?,
@@ -580,7 +582,6 @@ impl AccountAssetRegistrationProof {
                 asset_id,
                 counter,
                 account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
-                nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
                 inner: WrappedCanonical::wrap(&proof)?,
             },
@@ -609,7 +610,6 @@ impl AccountAssetRegistrationProof {
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,
-            self.nullifier.get_affine()?,
             identity,
             dart_gens().account_comm_key(),
             tree_params.even_parameters.pc_gens(),
@@ -645,7 +645,6 @@ impl AccountAssetRegistrationProof {
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             self.counter,
-            self.nullifier.get_affine()?,
             identity,
             dart_gens().account_comm_key(),
             tree_params.even_parameters.pc_gens(),

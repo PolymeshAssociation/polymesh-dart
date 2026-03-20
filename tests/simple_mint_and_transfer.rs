@@ -80,7 +80,6 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
                 amount: 500,
                 config,
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
         // Submit the settlement.
@@ -230,7 +229,6 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
                 amount: 500,
                 config,
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
         // Submit the settlement.
@@ -375,7 +373,6 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
                 amount: 500,
                 config,
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
 
@@ -592,7 +589,6 @@ fn test_atomic_swap() -> Result<()> {
                 amount: 1000,
                 config: config.clone(),
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
         eprintln!("Creating funding settlement: {:?}", funding_settlement1);
@@ -608,7 +604,6 @@ fn test_atomic_swap() -> Result<()> {
                 amount: 1500,
                 config: config.clone(),
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
         eprintln!("Creating funding settlement: {:?}", funding_settlement2);
@@ -715,7 +710,6 @@ fn test_atomic_swap() -> Result<()> {
                 amount: 500,
                 config: config.clone(),
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .leg(LegBuilder {
                 sender: investor2_acct.public_keys(),
@@ -724,7 +718,6 @@ fn test_atomic_swap() -> Result<()> {
                 amount: 750,
                 config: config.clone(),
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             })
             .encrypt_and_prove(&mut rng, chain.asset_tree())?;
         eprintln!("Creating swap settlement: {:?}", swap_settlement);
@@ -959,7 +952,6 @@ fn test_reject_after_sender_affirms() -> Result<()> {
             amount: 500,
             config: LegConfig::default(),
             public_enc_keys: vec![],
-            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, chain.asset_tree())?;
 
@@ -1085,7 +1077,6 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
             amount: 500,
             config: LegConfig::default(),
             public_enc_keys: vec![],
-            public_med_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, chain.asset_tree())?;
     // Submit the settlement.

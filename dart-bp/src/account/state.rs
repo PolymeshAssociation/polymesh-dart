@@ -12,7 +12,7 @@ use polymesh_dart_common::{
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub const NUM_GENERATORS: usize = 9;
+pub const NUM_GENERATORS: usize = 10;
 
 // The account commitment has g * {sk_{en}}^{-1}. This is safe as it's called Inverse Diffie Hellman assumption and [this paper](https://ink.library.smu.edu.sg/cgi/viewcontent.cgi?params=/context/sis_research/article/2082/&path_info=Bao2003_VariationsOfDiffie_HellmanProblem_pv.pdf)
 // shows DDH implies Inverse Diffie Hellman assumption. See section 3.1 and 3.2 where InvDDH ⇐ SDDH and SDDH ⇐ DDH, where SDDH is the square decisional Diffie-Hellman problem
@@ -25,8 +25,9 @@ pub(crate) const ASSET_ID_GEN_INDEX: usize = 3;
 pub(crate) const RHO_GEN_INDEX: usize = 4;
 pub(crate) const CURRENT_RHO_GEN_INDEX: usize = 5;
 pub(crate) const RANDOMNESS_GEN_INDEX: usize = 6;
-pub(crate) const ID_GEN_INDEX: usize = 7;
-pub(crate) const SK_ENC_INV_GEN_INDEX: usize = 8;
+pub(crate) const CURRENT_RANDOMNESS_GEN_INDEX: usize = 7;
+pub(crate) const ID_GEN_INDEX: usize = 8;
+pub(crate) const SK_ENC_INV_GEN_INDEX: usize = 9;
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
@@ -52,6 +53,9 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
     /// Returns the generator for the randomness value.
     fn randomness_gen(&self) -> G;
 
+    /// Returns the generator for the current randomness value.
+    fn current_randomness_gen(&self) -> G;
+
     /// Returns the generator for the user's identity. This is bound to the public key but the relation
     /// between them is not proven in any of the proofs
     fn id_gen(&self) -> G;
@@ -68,6 +72,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.current_randomness_gen(),
             self.id_gen(),
             self.sk_enc_gen(),
         ]
@@ -81,6 +86,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.current_randomness_gen(),
             self.id_gen(),
             self.sk_enc_gen(),
         ]
@@ -96,6 +102,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.current_randomness_gen(),
             self.id_gen(),
             self.sk_enc_gen(),
             blinding,
@@ -111,6 +118,7 @@ pub trait AccountCommitmentKeyTrait<G: AffineRepr>: CanonicalSerialize + Clone {
             self.rho_gen(),
             self.current_rho_gen(),
             self.randomness_gen(),
+            self.current_randomness_gen(),
             self.id_gen(),
             self.sk_enc_gen(),
             blinding,
@@ -145,6 +153,10 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
 
     fn randomness_gen(&self) -> G {
         self[RANDOMNESS_GEN_INDEX]
+    }
+
+    fn current_randomness_gen(&self) -> G {
+        self[CURRENT_RANDOMNESS_GEN_INDEX]
     }
 
     fn id_gen(&self) -> G {
@@ -291,6 +303,7 @@ pub struct AccountState<G: AffineRepr> {
     pub rho: G::ScalarField,
     pub current_rho: G::ScalarField,
     pub randomness: G::ScalarField,
+    pub current_randomness: G::ScalarField,
     pub sk_enc_inv: G::ScalarField,
 }
 
@@ -338,7 +351,8 @@ where
         let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let combined = Self::concat_asset_id_counter(asset_id, counter);
         let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk_aff, combined, poseidon_config)?;
-        let current_rho = rho.square();
+        let current_rho = rho;
+        let current_randomness = randomness;
 
         Ok(Self {
             id,
@@ -349,6 +363,7 @@ where
             rho,
             current_rho,
             randomness,
+            current_randomness,
             sk_enc_inv,
         })
     }
@@ -416,6 +431,7 @@ where
                 self.rho,
                 self.current_rho,
                 self.randomness,
+                self.current_randomness,
                 self.id,
                 self.sk_enc_inv,
             ],
@@ -505,15 +521,11 @@ where
     /// needs these refreshed.
     pub fn refresh_randomness_for_state_change(&mut self) {
         self.current_rho = self.current_rho * self.rho;
-        self.randomness.square_in_place();
+        self.current_randomness = self.current_randomness * self.randomness;
     }
 
     pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
         (comm_key.current_rho_gen() * self.current_rho).into()
-    }
-
-    pub(crate) fn initial_nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
-        (comm_key.rho_gen() * self.rho).into()
     }
 
     /// Append bytes of counter to bytes of asset id. `combined = asset_id || asset_id`

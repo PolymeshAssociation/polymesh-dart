@@ -930,7 +930,6 @@ mod tests {
                 vec![pk_auditor_e.0],
                 vec![],
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc_1, _) = leg_1
@@ -943,7 +942,6 @@ mod tests {
                 bob_send_amount,
                 asset_id,
                 vec![pk_auditor_e.0],
-                vec![],
                 vec![],
                 vec![],
             )
@@ -1159,7 +1157,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1, _) = leg_1
@@ -1172,7 +1169,6 @@ mod tests {
             carol_to_alice_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1350,7 +1346,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1, _) = leg_1
@@ -1363,7 +1358,6 @@ mod tests {
             carol_to_alice_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1380,7 +1374,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_3, _) = leg_3
@@ -1393,7 +1386,6 @@ mod tests {
             bob_to_alice_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1513,7 +1505,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1, _) = leg_1
@@ -1526,7 +1517,6 @@ mod tests {
             carol_to_alice_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1645,7 +1635,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1_asset1, _) = leg_1_asset1
@@ -1658,7 +1647,6 @@ mod tests {
             amount_2,
             asset_id_1,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1676,7 +1664,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1_asset2, _) = leg_1_asset2
@@ -1689,7 +1676,6 @@ mod tests {
             amount_4,
             asset_id_2,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1935,7 +1921,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_1, _) = leg_1
@@ -1957,7 +1942,6 @@ mod tests {
             alice_to_carol_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1983,7 +1967,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_3, _) = leg_3
@@ -2007,7 +1990,6 @@ mod tests {
             vec![pk_auditor_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc_4, _) = leg_4
@@ -2029,7 +2011,6 @@ mod tests {
             frank_to_alice_amount,
             asset_id,
             vec![pk_auditor_e.0],
-            vec![],
             vec![],
             vec![],
         )

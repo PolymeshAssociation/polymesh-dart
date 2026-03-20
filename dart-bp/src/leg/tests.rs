@@ -76,9 +76,6 @@ fn leg_encryption_configs() {
     let keys_public_enc = (0..2)
         .map(|_| keygen_enc(&mut rng, enc_key_gen))
         .collect::<Vec<_>>();
-    let keys_public_mediator = (0..2)
-        .map(|_| keygen_sig(&mut rng, sig_key_gen))
-        .collect::<Vec<_>>();
 
     let amount = 100;
     let asset_id = 1;
@@ -90,11 +87,6 @@ fn leg_encryption_configs() {
         .map(|(i, (_, k))| (i as u8, k.0))
         .collect::<Vec<_>>();
     let public_enc_keys = keys_public_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-    let public_med_keys = keys_public_mediator
-        .iter()
-        .enumerate()
-        .map(|(i, (_, k))| (i as u8, k.0))
-        .collect::<Vec<_>>();
 
     let leg = Leg::new(
         pk_s_e.0,
@@ -104,7 +96,6 @@ fn leg_encryption_configs() {
         enc_keys.clone(),
         med_keys.clone(),
         public_enc_keys.clone(),
-        public_med_keys.clone(),
     )
     .unwrap();
 
@@ -255,9 +246,6 @@ fn leg_verification() {
         let keys_public_enc = (0..num_public_enc_keys)
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
-        let keys_public_mediator = (0..num_public_mediators)
-            .map(|_| keygen_sig(&mut rng, sig_key_gen))
-            .collect::<Vec<_>>();
 
         let keys_enc = keys_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
         // Each mediator along with its index for encryption key
@@ -276,11 +264,6 @@ fn leg_verification() {
             })
             .collect::<Vec<_>>();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
-        let public_med_keys: Vec<_> = keys_public_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_public_enc_keys as u8, k.0))
-            .collect();
 
         let asset_data = AssetData::new(
             asset_id,
@@ -308,7 +291,6 @@ fn leg_verification() {
             keys_enc.clone(),
             keys_mediator.clone(),
             public_enc_keys.clone(),
-            public_med_keys.clone(),
         )
         .unwrap();
 
@@ -353,7 +335,6 @@ fn leg_verification() {
                 leg_enc.clone(),
                 &root,
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -374,7 +355,6 @@ fn leg_verification() {
                 leg_enc.clone(),
                 &root,
                 public_enc_keys.clone(),
-                public_med_keys.clone(),
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -543,7 +523,6 @@ fn batch_leg_verification() {
                 keys_auditor.clone(),
                 keys_mediator.clone(),
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc, leg_enc_rand) = leg
@@ -590,7 +569,6 @@ fn batch_leg_verification() {
                     leg_encs[i].clone(),
                     &root,
                     vec![],
-                    vec![],
                     &nonces[i],
                     &asset_tree_params,
                     &asset_comm_params,
@@ -614,7 +592,6 @@ fn batch_leg_verification() {
                 .verify_and_return_tuples::<_, PallasParams, VestaParams>(
                     leg_encs[i].clone(),
                     &root,
-                    vec![],
                     vec![],
                     &nonces[i],
                     &asset_tree_params,
@@ -667,7 +644,6 @@ fn batch_leg_verification() {
                 .verify_and_return_tuples::<_, PallasParams, VestaParams>(
                     leg_encs[i].clone(),
                     &root,
-                    vec![],
                     vec![],
                     &nonces[i],
                     &asset_tree_params,
@@ -812,7 +788,6 @@ fn combined_leg_verification() {
                 keys_auditor.clone(),
                 keys_mediator.clone(),
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc, leg_enc_rand) = leg
@@ -882,7 +857,6 @@ fn combined_leg_verification() {
                     leg_encs[i].clone(),
                     &root,
                     vec![],
-                    vec![],
                     &nonces[i],
                     &asset_tree_params,
                     &asset_comm_params,
@@ -924,7 +898,6 @@ fn combined_leg_verification() {
                 .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                     leg_encs[i].clone(),
                     &root,
-                    vec![],
                     vec![],
                     &nonces[i],
                     &asset_tree_params,
@@ -1070,7 +1043,6 @@ fn settlement_verification() {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let leg_2 = Leg::new(
@@ -1079,7 +1051,6 @@ fn settlement_verification() {
             amount,
             asset_id_2,
             vec![pk_a_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1164,7 +1135,6 @@ fn settlement_verification() {
                 enc_keys.clone(),
                 med_keys.clone(),
                 vec![],
-                vec![],
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -1185,7 +1155,6 @@ fn settlement_verification() {
                 &root,
                 enc_keys,
                 med_keys,
-                vec![],
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1215,7 +1184,6 @@ fn settlement_verification() {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let leg_4 = Leg::new(
@@ -1224,7 +1192,6 @@ fn settlement_verification() {
             amount,
             asset_id_4,
             vec![pk_a_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1333,7 +1300,6 @@ fn settlement_verification() {
                 enc_keys.clone(),
                 med_keys.clone(),
                 vec![],
-                vec![],
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -1359,7 +1325,6 @@ fn settlement_verification() {
                 &root,
                 enc_keys,
                 med_keys,
-                vec![],
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1387,7 +1352,6 @@ fn settlement_verification() {
             amount,
             asset_id_5,
             vec![pk_a_e.0],
-            vec![],
             vec![],
             vec![],
         )
@@ -1495,7 +1459,6 @@ fn settlement_verification() {
                 enc_keys.clone(),
                 med_keys.clone(),
                 vec![],
-                vec![],
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -1522,7 +1485,6 @@ fn settlement_verification() {
                 &root,
                 enc_keys,
                 med_keys,
-                vec![],
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1642,7 +1604,6 @@ fn batch_settlement_verification() {
                 vec![pk_a_e.0],
                 vec![],
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc, leg_enc_rand) = leg
@@ -1696,7 +1657,6 @@ fn batch_settlement_verification() {
                 vec![],
                 vec![],
                 vec![],
-                vec![],
                 &nonces[i],
                 &asset_tree_params,
                 &asset_comm_params,
@@ -1717,7 +1677,6 @@ fn batch_settlement_verification() {
             .verify_and_return_tuples(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -1758,7 +1717,6 @@ fn batch_settlement_verification() {
             .verify_and_return_tuples(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -1874,7 +1832,6 @@ fn large_settlement_verification() {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc, leg_enc_rand) = leg
@@ -1930,7 +1887,6 @@ fn large_settlement_verification() {
             &mut rng,
             leg_encs,
             &root,
-            vec![],
             vec![],
             vec![],
             vec![],
@@ -2059,7 +2015,6 @@ fn combined_settlement_verification() {
                 vec![pk_a_e.0],
                 vec![],
                 vec![],
-                vec![],
             )
             .unwrap();
             let (leg_enc, leg_enc_rand) = leg
@@ -2130,7 +2085,6 @@ fn combined_settlement_verification() {
                 vec![],
                 vec![],
                 vec![],
-                vec![],
                 &nonces[i],
                 &asset_tree_params,
                 &asset_comm_params,
@@ -2173,7 +2127,6 @@ fn combined_settlement_verification() {
             .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -2299,7 +2252,6 @@ fn six_leg_alternating_settlement() {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
 
@@ -2361,7 +2313,6 @@ fn six_leg_alternating_settlement() {
             &root,
             vec![vec![pk_a_e.0], vec![pk_a_e.0], vec![pk_a_e.0]],
             vec![vec![], vec![], vec![]],
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2460,7 +2411,6 @@ fn six_leg_grouped_settlement() {
             vec![pk_a_e.0],
             vec![],
             vec![],
-            vec![],
         )
         .unwrap();
 
@@ -2522,7 +2472,6 @@ fn six_leg_grouped_settlement() {
             &root,
             vec![vec![pk_a_e.0], vec![pk_a_e.0], vec![pk_a_e.0]],
             vec![vec![], vec![], vec![]],
-            vec![],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2637,7 +2586,6 @@ mod input_sanitation_disabled {
             keys_auditor.clone(),
             keys_mediator.clone(),
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc, leg_enc_rand) = leg
@@ -2670,7 +2618,6 @@ mod input_sanitation_disabled {
                     &mut rng,
                     leg_enc,
                     &root,
-                    vec![],
                     vec![],
                     nonce,
                     &asset_tree_params,
@@ -2710,7 +2657,6 @@ mod input_sanitation_disabled {
             different_keys_auditor.clone(),
             different_keys_mediator.clone(),
             vec![],
-            vec![],
         )
         .unwrap();
         let (leg_enc, leg_enc_rand) = leg_with_diff_keys
@@ -2741,7 +2687,6 @@ mod input_sanitation_disabled {
                     &mut rng,
                     leg_enc,
                     &root,
-                    vec![],
                     vec![],
                     nonce,
                     &asset_tree_params,

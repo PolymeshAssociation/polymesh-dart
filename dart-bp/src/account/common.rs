@@ -21,7 +21,7 @@ use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
-use ark_ff::{Field, PrimeField};
+use ark_ff::PrimeField;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
@@ -387,6 +387,7 @@ impl<
         let mut new_rho_blinding = F0::rand(rng);
         let mut old_randomness_blinding = F0::rand(rng);
         let mut new_randomness_blinding = F0::rand(rng);
+        let mut initial_randomness_blinding = F0::rand(rng);
 
         let (old_balance_blinding, new_balance_blinding) = if has_balance_changed {
             (F0::rand(rng), F0::rand(rng))
@@ -421,6 +422,7 @@ impl<
             new_rho_blinding,
             old_randomness_blinding,
             new_randomness_blinding,
+            initial_randomness_blinding,
             asset_id_blinding,
             sk_enc_inv_blinding,
             even_prover,
@@ -440,6 +442,7 @@ impl<
         Zeroize::zeroize(&mut new_rho_blinding);
         Zeroize::zeroize(&mut old_randomness_blinding);
         Zeroize::zeroize(&mut new_randomness_blinding);
+        Zeroize::zeroize(&mut initial_randomness_blinding);
 
         Ok(Self {
             even_prover: None,
@@ -1038,7 +1041,12 @@ pub fn ensure_same_accounts<G: AffineRepr>(
                 "Randomness not correctly constructed".to_string(),
             ));
         }
-        if old_state.randomness.square() != new_state.randomness {
+        if old_state.randomness != new_state.randomness {
+            return Err(Error::ProofGenerationError(
+                "Randomness not correctly constructed".to_string(),
+            ));
+        }
+        if old_state.current_randomness * old_state.randomness != new_state.current_randomness {
             return Err(Error::ProofGenerationError(
                 "Randomness not correctly constructed".to_string(),
             ));

@@ -229,6 +229,8 @@ pub struct AccountCommitmentKey {
     #[codec(encoded_as = "CompressedAffine")]
     pub randomness_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
+    pub current_randomness_gen: PallasA,
+    #[codec(encoded_as = "CompressedAffine")]
     pub identity_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     pub sk_enc_gen: PallasA,
@@ -243,6 +245,8 @@ impl AccountCommitmentKey {
         let rho_gen = hash_to_pallas(label, b" : rho_gen").into_affine();
         let current_rho_gen = hash_to_pallas(label, b" : current_rho_gen").into_affine();
         let randomness_gen = hash_to_pallas(label, b" : randomness_gen").into_affine();
+        let current_randomness_gen =
+            hash_to_pallas(label, b" : current_randomness_gen").into_affine();
         let identity_gen = hash_to_pallas(label, b" : identity_gen").into_affine();
         let sk_enc_gen = enc_key_gen;
 
@@ -254,6 +258,7 @@ impl AccountCommitmentKey {
             rho_gen,
             current_rho_gen,
             randomness_gen,
+            current_randomness_gen,
             identity_gen,
             sk_enc_gen,
         }
@@ -287,6 +292,10 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
 
     fn randomness_gen(&self) -> PallasA {
         self.randomness_gen
+    }
+
+    fn current_randomness_gen(&self) -> PallasA {
+        self.current_randomness_gen
     }
 
     fn id_gen(&self) -> PallasA {

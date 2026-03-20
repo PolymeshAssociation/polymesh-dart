@@ -285,7 +285,6 @@ impl Leg {
         asset_enc_keys: Vec<PallasA>,
         asset_med_keys: Vec<(u8, PallasA)>,
         public_enc_keys: Vec<PallasA>,
-        public_med_keys: Vec<(u8, PallasA)>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
         let leg = bp_leg::Leg::new(
             sender.get_affine()?,
@@ -295,7 +294,6 @@ impl Leg {
             asset_enc_keys,
             asset_med_keys,
             public_enc_keys,
-            public_med_keys,
         )?;
         let (leg_enc, leg_enc_rand) = leg.encrypt(
             rng,
@@ -377,9 +375,6 @@ pub struct LegBuilder {
     pub config: LegConfig,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
-    /// Public mediator keys specified by the leg creator (not tied to the asset).
-    /// Each entry is (index into public_enc_keys, mediator_affirmation_key).
-    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
 }
 
 impl LegBuilder {
@@ -390,7 +385,6 @@ impl LegBuilder {
         asset: AssetState,
         amount: Balance,
         public_enc_keys: Vec<EncryptionPublicKey>,
-        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
     ) -> Self {
         Self {
             sender,
@@ -399,7 +393,6 @@ impl LegBuilder {
             amount,
             config: LegConfig::default(),
             public_enc_keys,
-            public_med_keys,
         }
     }
 
@@ -440,11 +433,6 @@ impl LegBuilder {
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let public_med_keys: Vec<(u8, PallasA)> = self
-            .public_med_keys
-            .iter()
-            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-            .collect::<Result<_, Error>>()?;
         let (leg, leg_enc, leg_enc_rand) = leg.encrypt(
             rng,
             self.config.into(),
@@ -453,7 +441,6 @@ impl LegBuilder {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
         )?;
 
         if self.config.reveal_asset_id {
@@ -465,7 +452,6 @@ impl LegBuilder {
                 leg_enc,
                 &leg_enc_rand,
                 self.public_enc_keys.clone(),
-                self.public_med_keys.clone(),
                 ctx,
             )?;
             Ok(AnySettlementLegProof::RevealedAssetId(leg_proof))
@@ -480,7 +466,6 @@ impl LegBuilder {
                 &leg_enc_rand,
                 asset_data,
                 self.public_enc_keys.clone(),
-                self.public_med_keys.clone(),
                 ctx,
                 asset_tree,
             )?;
@@ -550,15 +535,7 @@ impl<
     fn get_asset_keys_if_revealed(
         &self,
         asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
-    ) -> Result<
-        Option<(
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-        )>,
-        Error,
-    > {
+    ) -> Result<Option<(Vec<PallasA>, Vec<(u8, PallasA)>, Vec<PallasA>)>, Error> {
         match self {
             Self::HiddenAssetId(_) => Ok(None),
             Self::RevealedAssetId(proof) => {
@@ -573,17 +550,11 @@ impl<
                         .iter()
                         .map(|pk| pk.get_affine())
                         .collect::<Result<_, _>>()?;
-                    let public_med_keys: Vec<(u8, PallasA)> = proof
-                        .public_med_keys
-                        .iter()
-                        .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-                        .collect::<Result<_, Error>>()?;
 
                     Ok(Some((
                         asset_data.enc_keys.clone(),
                         asset_data.med_keys.clone(),
                         public_enc_keys,
-                        public_med_keys,
                     )))
                 } else {
                     Err(Error::ProofGenerationError(
@@ -598,31 +569,18 @@ impl<
         &self,
         ctx: &[u8],
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
-        asset_keys: Option<(
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-        )>,
+        asset_keys: Option<(Vec<PallasA>, Vec<(u8, PallasA)>, Vec<PallasA>)>,
         rng: &mut R,
     ) -> Result<(), Error> {
         match self {
             Self::HiddenAssetId(p) => p.verify(ctx, root, rng),
             Self::RevealedAssetId(p) => {
-                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys
-                    .ok_or_else(|| {
-                        Error::ProofGenerationError(
-                            "Asset keys required for revealed asset ID proof".into(),
-                        )
-                    })?;
-                p.verify(
-                    ctx,
-                    enc_keys,
-                    med_keys,
-                    public_enc_keys,
-                    public_med_keys,
-                    rng,
-                )
+                let (enc_keys, med_keys, public_enc_keys) = asset_keys.ok_or_else(|| {
+                    Error::ProofGenerationError(
+                        "Asset keys required for revealed asset ID proof".into(),
+                    )
+                })?;
+                p.verify(ctx, enc_keys, med_keys, public_enc_keys, rng)
             }
         }
     }
@@ -631,12 +589,7 @@ impl<
         &self,
         ctx: &[u8],
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
-        asset_keys: Option<(
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-            Vec<PallasA>,
-            Vec<(u8, PallasA)>,
-        )>,
+        asset_keys: Option<(Vec<PallasA>, Vec<(u8, PallasA)>, Vec<PallasA>)>,
         rng: &mut R,
     ) -> Result<
         (
@@ -648,20 +601,12 @@ impl<
         match self {
             Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng),
             Self::RevealedAssetId(p) => {
-                let (enc_keys, med_keys, public_enc_keys, public_med_keys) = asset_keys
-                    .ok_or_else(|| {
-                        Error::ProofGenerationError(
-                            "Asset keys required for revealed asset ID proof".into(),
-                        )
-                    })?;
-                let odd_tuple = p.batched_verify(
-                    ctx,
-                    enc_keys,
-                    med_keys,
-                    public_enc_keys,
-                    public_med_keys,
-                    rng,
-                )?;
+                let (enc_keys, med_keys, public_enc_keys) = asset_keys.ok_or_else(|| {
+                    Error::ProofGenerationError(
+                        "Asset keys required for revealed asset ID proof".into(),
+                    )
+                })?;
+                let odd_tuple = p.batched_verify(ctx, enc_keys, med_keys, public_enc_keys, rng)?;
                 // Create an empty verification tuple for Vesta (even) since revealed asset ID
                 // proofs only operate on Pallas curve.
                 let even_tuple = VerificationTuple {
@@ -1002,8 +947,6 @@ pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
-    /// Public mediator keys specified by the leg creator (not tied to the asset).
-    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
 
     inner: WrappedCanonical<BPSettlementTxnProof<C>>,
 }
@@ -1026,7 +969,6 @@ impl<
         leg_enc_rand: &LegEncryptionRandomness,
         asset_data: AssetCommitmentData,
         public_enc_keys: Vec<EncryptionPublicKey>,
-        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<Self, Error> {
@@ -1054,7 +996,6 @@ impl<
             receiver,
             leg_enc,
             public_enc_keys,
-            public_med_keys,
 
             inner: WrappedCanonical::wrap(&proof)?,
         })
@@ -1088,18 +1029,11 @@ impl<
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let public_med_keys: Vec<(u8, PallasA)> = self
-            .public_med_keys
-            .iter()
-            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-            .collect::<Result<_, Error>>()?;
-
         proof.verify(
             rng,
             leg_enc.clone(),
             &root,
             public_enc_keys,
-            public_med_keys,
             ctx,
             C::parameters(),
             asset_comm_params,
@@ -1139,17 +1073,11 @@ impl<
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let public_med_keys: Vec<(u8, PallasA)> = self
-            .public_med_keys
-            .iter()
-            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-            .collect::<Result<_, Error>>()?;
 
         let tuples = proof.verify_and_return_tuples(
             leg_enc.clone(),
             &root,
             public_enc_keys,
-            public_med_keys,
             ctx,
             C::parameters(),
             asset_comm_params,
@@ -1185,8 +1113,6 @@ pub struct SettlementLegProofRevealedAssetId {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
-    /// Public mediator keys specified by the leg creator (not tied to the asset).
-    pub public_med_keys: Vec<(u8, EncryptionPublicKey)>,
 
     inner: WrappedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
@@ -1202,7 +1128,6 @@ impl SettlementLegProofRevealedAssetId {
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
         public_enc_keys: Vec<EncryptionPublicKey>,
-        public_med_keys: Vec<(u8, EncryptionPublicKey)>,
         ctx: &[u8],
     ) -> Result<Self, Error> {
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
@@ -1225,8 +1150,6 @@ impl SettlementLegProofRevealedAssetId {
             receiver,
             leg_enc,
             public_enc_keys,
-            public_med_keys,
-
             inner: WrappedCanonical::wrap(&proof)?,
         })
     }
@@ -1245,7 +1168,6 @@ impl SettlementLegProofRevealedAssetId {
         enc_keys: Vec<PallasA>,
         med_keys: Vec<(u8, PallasA)>,
         public_enc_keys: Vec<PallasA>,
-        public_med_keys: Vec<(u8, PallasA)>,
         rng: &mut R,
     ) -> Result<(), Error> {
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
@@ -1262,7 +1184,6 @@ impl SettlementLegProofRevealedAssetId {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             ctx,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -1282,7 +1203,6 @@ impl SettlementLegProofRevealedAssetId {
         enc_keys: Vec<PallasA>,
         med_keys: Vec<(u8, PallasA)>,
         public_enc_keys: Vec<PallasA>,
-        public_med_keys: Vec<(u8, PallasA)>,
         rng: &mut R,
     ) -> Result<VerificationTuple<PallasA>, Error> {
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
@@ -1295,7 +1215,6 @@ impl SettlementLegProofRevealedAssetId {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
             ctx,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,

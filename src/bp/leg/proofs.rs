@@ -785,7 +785,6 @@ impl MediatorAffirmationProof {
             mediator_keys.enc.secret.0.0,
             mediator_keys.acct.secret.0.0,
             accept,
-            false, // TODO: This should be accepted as an arg
             key_index as usize,
             ctx.as_bytes(),
             &dart_gens().sig_key_gen(),
@@ -806,7 +805,6 @@ impl MediatorAffirmationProof {
         proof.verify(
             leg_enc.decode()?,
             self.accept,
-            false, // TODO: This should be accepted as an arg
             self.key_index as usize,
             ctx.as_bytes(),
             dart_gens().sig_key_gen(),

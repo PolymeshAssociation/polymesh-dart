@@ -1022,7 +1022,6 @@ impl DartTestingDb {
                 amount,
                 config: LegConfig::default(),
                 public_enc_keys: vec![],
-                public_med_keys: vec![],
             });
         }
 

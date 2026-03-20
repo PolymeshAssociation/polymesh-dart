@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use curve_tree_relations::single_level_select_and_rerandomize::*;
 use scale_info::TypeInfo;
 
 use super::*;

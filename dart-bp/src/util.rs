@@ -1,8 +1,8 @@
 use crate::account::common::{LegAccountLink, LegAccountLinkProtocol};
 use crate::account::state::{
     ASSET_ID_GEN_INDEX, AccountCommitmentKeyTrait, AccountState, BALANCE_GEN_INDEX,
-    COUNTER_GEN_INDEX, CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX,
-    SK_ENC_INV_GEN_INDEX, SK_GEN_INDEX,
+    COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX,
+    RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX, SK_ENC_INV_GEN_INDEX, SK_GEN_INDEX,
 };
 use crate::error::*;
 use crate::leg::LegEncryption;
@@ -691,6 +691,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     mut new_rho_blinding: F0,
     mut old_randomness_blinding: F0,
     mut new_randomness_blinding: F0,
+    mut initial_randomness_blinding: F0,
     mut asset_id_blinding: Option<F0>,
     mut sk_enc_inv_blinding: F0,
     prover: &mut Prover<MerlinTranscript, Affine<G0>>,
@@ -734,7 +735,8 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         old_account.current_rho,
         updated_account.current_rho,
         old_account.randomness,
-        updated_account.randomness,
+        old_account.current_randomness,
+        updated_account.current_randomness,
     ];
 
     // If asset-id is revealed, then a different relation is used to prove leg was created for this account as a party
@@ -774,6 +776,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     asset_id_blinding,
                     initial_rho_blinding,
                     old_rho_blinding,
+                    initial_randomness_blinding,
                     old_randomness_blinding,
                     id_blinding,
                     sk_enc_inv_blinding,
@@ -791,6 +794,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     asset_id_blinding,
                     initial_rho_blinding,
                     new_rho_blinding,
+                    initial_randomness_blinding,
                     new_randomness_blinding,
                     id_blinding,
                     sk_enc_inv_blinding,
@@ -805,6 +809,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     initial_rho_blinding,
                     old_rho_blinding,
                     new_rho_blinding,
+                    initial_randomness_blinding,
                     old_randomness_blinding,
                     new_randomness_blinding,
                 ],
@@ -826,6 +831,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     old_counter_blinding,
                     initial_rho_blinding,
                     old_rho_blinding,
+                    initial_randomness_blinding,
                     old_randomness_blinding,
                     id_blinding,
                     sk_enc_inv_blinding,
@@ -842,6 +848,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     old_counter_blinding,
                     initial_rho_blinding,
                     new_rho_blinding,
+                    initial_randomness_blinding,
                     new_randomness_blinding,
                     id_blinding,
                     sk_enc_inv_blinding,
@@ -856,6 +863,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     initial_rho_blinding,
                     old_rho_blinding,
                     new_rho_blinding,
+                    initial_randomness_blinding,
                     old_randomness_blinding,
                     new_randomness_blinding,
                     sk_enc_inv_blinding,
@@ -946,6 +954,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     Zeroize::zeroize(&mut new_rho_blinding);
     Zeroize::zeroize(&mut old_randomness_blinding);
     Zeroize::zeroize(&mut new_randomness_blinding);
+    Zeroize::zeroize(&mut initial_randomness_blinding);
     Zeroize::zeroize(&mut asset_id_blinding);
     Zeroize::zeroize(&mut sk_enc_inv_blinding);
     Zeroize::zeroize(&mut sk_enc_blinding);
@@ -1135,6 +1144,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.current_randomness,
             account.id,
             account.sk_enc_inv,
             leaf_rerandomization,
@@ -1149,7 +1159,10 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             wits.insert(BALANCE_GEN_INDEX, updated_account.balance.into());
         }
         wits.insert(CURRENT_RHO_GEN_INDEX - 1, updated_account.current_rho);
-        wits.insert(RANDOMNESS_GEN_INDEX - 1, updated_account.randomness);
+        wits.insert(
+            CURRENT_RANDOMNESS_GEN_INDEX - 1,
+            updated_account.current_randomness,
+        );
         let resp_acc_new = t_acc_new.partial_response(wits, prover_challenge)?;
         (resp_leaf, resp_acc_new)
     } else {
@@ -1161,6 +1174,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             account.rho,
             account.current_rho,
             account.randomness,
+            account.current_randomness,
             account.id,
             account.sk_enc_inv,
             leaf_rerandomization,
@@ -1175,7 +1189,10 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             wits.insert(BALANCE_GEN_INDEX, updated_account.balance.into());
         }
         wits.insert(CURRENT_RHO_GEN_INDEX, updated_account.current_rho);
-        wits.insert(RANDOMNESS_GEN_INDEX, updated_account.randomness);
+        wits.insert(
+            CURRENT_RANDOMNESS_GEN_INDEX,
+            updated_account.current_randomness,
+        );
         let resp_acc_new = t_acc_new.partial_response(wits, prover_challenge)?;
         (resp_leaf, resp_acc_new)
     };
@@ -1242,7 +1259,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
 
     // If asset-id is revealed, then enforced inverse relation of sk_enc and sk_enc^{-1} in BP
     let mut vars = verifier.commit_vec(
-        5 + if is_asset_id_revealed { 2 } else { 0 },
+        6 + if is_asset_id_revealed { 2 } else { 0 },
         comm_bp_randomness_relations,
     );
     if is_asset_id_revealed {
@@ -1496,6 +1513,11 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         RHO_GEN_INDEX - offset_when_asset_id_revealed,
         resp_leaf.0[RHO_GEN_INDEX - offset_when_asset_id_revealed],
     );
+    // randomness (base s) is the same in old and new accounts; its response comes from resp_leaf
+    missing_resps.insert(
+        RANDOMNESS_GEN_INDEX - offset_when_asset_id_revealed,
+        resp_leaf.0[RANDOMNESS_GEN_INDEX - offset_when_asset_id_revealed],
+    );
     missing_resps.insert(
         ID_GEN_INDEX - offset_when_asset_id_revealed,
         resp_leaf.0[ID_GEN_INDEX - offset_when_asset_id_revealed],
@@ -1571,12 +1593,15 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                         "Asset id is revealed in leg {i} but response for leg-link is not provided"
                     ))
                 })?;
-                let resp_sk_enc = resp_bp.responses.get(&7).ok_or_else(|| {
-                    Error::ProofVerificationError(
-                        "Asset id is revealed but response for sk_enc is missing from resp_bp"
-                            .to_string(),
-                    )
-                })?;
+                let resp_sk_enc = resp_bp
+                    .responses
+                    .get(&(SK_ENC_INV_GEN_INDEX - 1))
+                    .ok_or_else(|| {
+                        Error::ProofVerificationError(
+                            "Asset id is revealed but response for sk_enc is missing from resp_bp"
+                                .to_string(),
+                        )
+                    })?;
                 verify_or_rmc_3!(
                     rmc,
                     resp,
@@ -1626,33 +1651,37 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     let mut missing_resps = BTreeMap::new();
     missing_resps.insert(1, resp_leaf.0[4 - offset_when_asset_id_revealed]);
     missing_resps.insert(2, resp_leaf.0[5 - offset_when_asset_id_revealed]);
-    let resp_acc_new_3 = resp_acc_new
+    let resp_acc_new_cur_rho = resp_acc_new
         .responses
         .get(&(5 - offset_when_asset_id_revealed))
-        .ok_or_else(|| {
-            Error::ProofVerificationError(
-                "Common state-change sigma verification: missing response for new account randomness"
-                    .to_string(),
-            )
-        })?;
-    missing_resps.insert(3, *resp_acc_new_3);
-    missing_resps.insert(4, resp_leaf.0[6 - offset_when_asset_id_revealed]);
-    let resp_acc_new_5 = resp_acc_new
-        .responses
-        .get(&(6 - offset_when_asset_id_revealed))
         .ok_or_else(|| {
             Error::ProofVerificationError(
                 "Common state-change sigma verification: missing response for new account current_rho"
                     .to_string(),
             )
         })?;
-    missing_resps.insert(5, *resp_acc_new_5);
+    missing_resps.insert(3, *resp_acc_new_cur_rho);
+    missing_resps.insert(4, resp_leaf.0[6 - offset_when_asset_id_revealed]);
+    missing_resps.insert(5, resp_leaf.0[7 - offset_when_asset_id_revealed]);
+    let resp_acc_new_cur_rand = resp_acc_new
+        .responses
+        .get(&(7 - offset_when_asset_id_revealed))
+        .ok_or_else(|| {
+            Error::ProofVerificationError(
+                "Common state-change sigma verification: missing response for new account current_randomness"
+                    .to_string(),
+            )
+        })?;
+    missing_resps.insert(6, *resp_acc_new_cur_rand);
 
     let bp_ver_gens = if asset_id.is_none() {
         bp_gens_vec_for_randomness_relations(pc_gens, bp_gens).to_vec()
     } else {
         // Add response for sk_enc^{-1}
-        missing_resps.insert(6, resp_leaf.0[7]); // 8 - 1 (offset)
+        missing_resps.insert(
+            7,
+            resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
+        );
         bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens).to_vec()
     };
     verify_partial_schnorr_resp_or_rmc!(
@@ -1753,19 +1782,20 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
 }
 
 /// Enforces the constraints for relations between initial rho, current rho, old and new randomness
-/// `committed_variables` are variables for committed values `[rho, rho^i, rho^{i+1}, s^j, s^{2*j}]`
+/// `committed_variables` are variables for committed values `[rho, rho^i, rho^{i+1}, s, s^j, s^{j+1}]`
 pub(crate) fn enforce_constraints_for_randomness_relations<F: Field, CS: ConstraintSystem<F>>(
     cs: &mut CS,
     committed_variables: &mut Vec<Variable<F>>,
 ) {
     let var_s_i_plus_1 = committed_variables.pop().unwrap();
     let var_s_i = committed_variables.pop().unwrap();
+    let var_s = committed_variables.pop().unwrap();
     let var_rho_i_plus_1 = committed_variables.pop().unwrap();
     let var_rho_i = committed_variables.pop().unwrap();
     let var_rho = committed_variables.pop().unwrap();
 
     let (_, _, var_rho_i_plus_1_) = cs.multiply(var_rho.into(), var_rho_i.into());
-    let (_, _, var_s_i_plus_1_) = cs.multiply(var_s_i.into(), var_s_i.into());
+    let (_, _, var_s_i_plus_1_) = cs.multiply(var_s.into(), var_s_i.into());
     cs.constrain(var_rho_i_plus_1 - var_rho_i_plus_1_);
     cs.constrain(var_s_i_plus_1 - var_s_i_plus_1_);
 }
@@ -1783,10 +1813,11 @@ pub(crate) fn enforce_constraints_for_sk_enc_relation<F: Field, CS: ConstraintSy
 fn bp_gens_vec_for_randomness_relations<G0: SWCurveConfig + Copy>(
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
-) -> [Affine<G0>; 6] {
-    let mut gens = bp_gens_for_vec_commitment(5, bp_gens);
+) -> [Affine<G0>; 7] {
+    let mut gens = bp_gens_for_vec_commitment(6, bp_gens);
     [
         pc_gens.B_blinding,
+        gens.next().unwrap(),
         gens.next().unwrap(),
         gens.next().unwrap(),
         gens.next().unwrap(),
@@ -1798,10 +1829,11 @@ fn bp_gens_vec_for_randomness_relations<G0: SWCurveConfig + Copy>(
 fn bp_gens_vec_for_randomness_and_sk_enc_relations<G0: SWCurveConfig + Copy>(
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
-) -> [Affine<G0>; 8] {
-    let mut gens = bp_gens_for_vec_commitment(7, bp_gens);
+) -> [Affine<G0>; 9] {
+    let mut gens = bp_gens_for_vec_commitment(8, bp_gens);
     [
         pc_gens.B_blinding,
+        gens.next().unwrap(),
         gens.next().unwrap(),
         gens.next().unwrap(),
         gens.next().unwrap(),
@@ -1840,6 +1872,64 @@ pub fn add_slice_to_transcript<T: CanonicalSerialize>(
     }
 
     Ok(())
+}
+
+/// Prove using SelRerandProofParameters (which contains bp_gens)
+pub fn prove_with_rng_using_params<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_prover: Prover<MerlinTranscript, Affine<G0>>,
+    odd_prover: Prover<MerlinTranscript, Affine<G1>>,
+    tree_params: &SelRerandProofParameters<G0, G1>,
+    rng: &mut R,
+) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
+    let even_bp_gens = tree_params.even_parameters.bp_gens();
+    let odd_bp_gens = tree_params.odd_parameters.bp_gens();
+    prove_with_rng(even_prover, odd_prover, even_bp_gens, odd_bp_gens, rng)
+}
+
+/// Get verification tuples using SelRerandProofParameters
+pub fn get_verification_tuples_with_rng_using_params<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    R: RngCore + CryptoRng,
+>(
+    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
+    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
+    even_proof: &R1CSProof<Affine<G0>>,
+    odd_proof: &R1CSProof<Affine<G1>>,
+    rng: &mut R,
+) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+    get_verification_tuples_with_rng(even_verifier, odd_verifier, even_proof, odd_proof, rng)
+}
+
+pub fn handle_verification_tuples<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    P: SelRerandParametersRef<G0, G1>,
+>(
+    even_tuple: VerificationTuple<Affine<G0>>,
+    odd_tuple: VerificationTuple<Affine<G1>>,
+    tree_params: &P,
+    rmc: Option<(
+        &mut RandomizedMultChecker<Affine<G0>>,
+        &mut RandomizedMultChecker<Affine<G1>>,
+    )>,
+) -> Result<()> {
+    match rmc {
+        Some((rmc_0, rmc_1)) => {
+            add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_params, rmc_0, rmc_1)
+        }
+        None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_params),
+    }
 }
 
 #[cfg(test)]
@@ -2061,10 +2151,11 @@ mod tests {
         rho: Fr,
         rho_i: Fr,
         rho_i_plus_1: Fr,
+        s: Fr,
         s_i: Fr,
         s_i_plus_1: Fr,
     ) -> bool {
-        let values = vec![rho, rho_i, rho_i_plus_1, s_i, s_i_plus_1];
+        let values = vec![rho, rho_i, rho_i_plus_1, s, s_i, s_i_plus_1];
 
         let prover_transcript = MerlinTranscript::new(b"test");
         let mut prover = Prover::new(pc_gens, prover_transcript);
@@ -2095,14 +2186,16 @@ mod tests {
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i * rho;
+        let s = Fr::rand(&mut rng);
         let s_i = Fr::rand(&mut rng);
-        let s_i_plus_1 = s_i * s_i;
+        let s_i_plus_1 = s * s_i;
         assert!(prove_verify_randomness_relations(
             &pc_gens,
             &bp_gens,
             rho,
             rho_i,
             rho_i_plus_1,
+            s,
             s_i,
             s_i_plus_1
         ));
@@ -2110,14 +2203,16 @@ mod tests {
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i + Fr::ONE;
+        let s = Fr::rand(&mut rng);
         let s_i = Fr::rand(&mut rng);
-        let s_i_plus_1 = s_i * s_i;
+        let s_i_plus_1 = s * s_i;
         assert!(!prove_verify_randomness_relations(
             &pc_gens,
             &bp_gens,
             rho,
             rho_i,
             rho_i_plus_1,
+            s,
             s_i,
             s_i_plus_1
         ));
@@ -2125,6 +2220,7 @@ mod tests {
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i * rho;
+        let s = Fr::rand(&mut rng);
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i + Fr::ONE;
         assert!(!prove_verify_randomness_relations(
@@ -2133,6 +2229,7 @@ mod tests {
             rho,
             rho_i,
             rho_i_plus_1,
+            s,
             s_i,
             s_i_plus_1
         ));
@@ -2140,6 +2237,7 @@ mod tests {
         let rho = Fr::rand(&mut rng);
         let rho_i = Fr::rand(&mut rng);
         let rho_i_plus_1 = rho_i + Fr::ONE;
+        let s = Fr::rand(&mut rng);
         let s_i = Fr::rand(&mut rng);
         let s_i_plus_1 = s_i + Fr::ONE;
         assert!(!prove_verify_randomness_relations(
@@ -2148,66 +2246,9 @@ mod tests {
             rho,
             rho_i,
             rho_i_plus_1,
+            s,
             s_i,
             s_i_plus_1
         ));
-    }
-}
-
-/// Prove using SelRerandProofParameters (which contains bp_gens)
-pub fn prove_with_rng_using_params<
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-    R: RngCore + CryptoRng,
->(
-    even_prover: Prover<MerlinTranscript, Affine<G0>>,
-    odd_prover: Prover<MerlinTranscript, Affine<G1>>,
-    tree_params: &SelRerandProofParameters<G0, G1>,
-    rng: &mut R,
-) -> Result<(R1CSProof<Affine<G0>>, R1CSProof<Affine<G1>>)> {
-    let even_bp_gens = tree_params.even_parameters.bp_gens();
-    let odd_bp_gens = tree_params.odd_parameters.bp_gens();
-    prove_with_rng(even_prover, odd_prover, even_bp_gens, odd_bp_gens, rng)
-}
-
-/// Get verification tuples using SelRerandProofParameters
-pub fn get_verification_tuples_with_rng_using_params<
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-    R: RngCore + CryptoRng,
->(
-    even_verifier: Verifier<MerlinTranscript, Affine<G0>>,
-    odd_verifier: Verifier<MerlinTranscript, Affine<G1>>,
-    even_proof: &R1CSProof<Affine<G0>>,
-    odd_proof: &R1CSProof<Affine<G1>>,
-    rng: &mut R,
-) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-    get_verification_tuples_with_rng(even_verifier, odd_verifier, even_proof, odd_proof, rng)
-}
-
-pub fn handle_verification_tuples<
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-    P: SelRerandParametersRef<G0, G1>,
->(
-    even_tuple: VerificationTuple<Affine<G0>>,
-    odd_tuple: VerificationTuple<Affine<G1>>,
-    tree_params: &P,
-    rmc: Option<(
-        &mut RandomizedMultChecker<Affine<G0>>,
-        &mut RandomizedMultChecker<Affine<G1>>,
-    )>,
-) -> Result<()> {
-    match rmc {
-        Some((rmc_0, rmc_1)) => {
-            add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_params, rmc_0, rmc_1)
-        }
-        None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_params),
     }
 }

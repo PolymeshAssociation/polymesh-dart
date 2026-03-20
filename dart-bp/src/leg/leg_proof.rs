@@ -34,7 +34,7 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{BALANCE_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+    PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
@@ -104,10 +104,6 @@ pub struct LegCreationProof<
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G0>>>,
     /// Response for proving R[0] = R[1] * r_1/r_2 (only when sender_receiver_decryption_needed)
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G0>>>,
-    /// Responses for proving public mediator ciphertext relations
-    pub resp_ct_public_meds: Vec<PokDiscreteLog<Affine<G0>>>,
-    /// Responses for proving public mediator ephemeral key relations
-    pub resp_eph_pk_public_meds: Vec<PartialPokDiscreteLog<Affine<G0>>>,
     /// Responses for proving public encryption key relations
     pub resp_eph_pk_public_enc: Vec<(
         PartialPokDiscreteLog<Affine<G0>>,
@@ -379,7 +375,6 @@ impl<
 
         // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m` and `M_i = pk_{e, j} * m_i`
         let r_meds = leg_enc_rand.r_meds.clone();
-        let r_public_meds = leg_enc_rand.r_public_meds.clone();
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
 
@@ -424,11 +419,6 @@ impl<
 
         // `m_i * 1/r_1`
         let m_r_1_inv = r_meds.iter().map(|m_i| *m_i * r_1_inv).collect::<Vec<_>>();
-        // For public mediators
-        let public_m_r_1_inv = r_public_meds
-            .iter()
-            .map(|m_i| *m_i * r_1_inv)
-            .collect::<Vec<_>>();
 
         let mut amount_blinding = F0::rand(rng);
         let mut r_1_blinding = F0::rand(rng);
@@ -448,9 +438,6 @@ impl<
         let mut m_blindings = (0..r_meds.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
         let mut m_r_1_inv_blindings = (0..r_meds.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
         let mut k_blindings = (0..k.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
-        let mut r_public_meds_blindings = (0..r_public_meds.len())
-            .map(|_| F0::rand(rng))
-            .collect::<Vec<_>>();
 
         let mut asset_id_blinding = F0::rand(rng);
 
@@ -689,25 +676,6 @@ impl<
             pk_m_proto.push((t_m, t_k, t_eph_m));
         }
 
-        // Protocols for public mediator and encryption keys
-        let mut ct_public_meds_proto = Vec::with_capacity(r_public_meds.len());
-        let mut eph_pk_public_meds_proto = Vec::with_capacity(r_public_meds.len());
-        for i in 0..r_public_meds.len() {
-            // For proving ct_m[i] - pk_m[i] = enc_key_gen * r_public_meds[i]
-            ct_public_meds_proto.push(PokDiscreteLogProtocol::init(
-                r_public_meds[i],
-                r_public_meds_blindings[i],
-                &enc_key_gen,
-            ));
-            // For proving M[i] = pk_en[j] * r_public_meds[i] / r_1
-            let base = &leg_enc.eph_pk_public_enc_keys[leg.public_med_keys[i].0 as usize].0;
-            eph_pk_public_meds_proto.push(PokDiscreteLogProtocol::init(
-                public_m_r_1_inv[i],
-                r_public_meds_blindings[i],
-                base,
-            ));
-        }
-
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg.public_enc_keys.len());
         for i in 0..leg.public_enc_keys.len() {
             // For proving A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
@@ -752,7 +720,6 @@ impl<
         Zeroize::zeroize(&mut m_blindings);
         Zeroize::zeroize(&mut m_r_1_inv_blindings);
         Zeroize::zeroize(&mut k_blindings);
-        Zeroize::zeroize(&mut r_public_meds_blindings);
 
         t_comm_r_i_amount.challenge_contribution(&mut transcript)?;
 
@@ -876,22 +843,6 @@ impl<
             )?;
         }
 
-        for i in 0..r_public_meds.len() {
-            let y = leg_enc.ct_public_meds[i] - leg.public_med_keys[i].1.into_group();
-            ct_public_meds_proto[i].challenge_contribution(
-                &enc_key_gen,
-                &y.into_affine(),
-                &mut transcript,
-            )?;
-
-            let base = &leg_enc.eph_pk_public_enc_keys[leg.public_med_keys[i].0 as usize].0;
-            eph_pk_public_meds_proto[i].challenge_contribution(
-                &base,
-                &leg_enc.eph_pk_public_med_keys[i].1,
-                &mut transcript,
-            )?;
-        }
-
         for i in 0..leg.public_enc_keys.len() {
             eph_pk_public_enc_proto[i].0.challenge_contribution(
                 &leg.public_enc_keys[i],
@@ -960,15 +911,7 @@ impl<
             })
             .collect();
 
-        // Generate responses for public mediator and encryption key proofs
-        let resp_ct_public_meds = ct_public_meds_proto
-            .into_iter()
-            .map(|p| p.gen_proof(&challenge))
-            .collect();
-        let resp_eph_pk_public_meds = eph_pk_public_meds_proto
-            .into_iter()
-            .map(|p| p.gen_partial_proof())
-            .collect();
+        // Generate responses for public encryption key proofs
         let resp_eph_pk_public_enc = eph_pk_public_enc_proto
             .into_iter()
             .map(|(p_0, p_1, p_2)| {
@@ -1019,8 +962,6 @@ impl<
             resp_eph_pk_meds,
             resp_eph_pk_s_r,
             resp_eph_pk_r_s,
-            resp_ct_public_meds,
-            resp_eph_pk_public_meds,
             resp_eph_pk_public_enc,
         })
     }
@@ -1035,7 +976,6 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         public_enc_keys: Vec<Affine<G0>>,
-        public_med_keys: Vec<(u8, Affine<G0>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1056,7 +996,6 @@ impl<
                 leg_enc,
                 asset_tree_root,
                 public_enc_keys,
-                public_med_keys,
                 nonce,
                 tree_parameters,
                 asset_comm_params,
@@ -1078,7 +1017,6 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         public_enc_keys: Vec<Affine<G0>>,
-        public_med_keys: Vec<(u8, Affine<G0>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1096,7 +1034,6 @@ impl<
             leg_enc,
             asset_tree_root,
             public_enc_keys,
-            public_med_keys,
             nonce,
             tree_parameters,
             asset_comm_params,
@@ -1128,7 +1065,6 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         asset_tree_root: &Root<L, 1, G1, G0>,
         public_enc_keys: Vec<Affine<G0>>,
-        public_med_keys: Vec<(u8, Affine<G0>)>, // (index in public_enc_keys, mediator affirmation key)
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -1168,7 +1104,7 @@ impl<
 
         self.verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
             leg_enc, rerandomized_leaf,
-            public_enc_keys, public_med_keys,
+            public_enc_keys,
             tree_parameters, asset_comm_params,
             enc_key_gen, enc_gen, even_verifier, odd_verifier, rmc,
         )
@@ -1182,7 +1118,6 @@ impl<
         leg_enc: LegEncryption<Affine<G0>>,
         rerandomized_leaf: Affine<G1>,
         public_enc_keys: Vec<Affine<G0>>,
-        public_med_keys: Vec<(u8, Affine<G0>)>, // (index in public_enc_keys, mediator affirmation key)
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
         enc_key_gen: Affine<G0>,
@@ -1228,35 +1163,6 @@ impl<
             )));
         }
 
-        if self.resp_ct_public_meds.len() != self.resp_eph_pk_public_meds.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_public_meds.len() != resp_eph_pk_public_meds.len() ({} != {})",
-                self.resp_ct_public_meds.len(),
-                self.resp_eph_pk_public_meds.len()
-            )));
-        }
-        if self.resp_ct_public_meds.len() != leg_enc.ct_public_meds.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_public_meds.len() != leg_enc.ct_public_meds.len() ({} != {})",
-                self.resp_ct_public_meds.len(),
-                leg_enc.ct_public_meds.len()
-            )));
-        }
-        if self.resp_ct_public_meds.len() != leg_enc.eph_pk_public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_public_meds.len() != leg_enc.eph_pk_public_med_keys.len() ({} != {})",
-                self.resp_ct_public_meds.len(),
-                leg_enc.eph_pk_public_med_keys.len()
-            )));
-        }
-        if self.resp_ct_public_meds.len() != public_med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_public_meds.len() != public_med_keys.len() ({} != {})",
-                self.resp_ct_public_meds.len(),
-                public_med_keys.len()
-            )));
-        }
-
         if self.resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() ({} != {})",
@@ -1270,16 +1176,6 @@ impl<
                 self.resp_eph_pk_public_enc.len(),
                 public_enc_keys.len()
             )));
-        }
-
-        for (i, (idx, _)) in public_med_keys.iter().enumerate() {
-            if (*idx as usize) >= public_enc_keys.len() {
-                return Err(Error::ProofVerificationError(format!(
-                    "public_med_keys[{i}].0 is out of bounds for public_enc_keys ({} >= {})",
-                    *idx,
-                    public_enc_keys.len()
-                )));
-            }
         }
 
         if self.re_randomized_points.len() != num_enc_keys + num_med_keys + 1 {
@@ -1335,23 +1231,6 @@ impl<
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
                     idx, num_enc_keys
-                )));
-            }
-        }
-
-        for i in 0..public_med_keys.len() {
-            let idx = public_med_keys[i].0 as usize;
-            if idx >= leg_enc.eph_pk_public_enc_keys.len() {
-                return Err(Error::ProofVerificationError(format!(
-                    "public_med_keys[{i}].0 is out of bounds for leg_enc.eph_pk_public_enc_keys ({} >= {})",
-                    idx,
-                    leg_enc.eph_pk_public_enc_keys.len()
-                )));
-            }
-            if idx != leg_enc.eph_pk_public_med_keys[i].0 as usize {
-                return Err(Error::ProofVerificationError(format!(
-                    "public_med_keys[{i}].0 != leg_enc.eph_pk_public_med_keys[{i}].0 ({} != {})",
-                    idx, leg_enc.eph_pk_public_med_keys[i].0
                 )));
             }
         }
@@ -1561,23 +1440,6 @@ impl<
 
             let base = &leg_enc.eph_pk_enc_keys[leg_enc.eph_pk_med_keys[i].0 as usize].0;
             p_2.challenge_contribution(&base, &leg_enc.eph_pk_med_keys[i].1, &mut transcript)?;
-        }
-
-        // Verify public mediator and encryption key proofs
-        for i in 0..self.resp_ct_public_meds.len() {
-            let y = leg_enc.ct_public_meds[i] - public_med_keys[i].1.into_group();
-            self.resp_ct_public_meds[i].challenge_contribution(
-                &enc_key_gen,
-                &y.into_affine(),
-                &mut transcript,
-            )?;
-
-            let base = &leg_enc.eph_pk_public_enc_keys[public_med_keys[i].0 as usize].0;
-            self.resp_eph_pk_public_meds[i].challenge_contribution(
-                &base,
-                &leg_enc.eph_pk_public_med_keys[i].1,
-                &mut transcript,
-            )?;
         }
 
         for i in 0..self.resp_eph_pk_public_enc.len() {
@@ -1856,19 +1718,6 @@ impl<
             );
         }
 
-        // Verify public mediator ciphertexts
-        for i in 0..self.resp_ct_public_meds.len() {
-            let y = leg_enc.ct_public_meds[i] - public_med_keys[i].1.into_group();
-            verify_or_rmc_2!(
-                rmc,
-                self.resp_ct_public_meds[i],
-                format!("resp_ct_public_meds[{}] verification failed", i),
-                y.into_affine(),
-                enc_key_gen,
-                &challenge,
-            );
-        }
-
         // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
         for i in 0..self.resp_eph_pk_public_enc.len() {
             let (p_0, p_1, p_2) = &self.resp_eph_pk_public_enc[i];
@@ -2083,14 +1932,6 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
-        if leg_enc.ct_public_meds.len() != leg.public_med_keys.len() {
-            return Err(Error::ProofGenerationError(format!(
-                "Mismatch in ct_public_meds length: leg_enc has {} but leg has {} public_med_keys",
-                leg_enc.ct_public_meds.len(),
-                leg.public_med_keys.len()
-            )));
-        }
-
         if leg_enc.eph_pk_med_keys.len() != leg.med_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in eph_pk_med_keys length: leg_enc has {} but leg has {} med_keys",
@@ -2099,13 +1940,6 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
-        if leg_enc.eph_pk_public_med_keys.len() != leg.public_med_keys.len() {
-            return Err(Error::ProofGenerationError(format!(
-                "Mismatch in eph_pk_public_med_keys length: leg_enc has {} but leg has {} public_med_keys",
-                leg_enc.eph_pk_public_med_keys.len(),
-                leg.public_med_keys.len()
-            )));
-        }
         Ok(())
     }
 }

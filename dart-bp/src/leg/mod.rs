@@ -48,24 +48,6 @@ pub struct AssetCommitmentParams<
     pub comm_key: Vec<Affine<G1>>,
 }
 
-/*impl<
-    G0: SWCurveConfig + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
-> AssetCommitmentParams<G0, G1>
-{
-    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
-    /// Use try-and-increment
-    pub fn new_deprecated<D: Digest>(
-        label: &[u8],
-        num_keys: u32,
-        leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
-    ) -> Self {
-        let j_0 = affine_group_elem_from_try_and_incr::<_, D>(&concat_slices![label, b" : j_0"]);
-        let comm_key = bp_gens_for_vec_commitment(num_keys + 1, leaf_layer_bp_gens).collect();
-        Self { j_0, comm_key }
-    }
-}*/
-
 impl<
     G1: SWCurveConfig<
             ScalarField = <PallasConfig as CurveConfig>::BaseField,
@@ -218,11 +200,6 @@ pub struct Leg<G: AffineRepr> {
     /// Encryption keys for which [`LegCore`] will be encrypted.
     /// These keys are not stored along the asset-id in [`AssetData`] but provided by the leg creator and are always revealed to the verifier
     pub public_enc_keys: Vec<G>,
-    /// List of pairs of the form `(enc-key-index, mediator-affirmation-key)` where `enc-key-index` is the index
-    /// of key in `enc_keys` used when encrypting `mediator-affirmation-key`
-    /// These keys are not stored along the asset-id in [`AssetData`] but provided by the leg creator and are always revealed to the verifier.
-    /// A leg cannot have zero public encryption keys but non-zero public mediator affirmation keys.
-    pub public_med_keys: Vec<(u8, G)>,
 }
 
 #[derive(Clone)]
@@ -309,8 +286,6 @@ pub struct LegEncryptionRandomness<F: PrimeField> {
     pub r4: Option<F>,
     /// Randomness used for creating ephemeral public keys for encryption keys corresponding to mediators.
     pub r_meds: Vec<F>,
-    /// Randomness used for creating ephemeral public keys for encryption keys corresponding to public mediators.
-    pub r_public_meds: Vec<F>,
 }
 
 /// Twisted Elgamal encryption of sender pk, receiver pk, amount and asset id
@@ -326,9 +301,6 @@ pub struct LegEncryption<G: AffineRepr> {
     /// Encryption of mediator affirmation keys in the order they appear in [`AssetData`].
     /// These only need to be decrypted by the corresponding mediator and none other.
     pub ct_meds: Vec<G>,
-    /// Encryption of mediator affirmation keys in the order they were passed by leg creator.
-    /// These only need to be decrypted by the corresponding mediator and none other.
-    pub ct_public_meds: Vec<G>,
     /// Ephemeral public keys of auditors in the order they appear in [`AssetData`].
     pub eph_pk_enc_keys: Vec<EphemeralPublicKey<G>>,
     /// Ephemeral public keys of auditors in the order they were passed by leg creator.
@@ -338,11 +310,6 @@ pub struct LegEncryption<G: AffineRepr> {
     ///
     /// Invariant: `ct_meds.len() == eph_pk_med_keys.len()`.
     pub eph_pk_med_keys: Vec<(u8, G)>,
-    /// Ephemeral encryption public keys for mediators in the order they appear in `ct_public_meds`.
-    /// The index corresponds to the encryption key passed by leg creator.
-    ///
-    /// Invariant: `ct_public_meds.len() == eph_pk_public_med_keys.len()`.
-    pub eph_pk_public_med_keys: Vec<(u8, G)>,
 }
 
 impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
@@ -360,7 +327,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         enc_keys: Vec<G>,
         med_keys: Vec<(u8, G)>,
         public_enc_keys: Vec<G>,
-        public_med_keys: Vec<(u8, G)>,
     ) -> Result<Self> {
         if amount > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount));
@@ -370,11 +336,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         }
         for (idx, _) in &med_keys {
             if *idx as usize >= enc_keys.len() {
-                return Err(Error::InvalidKeyIndex(*idx as usize));
-            }
-        }
-        for (idx, _) in &public_med_keys {
-            if *idx as usize >= public_enc_keys.len() {
                 return Err(Error::InvalidKeyIndex(*idx as usize));
             }
         }
@@ -388,7 +349,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             enc_keys,
             med_keys,
             public_enc_keys,
-            public_med_keys,
         })
     }
 
@@ -470,9 +430,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let mut r_meds = Vec::with_capacity(self.med_keys.len());
         let mut ct_meds = Vec::with_capacity(self.med_keys.len());
         let mut eph_pk_med_keys = Vec::with_capacity(self.med_keys.len());
-        let mut r_public_meds = Vec::with_capacity(self.public_med_keys.len());
-        let mut ct_public_meds = Vec::with_capacity(self.public_med_keys.len());
-        let mut eph_pk_public_med_keys = Vec::with_capacity(self.public_med_keys.len());
 
         for i in 0..self.med_keys.len() {
             let r = F::rand(rng);
@@ -482,16 +439,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                 (self.enc_keys[self.med_keys[i].0 as usize] * r).into_affine(),
             ));
             r_meds.push(r);
-        }
-
-        for i in 0..self.public_med_keys.len() {
-            let r = F::rand(rng);
-            ct_public_meds.push(enc_key_gen * r + self.public_med_keys[i].1);
-            eph_pk_public_med_keys.push((
-                self.public_med_keys[i].0,
-                (self.public_enc_keys[self.public_med_keys[i].0 as usize] * r).into_affine(),
-            ));
-            r_public_meds.push(r);
         }
 
         Zeroize::zeroize(&mut amount);
@@ -508,9 +455,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                 eph_pk_enc_keys: enc_keys.collect(),
                 eph_pk_public_enc_keys: public_enc_keys.collect(),
                 ct_meds: G::Group::normalize_batch(&ct_meds),
-                ct_public_meds: G::Group::normalize_batch(&ct_public_meds),
                 eph_pk_med_keys,
-                eph_pk_public_med_keys,
             },
             LegEncryptionRandomness {
                 r1,
@@ -518,7 +463,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                 r3,
                 r4,
                 r_meds,
-                r_public_meds,
             },
         ))
     }
