@@ -18,17 +18,9 @@ fn decrypt_benchmark(c: &mut Criterion) {
     for i in 2..6 {
         let amount = (10 as Balance).pow(i);
         let leg =
-            Leg::new(sender.acct, receiver.acct, asset_id, amount).expect("Failed to create leg");
+            Leg::new(sender.enc, receiver.enc, asset_id, amount).expect("Failed to create leg");
         let (_leg, leg_enc, _leg_enc_rand) = leg
-            .encrypt(
-                &mut rng,
-                LegEncConfig::default(),
-                sender.enc,
-                receiver.enc,
-                vec![],
-                vec![],
-                vec![],
-            )
+            .encrypt(&mut rng, LegEncConfig::default(), vec![], vec![], vec![])
             .expect("Failed to encrypt leg");
 
         group.bench_with_input(
@@ -85,17 +77,9 @@ fn decrypt_benchmark(c: &mut Criterion) {
         }
         eprintln!("Preparing leg for amount {}", s_amount);
         let leg =
-            Leg::new(sender.acct, receiver.acct, asset_id, amount).expect("Failed to create leg");
+            Leg::new(sender.enc, receiver.enc, asset_id, amount).expect("Failed to create leg");
         let (_leg, leg_enc, _leg_enc_rand) = leg
-            .encrypt(
-                &mut rng,
-                LegEncConfig::default(),
-                sender.enc,
-                receiver.enc,
-                vec![],
-                vec![],
-                vec![],
-            )
+            .encrypt(&mut rng, LegEncConfig::default(), vec![], vec![], vec![])
             .expect("Failed to encrypt leg");
 
         Some((amount, leg_enc, format!("{:>19}", s_amount)))

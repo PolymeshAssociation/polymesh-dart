@@ -116,8 +116,8 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
         // If asset ID is revealed, the mediator can decrypt and verify the leg details.
         if reveal_asset_id {
             let leg = mediator_acct.decrypt_leg(&chain, &leg_ref, LegRole::mediator(0))?;
-            assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
-            assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+            assert_eq!(leg.sender()?, issuer_acct.public_keys().enc);
+            assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
             assert_eq!(leg.asset_id(), asset_id);
             assert_eq!(leg.amount(), 500);
         }
@@ -262,8 +262,8 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
         // The auditor decrypts the leg details (possible regardless of reveal_asset_id).
         let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::auditor(0))?;
         // Verify the leg details.
-        assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
-        assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+        assert_eq!(leg.sender()?, issuer_acct.public_keys().enc);
+        assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
         assert_eq!(leg.asset_id(), asset_id);
         assert_eq!(leg.amount(), 500);
 
@@ -423,8 +423,8 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
         // The auditor decrypts the leg details (possible regardless of reveal_asset_id).
         let leg = auditor_acct.decrypt_leg(&chain, &leg_ref, LegRole::auditor(0))?;
         // Verify the leg details.
-        assert_eq!(leg.sender()?, issuer_acct.public_keys().acct);
-        assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+        assert_eq!(leg.sender()?, issuer_acct.public_keys().enc);
+        assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
         assert_eq!(leg.asset_id(), asset_id);
         assert_eq!(leg.amount(), 500);
 
@@ -639,8 +639,8 @@ fn test_atomic_swap() -> Result<()> {
         // If asset ID is revealed, the auditor can decrypt funding leg 1.
         if reveal_asset_id {
             let leg = auditor_acct.decrypt_leg(&chain, &funding_leg1_ref, LegRole::auditor(0))?;
-            assert_eq!(leg.sender()?, issuer1_acct.public_keys().acct);
-            assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+            assert_eq!(leg.sender()?, issuer1_acct.public_keys().enc);
+            assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
             assert_eq!(leg.asset_id(), asset1_id);
             assert_eq!(leg.amount(), 1000);
         }
@@ -670,8 +670,8 @@ fn test_atomic_swap() -> Result<()> {
         // If asset ID is revealed, the mediator can decrypt funding leg 2.
         if reveal_asset_id {
             let leg = mediator_acct.decrypt_leg(&chain, &funding_leg2_ref, LegRole::mediator(0))?;
-            assert_eq!(leg.sender()?, issuer2_acct.public_keys().acct);
-            assert_eq!(leg.receiver()?, investor2_acct.public_keys().acct);
+            assert_eq!(leg.sender()?, issuer2_acct.public_keys().enc);
+            assert_eq!(leg.receiver()?, investor2_acct.public_keys().enc);
             assert_eq!(leg.asset_id(), asset2_id);
             assert_eq!(leg.amount(), 1500);
         }
@@ -778,14 +778,14 @@ fn test_atomic_swap() -> Result<()> {
         // If asset ID is revealed, the auditor/mediator can decrypt the swap legs.
         if reveal_asset_id {
             let leg = auditor_acct.decrypt_leg(&chain, &swap_leg1_ref, LegRole::auditor(0))?;
-            assert_eq!(leg.sender()?, investor1_acct.public_keys().acct);
-            assert_eq!(leg.receiver()?, investor2_acct.public_keys().acct);
+            assert_eq!(leg.sender()?, investor1_acct.public_keys().enc);
+            assert_eq!(leg.receiver()?, investor2_acct.public_keys().enc);
             assert_eq!(leg.asset_id(), asset1_id);
             assert_eq!(leg.amount(), 500);
 
             let leg = mediator_acct.decrypt_leg(&chain, &swap_leg2_ref, LegRole::mediator(0))?;
-            assert_eq!(leg.sender()?, investor2_acct.public_keys().acct);
-            assert_eq!(leg.receiver()?, investor1_acct.public_keys().acct);
+            assert_eq!(leg.sender()?, investor2_acct.public_keys().enc);
+            assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
             assert_eq!(leg.asset_id(), asset2_id);
             assert_eq!(leg.amount(), 750);
         }

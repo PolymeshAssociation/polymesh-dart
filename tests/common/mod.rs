@@ -405,12 +405,9 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Mediator decrypts the leg");
         let leg_data = chain.get_settlement_leg(leg_ref)?;
-        let leg = leg_data.enc.decrypt_with_keys(
-            LegRole::mediator(0),
-            &self.keys,
-            leg_data.sender_keys,
-            leg_data.receiver_keys,
-        )?;
+        let leg = leg_data
+            .enc
+            .decrypt_with_keys(LegRole::mediator(0), &self.keys)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
         // Create the mediator affirmation proof.
@@ -430,17 +427,10 @@ impl DartUserAccountInner {
     ) -> Result<Leg> {
         log::info!("Decrypting leg for role: {:?}", role);
         let leg_data = chain.get_settlement_leg(leg_ref)?;
-        let leg = leg_data.enc.decrypt_with_keys(
-            role,
-            &self.keys,
-            leg_data.sender_keys,
-            leg_data.receiver_keys,
-        )?;
+        let leg = leg_data.enc.decrypt_with_keys(role, &self.keys)?;
         log::info!("Decrypted leg: {:?}", leg);
         Ok(leg)
     }
-
-    // Method removed: leg encryption randomness is no longer needed for proofs
 
     pub fn receiver_claims<R: RngCore + CryptoRng>(
         &mut self,
@@ -746,8 +736,6 @@ impl DartUserAccount {
         self.0.read().unwrap().decrypt_leg(chain, leg_ref, role)
     }
 
-    // Method removed: leg encryption randomness is no longer needed
-
     pub fn receiver_claims<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
@@ -922,8 +910,6 @@ impl AffirmationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DartSettlementLeg {
-    pub sender_keys: AccountPublicKeys,
-    pub receiver_keys: AccountPublicKeys,
     pub enc: LegEncrypted,
     pub sender: AffirmationStatus,
     pub receiver: AffirmationStatus,
@@ -1236,8 +1222,6 @@ impl DartSettlement {
                     .map(|idx| (idx, AffirmationStatus::Pending))
                     .collect();
                 Ok(DartSettlementLeg {
-                    sender_keys: leg.sender(),
-                    receiver_keys: leg.receiver(),
                     enc: leg.leg_enc().clone(),
                     sender: AffirmationStatus::Pending,
                     receiver: AffirmationStatus::Pending,

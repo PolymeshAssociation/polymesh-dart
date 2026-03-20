@@ -11,6 +11,7 @@ use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
     UniformRand, format,
     string::{String, ToString},
+    vec,
     vec::Vec,
 };
 use bulletproofs::r1cs::VerificationTuple;
@@ -247,12 +248,12 @@ impl LegRole {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
-    /// Sender's confidential account.
+    /// The sender's encryption public key.
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
-    pub sender: AccountPublicKey,
-    /// Receiver's confidential account.
+    pub sender: EncryptionPublicKey,
+    /// The receiver's encryption public key.
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
-    pub receiver: AccountPublicKey,
+    pub receiver: EncryptionPublicKey,
     /// Asset id.
     #[cfg_attr(feature = "utoipa", schema(examples(1), value_type = u64))]
     pub asset_id: AssetId,
@@ -263,8 +264,8 @@ pub struct Leg {
 
 impl Leg {
     pub fn new(
-        sender: AccountPublicKey,
-        receiver: AccountPublicKey,
+        sender: EncryptionPublicKey,
+        receiver: EncryptionPublicKey,
         asset_id: AssetId,
         amount: Balance,
     ) -> Result<Self, Error> {
@@ -280,15 +281,13 @@ impl Leg {
         &self,
         rng: &mut R,
         config: bp_leg::LegEncConfig,
-        sender: EncryptionPublicKey,
-        receiver: EncryptionPublicKey,
         asset_enc_keys: Vec<PallasA>,
         asset_med_keys: Vec<(u8, PallasA)>,
         public_enc_keys: Vec<PallasA>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
         let leg = bp_leg::Leg::new(
-            sender.get_affine()?,
-            receiver.get_affine()?,
+            self.sender.get_affine()?,
+            self.receiver.get_affine()?,
             self.amount,
             self.asset_id,
             asset_enc_keys,
@@ -308,11 +307,11 @@ impl Leg {
         ))
     }
 
-    pub fn sender(&self) -> Result<AccountPublicKey, Error> {
+    pub fn sender(&self) -> Result<EncryptionPublicKey, Error> {
         Ok(self.sender)
     }
 
-    pub fn receiver(&self) -> Result<AccountPublicKey, Error> {
+    pub fn receiver(&self) -> Result<EncryptionPublicKey, Error> {
         Ok(self.receiver)
     }
 
@@ -411,8 +410,8 @@ impl LegBuilder {
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<AnySettlementLegProof<C>, Error> {
         let leg = Leg::new(
-            self.sender.acct,
-            self.receiver.acct,
+            self.sender.enc,
+            self.receiver.enc,
             self.asset.asset_id,
             self.amount,
         )?;
@@ -433,21 +432,12 @@ impl LegBuilder {
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let (leg, leg_enc, leg_enc_rand) = leg.encrypt(
-            rng,
-            self.config.into(),
-            self.sender.enc,
-            self.receiver.enc,
-            enc_keys,
-            med_keys,
-            public_enc_keys,
-        )?;
+        let (leg, leg_enc, leg_enc_rand) =
+            leg.encrypt(rng, self.config.into(), enc_keys, med_keys, public_enc_keys)?;
 
         if self.config.reveal_asset_id {
             let leg_proof = SettlementLegProofRevealedAssetId::new(
                 rng,
-                self.sender,
-                self.receiver,
                 leg,
                 leg_enc,
                 &leg_enc_rand,
@@ -459,8 +449,6 @@ impl LegBuilder {
             let asset_data = self.asset.asset_data()?;
             let leg_proof = SettlementLegProof::new(
                 rng,
-                self.sender,
-                self.receiver,
                 leg,
                 leg_enc,
                 &leg_enc_rand,
@@ -478,7 +466,7 @@ impl LegBuilder {
 ///
 /// When the asset-id is hidden, the proof includes a curve tree membership proof.
 /// When the asset-id is revealed, a simpler proof (`PublicAssetLegCreationProof`) is used instead.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     /// Asset ID is hidden; uses `SettlementLegProof` with curve-tree membership.
@@ -496,20 +484,6 @@ impl<
         >,
 > AnySettlementLegProof<C>
 {
-    pub fn sender(&self) -> AccountPublicKeys {
-        match self {
-            Self::HiddenAssetId(p) => p.sender,
-            Self::RevealedAssetId(p) => p.sender,
-        }
-    }
-
-    pub fn receiver(&self) -> AccountPublicKeys {
-        match self {
-            Self::HiddenAssetId(p) => p.receiver,
-            Self::RevealedAssetId(p) => p.receiver,
-        }
-    }
-
     pub fn leg_enc(&self) -> &LegEncrypted {
         match self {
             Self::HiddenAssetId(p) => &p.leg_enc,
@@ -942,8 +916,6 @@ type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
-    pub sender: AccountPublicKeys,
-    pub receiver: AccountPublicKeys,
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
@@ -962,8 +934,6 @@ impl<
 {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        sender: AccountPublicKeys,
-        receiver: AccountPublicKeys,
         leg: bp_leg::Leg<PallasA>,
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
@@ -992,8 +962,6 @@ impl<
         )?;
 
         Ok(Self {
-            sender,
-            receiver,
             leg_enc,
             public_enc_keys,
 
@@ -1106,10 +1074,8 @@ fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
 
 /// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
 /// The auditor and mediator public keys are also known to the verifier.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 pub struct SettlementLegProofRevealedAssetId {
-    pub sender: AccountPublicKeys,
-    pub receiver: AccountPublicKeys,
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
@@ -1122,8 +1088,6 @@ pub struct SettlementLegProofRevealedAssetId {
 impl SettlementLegProofRevealedAssetId {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        sender: AccountPublicKeys,
-        receiver: AccountPublicKeys,
         leg: bp_leg::Leg<PallasA>,
         leg_enc: LegEncrypted,
         leg_enc_rand: &LegEncryptionRandomness,
@@ -1146,8 +1110,6 @@ impl SettlementLegProofRevealedAssetId {
         )?;
 
         Ok(Self {
-            sender,
-            receiver,
             leg_enc,
             public_enc_keys,
             inner: WrappedCanonical::wrap(&proof)?,
@@ -1337,8 +1299,8 @@ impl LegEncrypted {
         };
         Ok((
             Leg {
-                sender: AccountPublicKey::from_affine(sender)?,
-                receiver: AccountPublicKey::from_affine(receiver)?,
+                sender: EncryptionPublicKey::from_affine(sender)?,
+                receiver: EncryptionPublicKey::from_affine(receiver)?,
                 asset_id,
                 amount,
             },
@@ -1410,8 +1372,8 @@ impl LegEncrypted {
             }
         };
         Ok(Leg {
-            sender: AccountPublicKey::from_affine(sender)?,
-            receiver: AccountPublicKey::from_affine(receiver)?,
+            sender: EncryptionPublicKey::from_affine(sender)?,
+            receiver: EncryptionPublicKey::from_affine(receiver)?,
             asset_id,
             amount,
         })
@@ -1419,16 +1381,10 @@ impl LegEncrypted {
 
     /// Decrypt the leg and return it with the provided sender/receiver account public keys.
     /// This is preferred over `decrypt()` as it ensures the correct account keys are returned.
-    pub fn decrypt_with_keys(
-        &self,
-        role: LegRole,
-        keys: &AccountKeys,
-        sender_keys: AccountPublicKeys,
-        receiver_keys: AccountPublicKeys,
-    ) -> Result<Leg, Error> {
+    pub fn decrypt_with_keys(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
         // Decrypt to get asset_id and amount
-        let (_, _, asset_id, amount) = match role {
+        let (sender, receiver, asset_id, amount) = match role {
             LegRole {
                 kind: LegRoleKind::Sender,
                 ..
@@ -1472,8 +1428,8 @@ impl LegEncrypted {
             }
         };
         Ok(Leg {
-            sender: sender_keys.acct,
-            receiver: receiver_keys.acct,
+            sender: EncryptionPublicKey::from_affine(sender)?,
+            receiver: EncryptionPublicKey::from_affine(receiver)?,
             asset_id,
             amount,
         })
