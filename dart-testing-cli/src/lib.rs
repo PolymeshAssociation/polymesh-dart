@@ -1406,7 +1406,7 @@ impl DartTestingDb {
             proof
         } else {
             // Decrypt leg
-            let leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
+            let _leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
             MediatorAffirmationProof::new(rng, &leg_ref, &encrypted_leg, &account_keys, 0, accept)?
