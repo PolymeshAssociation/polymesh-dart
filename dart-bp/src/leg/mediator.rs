@@ -4,6 +4,7 @@ use ark_ec::AffineRepr;
 use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};

@@ -8,6 +8,7 @@ use super::{
 use crate::{PallasA, PallasScalar, WrappedCanonical};
 use ark_ec::AffineRepr;
 use ark_std::UniformRand;
+use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::key_distribution;
 use rand_core::{CryptoRng, RngCore};
