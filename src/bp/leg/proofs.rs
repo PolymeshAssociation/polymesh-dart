@@ -534,14 +534,13 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountKeys,
         leg_ref: &LegRef,
         leg_enc: &LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        // Generate a new account state for decreasing the counter.
+        // Generate a new account state for decreasing counter.
         let state_change = account_asset.get_state_for_decreasing_counter(account)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
@@ -555,7 +554,6 @@ impl<
             bp_account::ReceiverCounterUpdateTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
                 rng,
                 leg_enc.decode()?,
-                leg_enc_rand.decode()?,
                 &state_change.current_state,
                 &state_change.new_state,
                 state_change.new_commitment,
@@ -564,7 +562,6 @@ impl<
                 ctx.as_bytes(),
                 tree_lookup.params(),
                 dart_gens().account_comm_key(),
-                dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
             )?;
 
@@ -607,7 +604,6 @@ impl<
             ctx.as_bytes(),
             tree_roots.params(),
             dart_gens().account_comm_key(),
-            dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rmc,
         )?;
