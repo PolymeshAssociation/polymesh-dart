@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=divisor-proof#6a2b535ec38862f5f4249c6f7137fe8b0e100cdd"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh-updated#b21d62a36d596840454855361106b82f94b13813"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -236,7 +236,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=divisor-proof#6a2b535ec38862f5f4249c6f7137fe8b0e100cdd"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh-updated#b21d62a36d596840454855361106b82f94b13813"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -613,7 +613,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=divisor-proof#6a2b535ec38862f5f4249c6f7137fe8b0e100cdd"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh-updated#b21d62a36d596840454855361106b82f94b13813"
 dependencies = [
  "ahash",
  "ark-ec",
@@ -1574,10 +1574,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2842,7 +2840,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=divisor-proof#6a2b535ec38862f5f4249c6f7137fe8b0e100cdd"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh-updated#b21d62a36d596840454855361106b82f94b13813"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
@@ -2859,7 +2857,6 @@ dependencies = [
  "bulletproofs",
  "digest 0.10.7",
  "dock_crypto_utils",
- "getrandom",
  "log",
  "rand",
  "rand_chacha",
