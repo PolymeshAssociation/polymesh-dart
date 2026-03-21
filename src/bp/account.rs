@@ -23,7 +23,16 @@ use super::*;
 use crate::*;
 
 pub type PallasParameters = ark_pallas::PallasConfig;
-use ark_ec_divisors::curves::vesta::VestaParams;
+use curve_tree_relations::parameters::SingleLayerParameters;
+
+const CURVE_TREE_PARAMETERS_PALLAS_LABEL: &[u8] = b"curve-tree-pallas";
+pub fn get_pallas_single_layer_params() -> SingleLayerParameters<PallasParameters> {
+    SingleLayerParameters::<PallasParameters>::new_using_label(
+        CURVE_TREE_PARAMETERS_PALLAS_LABEL,
+        MAX_CURVE_TREE_GENS as u32,
+    )
+    .expect("Failed to create SingleLayerParameters for Pallas")
+}
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
 pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
@@ -593,7 +602,7 @@ impl AccountAssetRegistrationProof {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
-        even_param: &SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+        sl_params: &SingleLayerParameters<PallasParameters>,
     ) -> Result<(Self, AccountAssetState), Error> {
         let account_state = keys.init_asset_state(asset_id, counter, identity)?;
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
@@ -608,8 +617,8 @@ impl AccountAssetRegistrationProof {
             counter,
             identity,
             gens.account_comm_key(),
-            even_param.pc_gens(),
-            even_param.bp_gens(),
+            sl_params.pc_gens(),
+            sl_params.bp_gens(),
             &params.params,
             None,
         )?;
