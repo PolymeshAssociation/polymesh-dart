@@ -148,9 +148,9 @@ pub mod pallas {
             degree,
             full_rounds,
             partial_rounds,
-            init_mat_diag3().clone(),
-            init_mat_internal3().clone(),
-            init_round_constants()?.clone(),
+            get_mat_diag3_m1(),
+            get_internal3(),
+            get_round_constants()?,
         );
     }
 
