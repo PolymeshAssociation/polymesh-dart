@@ -566,7 +566,7 @@ impl AccountAssetRegistrationProof {
     ) -> Result<(Self, AccountAssetState), Error> {
         let account_state = keys.init_asset_state(asset_id, counter, identity)?;
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
-        let params = poseidon_params();
+        let params = PoseidonParameters::new()?;
         let gens = dart_gens();
         let proof = account_registration::RegTxnProof::new(
             rng,
