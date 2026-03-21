@@ -223,6 +223,8 @@ pub mod pallas {
 
     fn get_round_constants() -> Result<Vec<Vec<PallasFr>>> {
         let mut temp = [0u8; 32];
+        Ok(vec![])
+        /*
         Ok(vec![
             vec![
                 from_hex::<PallasFr>(
@@ -785,5 +787,6 @@ pub mod pallas {
                 )?,
             ],
         ])
+        */
     }
 }
