@@ -113,10 +113,10 @@ impl DartLimits for () {
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolymeshPrivateLimits;
+#[derive(Encode, Decode, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PolymeshLimits;
 
-impl DartLimits for PolymeshPrivateLimits {
+impl DartLimits for PolymeshLimits {
     type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
     type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
