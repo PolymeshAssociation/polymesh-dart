@@ -608,6 +608,13 @@ impl AccountAssetRegistrationProof {
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
         let params = PoseidonParameters::new()?;
         let gens = DartBPGenerators::new(DART_GEN_DOMAIN);
+        let k1 = keys.acct.public.get_affine()?;
+        let k2 = keys.enc.public.get_affine()?;
+        let g1 = gens.account_comm_key();
+        let g2 = sl_params.pc_gens();
+        let g3 = sl_params.bp_gens();
+        let g4 = &params.params;
+        /*
         let proof = account_registration::RegTxnProof::new(
             rng,
             keys.acct.public.get_affine()?,
@@ -633,6 +640,8 @@ impl AccountAssetRegistrationProof {
             },
             account_state,
         ))
+        */
+        Err(Error::AccountPublicKeyExists)
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
