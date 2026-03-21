@@ -1241,197 +1241,197 @@ impl LegEncrypted {
         Ok(mediators)
     }
 
-    /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
-    pub fn try_decrypt_with_key(
-        &self,
-        keys: &EncryptionKeyPair,
-        key_index: Option<usize>,
-        max_asset_id: Option<AssetId>,
-    ) -> Result<(Leg, LegRole), Error> {
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        let leg_enc = self.decode()?;
-        let (key_index, (sender, receiver, asset_id, amount)) = if let Some(key_index) = key_index {
-            // The key index is provided, use it directly.
-            (
-                key_index,
-                leg_enc.decrypt_given_key_with_limits(
-                    &keys.secret.0.0,
-                    false,
-                    key_index,
-                    enc_gen,
-                    max_asset_id,
-                    None,
-                )?,
-            )
-        } else {
-            // No key index provided, try all key indices until one works.
-            let max_keys = leg_enc.eph_pk_enc_keys.len();
-            let mut idx = 0;
-            loop {
-                if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
-                    &keys.secret.0.0,
-                    false,
-                    idx,
-                    enc_gen,
-                    max_asset_id,
-                    None,
-                ) {
-                    break (idx, res);
-                }
-                idx += 1;
-                if idx >= max_keys {
-                    return Err(Error::LegDecryptionError(
-                        "Failed to decrypt leg with provided key".to_string(),
-                    ));
-                }
-            }
-        };
-
-        // Check if this key index is in the mediator keys
-        let is_mediator = leg_enc
-            .eph_pk_med_keys
-            .iter()
-            .any(|(idx, _)| *idx as usize == key_index);
-        let leg_role = if is_mediator {
-            LegRole::mediator(key_index as u8)
-        } else {
-            LegRole::auditor(key_index as u8)
-        };
-        Ok((
-            Leg {
-                sender: EncryptionPublicKey::from_affine(sender)?,
-                receiver: EncryptionPublicKey::from_affine(receiver)?,
-                asset_id,
-                amount,
-            },
-            leg_role,
-        ))
-    }
-
-    /// Try to decrypt the leg as either sender or receiver.
-    ///
-    /// Auditors and mediators should use `try_decrypt_with_key` instead.
-    pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
-        // TODO: optimize to avoid decoding leg encryption twice.
-        if let Ok(leg) = self.decrypt(LegRole::sender(), keys) {
-            Some((leg, LegRole::sender()))
-        } else if let Ok(leg) = self.decrypt(LegRole::receiver(), keys) {
-            Some((leg, LegRole::receiver()))
-        } else {
-            None
-        }
-    }
-
-    /// Decrypt the leg using the provided role and account keys.  Only use this if the role is known.
-    ///
-    /// Senders/receivers should use `try_decrypt` instead.
-    /// Auditors/mediators should use `try_decrypt_with_key` instead.
-    pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        let (sender, receiver, asset_id, amount) = match role {
-            LegRole {
-                kind: LegRoleKind::Sender,
-                ..
-            } => {
-                let leg_enc = self.decode()?;
-                let (sender, receiver_opt, asset_id, amount) =
-                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
-                let receiver = receiver_opt.ok_or_else(|| {
-                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
-                })?;
-                (sender, receiver, asset_id, amount)
-            }
-            LegRole {
-                kind: LegRoleKind::Receiver,
-                ..
-            } => {
-                let leg_enc = self.decode()?;
-                let (sender_opt, receiver, asset_id, amount) =
-                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
-                let sender = sender_opt.ok_or_else(|| {
-                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
-                })?;
-                (sender, receiver, asset_id, amount)
-            }
-            LegRole {
-                kind: LegRoleKind::Auditor,
-                index: Some(idx),
-            }
-            | LegRole {
-                kind: LegRoleKind::Mediator,
-                index: Some(idx),
-            } => {
-                let leg_enc = self.decode()?;
-                let is_public = false;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
-            }
-            _ => {
-                return Err(Error::LegDecryptionError(
-                    "Invalid role for leg decryption".to_string(),
-                ));
-            }
-        };
-        Ok(Leg {
-            sender: EncryptionPublicKey::from_affine(sender)?,
-            receiver: EncryptionPublicKey::from_affine(receiver)?,
-            asset_id,
-            amount,
-        })
-    }
-
-    /// Decrypt the leg and return it with the provided sender/receiver account public keys.
-    /// This is preferred over `decrypt()` as it ensures the correct account keys are returned.
-    pub fn decrypt_with_keys(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        // Decrypt to get asset_id and amount
-        let (sender, receiver, asset_id, amount) = match role {
-            LegRole {
-                kind: LegRoleKind::Sender,
-                ..
-            } => {
-                let leg_enc = self.decode()?;
-                let (sender, receiver_opt, asset_id, amount) =
-                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
-                let receiver = receiver_opt.ok_or_else(|| {
-                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
-                })?;
-                (sender, receiver, asset_id, amount)
-            }
-            LegRole {
-                kind: LegRoleKind::Receiver,
-                ..
-            } => {
-                let leg_enc = self.decode()?;
-                let (sender_opt, receiver, asset_id, amount) =
-                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
-                let sender = sender_opt.ok_or_else(|| {
-                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
-                })?;
-                (sender, receiver, asset_id, amount)
-            }
-            LegRole {
-                kind: LegRoleKind::Auditor,
-                index: Some(idx),
-            }
-            | LegRole {
-                kind: LegRoleKind::Mediator,
-                index: Some(idx),
-            } => {
-                let leg_enc = self.decode()?;
-                let is_public = false;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
-            }
-            _ => {
-                return Err(Error::LegDecryptionError(
-                    "Invalid role for leg decryption".to_string(),
-                ));
-            }
-        };
-        Ok(Leg {
-            sender: EncryptionPublicKey::from_affine(sender)?,
-            receiver: EncryptionPublicKey::from_affine(receiver)?,
-            asset_id,
-            amount,
-        })
-    }
+//    /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
+//    pub fn try_decrypt_with_key(
+//        &self,
+//        keys: &EncryptionKeyPair,
+//        key_index: Option<usize>,
+//        max_asset_id: Option<AssetId>,
+//    ) -> Result<(Leg, LegRole), Error> {
+//        let enc_gen = dart_gens().leg_asset_value_gen();
+//        let leg_enc = self.decode()?;
+//        let (key_index, (sender, receiver, asset_id, amount)) = if let Some(key_index) = key_index {
+//            // The key index is provided, use it directly.
+//            (
+//                key_index,
+//                leg_enc.decrypt_given_key_with_limits(
+//                    &keys.secret.0.0,
+//                    false,
+//                    key_index,
+//                    enc_gen,
+//                    max_asset_id,
+//                    None,
+//                )?,
+//            )
+//        } else {
+//            // No key index provided, try all key indices until one works.
+//            let max_keys = leg_enc.eph_pk_enc_keys.len();
+//            let mut idx = 0;
+//            loop {
+//                if let Ok(res) = leg_enc.decrypt_given_key_with_limits(
+//                    &keys.secret.0.0,
+//                    false,
+//                    idx,
+//                    enc_gen,
+//                    max_asset_id,
+//                    None,
+//                ) {
+//                    break (idx, res);
+//                }
+//                idx += 1;
+//                if idx >= max_keys {
+//                    return Err(Error::LegDecryptionError(
+//                        "Failed to decrypt leg with provided key".to_string(),
+//                    ));
+//                }
+//            }
+//        };
+//
+//        // Check if this key index is in the mediator keys
+//        let is_mediator = leg_enc
+//            .eph_pk_med_keys
+//            .iter()
+//            .any(|(idx, _)| *idx as usize == key_index);
+//        let leg_role = if is_mediator {
+//            LegRole::mediator(key_index as u8)
+//        } else {
+//            LegRole::auditor(key_index as u8)
+//        };
+//        Ok((
+//            Leg {
+//                sender: EncryptionPublicKey::from_affine(sender)?,
+//                receiver: EncryptionPublicKey::from_affine(receiver)?,
+//                asset_id,
+//                amount,
+//            },
+//            leg_role,
+//        ))
+//    }
+//
+//    /// Try to decrypt the leg as either sender or receiver.
+//    ///
+//    /// Auditors and mediators should use `try_decrypt_with_key` instead.
+//    pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
+//        // TODO: optimize to avoid decoding leg encryption twice.
+//        if let Ok(leg) = self.decrypt(LegRole::sender(), keys) {
+//            Some((leg, LegRole::sender()))
+//        } else if let Ok(leg) = self.decrypt(LegRole::receiver(), keys) {
+//            Some((leg, LegRole::receiver()))
+//        } else {
+//            None
+//        }
+//    }
+//
+//    /// Decrypt the leg using the provided role and account keys.  Only use this if the role is known.
+//    ///
+//    /// Senders/receivers should use `try_decrypt` instead.
+//    /// Auditors/mediators should use `try_decrypt_with_key` instead.
+//    pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
+//        let enc_gen = dart_gens().leg_asset_value_gen();
+//        let (sender, receiver, asset_id, amount) = match role {
+//            LegRole {
+//                kind: LegRoleKind::Sender,
+//                ..
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let (sender, receiver_opt, asset_id, amount) =
+//                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
+//                let receiver = receiver_opt.ok_or_else(|| {
+//                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
+//                })?;
+//                (sender, receiver, asset_id, amount)
+//            }
+//            LegRole {
+//                kind: LegRoleKind::Receiver,
+//                ..
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let (sender_opt, receiver, asset_id, amount) =
+//                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
+//                let sender = sender_opt.ok_or_else(|| {
+//                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
+//                })?;
+//                (sender, receiver, asset_id, amount)
+//            }
+//            LegRole {
+//                kind: LegRoleKind::Auditor,
+//                index: Some(idx),
+//            }
+//            | LegRole {
+//                kind: LegRoleKind::Mediator,
+//                index: Some(idx),
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let is_public = false;
+//                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
+//            }
+//            _ => {
+//                return Err(Error::LegDecryptionError(
+//                    "Invalid role for leg decryption".to_string(),
+//                ));
+//            }
+//        };
+//        Ok(Leg {
+//            sender: EncryptionPublicKey::from_affine(sender)?,
+//            receiver: EncryptionPublicKey::from_affine(receiver)?,
+//            asset_id,
+//            amount,
+//        })
+//    }
+//
+//    /// Decrypt the leg and return it with the provided sender/receiver account public keys.
+//    /// This is preferred over `decrypt()` as it ensures the correct account keys are returned.
+//    pub fn decrypt_with_keys(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
+//        let enc_gen = dart_gens().leg_asset_value_gen();
+//        // Decrypt to get asset_id and amount
+//        let (sender, receiver, asset_id, amount) = match role {
+//            LegRole {
+//                kind: LegRoleKind::Sender,
+//                ..
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let (sender, receiver_opt, asset_id, amount) =
+//                    leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
+//                let receiver = receiver_opt.ok_or_else(|| {
+//                    Error::LegDecryptionError("Sender cannot see receiver".to_string())
+//                })?;
+//                (sender, receiver, asset_id, amount)
+//            }
+//            LegRole {
+//                kind: LegRoleKind::Receiver,
+//                ..
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let (sender_opt, receiver, asset_id, amount) =
+//                    leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
+//                let sender = sender_opt.ok_or_else(|| {
+//                    Error::LegDecryptionError("Receiver cannot see sender".to_string())
+//                })?;
+//                (sender, receiver, asset_id, amount)
+//            }
+//            LegRole {
+//                kind: LegRoleKind::Auditor,
+//                index: Some(idx),
+//            }
+//            | LegRole {
+//                kind: LegRoleKind::Mediator,
+//                index: Some(idx),
+//            } => {
+//                let leg_enc = self.decode()?;
+//                let is_public = false;
+//                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
+//            }
+//            _ => {
+//                return Err(Error::LegDecryptionError(
+//                    "Invalid role for leg decryption".to_string(),
+//                ));
+//            }
+//        };
+//        Ok(Leg {
+//            sender: EncryptionPublicKey::from_affine(sender)?,
+//            receiver: EncryptionPublicKey::from_affine(receiver)?,
+//            asset_id,
+//            amount,
+//        })
+//    }
 }
