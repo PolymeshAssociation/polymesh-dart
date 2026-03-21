@@ -269,16 +269,7 @@ impl AccountKeyPair {
 
 /// The pair of public keys for an account: the encryption public key and the account public key.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    PartialEq,
-    Eq,
-    Hash,
+    Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Hash,
 )]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -383,6 +374,8 @@ impl AccountKeys {
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
+#[codec(encode_bound(skip_type_params(T)))]
+#[codec(decode_bound(skip_type_params(T)))]
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
