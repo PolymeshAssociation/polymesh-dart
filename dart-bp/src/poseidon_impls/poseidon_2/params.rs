@@ -131,18 +131,18 @@ pub mod pallas {
         let partial_rounds = 56;
         let degree = 5;
 
-        #[cfg(feature = "std")]
-        return Poseidon2Params::<PallasFr>::new(
-            3,
-            degree,
-            full_rounds,
-            partial_rounds,
-            MAT_DIAG3_M_1.to_vec(),
-            MAT_INTERNAL3.to_vec(),
-            RC3.as_ref().unwrap().to_vec(),
-        );
+        //#[cfg(feature = "std")]
+        //return Poseidon2Params::<PallasFr>::new(
+        //    3,
+        //    degree,
+        //    full_rounds,
+        //    partial_rounds,
+        //    MAT_DIAG3_M_1.to_vec(),
+        //    MAT_INTERNAL3.to_vec(),
+        //    RC3.as_ref().unwrap().to_vec(),
+        //);
 
-        #[cfg(not(feature = "std"))]
+        //#[cfg(not(feature = "std"))]
         return Poseidon2Params::<PallasFr>::new(
             3,
             degree,
@@ -154,58 +154,58 @@ pub mod pallas {
         );
     }
 
-    #[cfg(feature = "std")]
-    pub static MAT_DIAG3_M_1: LazyLock<Vec<PallasFr>> = LazyLock::new(|| get_mat_diag3_m1());
+    //#[cfg(feature = "std")]
+    //pub static MAT_DIAG3_M_1: LazyLock<Vec<PallasFr>> = LazyLock::new(|| get_mat_diag3_m1());
 
-    #[cfg(feature = "std")]
-    pub static MAT_INTERNAL3: LazyLock<Vec<Vec<PallasFr>>> = LazyLock::new(|| get_internal3());
+    //#[cfg(feature = "std")]
+    //pub static MAT_INTERNAL3: LazyLock<Vec<Vec<PallasFr>>> = LazyLock::new(|| get_internal3());
 
-    #[cfg(feature = "std")]
-    pub static RC3: LazyLock<Result<Vec<Vec<PallasFr>>>> = LazyLock::new(|| get_round_constants());
+    //#[cfg(feature = "std")]
+    //pub static RC3: LazyLock<Result<Vec<Vec<PallasFr>>>> = LazyLock::new(|| get_round_constants());
 
-    #[cfg(not(feature = "std"))]
-    pub static mut MAT_DIAG3_M_1: Option<Vec<PallasFr>> = None;
+    //#[cfg(not(feature = "std"))]
+    //pub static mut MAT_DIAG3_M_1: Option<Vec<PallasFr>> = None;
 
-    #[cfg(not(feature = "std"))]
-    pub static mut MAT_INTERNAL3: Option<Vec<Vec<PallasFr>>> = None;
+    //#[cfg(not(feature = "std"))]
+    //pub static mut MAT_INTERNAL3: Option<Vec<Vec<PallasFr>>> = None;
 
-    #[cfg(not(feature = "std"))]
-    pub static mut RC3: Option<Vec<Vec<PallasFr>>> = None;
+    //#[cfg(not(feature = "std"))]
+    //pub static mut RC3: Option<Vec<Vec<PallasFr>>> = None;
 
-    #[cfg(not(feature = "std"))]
-    #[allow(static_mut_refs)]
-    pub fn init_mat_diag3() -> &'static Vec<PallasFr> {
-        unsafe {
-            if MAT_DIAG3_M_1.is_none() {
-                MAT_DIAG3_M_1 = Some(get_mat_diag3_m1());
-            }
-            MAT_DIAG3_M_1.as_ref().unwrap()
-        }
-    }
+    //#[cfg(not(feature = "std"))]
+    //#[allow(static_mut_refs)]
+    //pub fn init_mat_diag3() -> &'static Vec<PallasFr> {
+    //    unsafe {
+    //        if MAT_DIAG3_M_1.is_none() {
+    //            MAT_DIAG3_M_1 = Some(get_mat_diag3_m1());
+    //        }
+    //        MAT_DIAG3_M_1.as_ref().unwrap()
+    //    }
+    //}
 
-    #[cfg(not(feature = "std"))]
-    #[allow(static_mut_refs)]
-    pub fn init_mat_internal3() -> &'static Vec<Vec<PallasFr>> {
-        unsafe {
-            if MAT_INTERNAL3.is_none() {
-                MAT_INTERNAL3 = Some(get_internal3());
-            }
-            MAT_INTERNAL3.as_ref().unwrap()
-        }
-    }
+    //#[cfg(not(feature = "std"))]
+    //#[allow(static_mut_refs)]
+    //pub fn init_mat_internal3() -> &'static Vec<Vec<PallasFr>> {
+    //    unsafe {
+    //        if MAT_INTERNAL3.is_none() {
+    //            MAT_INTERNAL3 = Some(get_internal3());
+    //        }
+    //        MAT_INTERNAL3.as_ref().unwrap()
+    //    }
+    //}
 
-    #[cfg(not(feature = "std"))]
-    #[allow(static_mut_refs)]
-    pub fn init_round_constants() -> Result<&'static Vec<Vec<PallasFr>>, crate::Error> {
-        unsafe {
-            if RC3.is_none() {
-                // Initialize constants if not already done
-                let constants = get_round_constants()?;
-                RC3 = Some(constants);
-            }
-            Ok(RC3.as_ref().unwrap())
-        }
-    }
+    //#[cfg(not(feature = "std"))]
+    //#[allow(static_mut_refs)]
+    //pub fn init_round_constants() -> Result<&'static Vec<Vec<PallasFr>>, crate::Error> {
+    //    unsafe {
+    //        if RC3.is_none() {
+    //            // Initialize constants if not already done
+    //            let constants = get_round_constants()?;
+    //            RC3 = Some(constants);
+    //        }
+    //        Ok(RC3.as_ref().unwrap())
+    //    }
+    //}
 
     // Parameters taken from https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_pallas.rs
 
