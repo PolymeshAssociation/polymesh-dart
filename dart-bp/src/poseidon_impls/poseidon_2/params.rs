@@ -121,12 +121,8 @@ pub mod pallas {
     use super::*;
     use ark_ff::{One, Zero};
     use ark_pallas::Fr as PallasFr;
-    #[cfg(not(feature = "std"))]
-    use ark_std::boxed::Box;
     #[cfg(feature = "std")]
     use ark_std::sync::LazyLock;
-    #[cfg(not(feature = "std"))]
-    use once_cell::race::OnceBox;
 
     pub fn get_poseidon2_params_for_2_1_hashing() -> Result<Poseidon2Params<PallasFr>> {
         // NOTE: These numbers are for 2:1 compression and 256 bit group (Table 1 from Poseidon2 paper) and that is the only config we use.
@@ -168,38 +164,46 @@ pub mod pallas {
     pub static RC3: LazyLock<Result<Vec<Vec<PallasFr>>>> = LazyLock::new(|| get_round_constants());
 
     #[cfg(not(feature = "std"))]
-    pub static MAT_DIAG3_M_1: OnceBox<Vec<PallasFr>> = OnceBox::new();
+    pub static mut MAT_DIAG3_M_1: Option<Vec<PallasFr>> = None;
 
     #[cfg(not(feature = "std"))]
-    pub static MAT_INTERNAL3: OnceBox<Vec<Vec<PallasFr>>> = OnceBox::new();
+    pub static mut MAT_INTERNAL3: Option<Vec<Vec<PallasFr>>> = None;
 
     #[cfg(not(feature = "std"))]
-    pub static RC3: OnceBox<Vec<Vec<PallasFr>>> = OnceBox::new();
+    pub static mut RC3: Option<Vec<Vec<PallasFr>>> = None;
 
     #[cfg(not(feature = "std"))]
+    #[allow(static_mut_refs)]
     pub fn init_mat_diag3() -> &'static Vec<PallasFr> {
-        MAT_DIAG3_M_1.get_or_init(|| Box::new(get_mat_diag3_m1()))
-    }
-
-    #[cfg(not(feature = "std"))]
-    pub fn init_mat_internal3() -> &'static Vec<Vec<PallasFr>> {
-        MAT_INTERNAL3.get_or_init(|| Box::new(get_internal3()))
-    }
-
-    #[cfg(not(feature = "std"))]
-    pub fn init_round_constants() -> Result<&'static Vec<Vec<PallasFr>>, crate::Error> {
-        if let Some(constants) = RC3.get() {
-            return Ok(constants);
-        }
-
-        // Initialize constants if not already done
-        let constants = get_round_constants()?;
-        match RC3.set(Box::new(constants)) {
-            Ok(()) => Ok(RC3.get().unwrap()),
-            Err(_) => {
-                // Another thread may have set it already, that's fine
-                Ok(RC3.get().unwrap())
+        unsafe {
+            if MAT_DIAG3_M_1.is_none() {
+                MAT_DIAG3_M_1 = Some(get_mat_diag3_m1());
             }
+            MAT_DIAG3_M_1.as_ref().unwrap()
+        }
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(static_mut_refs)]
+    pub fn init_mat_internal3() -> &'static Vec<Vec<PallasFr>> {
+        unsafe {
+            if MAT_INTERNAL3.is_none() {
+                MAT_INTERNAL3 = Some(get_internal3());
+            }
+            MAT_INTERNAL3.as_ref().unwrap()
+        }
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[allow(static_mut_refs)]
+    pub fn init_round_constants() -> Result<&'static Vec<Vec<PallasFr>>, crate::Error> {
+        unsafe {
+            if RC3.is_none() {
+                // Initialize constants if not already done
+                let constants = get_round_constants()?;
+                RC3 = Some(constants);
+            }
+            Ok(RC3.as_ref().unwrap())
         }
     }
 
