@@ -640,6 +640,40 @@ impl DartTestingDb {
         Ok(AccountPublicKeys { acct, enc })
     }
 
+    // Generate Account registration proof.
+    pub fn account_registration<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        signer_name: &str,
+        account_name: &str,
+        mut proof_action: ProofAction,
+    ) -> Result<AccountRegistrationProof> {
+        let account_info = self.get_dart_account(signer_name, account_name)?;
+
+        let account_keys = account_info.account_keys()?;
+        let proof = AccountRegistrationProof::new(
+            rng,
+            &[account_keys],
+            signer_name.as_bytes(),
+        )?;
+
+        // If proof action is to generate only, save proof and return
+        if !proof_action.apply_proof() {
+            proof_action.save_proof(&proof)?;
+            return Ok(proof);
+        }
+
+        // Verify the proof
+        proof.verify(signer_name.as_bytes())?;
+
+        if proof_action.is_dry_run() {
+            // If dry run, just verify and return
+            return Ok(proof);
+        }
+
+        Ok(proof)
+    }
+
     // Asset operations
     pub fn create_asset(
         &mut self,

@@ -24,6 +24,9 @@ run create-account -s investor-0
 run create-account -s mediator-0
 run create-account -s auditor-0
 
+run account-registration -w account-registration-proof.dat -s investor-0
+run account-registration -r account-registration-proof.dat -s investor-0
+
 run create-asset -s issuer1 --type auditor --auditor auditor
 #run create-asset -s issuer1 --type mediator --auditor mediator
 run create-asset -s issuer1 --type mediator --auditor mediator

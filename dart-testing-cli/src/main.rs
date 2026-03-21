@@ -38,6 +38,23 @@ enum Commands {
         signer_account: String,
     },
 
+    /// Account registration proof.
+    AccountRegistration {
+        /// Signer and account in format signer-account
+        #[arg(short, long)]
+        signer_account: String,
+        /// Write proof to file instead of applying
+        #[arg(short, long)]
+        write: Option<PathBuf>,
+        /// Read proof from file and apply
+        #[arg(short, long)]
+        read: Option<PathBuf>,
+
+        /// Dry run without applying changes
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
     /// Create a new asset
     CreateAsset {
         /// Name of the issuer signer
@@ -335,6 +352,24 @@ fn main() -> Result<()> {
                 "Created account '{}' for signer '{}' (ID: {})",
                 account_info.name, signer, account_info.id
             );
+        }
+
+        Commands::AccountRegistration {
+            signer_account,
+            write,
+            read,
+            dry_run,
+        } => {
+            let (signer, account) = parse_signer_account(&signer_account);
+
+            let proof_action = ProofAction::new(write, read, dry_run)?;
+
+            let account = account.ok_or_else(|| {
+                anyhow::anyhow!("Account name is required for AccountRegistration")
+            })?;
+
+            db.account_registration(&mut rng, &signer, &account, proof_action)?;
+            println!("Registered account '{}:{}'", signer, account);
         }
 
         Commands::CreateAsset {
