@@ -1,3 +1,4 @@
+use curve_tree_relations::parameters::SingleLayerProofParametersNew;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -20,6 +21,9 @@ use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::*;
 use crate::*;
+
+pub type PallasParameters = ark_pallas::PallasConfig;
+use ark_ec_divisors::curves::vesta::VestaParams;
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
 pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
@@ -137,15 +141,7 @@ impl AccountStateNullifier {
 }
 
 #[derive(
-    Copy,
-    Clone,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    Debug,
-    PartialEq,
-    Eq,
+    Copy, Clone, MaxEncodedLen, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq,
 )]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -574,6 +570,46 @@ impl AccountAssetRegistrationProof {
             gens.account_comm_key(),
             tree_params.even_parameters.pc_gens(),
             tree_params.even_parameters.bp_gens(),
+            &params.params,
+            None,
+        )?;
+        Ok((
+            Self {
+                account: keys.public_keys(),
+                asset_id,
+                counter,
+                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
+
+                inner: WrappedCanonical::wrap(&proof)?,
+            },
+            account_state,
+        ))
+    }
+
+    /// Generate a new account state for an asset and a registration proof for it.
+    pub fn new_min<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        keys: &AccountKeys,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+        even_param: &SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+    ) -> Result<(Self, AccountAssetState), Error> {
+        let account_state = keys.init_asset_state(asset_id, counter, identity)?;
+        let (bp_state, commitment) = account_state.bp_current_state(keys)?;
+        let params = poseidon_params();
+        let gens = dart_gens();
+        let proof = account_registration::RegTxnProof::new(
+            rng,
+            keys.acct.public.get_affine()?,
+            keys.enc.public.get_affine()?,
+            &bp_state,
+            commitment,
+            counter,
+            identity,
+            gens.account_comm_key(),
+            even_param.pc_gens(),
+            even_param.bp_gens(),
             &params.params,
             None,
         )?;
