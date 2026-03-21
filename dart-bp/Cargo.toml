@@ -40,7 +40,6 @@ ark-dlog-gadget = { workspace = true, default-features = false, features = ["pal
 ark-pallas = { workspace = true, default-features = false, features = ["curve"] }
 rand_chacha = { workspace = true, default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
-once_cell = { version = "1.21.3", default-features = false, features = ["alloc", "race"] }
 lazy_static = { workspace = true, default-features = false, optional = true }
 itertools = { version = "0.14.0", default-features = false }
 
@@ -81,7 +80,6 @@ std = [
 	#	"equality_across_groups/std",
 	"ark-pallas/std",
 	"hex/std",
-	"once_cell/std",
 	"lazy_static",
 	"itertools/use_std",
 	"ark-dlog-gadget/std",
