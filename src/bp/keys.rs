@@ -2,7 +2,6 @@
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use scale_info::TypeInfo;
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::String, vec::Vec};
@@ -33,7 +32,6 @@ pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
     Decode,
     DecodeWithMemTracking,
     Default,
-    TypeInfo,
     Debug,
     PartialEq,
     Eq,
@@ -41,6 +39,7 @@ pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct EncryptionPublicKey(CompressedAffine);
@@ -137,7 +136,6 @@ impl EncryptionKeyPair {
     Decode,
     DecodeWithMemTracking,
     Default,
-    TypeInfo,
     Debug,
     PartialEq,
     Eq,
@@ -145,6 +143,7 @@ impl EncryptionKeyPair {
     Ord,
     Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountPublicKey(CompressedAffine);
@@ -277,11 +276,11 @@ impl AccountKeyPair {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     PartialEq,
     Eq,
     Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountPublicKeys {
     pub enc: EncryptionPublicKey,
@@ -381,8 +380,9 @@ impl AccountKeys {
 /// DART account registration proof.
 ///
 /// This is used to prove knowledge of the secret keys (account and encryption keys) for 1 or more DART accounts.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
@@ -451,8 +451,9 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 }
 
 /// Encryption key registration proof for auditors and mediators.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 

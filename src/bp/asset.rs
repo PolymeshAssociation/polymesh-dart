@@ -2,7 +2,6 @@
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
 use ark_std::vec::Vec;
@@ -23,7 +22,8 @@ use polymesh_dart_bp::account::mint::MintTxnProof;
 ///   `affirmation_key` is the mediator's signing/affirmation key used to prove their identity.
 ///
 /// This mirrors [`dart_bp::leg::AssetData`]'s `enc_keys` / `med_keys` fields exactly.
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetState<T: DartLimits = ()> {
     pub asset_id: AssetId,
@@ -115,8 +115,9 @@ type BPMintTxnProof<C> = MintTxnProof<
 >;
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
 pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.
     pub pk: AccountPublicKey,

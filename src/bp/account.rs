@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
 use ark_ff::Field;
@@ -116,7 +115,6 @@ impl TryFrom<BPAccountState> for AccountState {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     Debug,
     PartialEq,
     Eq,
@@ -124,6 +122,7 @@ impl TryFrom<BPAccountState> for AccountState {
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AccountStateNullifier(CompressedAffine);
 
@@ -144,11 +143,11 @@ impl AccountStateNullifier {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     Debug,
     PartialEq,
     Eq,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct AccountStateCommitment(CompressedAffine);
@@ -362,8 +361,9 @@ impl AccountAssetState {
 /// Batched account asset registration proof.
 ///
 /// This is used to register multiple account/asset pairs in a single proof.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
 pub struct BatchedAccountAssetRegistrationProof<T: DartLimits = ()> {
     pub proofs: BoundedVec<AccountAssetRegistrationProof, T::MaxAccountAssetRegProofs>,
 }
@@ -538,7 +538,8 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct AccountAssetRegistrationProof {
     pub account: AccountPublicKeys,
     pub asset_id: AssetId,
