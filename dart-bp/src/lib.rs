@@ -72,9 +72,9 @@ pub mod account_registration;
 mod error;
 pub mod poseidon_impls;
 
-pub mod discrete_log;
+//pub mod discrete_log;
 pub mod fee_account;
-pub mod key_distribution;
+//pub mod key_distribution;
 pub mod leg;
 
 pub use error::Error;

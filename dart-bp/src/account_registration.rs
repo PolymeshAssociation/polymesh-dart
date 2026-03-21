@@ -2,7 +2,7 @@ use crate::TXN_CHALLENGE_LABEL;
 use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
-use crate::discrete_log::solve_discrete_log_bsgs;
+//use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
@@ -1166,31 +1166,31 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     }
 }
 
-impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
-    EncryptedScalar<G, CHUNK_BITS, NUM_CHUNKS>
-{
-    pub fn decrypt(&self, sk_T: &G::ScalarField, enc_gen: G::Group) -> Result<G::ScalarField> {
-        let max = 1_u64 << CHUNK_BITS;
-        let chunks = self
-            .ciphertexts
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let e = c.decrypt(sk_T).into_group();
-                // TODO: This can be optimized as discrete log with same base is being computed
-                solve_discrete_log_bsgs(max, enc_gen, e)
-                    .map(|d| G::ScalarField::from(d))
-                    .ok_or_else(|| Error::SolvingDiscreteLogFailed(i))
-            })
-            .collect::<Vec<_>>();
-        let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-        let mut reconstructed = G::ScalarField::zero();
-        for (i, c) in chunks.into_iter().enumerate() {
-            reconstructed += c? * powers[i];
-        }
-        Ok(reconstructed)
-    }
-}
+//impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
+//    EncryptedScalar<G, CHUNK_BITS, NUM_CHUNKS>
+//{
+//    pub fn decrypt(&self, sk_T: &G::ScalarField, enc_gen: G::Group) -> Result<G::ScalarField> {
+//        let max = 1_u64 << CHUNK_BITS;
+//        let chunks = self
+//            .ciphertexts
+//            .iter()
+//            .enumerate()
+//            .map(|(i, c)| {
+//                let e = c.decrypt(sk_T).into_group();
+//                // TODO: This can be optimized as discrete log with same base is being computed
+//                solve_discrete_log_bsgs(max, enc_gen, e)
+//                    .map(|d| G::ScalarField::from(d))
+//                    .ok_or_else(|| Error::SolvingDiscreteLogFailed(i))
+//            })
+//            .collect::<Vec<_>>();
+//        let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+//        let mut reconstructed = G::ScalarField::zero();
+//        for (i, c) in chunks.into_iter().enumerate() {
+//            reconstructed += c? * powers[i];
+//        }
+//        Ok(reconstructed)
+//    }
+//}
 
 /*
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]

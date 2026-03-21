@@ -8,7 +8,7 @@ pub mod tests;
 
 pub use self::leg_proof::LegCreationProof;
 pub use self::mediator::MediatorTxnProof;
-use crate::discrete_log::solve_discrete_log_bsgs;
+//use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -533,230 +533,230 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         ct.into_group() - eph_pk * sk_inv
     }
 
-    /// Decrypt as sender using `sk_enc`. Sender can always decrypt own pk, amount, asset_id.
-    /// Receiver pk is only decryptable when `eph_pk_s.1` is present.
-    pub fn decrypt_as_sender(
-        &self,
-        sk_enc: &F,
-        enc_gen: G,
-    ) -> Result<(G, Option<G>, AssetId, Balance)> {
-        self.decrypt_as_sender_with_limits(sk_enc, enc_gen, None, None)
-    }
-
-    pub fn decrypt_as_sender_with_limits(
-        &self,
-        sk_enc: &F,
-        enc_gen: G,
-        max_asset_id: Option<AssetId>,
-        max_amount: Option<Balance>,
-    ) -> Result<(G, Option<G>, AssetId, Balance)> {
-        let enc_gen = enc_gen.into_group();
-        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
-
-        let sk_enc_inv = sk_enc
-            .inverse()
-            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
-
-        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
-        let asset_id = match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => *asset_id,
-            AssetIdEncryption::Ciphertext(ct) => {
-                let eph_pk_asset_id = self.eph_pk_s.3.ok_or_else(|| {
-                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
-                })?;
-                let asset_id_pt =
-                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })? as AssetId
-            }
-        };
-
-        let amount_pt =
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_s.2);
-        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
-            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
-
-        let sender = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, self.eph_pk_s.0)
-            .into_affine();
-        let receiver = self.eph_pk_s.1.map(|eph| {
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, eph).into_affine()
-        });
-
-        Ok((sender, receiver, asset_id, amount))
-    }
-
-    /// Decrypt as receiver using `sk_enc`. Receiver can always decrypt own pk, amount, asset_id.
-    /// Sender pk is only decryptable when `eph_pk_r.0` is present.
-    pub fn decrypt_as_receiver(
-        &self,
-        sk_enc: &F,
-        enc_gen: G,
-    ) -> Result<(Option<G>, G, AssetId, Balance)> {
-        self.decrypt_as_receiver_with_limits(sk_enc, enc_gen, None, None)
-    }
-
-    pub fn decrypt_as_receiver_with_limits(
-        &self,
-        sk_enc: &F,
-        enc_gen: G,
-        max_asset_id: Option<AssetId>,
-        max_amount: Option<Balance>,
-    ) -> Result<(Option<G>, G, AssetId, Balance)> {
-        let enc_gen = enc_gen.into_group();
-        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
-
-        let sk_enc_inv = sk_enc
-            .inverse()
-            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
-
-        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
-        let asset_id = match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => *asset_id,
-            AssetIdEncryption::Ciphertext(ct) => {
-                let eph_pk_asset_id = self.eph_pk_r.3.ok_or_else(|| {
-                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
-                })?;
-                let asset_id_pt =
-                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })? as AssetId
-            }
-        };
-
-        let amount_pt =
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_r.2);
-        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
-            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
-
-        let receiver = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, self.eph_pk_r.1)
-            .into_affine();
-        let sender = self.eph_pk_r.0.map(|eph| {
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, eph).into_affine()
-        });
-
-        Ok((sender, receiver, asset_id, amount))
-    }
-
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
-    /// `key_index` is the index of auditor/mediator key in [`AssetData`]
-    pub fn decrypt_given_key(
-        &self,
-        sk: &F,
-        is_public: bool,
-        key_index: usize,
-        enc_gen: G,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        self.decrypt_given_key_with_limits(sk, is_public, key_index, enc_gen, None, None)
-    }
-
-    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
-    /// `key_index` is the index of auditor/mediator key in [`AssetData`]
-    pub fn decrypt_given_key_with_limits(
-        &self,
-        sk: &F,
-        is_public: bool,
-        key_index: usize,
-        enc_gen: G,
-        max_asset_id: Option<AssetId>,
-        max_amount: Option<Balance>,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        let eph_keys = if is_public {
-            &self.eph_pk_public_enc_keys
-        } else {
-            &self.eph_pk_enc_keys
-        };
-        if key_index >= eph_keys.len() {
-            return Err(Error::InvalidKeyIndex(key_index));
-        }
-        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
-
-        // Compute inverse of secret key once.
-        let mut sk_inv = sk
-            .inverse()
-            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
-
-        // Try to decrypt asset-id and amount first as they will fail if the wrong secret key is used.
-        let enc_gen = enc_gen.into_group();
-        let asset_id =
-            self.decrypt_asset_id(&sk_inv, is_public, key_index, enc_gen, max_asset_id)? as AssetId;
-        let amount = self.decrypt_amount(&sk_inv, is_public, key_index, enc_gen, max_amount)?;
-
-        let sender = Self::decrypt_as_group_element(&sk_inv, self.ct_s, eph_keys[key_index].0);
-        let receiver = Self::decrypt_as_group_element(&sk_inv, self.ct_r, eph_keys[key_index].1);
-
-        Zeroize::zeroize(&mut sk_inv);
-
-        Ok((
-            sender.into_affine(),
-            receiver.into_affine(),
-            asset_id,
-            amount,
-        ))
-    }
-
-    pub fn decrypt_asset_id(
-        &self,
-        sk_inv: &F,
-        is_public: bool,
-        key_index: usize,
-        enc_gen: G::Group,
-        max_asset_id: AssetId,
-    ) -> Result<u64> {
-        let eph_keys = if is_public {
-            &self.eph_pk_public_enc_keys
-        } else {
-            &self.eph_pk_enc_keys
-        };
-        if key_index >= eph_keys.len() {
-            return Err(Error::InvalidKeyIndex(key_index));
-        }
-
-        match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => Ok(*asset_id as u64),
-            AssetIdEncryption::Ciphertext(ct) => {
-                let asset_id =
-                    Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].3.unwrap());
-
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })
-            }
-        }
-    }
-
-    pub fn decrypt_amount(
-        &self,
-        sk_inv: &F,
-        is_public: bool,
-        key_index: usize,
-        enc_gen: G::Group,
-        max_amount: Balance,
-    ) -> Result<u64> {
-        let eph_keys = if is_public {
-            &self.eph_pk_public_enc_keys
-        } else {
-            &self.eph_pk_enc_keys
-        };
-        if key_index >= eph_keys.len() {
-            return Err(Error::InvalidKeyIndex(key_index));
-        }
-        let amount = Self::decrypt_as_group_element(sk_inv, self.ct_amount, eph_keys[key_index].2);
-
-        solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
-            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
-    }
-
-    pub fn decrypt_as_group_element(sk_inv: &F, encrypted: G, eph_pk: G) -> G::Group {
-        encrypted.into_group() - eph_pk * sk_inv
-    }
+//    /// Decrypt as sender using `sk_enc`. Sender can always decrypt own pk, amount, asset_id.
+//    /// Receiver pk is only decryptable when `eph_pk_s.1` is present.
+//    pub fn decrypt_as_sender(
+//        &self,
+//        sk_enc: &F,
+//        enc_gen: G,
+//    ) -> Result<(G, Option<G>, AssetId, Balance)> {
+//        self.decrypt_as_sender_with_limits(sk_enc, enc_gen, None, None)
+//    }
+//
+//    pub fn decrypt_as_sender_with_limits(
+//        &self,
+//        sk_enc: &F,
+//        enc_gen: G,
+//        max_asset_id: Option<AssetId>,
+//        max_amount: Option<Balance>,
+//    ) -> Result<(G, Option<G>, AssetId, Balance)> {
+//        let enc_gen = enc_gen.into_group();
+//        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
+//        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+//
+//        let sk_enc_inv = sk_enc
+//            .inverse()
+//            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
+//
+//        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
+//        let asset_id = match &self.ct_asset_id {
+//            AssetIdEncryption::Revealed(asset_id) => *asset_id,
+//            AssetIdEncryption::Ciphertext(ct) => {
+//                let eph_pk_asset_id = self.eph_pk_s.3.ok_or_else(|| {
+//                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
+//                })?;
+//                let asset_id_pt =
+//                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
+//                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
+//                    .ok_or_else(|| {
+//                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+//                    })? as AssetId
+//            }
+//        };
+//
+//        let amount_pt =
+//            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_s.2);
+//        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
+//            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
+//
+//        let sender = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, self.eph_pk_s.0)
+//            .into_affine();
+//        let receiver = self.eph_pk_s.1.map(|eph| {
+//            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, eph).into_affine()
+//        });
+//
+//        Ok((sender, receiver, asset_id, amount))
+//    }
+//
+//    /// Decrypt as receiver using `sk_enc`. Receiver can always decrypt own pk, amount, asset_id.
+//    /// Sender pk is only decryptable when `eph_pk_r.0` is present.
+//    pub fn decrypt_as_receiver(
+//        &self,
+//        sk_enc: &F,
+//        enc_gen: G,
+//    ) -> Result<(Option<G>, G, AssetId, Balance)> {
+//        self.decrypt_as_receiver_with_limits(sk_enc, enc_gen, None, None)
+//    }
+//
+//    pub fn decrypt_as_receiver_with_limits(
+//        &self,
+//        sk_enc: &F,
+//        enc_gen: G,
+//        max_asset_id: Option<AssetId>,
+//        max_amount: Option<Balance>,
+//    ) -> Result<(Option<G>, G, AssetId, Balance)> {
+//        let enc_gen = enc_gen.into_group();
+//        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
+//        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+//
+//        let sk_enc_inv = sk_enc
+//            .inverse()
+//            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
+//
+//        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
+//        let asset_id = match &self.ct_asset_id {
+//            AssetIdEncryption::Revealed(asset_id) => *asset_id,
+//            AssetIdEncryption::Ciphertext(ct) => {
+//                let eph_pk_asset_id = self.eph_pk_r.3.ok_or_else(|| {
+//                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
+//                })?;
+//                let asset_id_pt =
+//                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
+//                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
+//                    .ok_or_else(|| {
+//                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+//                    })? as AssetId
+//            }
+//        };
+//
+//        let amount_pt =
+//            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_r.2);
+//        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
+//            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
+//
+//        let receiver = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, self.eph_pk_r.1)
+//            .into_affine();
+//        let sender = self.eph_pk_r.0.map(|eph| {
+//            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, eph).into_affine()
+//        });
+//
+//        Ok((sender, receiver, asset_id, amount))
+//    }
+//
+//    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
+//    /// `key_index` is the index of auditor/mediator key in [`AssetData`]
+//    pub fn decrypt_given_key(
+//        &self,
+//        sk: &F,
+//        is_public: bool,
+//        key_index: usize,
+//        enc_gen: G,
+//    ) -> Result<(G, G, AssetId, Balance)> {
+//        self.decrypt_given_key_with_limits(sk, is_public, key_index, enc_gen, None, None)
+//    }
+//
+//    /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
+//    /// `key_index` is the index of auditor/mediator key in [`AssetData`]
+//    pub fn decrypt_given_key_with_limits(
+//        &self,
+//        sk: &F,
+//        is_public: bool,
+//        key_index: usize,
+//        enc_gen: G,
+//        max_asset_id: Option<AssetId>,
+//        max_amount: Option<Balance>,
+//    ) -> Result<(G, G, AssetId, Balance)> {
+//        let eph_keys = if is_public {
+//            &self.eph_pk_public_enc_keys
+//        } else {
+//            &self.eph_pk_enc_keys
+//        };
+//        if key_index >= eph_keys.len() {
+//            return Err(Error::InvalidKeyIndex(key_index));
+//        }
+//        let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
+//        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+//
+//        // Compute inverse of secret key once.
+//        let mut sk_inv = sk
+//            .inverse()
+//            .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
+//
+//        // Try to decrypt asset-id and amount first as they will fail if the wrong secret key is used.
+//        let enc_gen = enc_gen.into_group();
+//        let asset_id =
+//            self.decrypt_asset_id(&sk_inv, is_public, key_index, enc_gen, max_asset_id)? as AssetId;
+//        let amount = self.decrypt_amount(&sk_inv, is_public, key_index, enc_gen, max_amount)?;
+//
+//        let sender = Self::decrypt_as_group_element(&sk_inv, self.ct_s, eph_keys[key_index].0);
+//        let receiver = Self::decrypt_as_group_element(&sk_inv, self.ct_r, eph_keys[key_index].1);
+//
+//        Zeroize::zeroize(&mut sk_inv);
+//
+//        Ok((
+//            sender.into_affine(),
+//            receiver.into_affine(),
+//            asset_id,
+//            amount,
+//        ))
+//    }
+//
+//    pub fn decrypt_asset_id(
+//        &self,
+//        sk_inv: &F,
+//        is_public: bool,
+//        key_index: usize,
+//        enc_gen: G::Group,
+//        max_asset_id: AssetId,
+//    ) -> Result<u64> {
+//        let eph_keys = if is_public {
+//            &self.eph_pk_public_enc_keys
+//        } else {
+//            &self.eph_pk_enc_keys
+//        };
+//        if key_index >= eph_keys.len() {
+//            return Err(Error::InvalidKeyIndex(key_index));
+//        }
+//
+//        match &self.ct_asset_id {
+//            AssetIdEncryption::Revealed(asset_id) => Ok(*asset_id as u64),
+//            AssetIdEncryption::Ciphertext(ct) => {
+//                let asset_id =
+//                    Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].3.unwrap());
+//
+//                solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
+//                    .ok_or_else(|| {
+//                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+//                    })
+//            }
+//        }
+//    }
+//
+//    pub fn decrypt_amount(
+//        &self,
+//        sk_inv: &F,
+//        is_public: bool,
+//        key_index: usize,
+//        enc_gen: G::Group,
+//        max_amount: Balance,
+//    ) -> Result<u64> {
+//        let eph_keys = if is_public {
+//            &self.eph_pk_public_enc_keys
+//        } else {
+//            &self.eph_pk_enc_keys
+//        };
+//        if key_index >= eph_keys.len() {
+//            return Err(Error::InvalidKeyIndex(key_index));
+//        }
+//        let amount = Self::decrypt_as_group_element(sk_inv, self.ct_amount, eph_keys[key_index].2);
+//
+//        solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
+//            .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
+//    }
+//
+//    pub fn decrypt_as_group_element(sk_inv: &F, encrypted: G, eph_pk: G) -> G::Group {
+//        encrypted.into_group() - eph_pk * sk_inv
+//    }
 }
 
 mod serialization {
