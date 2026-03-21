@@ -154,52 +154,59 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
-#[cfg(feature = "std")]
-lazy_static::lazy_static! {
-    pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
-
-    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new().expect("Failed to create Poseidon parameters");
+pub fn dart_gens() -> DartBPGenerators {
+    DartBPGenerators::new(DART_GEN_DOMAIN)
 }
 
-#[cfg(feature = "std")]
-pub fn dart_gens() -> &'static DartBPGenerators {
-    &DART_GENS
+//#[cfg(feature = "std")]
+//lazy_static::lazy_static! {
+//    pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
+//
+//    pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new().expect("Failed to create Poseidon parameters");
+//}
+//
+//#[cfg(feature = "std")]
+//pub fn dart_gens() -> &'static DartBPGenerators {
+//    &DART_GENS
+//}
+//
+//#[cfg(not(feature = "std"))]
+//static mut DART_GENS: Option<DartBPGenerators> = None;
+//
+//#[cfg(not(feature = "std"))]
+//#[allow(static_mut_refs)]
+//pub fn dart_gens() -> &'static DartBPGenerators {
+//    unsafe {
+//        if DART_GENS.is_none() {
+//            DART_GENS = Some(DartBPGenerators::new(DART_GEN_DOMAIN));
+//        }
+//        DART_GENS.as_ref().unwrap()
+//    }
+//}
+//
+//#[cfg(feature = "std")]
+//pub fn poseidon_params() -> &'static PoseidonParameters {
+//    &POSEIDON_PARAMS
+//}
+//
+//#[cfg(not(feature = "std"))]
+//static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
+//
+//#[cfg(not(feature = "std"))]
+//#[allow(static_mut_refs)]
+//pub fn poseidon_params() -> &'static PoseidonParameters {
+//    unsafe {
+//        if POSEIDON_PARAMS.is_none() {
+//            POSEIDON_PARAMS =
+//                Some(PoseidonParameters::new().expect("Failed to create Poseidon parameters"));
+//        }
+//        POSEIDON_PARAMS.as_ref().unwrap()
+//    }
+//}
+
+pub fn poseidon_params() -> PoseidonParameters {
+    PoseidonParameters::new().expect("Failed to create Poseidon parameters")
 }
-
-#[cfg(not(feature = "std"))]
-static mut DART_GENS: Option<DartBPGenerators> = None;
-
-#[cfg(not(feature = "std"))]
-#[allow(static_mut_refs)]
-pub fn dart_gens() -> &'static DartBPGenerators {
-    unsafe {
-        if DART_GENS.is_none() {
-            DART_GENS = Some(DartBPGenerators::new(DART_GEN_DOMAIN));
-        }
-        DART_GENS.as_ref().unwrap()
-    }
-}
-
-#[cfg(feature = "std")]
-pub fn poseidon_params() -> &'static PoseidonParameters {
-    &POSEIDON_PARAMS
-}
-
-#[cfg(not(feature = "std"))]
-static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
-
-#[cfg(not(feature = "std"))]
-#[allow(static_mut_refs)]
-pub fn poseidon_params() -> &'static PoseidonParameters {
-    unsafe {
-        if POSEIDON_PARAMS.is_none() {
-            POSEIDON_PARAMS =
-                Some(PoseidonParameters::new().expect("Failed to create Poseidon parameters"));
-        }
-        POSEIDON_PARAMS.as_ref().unwrap()
-    }
-}
-
 pub struct PoseidonParameters {
     pub params: Poseidon2Params<PallasScalar>,
 }
