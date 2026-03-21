@@ -374,28 +374,24 @@ impl AccountKeys {
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
-#[codec(encode_bound(skip_type_params(T)))]
-#[codec(decode_bound(skip_type_params(T)))]
-pub struct AccountRegistrationProof<T: DartLimits = ()> {
-    pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
+pub struct AccountRegistrationProof {
+    pub accounts: Vec<AccountPublicKeys>,
 
     inner: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
 }
 
-impl<T: DartLimits> AccountRegistrationProof<T> {
+impl AccountRegistrationProof {
     /// Generate a new account registration proof for the given accounts.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         accounts: &[AccountKeys],
         identity: &[u8],
     ) -> Result<Self, Error> {
-        let mut bounded_accounts = BoundedVec::with_bounded_capacity(accounts.len());
+        let mut bounded_accounts = Vec::with_capacity(accounts.len());
         let mut keys = Vec::with_capacity(accounts.len());
 
         for account in accounts {
-            bounded_accounts
-                .try_push(account.public_keys())
-                .map_err(|_| Error::TooManyKeysInRegProof)?;
+            bounded_accounts.push(account.public_keys());
 
             let acc_pub = account.acct.public.get_affine()?;
             let acc_sec = account.acct.secret.0.0;
