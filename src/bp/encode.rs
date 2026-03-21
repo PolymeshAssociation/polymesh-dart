@@ -2,7 +2,6 @@ use codec::{
     Decode, DecodeWithMemTracking, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input,
     MaxEncodedLen, Output,
 };
-use scale_info::{Path, Type, TypeInfo, build::Fields};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -61,12 +60,13 @@ macro_rules! impl_scale_and_type_info {
             trailing { > }
         )?
     }) => {
-        impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
+        #[cfg(feature = "scale-info")]
+        impl $(< $( $impl_generics )* >)? scale_info::TypeInfo for $type $(< $( $generics )* >)? {
             type Identity = Self;
-            fn type_info() -> Type {
-                Type::builder()
-                    .path(Path::new(stringify!($type), module_path!()))
-                    .composite(Fields::unnamed().field(|f| f.ty::<[u8; 32]>()))
+            fn type_info() -> scale_info::Type {
+                scale_info::Type::builder()
+                    .path(scale_info::Path::new(stringify!($type), module_path!()))
+                    .composite(scale_info::build::Fields::unnamed().field(|f| f.ty::<[u8; 32]>()))
             }
         }
 
@@ -104,12 +104,13 @@ macro_rules! impl_scale_and_type_info {
             trailing { > }
         )?
     }) => {
-        impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
+        #[cfg(feature = "scale-info")]
+        impl $(< $( $impl_generics )* >)? scale_info::TypeInfo for $type $(< $( $generics )* >)? {
             type Identity = Self;
-            fn type_info() -> Type {
-                Type::builder()
-                    .path(Path::new(stringify!($type), module_path!()))
-                    .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
+            fn type_info() -> scale_info::Type {
+                scale_info::Type::builder()
+                    .path(scale_info::Path::new(stringify!($type), module_path!()))
+                    .composite(scale_info::build::Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
             }
         }
 
@@ -145,12 +146,13 @@ macro_rules! impl_scale_and_type_info {
             trailing { > }
         )?
     }) => {
-        impl $(< $( $impl_generics )* >)? TypeInfo for $type $(< $( $generics )* >)? {
+        #[cfg(feature = "scale-info")]
+        impl $(< $( $impl_generics )* >)? scale_info::TypeInfo for $type $(< $( $generics )* >)? {
             type Identity = Self;
-            fn type_info() -> Type {
-                Type::builder()
-                    .path(Path::new(stringify!($type), module_path!()))
-                    .composite(Fields::unnamed().field(|f| f.ty::<CompressedPoint>().type_name(concat!("Encoded", stringify!($type)))))
+            fn type_info() -> scale_info::Type {
+                scale_info::Type::builder()
+                    .path(scale_info::Path::new(stringify!($type), module_path!()))
+                    .composite(scale_info::build::Fields::unnamed().field(|f| f.ty::<CompressedPoint>().type_name(concat!("Encoded", stringify!($type)))))
             }
         }
 
@@ -192,13 +194,13 @@ pub type BaseField = [u8; ARK_EC_BASE_FIELD_SIZE];
     Decode,
     DecodeWithMemTracking,
     Default,
-    TypeInfo,
     PartialEq,
     Eq,
     Hash,
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct CompressedBaseField(BaseField);
 
 impl core::fmt::Debug for CompressedBaseField {
@@ -248,13 +250,13 @@ pub type CompressedPoint = [u8; ARK_EC_POINT_SIZE];
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     PartialEq,
     Eq,
     Hash,
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
@@ -350,14 +352,15 @@ impl<'a, P: SWCurveConfig> EncodeAsRef<'a, Affine<P>> for CompressedAffine {
     type RefType = CompressedAffine;
 }
 
-impl TypeInfo for DartBPGenerators {
+#[cfg(feature = "scale-info")]
+impl scale_info::TypeInfo for DartBPGenerators {
     type Identity = Self;
 
-    fn type_info() -> Type {
-        Type::builder()
-            .path(Path::new("DartBPGenerators", module_path!()))
+    fn type_info() -> scale_info::Type {
+        scale_info::Type::builder()
+            .path(scale_info::Path::new("DartBPGenerators", module_path!()))
             .composite(
-                Fields::named()
+                scale_info::build::Fields::named()
                     .field(|f| f.name("sig_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("enc_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
@@ -366,14 +369,15 @@ impl TypeInfo for DartBPGenerators {
     }
 }
 
-impl TypeInfo for AccountCommitmentKey {
+#[cfg(feature = "scale-info")]
+impl scale_info::TypeInfo for AccountCommitmentKey {
     type Identity = Self;
 
-    fn type_info() -> Type {
-        Type::builder()
-            .path(Path::new("AccountCommitmentKey", module_path!()))
+    fn type_info() -> scale_info::Type {
+        scale_info::Type::builder()
+            .path(scale_info::Path::new("AccountCommitmentKey", module_path!()))
             .composite(
-                Fields::named()
+                scale_info::build::Fields::named()
                     .field(|f| f.name("sk_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("balance_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("counter_gen").ty::<CompressedAffine>())
@@ -442,10 +446,11 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     }
 }
 
-impl<T: 'static> TypeInfo for WrappedCanonical<T> {
+#[cfg(feature = "scale-info")]
+impl<T: 'static> scale_info::TypeInfo for WrappedCanonical<T> {
     type Identity = Self;
 
-    fn type_info() -> Type {
+    fn type_info() -> scale_info::Type {
         use core::any::type_name;
 
         let mut ty_name = type_name::<T>();
@@ -462,9 +467,9 @@ impl<T: 'static> TypeInfo for WrappedCanonical<T> {
             ("", ty_name)
         };
 
-        Type::builder()
-            .path(Path::new(ident, module_path))
-            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
+        scale_info::Type::builder()
+            .path(scale_info::Path::new(ident, module_path))
+            .composite(scale_info::build::Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
     }
 }
 

@@ -124,7 +124,7 @@ zeroize = { workspace = true, default-features = false }
 
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
-scale-info = { workspace = true, default-features = false, features = [
+scale-info = { workspace = true, default-features = false, optional = true, features = [
     "derive",
 ] }
 bounded-collections = { workspace = true, default-features = false }
@@ -199,6 +199,7 @@ default = [
     "serde",
     "utoipa",
     "sqlx",
+    "scale-info",
     "large_baby_steps",
 ]
 

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, models::short_weierstrass::SWCurveConfig, short_weierstrass::Affine};
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use scale_info::TypeInfo;
 
 use super::*;
 use crate::error::*;
@@ -16,7 +15,7 @@ use crate::error::*;
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
+    scale_info::TypeInfo,
     Debug,
     PartialEq,
     Eq,
@@ -91,7 +90,7 @@ impl NodePosition {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
+    scale_info::TypeInfo,
     Debug,
     PartialEq,
     Eq,
@@ -351,7 +350,7 @@ impl<const M: usize, P0: SWCurveConfig + Copy + Send> ChildCommitments<M, P0> {
     }
 }
 
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, scale_info::TypeInfo, Debug)]
 pub struct CompressedXCoords<const M: usize> {
     pub x_coords: [CompressedBaseField; M],
 }
@@ -390,8 +389,8 @@ impl<const M: usize> CompressedXCoords<M> {
     }
 }
 
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, scale_info::TypeInfo, Debug)]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
 pub struct CompressedInner<const M: usize, C: CurveTreeConfig> {
     pub is_even: bool,
     pub commitments: [CompressedAffine; M],
@@ -1303,8 +1302,8 @@ macro_rules! impl_curve_tree_with_backend {
     };
 }
 
-#[derive(Clone, Copy, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Copy, Encode, Decode, DecodeWithMemTracking, Debug, scale_info::TypeInfo, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CompressedLeafValue<C: CurveTreeConfig> {
     point: CompressedAffine,

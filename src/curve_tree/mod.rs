@@ -24,7 +24,6 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 pub use curve_tree_relations::parameters::{
     SelRerandProofParametersNew, SingleLayerParameters, SingleLayerProofParametersNew,
 };
-use scale_info::TypeInfo;
 
 use super::*;
 use crate::curve_tree::{LeafIndex, NodeLevel};
@@ -208,7 +207,6 @@ pub trait CurveTreeConfig:
     + Encode
     + Decode
     + DecodeWithMemTracking
-    + TypeInfo
     + Send
     + Sync
     + 'static
@@ -248,7 +246,8 @@ pub trait CurveTreeConfig:
 // NOTE: Currently build_parameters uses unsafe but its also called from unsafe code except in tests or
 // the in-memory backend so nowhere serious. This approach will soon be phased out anyway.
 
-#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct AssetTreeConfig;
 impl CurveTreeConfig for AssetTreeConfig {
     const L: usize = ASSET_TREE_L;
@@ -283,7 +282,8 @@ impl CurveTreeConfig for AssetTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct AccountTreeConfig;
 impl CurveTreeConfig for AccountTreeConfig {
     const L: usize = ACCOUNT_TREE_L;
@@ -318,7 +318,8 @@ impl CurveTreeConfig for AccountTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct FeeAccountTreeConfig;
 impl CurveTreeConfig for FeeAccountTreeConfig {
     const L: usize = FEE_ACCOUNT_TREE_L;
@@ -353,7 +354,8 @@ impl CurveTreeConfig for FeeAccountTreeConfig {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[derive(Debug, Clone, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct WrappedCurveTreeParameters(Vec<u8>);
 
 impl WrappedCurveTreeParameters {
@@ -689,8 +691,9 @@ impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for &Ass
     }
 }
 
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
 pub struct CompressedCurveTreeRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
     pub commitments: [CompressedAffine; M],
     pub x_coord_children: Vec<[CompressedBaseField; M]>,
@@ -893,7 +896,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
 }
 
 /// A lean curve tree that only stores the inner nodes that are necessary to update the tree root.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo)]
+#[derive(Clone, Encode, Decode, Debug)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct LeanCurveTree<
     const L: usize,
     const M: usize,
