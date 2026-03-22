@@ -29,7 +29,7 @@ use crate::leg::LegEncryption;
 use crate::util::{BPProof, handle_verification_tuples, prove_with_rng};
 use crate::{Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -65,14 +65,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AffirmAsSenderTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -98,23 +96,22 @@ impl<
         let mut odd_prover =
             Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let bp_gens = account_tree_params.bp_gens();
 
@@ -132,8 +129,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -175,7 +170,7 @@ impl<
         );
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -423,14 +418,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AffirmAsReceiverTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -455,22 +448,21 @@ impl<
         let mut odd_prover =
             Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let bp_gens = account_tree_params.bp_gens();
 
@@ -488,8 +480,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -519,7 +509,7 @@ impl<
 
         let eph_pk_r = leg_enc.eph_pk_r.clone();
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -721,14 +711,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > IrreversibleAffirmAsSenderTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -756,23 +744,22 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -793,8 +780,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -835,7 +820,7 @@ impl<
         let eph_pk_amount = eph_pk.2;
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -1083,14 +1068,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > IrreversibleAffirmAsReceiverTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1116,23 +1099,22 @@ impl<
         let mut odd_prover =
             Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -1153,8 +1135,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1195,7 +1175,7 @@ impl<
         let eph_pk_amount = eph_pk.2;
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -1443,14 +1423,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > ClaimReceivedTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1478,23 +1456,22 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -1515,8 +1492,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1540,7 +1515,7 @@ impl<
         let eph_pk_amount = eph_pk.2;
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -1788,14 +1763,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > SenderReverseTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1823,23 +1796,22 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -1860,8 +1832,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1885,7 +1855,7 @@ impl<
         let eph_pk_amount = eph_pk.2;
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -2132,14 +2102,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > SenderCounterUpdateTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -2164,22 +2132,21 @@ impl<
         let mut odd_prover =
             Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let bp_gens = (
             account_tree_params.even_parameters.bp_gens(),
@@ -2200,8 +2167,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -2231,7 +2196,7 @@ impl<
 
         let eph_pk_s = leg_enc.eph_pk_s.clone();
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,
@@ -2433,14 +2398,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > ReceiverCounterUpdateTxnProof<L, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -2465,22 +2428,21 @@ impl<
         let mut odd_prover =
             Prover::new(account_tree_params.odd_parameters.pc_gens(), odd_transcript);
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                leg_enc,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                account_tree_root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            leg_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            account_tree_root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let bp_gens = (
             account_tree_params.even_parameters.bp_gens(),
@@ -2501,8 +2463,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -2532,7 +2492,7 @@ impl<
 
         let eph_pk_r = leg_enc.eph_pk_r.clone();
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
                     encryption: leg_enc,

@@ -9,7 +9,7 @@ use crate::util::{
 use crate::{Error, TXN_EVEN_LABEL, TXN_ODD_LABEL, add_to_transcript, error::Result};
 use crate::{RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -45,14 +45,12 @@ impl<
     const M: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > MultiAssetStateTransitionProof<L, M, F0, F1, G0, G1>
 {
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -75,18 +73,17 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifiers) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                account_builders,
-                leaf_paths,
-                tree_root,
-                account_tree_params,
-                account_comm_key,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifiers) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            account_builders,
+            leaf_paths,
+            tree_root,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -106,8 +103,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -147,7 +142,7 @@ impl<
 
         for leaf_path in leaf_paths.iter() {
             let (re_randomized_path, randomizers_of_leaves) = leaf_path
-                .batched_select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+                .batched_select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                     even_prover,
                     odd_prover,
                     account_tree_params,
@@ -180,14 +175,15 @@ impl<
         for (i, builder) in account_builders.into_iter().enumerate() {
             // Finalize with pre-computed rerandomized leaf
             // Note: nonce and updated_account_commitment are added to transcript inside finalize_with_given_prover_with_rerandomized_leaf
-            let (proof, nullifier) = builder.finalize_with_given_prover_with_rerandomized_leaf::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                rerandomized_leaves_and_randomizers[i].1, // Extract just the scalar randomization
-                account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-                even_prover,
-            )?;
+            let (proof, nullifier) = builder
+                .finalize_with_given_prover_with_rerandomized_leaf::<_, Parameters0, Parameters1>(
+                    rng,
+                    rerandomized_leaves_and_randomizers[i].1, // Extract just the scalar randomization
+                    account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    even_prover,
+                )?;
 
             account_proofs.push(proof);
             nullifiers.push(nullifier);
@@ -375,10 +371,7 @@ mod tests {
     use crate::leg::LegEncConfig;
     use crate::leg::tests::setup_keys;
     use crate::util::verify_rmc;
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters};
     use ark_std::UniformRand;
     use ark_vesta::{Fr as VestaFr, VestaConfig as VestaParameters};
@@ -567,8 +560,6 @@ mod tests {
         let (multi_asset_proof, nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -627,8 +618,6 @@ mod tests {
         let (multi_asset_proof, nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -1088,8 +1077,6 @@ mod tests {
         let (alice_proof, alice_nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -1243,8 +1230,6 @@ mod tests {
         let (bob_proof, bob_nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -1587,8 +1572,6 @@ mod tests {
         let (alice_proof, alice_nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -1632,8 +1615,6 @@ mod tests {
         let (bob_proof, bob_nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(
@@ -2032,8 +2013,6 @@ mod tests {
         let (alice_proof, alice_nullifiers) =
             MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
                 _,
-                PallasPoint,
-                VestaPoint,
                 PallasParams,
                 VestaParams,
             >(

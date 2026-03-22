@@ -6,10 +6,7 @@ use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
 };
-use ark_ec_divisors::curves::{
-    pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-    vesta::VestaParams,
-};
+use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::{Fq as PallasBase, Fr as PallasScalar, PallasConfig};
 use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
@@ -306,8 +303,6 @@ fn leg_verification() {
 
         let proof = LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new::<
             _,
-            PallasPoint,
-            VestaPoint,
             PallasParams,
             VestaParams,
         >(
@@ -534,8 +529,6 @@ fn batch_leg_verification() {
             let proof =
                 LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new::<
                     _,
-                    PallasPoint,
-                    VestaPoint,
                     PallasParams,
                     VestaParams,
                 >(
@@ -815,7 +808,7 @@ fn combined_leg_verification() {
         for i in 0..batch_size {
             let path = asset_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
 
-            let proof = LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            let proof = LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
                 legs[i].clone(),
                 leg_encs[i].clone(),
@@ -1094,27 +1087,22 @@ fn settlement_verification() {
             (vec![], vec![])
         };
         let clock = Instant::now();
-        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            PallasParams,
-            VestaParams,
-        >(
-            &mut rng,
-            vec![leg_1.clone(), leg_2.clone()],
-            vec![leg_enc1.clone(), leg_enc2.clone()],
-            vec![leg_enc_rand1.clone(), leg_enc_rand2.clone()],
-            leaf_paths,
-            asset_data_vec,
-            &root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![leg_1.clone(), leg_2.clone()],
+                vec![leg_enc1.clone(), leg_enc2.clone()],
+                vec![leg_enc_rand1.clone(), leg_enc_rand2.clone()],
+                leaf_paths,
+                asset_data_vec,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
         let proving_time = clock.elapsed();
 
         let (enc_keys, med_keys) = if !reveal_asset_id {
@@ -1239,37 +1227,32 @@ fn settlement_verification() {
         };
 
         let clock = Instant::now();
-        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            PallasParams,
-            VestaParams,
-        >(
-            &mut rng,
-            vec![leg_1.clone(), leg_2.clone(), leg_3.clone(), leg_4.clone()],
-            vec![
-                leg_enc1.clone(),
-                leg_enc2.clone(),
-                leg_enc3.clone(),
-                leg_enc4.clone(),
-            ],
-            vec![
-                leg_enc_rand1.clone(),
-                leg_enc_rand2.clone(),
-                leg_enc_rand3.clone(),
-                leg_enc_rand4.clone(),
-            ],
-            leaf_paths,
-            asset_data_vec,
-            &root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![leg_1.clone(), leg_2.clone(), leg_3.clone(), leg_4.clone()],
+                vec![
+                    leg_enc1.clone(),
+                    leg_enc2.clone(),
+                    leg_enc3.clone(),
+                    leg_enc4.clone(),
+                ],
+                vec![
+                    leg_enc_rand1.clone(),
+                    leg_enc_rand2.clone(),
+                    leg_enc_rand3.clone(),
+                    leg_enc_rand4.clone(),
+                ],
+                leaf_paths,
+                asset_data_vec,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
         let proving_time = clock.elapsed();
 
         let (enc_keys, med_keys) = if !reveal_asset_id {
@@ -1388,45 +1371,40 @@ fn settlement_verification() {
         };
 
         let clock = Instant::now();
-        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            PallasParams,
-            VestaParams,
-        >(
-            &mut rng,
-            vec![
-                leg_1.clone(),
-                leg_2.clone(),
-                leg_3.clone(),
-                leg_4.clone(),
-                leg_5.clone(),
-            ],
-            vec![
-                leg_enc1.clone(),
-                leg_enc2.clone(),
-                leg_enc3.clone(),
-                leg_enc4.clone(),
-                leg_enc5.clone(),
-            ],
-            vec![
-                leg_enc_rand1.clone(),
-                leg_enc_rand2.clone(),
-                leg_enc_rand3.clone(),
-                leg_enc_rand4.clone(),
-                leg_enc_rand5.clone(),
-            ],
-            leaf_paths,
-            asset_data_vec,
-            &root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                vec![
+                    leg_1.clone(),
+                    leg_2.clone(),
+                    leg_3.clone(),
+                    leg_4.clone(),
+                    leg_5.clone(),
+                ],
+                vec![
+                    leg_enc1.clone(),
+                    leg_enc2.clone(),
+                    leg_enc3.clone(),
+                    leg_enc4.clone(),
+                    leg_enc5.clone(),
+                ],
+                vec![
+                    leg_enc_rand1.clone(),
+                    leg_enc_rand2.clone(),
+                    leg_enc_rand3.clone(),
+                    leg_enc_rand4.clone(),
+                    leg_enc_rand5.clone(),
+                ],
+                leaf_paths,
+                asset_data_vec,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
         let proving_time = clock.elapsed();
 
         let (enc_keys, med_keys) = if !reveal_asset_id {
@@ -1621,27 +1599,22 @@ fn batch_settlement_verification() {
             leaf_paths.push(path);
         }
 
-        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            PallasParams,
-            VestaParams,
-        >(
-            &mut rng,
-            legs,
-            leg_encs.clone(),
-            leg_enc_rands,
-            leaf_paths,
-            asset_data,
-            &root,
-            &nonces[i],
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                legs,
+                leg_encs.clone(),
+                leg_enc_rands,
+                leaf_paths,
+                asset_data,
+                &root,
+                &nonces[i],
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         proofs.push(proof);
         all_leg_encs.push(leg_encs);
@@ -1855,13 +1828,7 @@ fn large_settlement_verification() {
     println!("For tree with height {height}, L={L}, M={M} and {num_legs} legs");
 
     let clock = Instant::now();
-    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
+    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -2032,13 +1999,7 @@ fn combined_settlement_verification() {
             leaf_paths.push(path);
         }
 
-        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new_with_given_prover::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            _,
-            _,
-        >(
+        let proof = SettlementCreationProof::<L, M, _, _, _, _>::new_with_given_prover::<_, _, _>(
             &mut rng,
             legs,
             leg_encs.clone(),
@@ -2282,13 +2243,7 @@ fn six_leg_alternating_settlement() {
     ];
 
     let clock = Instant::now();
-    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
+    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -2441,13 +2396,7 @@ fn six_leg_grouped_settlement() {
     ];
 
     let clock = Instant::now();
-    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
+    let proof = SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
         &mut rng,
         legs,
         leg_encs.clone(),
@@ -2596,7 +2545,7 @@ mod input_sanitation_disabled {
 
         let root = asset_tree.root_node();
 
-        let proof = LegCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg.clone(),
             leg_enc.clone(),
@@ -2665,7 +2614,7 @@ mod input_sanitation_disabled {
 
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
-        let proof = LegCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+        let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_with_diff_keys.clone(),
             leg_enc.clone(),

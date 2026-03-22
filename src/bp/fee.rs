@@ -17,7 +17,6 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 use super::encode::*;
 use super::*;
 use crate::*;
-use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::fee_account as bp_fee_account;
@@ -509,20 +508,19 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) =
-            bp_fee_account::FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
-                rng,
-                &pk.get_affine()?,
-                amount,
-                &state_change.current_state,
-                &state_change.new_state,
-                state_change.new_commitment,
-                current_account_path,
-                &root,
-                ctx,
-                tree_lookup.params(),
-                dart_gens().account_comm_key(),
-            )?;
+        let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, _, _>(
+            rng,
+            &pk.get_affine()?,
+            amount,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
+            current_account_path,
+            &root,
+            ctx,
+            tree_lookup.params(),
+            dart_gens().account_comm_key(),
+        )?;
         Ok(Self {
             account: pk,
             asset_id: state_change.new_state.asset_id,
@@ -901,19 +899,18 @@ impl<
         let root = tree_lookup.root()?;
         let root = root.root_node()?;
 
-        let (proof, nullifier) =
-            bp_fee_account::FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
-                rng,
-                amount,
-                &state_change.current_state,
-                &state_change.new_state,
-                state_change.new_commitment,
-                current_account_path,
-                &root,
-                ctx,
-                tree_lookup.params(),
-                dart_gens().account_comm_key(),
-            )?;
+        let (proof, nullifier) = bp_fee_account::FeePaymentProof::new::<_, _, _>(
+            rng,
+            amount,
+            &state_change.current_state,
+            &state_change.new_state,
+            state_change.new_commitment,
+            current_account_path,
+            &root,
+            ctx,
+            tree_lookup.params(),
+            dart_gens().account_comm_key(),
+        )?;
         Ok(Self {
             asset_id: state_change.new_state.asset_id,
             amount,

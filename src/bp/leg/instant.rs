@@ -8,7 +8,6 @@ use bounded_collections::BoundedVec;
 
 use crate::curve_tree::*;
 use crate::*;
-use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account as bp_account;
@@ -184,13 +183,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            _,
-            _,
-        >(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsSenderTxnProof::new::<_, _, _>(
             rng,
             amount,
             leg_enc.decode()?,
@@ -319,13 +312,7 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
-        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new::<
-            _,
-            PallasPoint,
-            VestaPoint,
-            _,
-            _,
-        >(
+        let (proof, nullifier) = bp_account::IrreversibleAffirmAsReceiverTxnProof::new::<_, _, _>(
             rng,
             amount,
             leg_enc.decode()?,

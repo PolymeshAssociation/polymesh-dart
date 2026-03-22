@@ -12,7 +12,7 @@ use crate::util::{
 };
 use crate::{TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Error, error::Result};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -61,8 +61,8 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
 {
     pub fn init(
@@ -231,8 +231,6 @@ impl<
 
     pub fn finalize<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -256,7 +254,7 @@ impl<
         );
 
         let (mut proof, nullifier) = self
-            .finalize_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            .finalize_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 leaf_path,
                 root,
@@ -286,8 +284,6 @@ impl<
     pub fn finalize_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -304,7 +300,7 @@ impl<
         self.pre_finalize_checks()?;
 
         let common_prover =
-            CommonStateChangeProver::init_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 self.legs.clone(),
                 &self.account,
@@ -334,8 +330,6 @@ impl<
     pub fn finalize_with_given_prover_with_rerandomized_leaf<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -459,8 +453,8 @@ pub struct AccountStateTransitionProofVerifier<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub(crate) legs: Vec<LegVerifierConfig<G0>>,
     pub(crate) net_counter_change: i32,
@@ -474,8 +468,8 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AccountStateTransitionProofVerifier<L, F0, F1, G0, G1>
 {
     pub fn init(
@@ -584,8 +578,8 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AccountStateTransitionProofVerifier<L, F0, F1, G0, G1>
 {
     pub fn verify<
@@ -875,10 +869,7 @@ mod tests {
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, LegEncConfig};
     use crate::util::{prove_with_rng, verify_rmc, verify_with_rng};
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_std::UniformRand;
     use bulletproofs::r1cs::{Prover, Verifier};
     use curve_tree_relations::curve_tree::CurveTree;
@@ -1001,7 +992,7 @@ mod tests {
 
             let start = Instant::now();
             let (carol_proof_1, carol_nullifier_1) = carol_builder_1
-                .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                .finalize::<_, PallasParams, VestaParams>(
                     &mut rng,
                     carol_leaf_path.clone(),
                     &account_tree_root,
@@ -1080,7 +1071,7 @@ mod tests {
 
             let start = Instant::now();
             let (carol_proof_2, carol_nullifier_2) = carol_builder_2
-                .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+                .finalize::<_, PallasParams, VestaParams>(
                     &mut rng,
                     carol_leaf_path_2.clone(),
                     &account_tree_root_2,
@@ -1216,7 +1207,7 @@ mod tests {
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
@@ -1277,7 +1268,7 @@ mod tests {
 
         let start = Instant::now();
         let (alice_proof_2, alice_nullifier_2) = alice_builder_2
-            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path_2.clone(),
                 &account_tree_root,
@@ -1437,7 +1428,7 @@ mod tests {
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
@@ -1566,7 +1557,7 @@ mod tests {
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,
@@ -1774,7 +1765,7 @@ mod tests {
         let start = Instant::now();
 
         let (alice_proof_asset1, alice_nullifier_1) = alice_builder_asset1
-            .finalize_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_path_asset1.clone(),
                 &account_tree_root,
@@ -1787,7 +1778,7 @@ mod tests {
             .unwrap();
 
         let (alice_proof_asset2, alice_nullifier_2) = alice_builder_asset2
-            .finalize_with_given_prover::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_path_asset2.clone(),
                 &account_tree_root,
@@ -2068,7 +2059,7 @@ mod tests {
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+            .finalize::<_, PallasParams, VestaParams>(
                 &mut rng,
                 alice_leaf_path.clone(),
                 &account_tree_root,

@@ -25,7 +25,6 @@ use bounded_collections::BoundedVec;
 use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
-use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
@@ -946,7 +945,7 @@ impl<
         let asset_comm_params = get_asset_commitment_parameters();
         let root = asset_tree.root()?.root_node()?;
 
-        let proof = bp_leg::leg_proof::LegCreationProof::new::<_, PallasPoint, VestaPoint, _, _>(
+        let proof = bp_leg::leg_proof::LegCreationProof::new::<_, _, _>(
             rng,
             leg,
             leg_enc.decode()?,

@@ -63,14 +63,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > CommonTransparentProof<L, F0, F1, G0, G1>
 {
     fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -99,24 +97,23 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
-                rng,
-                amount,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                has_balance_decreased,
-                auditor_keys,
-                root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                enc_key_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            amount,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            has_balance_decreased,
+            auditor_keys,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_key_gen,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -137,8 +134,6 @@ impl<
     fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -163,7 +158,7 @@ impl<
         ensure_counter_unchanged(account, updated_account)?;
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
@@ -853,16 +848,14 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > WithdrawProof<L, F0, F1, G0, G1>
 {
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -879,7 +872,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new::<_, D0, D1, Parameters0, Parameters1>(
+        let (common, nullifier) = CommonTransparentProof::new::<_, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -901,8 +894,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -922,7 +913,7 @@ impl<
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         let (common, nullifier) =
-            CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonTransparentProof::new_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 amount,
                 account,
@@ -1073,16 +1064,14 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > DepositProof<L, F0, F1, G0, G1>
 {
     /// `auditor_keys` is the list auditor/mediator keys for which encryption of account public key is done
     /// `nonce` should include all the relevant information including the "transparent public key"
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1099,7 +1088,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_key_gen: Affine<G0>,
     ) -> Result<(Self, Affine<G0>)> {
-        let (common, nullifier) = CommonTransparentProof::new::<_, D0, D1, Parameters0, Parameters1>(
+        let (common, nullifier) = CommonTransparentProof::new::<_, Parameters0, Parameters1>(
             rng,
             amount,
             account,
@@ -1121,8 +1110,6 @@ impl<
     pub fn new_with_given_prover<
         'a,
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1142,7 +1129,7 @@ impl<
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         let (common, nullifier) =
-            CommonTransparentProof::new_with_given_prover::<_, D0, D1, Parameters0, Parameters1>(
+            CommonTransparentProof::new_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 amount,
                 account,
@@ -1290,10 +1277,7 @@ mod tests {
         add_verification_tuples_batches_to_rmc, batch_verify_bp, prove_with_rng, verify_rmc,
         verify_with_rng,
     };
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_ff::UniformRand;
     use ark_pallas::{Fr as PallasFr, PallasConfig};
     use ark_vesta::{Fr as VestaFr, VestaConfig};
@@ -1345,22 +1329,21 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) =
-            WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                withdraw_amount,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                auditor_pubkeys.clone(),
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
+        let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            withdraw_amount,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            auditor_pubkeys.clone(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+        )
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1441,22 +1424,21 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        let (proof, nullifier) =
-            DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                deposit_amount,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                auditor_pubkeys.clone(),
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
+        let (proof, nullifier) = DepositProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            deposit_amount,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            auditor_pubkeys.clone(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_key_gen,
+        )
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1557,22 +1539,21 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) =
-                WithdrawProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                    &mut rng,
-                    withdraw_amount,
-                    &accounts[i],
-                    &updated_accounts[i],
-                    updated_account_comms[i],
-                    paths[i].clone(),
-                    auditor_pubkeys.clone(),
-                    &root,
-                    &nonces[i],
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                )
-                .unwrap();
+            let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                withdraw_amount,
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                auditor_pubkeys.clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+            )
+            .unwrap();
 
             proofs.push(proof);
             nullifiers.push(nullifier);
@@ -1769,29 +1750,24 @@ mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = WithdrawProof::new_with_given_prover::<
-                _,
-                PallasPoint,
-                VestaPoint,
-                PallasParams,
-                VestaParams,
-            >(
-                &mut rng,
-                withdraw_amount,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
-                paths[i].clone(),
-                auditor_pubkeys.clone(),
-                &root,
-                &nonces[i],
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )
-            .unwrap();
+            let (proof, nullifier) =
+                WithdrawProof::new_with_given_prover::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    withdraw_amount,
+                    &accounts[i],
+                    &updated_accounts[i],
+                    updated_account_comms[i],
+                    paths[i].clone(),
+                    auditor_pubkeys.clone(),
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    &mut even_prover,
+                    &mut odd_prover,
+                )
+                .unwrap();
             proofs.push(proof);
             nullifiers.push(nullifier);
         }
@@ -1977,22 +1953,21 @@ mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) =
-                DepositProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                    &mut rng,
-                    deposit_amount,
-                    &accounts[i],
-                    &updated_accounts[i],
-                    updated_account_comms[i],
-                    paths[i].clone(),
-                    auditor_pubkeys.clone(),
-                    &root,
-                    &nonces[i],
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_key_gen,
-                )
-                .unwrap();
+            let (proof, nullifier) = DepositProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                deposit_amount,
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                auditor_pubkeys.clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_key_gen,
+            )
+            .unwrap();
 
             proofs.push(proof);
             nullifiers.push(nullifier);
@@ -2189,29 +2164,24 @@ mod tests {
         let mut proofs = Vec::with_capacity(batch_size);
         let mut nullifiers = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
-            let (proof, nullifier) = DepositProof::new_with_given_prover::<
-                _,
-                PallasPoint,
-                VestaPoint,
-                PallasParams,
-                VestaParams,
-            >(
-                &mut rng,
-                deposit_amount,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
-                paths[i].clone(),
-                auditor_pubkeys.clone(),
-                &root,
-                &nonces[i],
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                &mut even_prover,
-                &mut odd_prover,
-            )
-            .unwrap();
+            let (proof, nullifier) =
+                DepositProof::new_with_given_prover::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    deposit_amount,
+                    &accounts[i],
+                    &updated_accounts[i],
+                    updated_account_comms[i],
+                    paths[i].clone(),
+                    auditor_pubkeys.clone(),
+                    &root,
+                    &nonces[i],
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    &mut even_prover,
+                    &mut odd_prover,
+                )
+                .unwrap();
             proofs.push(proof);
             nullifiers.push(nullifier);
         }

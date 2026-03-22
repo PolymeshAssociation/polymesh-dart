@@ -116,15 +116,13 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > LegCreationProof<L, F0, F1, G0, G1>
 {
     /// Creates a new proof using the new curve tree protocol with divisor commitments
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -152,7 +150,7 @@ impl<
             odd_transcript,
         );
 
-        let mut proof = Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
+        let mut proof = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
             leg,
             leg_enc,
@@ -185,8 +183,6 @@ impl<
 
     pub fn new_with_given_prover<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -206,7 +202,7 @@ impl<
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<Self> {
         let (re_randomized_path, re_randomization_of_leaf) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D1, D0, Parameters1, Parameters0>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters1, Parameters0>(
                 even_prover,
                 odd_prover,
                 tree_parameters,
@@ -227,7 +223,7 @@ impl<
 
         let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
 
-        Self::new_with_given_prover_inner::<R, D0, Parameters0, Parameters1>(
+        Self::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
             rng,
             leg,
             leg_enc,
@@ -247,7 +243,6 @@ impl<
 
     pub(crate) fn new_with_given_prover_inner<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -323,7 +318,7 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        let (re_randomized_points, ped_comms) = prove_ped_com::<_, _, _, _, _, D0, Parameters1>(
+        let (re_randomized_points, ped_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
             rng,
             even_prover,
             asset_data_points,

@@ -1,8 +1,5 @@
 use ark_ec::CurveGroup;
-use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
-};
+use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::Affine as PallasA;
 use ark_serialize::CanonicalSerialize;
 use ark_std::{UniformRand, format};
@@ -66,9 +63,7 @@ fn create_shared_setup<const NUM_GENS: usize>(
         VestaParameters,
         PallasParams,
         VestaParams,
-    >::new::<PallasPoint, VestaPoint>(
-        NUM_GENS as u32, NUM_GENS as u32
-    )
+    >::new(NUM_GENS as u32, NUM_GENS as u32)
     .unwrap();
 
     // Asset tree uses opposite curves
@@ -77,7 +72,7 @@ fn create_shared_setup<const NUM_GENS: usize>(
         PallasParameters,
         VestaParams,
         PallasParams,
-    >::new::<VestaPoint, PallasPoint>(NUM_GENS as u32, NUM_GENS as u32)
+    >::new(NUM_GENS as u32, NUM_GENS as u32)
     .unwrap();
 
     let account_comm_key = setup_comm_key(label);
@@ -223,22 +218,21 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
 
     println!("L={L}, M={M}, asset tree height = {height} and {num_legs} legs");
 
-    let proof =
-        SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            legs.clone(),
-            leg_encs.clone(),
-            leg_enc_rands.clone(),
-            paths.clone(),
-            asset_data_vec.clone(),
-            &root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+    let proof = SettlementCreationProof::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        legs.clone(),
+        leg_encs.clone(),
+        leg_enc_rands.clone(),
+        paths.clone(),
+        asset_data_vec.clone(),
+        &root,
+        nonce,
+        &asset_tree_params,
+        &asset_comm_params,
+        enc_key_gen,
+        enc_gen,
+    )
+    .unwrap();
     let proof_size = proof.compressed_size() + leg_encs.compressed_size();
 
     println!("Proof: {proof_size} bytes");
@@ -247,13 +241,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Large settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProof::new::<
-                _,
-                PallasPoint,
-                VestaPoint,
-                PallasParams,
-                VestaParams,
-            >(
+            let _ = SettlementCreationProof::new::<_, PallasParams, VestaParams>(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
@@ -440,22 +428,21 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         }
 
         // Create the settlement proof
-        let proof =
-            SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                legs,
-                leg_encs.clone(),
-                leg_enc_rands,
-                leaf_paths,
-                asset_data,
-                &root,
-                &nonces[i],
-                &asset_tree_params,
-                &asset_comm_params,
-                enc_key_gen,
-                enc_gen,
-            )
-            .unwrap();
+        let proof = SettlementCreationProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            legs,
+            leg_encs.clone(),
+            leg_enc_rands,
+            leaf_paths,
+            asset_data,
+            &root,
+            &nonces[i],
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
 
         proofs.push(proof);
         all_leg_encs.push(leg_encs);
@@ -658,22 +645,21 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         "L={L}, ASSET_TREE_M={ASSET_TREE_M}, ACCOUNT_TREE_M={ACCOUNT_TREE_M}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height} and {num_legs} legs",
     );
 
-    let settlement_proof =
-        SettlementCreationProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-            &mut rng,
-            legs.clone(),
-            leg_encs.clone(),
-            leg_enc_rands.clone(),
-            asset_paths.clone(),
-            asset_data_vec.clone(),
-            &asset_tree_root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+    let settlement_proof = SettlementCreationProof::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        legs.clone(),
+        leg_encs.clone(),
+        leg_enc_rands.clone(),
+        asset_paths.clone(),
+        asset_data_vec.clone(),
+        &asset_tree_root,
+        nonce,
+        &asset_tree_params,
+        &asset_comm_params,
+        enc_key_gen,
+        enc_gen,
+    )
+    .unwrap();
     let settlement_proof_size = settlement_proof.compressed_size() + leg_encs.compressed_size();
 
     println!("Settlement proof: {settlement_proof_size} bytes");
@@ -682,13 +668,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Multi-asset settlement proof generation", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let _ = SettlementCreationProof::new::<
-                _,
-                PallasPoint,
-                VestaPoint,
-                PallasParams,
-                VestaParams,
-            >(
+            let _ = SettlementCreationProof::new::<_, PallasParams, VestaParams>(
                 &mut local_rng,
                 legs.clone(),
                 leg_encs.clone(),
@@ -793,13 +773,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         _,
         PallasParameters,
         VestaParameters,
-    >::new::<
-        _,
-        PallasPoint,
-        VestaPoint,
-        PallasParams,
-        VestaParams,
-    >(
+    >::new::<_, PallasParams, VestaParams>(
         &mut rng,
         alice_builders,
         alice_paths.clone(),
@@ -853,7 +827,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         _,
         PallasParameters,
         VestaParameters,
-    >::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
+    >::new::<_, PallasParams, VestaParams>(
         &mut rng,
         bob_builders,
         bob_paths.clone(),

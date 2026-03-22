@@ -11,12 +11,17 @@ use crate::{
     error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError, Valid};
 use ark_std::string::ToString;
-use ark_std::{format, vec, vec::Vec};
+use ark_std::{
+    format,
+    io::{Read, Write},
+    vec,
+    vec::Vec,
+};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizeMultiPathWithDivisorComms};
@@ -69,16 +74,14 @@ impl<
     const M: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > SettlementCreationProof<L, M, F0, F1, G0, G1>
 {
     /// Creates a settlement proof for multiple legs.
     /// This method creates new transcripts and provers internally, then generates the proof.
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -101,7 +104,7 @@ impl<
             Prover::new(&tree_parameters.even_parameters.pc_gens(), even_transcript);
         let mut odd_prover = Prover::new(&tree_parameters.odd_parameters.pc_gens(), odd_transcript);
 
-        let mut proof = Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
+        let mut proof = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
             legs,
             leg_encs,
@@ -141,8 +144,6 @@ impl<
     ///   or directly without curve tree (revealed asset-id legs)
     pub fn new_with_given_prover<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -214,9 +215,12 @@ impl<
         let mut all_rerandomized_leaves = Vec::with_capacity(num_hidden_asset_legs);
 
         for leaf_path in leaf_paths.iter() {
-            let (re_randomized_path, randomizers) =
-                leaf_path.batched_select_and_rerandomize_prover_gadget_new::<R, D1, D0, Parameters1, Parameters0>(
-                    even_prover, odd_prover, tree_parameters, rng
+            let (re_randomized_path, randomizers) = leaf_path
+                .batched_select_and_rerandomize_prover_gadget_new::<_, Parameters1, Parameters0>(
+                    even_prover,
+                    odd_prover,
+                    tree_parameters,
+                    rng,
                 )?;
 
             add_to_transcript!(
@@ -258,27 +262,23 @@ impl<
                 LegProof::RevealedAssetProof(proof)
             } else {
                 let (rerandomized_leaf, randomizer) = all_rerandomized_leaves[hidden_asset_idx];
-                let proof = LegCreationProof::new_with_given_prover_inner::<
-                    R,
-                    D0,
-                    Parameters0,
-                    Parameters1,
-                >(
-                    rng,
-                    legs[i].clone(),
-                    leg_encs[i].clone(),
-                    leg_enc_rands[i].clone(),
-                    rerandomized_leaf,
-                    randomizer,
-                    asset_data[hidden_asset_idx].clone(),
-                    tree_parameters,
-                    asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                    even_prover,
-                    odd_prover,
-                    None, // re_randomized_path is stored separately in SettlementCreationProof
-                )?;
+                let proof =
+                    LegCreationProof::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
+                        rng,
+                        legs[i].clone(),
+                        leg_encs[i].clone(),
+                        leg_enc_rands[i].clone(),
+                        rerandomized_leaf,
+                        randomizer,
+                        asset_data[hidden_asset_idx].clone(),
+                        tree_parameters,
+                        asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        even_prover,
+                        odd_prover,
+                        None, // re_randomized_path is stored separately in SettlementCreationProof
+                    )?;
 
                 hidden_asset_idx += 1;
                 LegProof::HiddenAssetProof(proof)
@@ -572,81 +572,86 @@ impl<
     }
 }
 
-impl<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> CanonicalSerialize for LegProof<L, F0, F1, G0, G1>
-{
-    fn serialize_with_mode<W: ark_std::io::Write>(
-        &self,
-        mut writer: W,
-        compress: ark_serialize::Compress,
-    ) -> Result<(), ark_serialize::SerializationError> {
-        match self {
-            LegProof::HiddenAssetProof(proof) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                proof.serialize_with_mode(&mut writer, compress)
+mod serialization {
+    use super::*;
+    use ark_serialize::{Compress, Validate};
+
+    impl<
+        const L: usize,
+        F0: PrimeField,
+        F1: PrimeField,
+        G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+        G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    > CanonicalSerialize for LegProof<L, F0, F1, G0, G1>
+    {
+        fn serialize_with_mode<W: Write>(
+            &self,
+            mut writer: W,
+            compress: Compress,
+        ) -> Result<(), SerializationError> {
+            match self {
+                LegProof::HiddenAssetProof(proof) => {
+                    0u8.serialize_with_mode(&mut writer, compress)?;
+                    proof.serialize_with_mode(&mut writer, compress)
+                }
+                LegProof::RevealedAssetProof(proof) => {
+                    1u8.serialize_with_mode(&mut writer, compress)?;
+                    proof.serialize_with_mode(&mut writer, compress)
+                }
             }
-            LegProof::RevealedAssetProof(proof) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-                proof.serialize_with_mode(&mut writer, compress)
+        }
+
+        fn serialized_size(&self, compress: Compress) -> usize {
+            1 + match self {
+                LegProof::HiddenAssetProof(proof) => proof.serialized_size(compress),
+                LegProof::RevealedAssetProof(proof) => proof.serialized_size(compress),
             }
         }
     }
 
-    fn serialized_size(&self, compress: ark_serialize::Compress) -> usize {
-        1 + match self {
-            LegProof::HiddenAssetProof(proof) => proof.serialized_size(compress),
-            LegProof::RevealedAssetProof(proof) => proof.serialized_size(compress),
+    impl<
+        const L: usize,
+        F0: PrimeField,
+        F1: PrimeField,
+        G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+        G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    > CanonicalDeserialize for LegProof<L, F0, F1, G0, G1>
+    {
+        fn deserialize_with_mode<R: Read>(
+            mut reader: R,
+            compress: Compress,
+            validate: Validate,
+        ) -> Result<Self, SerializationError> {
+            let discriminant = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+            match discriminant {
+                0 => Ok(LegProof::HiddenAssetProof(
+                    LegCreationProof::deserialize_with_mode(&mut reader, compress, validate)?,
+                )),
+                1 => Ok(LegProof::RevealedAssetProof(
+                    PublicAssetLegCreationProof::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                )),
+                _ => Err(SerializationError::InvalidData),
+            }
         }
     }
-}
 
-impl<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> CanonicalDeserialize for LegProof<L, F0, F1, G0, G1>
-{
-    fn deserialize_with_mode<R: ark_std::io::Read>(
-        mut reader: R,
-        compress: ark_serialize::Compress,
-        validate: ark_serialize::Validate,
-    ) -> Result<Self, ark_serialize::SerializationError> {
-        let discriminant = u8::deserialize_with_mode(&mut reader, compress, validate)?;
-        match discriminant {
-            0 => Ok(LegProof::HiddenAssetProof(
-                LegCreationProof::deserialize_with_mode(&mut reader, compress, validate)?,
-            )),
-            1 => Ok(LegProof::RevealedAssetProof(
-                PublicAssetLegCreationProof::deserialize_with_mode(
-                    &mut reader,
-                    compress,
-                    validate,
-                )?,
-            )),
-            _ => Err(ark_serialize::SerializationError::InvalidData),
-        }
-    }
-}
-
-impl<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> ark_serialize::Valid for LegProof<L, F0, F1, G0, G1>
-{
-    fn check(&self) -> Result<(), ark_serialize::SerializationError> {
-        match self {
-            LegProof::HiddenAssetProof(proof) => proof.check(),
-            LegProof::RevealedAssetProof(proof) => proof.check(),
+    impl<
+        const L: usize,
+        F0: PrimeField,
+        F1: PrimeField,
+        G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+        G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    > Valid for LegProof<L, F0, F1, G0, G1>
+    {
+        fn check(&self) -> Result<(), SerializationError> {
+            match self {
+                LegProof::HiddenAssetProof(proof) => proof.check(),
+                LegProof::RevealedAssetProof(proof) => proof.check(),
+            }
         }
     }
 }

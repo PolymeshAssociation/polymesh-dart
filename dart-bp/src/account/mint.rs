@@ -12,7 +12,7 @@ use crate::{
     UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
@@ -70,15 +70,13 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > MintTxnProof<L, F0, F1, G0, G1>
 {
     /// `issuer_pk` has the same secret key as the one in `account`
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -97,7 +95,7 @@ impl<
         let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
         let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
 
-        Self::new_with_given_transcript::<_, D0, D1, Parameters0, Parameters1>(
+        Self::new_with_given_transcript::<_, Parameters0, Parameters1>(
             rng,
             issuer_pk,
             increase_bal_by,
@@ -116,8 +114,6 @@ impl<
 
     pub fn new_with_given_transcript<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -146,7 +142,7 @@ impl<
             Prover::new(account_tree_params.odd_parameters.pc_gens(), transcript_odd);
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 &mut even_prover,
                 &mut odd_prover,
                 account_tree_params,
@@ -633,10 +629,7 @@ mod tests {
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
     use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
     use std::time::Instant;
@@ -691,21 +684,20 @@ mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) =
-            MintTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                pk_i.0,
-                increase_bal_by,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-            )
-            .unwrap();
+        let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            pk_i.0,
+            increase_bal_by,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
 
         let prover_time = clock.elapsed();
 

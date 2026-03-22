@@ -9,7 +9,7 @@ use crate::{
     UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
@@ -393,16 +393,14 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > FeeAccountTopupTxnProof<L, F0, F1, G0, G1>
 {
     /// `pk` is the public key of the investor who is topping up his fee account
     /// and has the same secret key as the one in `account`
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -429,22 +427,21 @@ impl<
             odd_transcript,
         );
 
-        let (mut proof, nullifier) =
-            Self::new_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
-                rng,
-                pk,
-                increase_bal_by,
-                account,
-                updated_account,
-                updated_account_commitment,
-                leaf_path,
-                root,
-                nonce,
-                account_tree_params,
-                account_comm_key,
-                &mut even_prover,
-                &mut odd_prover,
-            )?;
+        let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
+            rng,
+            pk,
+            increase_bal_by,
+            account,
+            updated_account,
+            updated_account_commitment,
+            leaf_path,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            &mut even_prover,
+            &mut odd_prover,
+        )?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -464,8 +461,6 @@ impl<
 
     pub fn new_with_given_prover<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -486,7 +481,7 @@ impl<
         ensure_correct_account_state(account, updated_account, increase_bal_by, false)?;
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
@@ -978,16 +973,14 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > FeePaymentProof<L, F0, F1, G0, G1>
 {
     /// `nonce` is used to tie this fee payment proof to the corresponding txn and the eventual payee (relayer, etc) identity, eg. it can
     /// be constructed as b"<txn id>||<payee id>" and the verifier can ensure that the appropriate `nonce` is used
     pub fn new<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -1016,7 +1009,7 @@ impl<
         );
 
         let (re_randomized_path, mut rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 &mut even_prover,
                 &mut odd_prover,
                 account_tree_params,
@@ -1434,10 +1427,7 @@ pub mod tests {
     use crate::keys::SigKey;
     use crate::keys::keygen_sig;
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
-    use ark_ec_divisors::curves::{
-        pallas::PallasParams, pallas::Point as PallasPoint, vesta::Point as VestaPoint,
-        vesta::VestaParams,
-    };
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use curve_tree_relations::curve_tree::CurveTree;
     use std::time::Instant;
 
@@ -1556,21 +1546,20 @@ pub mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) =
-            FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                &pk_i.0,
-                increase_bal_by,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-            )
-            .unwrap();
+        let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            &pk_i.0,
+            increase_bal_by,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1704,20 +1693,19 @@ pub mod tests {
 
         let root = account_tree.root_node();
 
-        let (proof, nullifier) =
-            FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                &mut rng,
-                fee_amount,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-            )
-            .unwrap();
+        let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            fee_amount,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -1879,20 +1867,19 @@ pub mod tests {
         let mut nullifiers = Vec::with_capacity(batch_size);
 
         for i in 0..batch_size {
-            let (proof, nullifier) =
-                FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                    &mut rng,
-                    fee_amount,
-                    &accounts[i],
-                    &updated_accounts[i],
-                    updated_account_comms[i],
-                    paths[i].clone(),
-                    &root,
-                    &nonces[i],
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                )
-                .unwrap();
+            let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                fee_amount,
+                &accounts[i],
+                &updated_accounts[i],
+                updated_account_comms[i],
+                paths[i].clone(),
+                &root,
+                &nonces[i],
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
             proofs.push(proof);
             nullifiers.push(nullifier);
         }
@@ -2059,13 +2046,7 @@ pub mod tests {
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
-            let (proof, nullifier) = FeeAccountTopupTxnProof::new::<
-                _,
-                PallasPoint,
-                VestaPoint,
-                PallasParams,
-                VestaParams,
-            >(
+            let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 &pk_i.0,
                 increase_bal_by,
@@ -2136,20 +2117,19 @@ pub mod tests {
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
-            let (proof, nullifier) =
-                FeePaymentProof::new::<_, PallasPoint, VestaPoint, PallasParams, VestaParams>(
-                    &mut rng,
-                    fee_amount,
-                    &account,
-                    &updated_account,
-                    updated_account_comm,
-                    path,
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                )
-                .unwrap();
+            let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                fee_amount,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
 
             assert!(
                 proof

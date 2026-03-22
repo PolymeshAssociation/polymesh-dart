@@ -19,7 +19,7 @@ use crate::{
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::AffineRepr;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{
@@ -137,14 +137,12 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > CommonStateChangeProver<'a, L, F0, F1, G0, G1>
 {
     pub fn init<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -171,7 +169,7 @@ impl<
             transcript_odd,
         );
 
-        let mut prover = Self::init_with_given_prover::<R, D0, D1, Parameters0, Parameters1>(
+        let mut prover = Self::init_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
             legs_with_conf,
             account,
@@ -231,8 +229,6 @@ impl<
 
     pub fn init_with_given_prover<
         R: CryptoRngCore,
-        D0: DivisorCurve<BaseField = F1, ScalarField = F0> + From<Projective<G0>>,
-        D1: DivisorCurve<BaseField = F0, ScalarField = F1> + From<Projective<G1>>,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
@@ -251,7 +247,7 @@ impl<
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<Self> {
         let (re_randomized_path, leaf_rerandomization) = leaf_path
-            .select_and_rerandomize_prover_gadget_new::<R, D0, D1, Parameters0, Parameters1>(
+            .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
@@ -508,8 +504,8 @@ impl<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > StateChangeVerifier<L, F0, F1, G0, G1>
 {
     /// Takes challenge contributions from all relevant subprotocols

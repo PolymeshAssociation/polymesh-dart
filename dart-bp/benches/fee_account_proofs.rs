@@ -1,8 +1,5 @@
 use ark_ec::CurveGroup;
-use ark_ec_divisors::curves::{
-    pallas::{PallasParams, Point as PallasPoint},
-    vesta::{Point as VestaPoint, VestaParams},
-};
+use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::Affine as PallasA;
 use ark_std::{UniformRand, format};
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
@@ -53,9 +50,7 @@ fn create_shared_setup() -> (
         VestaParameters,
         PallasParams,
         VestaParams,
-    >::new::<PallasPoint, VestaPoint>(
-        NUM_GENS as u32, NUM_GENS as u32
-    )
+    >::new(NUM_GENS as u32, NUM_GENS as u32)
     .unwrap();
     let account_comm_key = setup_comm_key(b"testing");
 
@@ -122,7 +117,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, _, _>(
         &mut setup_rng,
         &pk_i.0,
         increase_bal_by,
@@ -188,7 +183,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasPoint, VestaPoint, _, _>(
+    let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, _, _>(
         &mut setup_rng,
         &pk_i.0,
         increase_bal_by,
@@ -259,7 +254,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
+    let (proof, nullifier) = FeePaymentProof::new::<_, _, _>(
         &mut setup_rng,
         fee_amount,
         &account,
@@ -324,7 +319,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
-    let (proof, nullifier) = FeePaymentProof::new::<_, PallasPoint, VestaPoint, _, _>(
+    let (proof, nullifier) = FeePaymentProof::new::<_, _, _>(
         &mut setup_rng,
         fee_amount,
         &account,

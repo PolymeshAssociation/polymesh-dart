@@ -651,11 +651,7 @@ impl DartTestingDb {
         let account_info = self.get_dart_account(signer_name, account_name)?;
 
         let account_keys = account_info.account_keys()?;
-        let proof = AccountRegistrationProof::new(
-            rng,
-            &[account_keys],
-            signer_name.as_bytes(),
-        )?;
+        let proof = AccountRegistrationProof::new(rng, &[account_keys], signer_name.as_bytes())?;
 
         // If proof action is to generate only, save proof and return
         if !proof_action.apply_proof() {
