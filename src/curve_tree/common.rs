@@ -10,17 +10,7 @@ use crate::error::*;
 
 /// Node position.
 #[derive(
-    Copy,
-    Clone,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
+    Copy, Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct NodePosition {
@@ -85,17 +75,7 @@ impl NodePosition {
 
 /// Location of a node in the tree.
 #[derive(
-    Copy,
-    Clone,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
+    Copy, Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub enum NodeLocation<const L: usize> {
@@ -297,9 +277,8 @@ pub fn update_inner_node<
             .G((L * (tree_index + 1)) as u32)
             .skip(L * tree_index + child_index as usize);
         let g = gen_iter.next().ok_or(Error::CurveTreeGeneratorNotFound)?;
-        commitments[tree_index] = (commitments[tree_index].into_group()
-            + *g * (*new_x_coord - old_x_coord))
-            .into_affine();
+        commitments[tree_index] =
+            (commitments[tree_index].into_group() + g * (*new_x_coord - old_x_coord)).into_affine();
     }
     Ok(new_x_coords)
 }

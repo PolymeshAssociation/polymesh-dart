@@ -218,7 +218,10 @@ verify_api = ["polymesh-dart-bp?/verify_api"]
 decrypt_api = ["polymesh-dart-bp?/decrypt_api"]
 
 # Enable for low memory (SRAM) devices (hardware wallets)
-low_memory = ["polymesh-dart-bp?/low_memory"]
+low_memory = [
+    "polymesh-dart-bp?/low_memory",
+    "bulletproofs?/low_memory",
+]
 
 async_tree = []
 

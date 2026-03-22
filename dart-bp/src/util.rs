@@ -1849,8 +1849,8 @@ fn bp_gens_vec_for_randomness_and_sk_enc_relations<G0: SWCurveConfig + Copy>(
 pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
     size: u32,
     bp_gens: &BulletproofGens<G>,
-) -> Copied<impl Iterator<Item = &G>> {
-    bp_gens.share(0).G(size).copied()
+) -> impl Iterator<Item = G> {
+    bp_gens.share(0).G(size)
 }
 
 /// Add a slice to transcript by first writing the slice length (as index) and then each element
