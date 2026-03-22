@@ -1,4 +1,3 @@
-use curve_tree_relations::parameters::SingleLayerProofParametersNew;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]

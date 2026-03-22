@@ -61,9 +61,15 @@ name = "settlement_proofs"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel"]
+default = ["std", "asm", "parallel", "full_api"]
 
 no_std = []
+
+# Enable generate/verify/decrypt APIs based on feature flags
+full_api = ["generate_api", "verify_api", "decrypt_api"]
+generate_api = []
+verify_api = []
+decrypt_api = []
 
 large_baby_steps = []
 

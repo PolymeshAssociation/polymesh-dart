@@ -72,9 +72,11 @@ pub mod account_registration;
 mod error;
 pub mod poseidon_impls;
 
-//pub mod discrete_log;
+#[cfg(feature = "decrypt_api")]
+pub mod discrete_log;
 pub mod fee_account;
-//pub mod key_distribution;
+#[cfg(feature = "full_api")]
+pub mod key_distribution;
 pub mod leg;
 
 pub use error::Error;

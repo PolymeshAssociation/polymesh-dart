@@ -201,6 +201,7 @@ default = [
     "sqlx",
     "scale-info",
     "large_baby_steps",
+    "full_api",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -208,6 +209,12 @@ serde = ["dep:serde", "serde_json", "serde_arrays"]
 utoipa = ["dep:utoipa", "serde"]
 
 sqlx = ["dep:sqlx", "sqlx-core"]
+
+# Enable generate/verify/decrypt APIs based on feature flags
+full_api = ["generate_api", "verify_api", "decrypt_api", "polymesh-dart-bp?/full_api"]
+generate_api = ["polymesh-dart-bp?/generate_api"]
+verify_api = ["polymesh-dart-bp?/verify_api"]
+decrypt_api = ["polymesh-dart-bp?/decrypt_api"]
 
 async_tree = []
 
