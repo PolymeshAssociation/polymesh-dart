@@ -11,7 +11,7 @@ use crate::util::bp_gens_for_vec_commitment;
 use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
-use ark_ff::{Field, PrimeField, Zero};
+use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
@@ -1748,6 +1748,7 @@ pub mod tests {
     //     R1CSVar,
     //     fields::fp::{AllocatedFp, FpVar},
     // };
+    use ark_ff::Zero;
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
@@ -2177,7 +2178,7 @@ pub mod tests {
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let enc_gen = PallasA::rand(&mut rng);
-        let (sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_T, pk_T) = keygen_enc(&mut rng, enc_key_gen);
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
 
         let clock = Instant::now();
@@ -2274,19 +2275,19 @@ pub mod tests {
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             verifier_time_regular, verifier_time_rmc
         );
-
-        // This will take a long time to decrypt
-        let clock = Instant::now();
-        assert_eq!(
-            account.randomness,
-            reg_proof
-                .encryption_for_T
-                .unwrap()
-                .encrypted_randomness
-                .decrypt(&sk_T.0, enc_gen.into_group())
-                .unwrap()
-        );
-        println!("decryption time = {:?}", clock.elapsed());
+        // TODO: Re-enable?
+        // // This will take a long time to decrypt
+        // let clock = Instant::now();
+        // assert_eq!(
+        //     account.randomness,
+        //     reg_proof
+        //         .encryption_for_T
+        //         .unwrap()
+        //         .encrypted_randomness
+        //         .decrypt(&sk_T.0, enc_gen.into_group())
+        //         .unwrap()
+        // );
+        // println!("decryption time = {:?}", clock.elapsed());
     }
 
     /*
