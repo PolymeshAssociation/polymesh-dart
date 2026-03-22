@@ -11,6 +11,9 @@ use bulletproofs::r1cs::constraint_system::constrain_lc_with_scalar;
 use bulletproofs::r1cs::{ConstraintSystem, LinearCombination, R1CSError, Variable};
 pub use params::Poseidon2Params;
 
+#[cfg(feature = "ledger_device_sdk")]
+use ledger_device_sdk::log;
+
 pub const ZERO_CONST: u64 = 0;
 
 #[derive(Clone, Debug)]
@@ -247,22 +250,29 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     let mut output_vars = input;
     let mut temp_constants = [F::zero(); POSEIDON2_CONSTANTS];
 
+    log::debug!("Poseidon_perm_constraints: 1");
     // Linear layer at beginning
     matmul_external_constraints(&mut output_vars, params);
+    log::debug!("Poseidon_perm_constraints: 2");
 
     // Full rounds before partial
     for r in 0..params.rounds_f_beginning {
+        log::debug!("Poseidon_perm_constraints: 2: round {}", r);
         apply_round_constants(
             &mut output_vars,
             params.round_constants(r, &mut temp_constants),
         );
-        output_vars = apply_sbox_full(cs, &output_vars, params)?;
+        log::debug!("Poseidon_perm_constraints: 2: apply_sbox_full");
+        apply_sbox_full(cs, &mut output_vars, params)?;
+        log::debug!("Poseidon_perm_constraints: 2: matmul_external_constraints");
         matmul_external_constraints(&mut output_vars, params);
+        log::debug!("Poseidon_perm_constraints: 2: simplify");
         for i in 0..t {
             output_vars[i] = output_vars[i].clone().simplify();
         }
     }
 
+    log::debug!("Poseidon_perm_constraints: 3");
     let p_end = params.rounds_f_beginning + params.rounds_p;
     // Partial rounds
     for r in params.rounds_f_beginning..p_end {
@@ -275,18 +285,20 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         }
     }
 
+    log::debug!("Poseidon_perm_constraints: 4");
     // Full rounds after partial
     for r in p_end..params.rounds {
         apply_round_constants(
             &mut output_vars,
             params.round_constants(r, &mut temp_constants),
         );
-        output_vars = apply_sbox_full(cs, &output_vars, params)?;
+        apply_sbox_full(cs, &mut output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
         for i in 0..t {
             output_vars[i] = output_vars[i].clone().simplify();
         }
     }
+    log::debug!("Poseidon_perm_constraints: 4");
     Ok(output_vars)
 }
 
@@ -317,15 +329,27 @@ fn apply_round_constants<F: PrimeField>(vars: &mut [LinearCombination<F>], round
     }
 }
 
+//fn apply_sbox_full<F: PrimeField, CS: ConstraintSystem<F>>(
+//    cs: &mut CS,
+//    input: &[LinearCombination<F>],
+//    params: &Poseidon2Params<F>,
+//) -> Result<Vec<LinearCombination<F>>, R1CSError> {
+//    Ok(input
+//        .iter()
+//        .map(|el| sbox_p_constraints(cs, el, params))
+//        .collect::<Result<Vec<_>, _>>()?)
+//}
+
 fn apply_sbox_full<F: PrimeField, CS: ConstraintSystem<F>>(
     cs: &mut CS,
-    input: &[LinearCombination<F>],
+    input: &mut [LinearCombination<F>],
     params: &Poseidon2Params<F>,
-) -> Result<Vec<LinearCombination<F>>, R1CSError> {
-    Ok(input
-        .iter()
-        .map(|el| sbox_p_constraints(cs, el, params))
-        .collect::<Result<Vec<_>, _>>()?)
+) -> Result<(), R1CSError> {
+    for (i, el) in input.iter_mut().enumerate() {
+        log::debug!("Applying sbox full constraints for element: {:?}", i);
+        *el = sbox_p_constraints(cs, el, params)?;
+    }
+    Ok(())
 }
 
 fn sbox_p_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
@@ -334,7 +358,9 @@ fn sbox_p_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     params: &Poseidon2Params<F>,
 ) -> Result<LinearCombination<F>, R1CSError> {
     let d = params.degree;
+    log::debug!("Applying sbox_p_constraints with degree {}", d);
     let (_, _, x2_var) = cs.multiply(input.clone(), input.clone());
+    log::debug!("sbox_p_constraints: after first multiplication for x^2");
     match d {
         3 => {
             let (_, _, x3_var) = cs.multiply(x2_var.into(), input.clone());
@@ -342,7 +368,9 @@ fn sbox_p_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         }
         5 => {
             let (_, _, x4_var) = cs.multiply(x2_var.into(), x2_var.into());
+            log::debug!("sbox_p_constraints: after second multiplication for x^4");
             let (_, _, x5_var) = cs.multiply(x4_var.into(), input.clone());
+            log::debug!("sbox_p_constraints: after third multiplication for x^5");
             Ok(x5_var.into())
         }
         7 => {

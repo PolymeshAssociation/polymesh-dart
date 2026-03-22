@@ -70,11 +70,13 @@ impl AccountState {
         account: &AccountKeyPair,
         enc_key: &EncryptionSecretKey,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        log::debug!("-- bp_state: sk_enc_inv");
         let sk_enc_inv = enc_key
             .0
             .0
             .inverse()
             .ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
+        log::debug!("-- bp_state: sk_enc_inv computed");
         let state = BPAccountState {
             sk: account.secret.0.0,
             id: self.identity.decode()?,
@@ -87,7 +89,9 @@ impl AccountState {
             current_randomness: self.current_randomness.decode()?,
             sk_enc_inv,
         };
+        log::debug!("-- bp_state: BPAccountState constructed");
         let commitment = state.commit(dart_gens().account_comm_key())?;
+        log::debug!("-- bp_state: commitment computed");
         Ok((state, commitment))
     }
 
@@ -631,6 +635,7 @@ impl AccountAssetRegistrationProof {
             &params.params,
             None,
         )?;
+        log::debug!("Account registration proof generated.");
         Ok((
             Self {
                 account: keys.public_keys(),

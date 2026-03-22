@@ -247,6 +247,8 @@ large_baby_steps = [
     "polymesh-dart-bp/large_baby_steps",
 ]
 
+ledger_device_sdk = ["dep:ledger_device_sdk", "polymesh-dart-bp?/ledger_device_sdk"]
+
 no_std = ["alloc"]
 
 alloc = ["serde?/alloc", "serde_json?/alloc", "serde_arrays?/alloc"]

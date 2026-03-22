@@ -12,6 +12,9 @@ use polymesh_dart_common::{
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(feature = "ledger_device_sdk")]
+use ledger_device_sdk::log;
+
 pub const NUM_GENERATORS: usize = 10;
 
 // The account commitment has g * {sk_{en}}^{-1}. This is safe as it's called Inverse Diffie Hellman assumption and [this paper](https://ink.library.smu.edu.sg/cgi/viewcontent.cgi?params=/context/sis_research/article/2082/&path_info=Bao2003_VariationsOfDiffie_HellmanProblem_pv.pdf)
@@ -421,6 +424,41 @@ where
         &self,
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
     ) -> Result<AccountStateCommitment<G>> {
+        log::debug!(
+            "Committing account state with values: id={}, sk={}, balance={}, counter={}, asset_id={}, rho={}, current_rho={}, randomness={}, current_randomness={}, sk_enc_inv={}",
+            self.id,
+            self.sk,
+            self.balance,
+            self.counter,
+            self.asset_id,
+            self.rho,
+            self.current_rho,
+            self.randomness,
+            self.current_randomness,
+            self.sk_enc_inv
+        );
+        log::debug!("  --- bases");
+        let bases = &account_comm_key.as_gens()[..];
+        log::debug!("  --- scalars");
+        let scalars = &[
+            self.sk,
+            G::ScalarField::from(self.balance),
+            G::ScalarField::from(self.counter),
+            G::ScalarField::from(self.asset_id),
+            self.rho,
+            self.current_rho,
+            self.randomness,
+            self.current_randomness,
+            self.id,
+            self.sk_enc_inv,
+        ];
+        log::debug!(
+            "  --- computing MSM: size of bases: {}, size of scalars: {}",
+            bases.len(),
+            scalars.len()
+        );
+        let comm = G::Group::msm(bases, scalars).map_err(Error::size_mismatch)?;
+        /*
         let comm = G::Group::msm(
             &account_comm_key.as_gens()[..],
             &[
@@ -437,6 +475,8 @@ where
             ],
         )
         .map_err(Error::size_mismatch)?;
+        // */
+        log::debug!("  --- MSM computed");
         Ok(AccountStateCommitment(comm.into_affine()))
     }
 

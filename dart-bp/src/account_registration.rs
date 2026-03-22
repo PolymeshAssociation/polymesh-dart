@@ -42,6 +42,9 @@ use schnorr_pok::partial::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(feature = "ledger_device_sdk")]
+use ledger_device_sdk::log;
+
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
 pub const ENC_PK_LABEL: &'static [u8; 6] = b"pk_enc";
@@ -133,8 +136,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
     ) -> Result<Self> {
+        log::debug!("Starting registration proof generation");
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        log::debug!("Transcript initialized with label: {:?}", REG_TXN_LABEL);
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
+        log::debug!("Prover initialized with Pedersen generators");
         let mut proof = Self::new_with_given_prover(
             rng,
             pk_aff,
@@ -150,8 +156,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             T,
             &mut prover,
         )?;
+        log::debug!("Proof generated with given prover, now generating R1CS proof");
 
         let r1cs_proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
+        log::debug!("R1CS proof generated successfully");
         proof.proof = Some(r1cs_proof);
 
         Ok(proof)
@@ -172,10 +180,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         T: Option<(G, G, G)>,
         prover: &mut Prover<MerlinTranscript, G>,
     ) -> Result<Self> {
+        log::debug!("Starting registration proof generation with given prover");
         let _ = Self::CHECK_CHUNK_BITS;
         let enc_key_gen = account_comm_key.sk_enc_gen();
         let aff_key_gen = account_comm_key.sk_gen();
+        log::debug!("Ensuring correct registration state");
         ensure_correct_registration_state(account, pk_aff, pk_enc, aff_key_gen, enc_key_gen)?;
+        log::debug!("Registration state is correct, proceeding with proof generation");
 
         // Need to prove that:
         // 1. rho is generated correctly
@@ -188,6 +199,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // 8. if T is provided, prove that randomness is encrypted correctly for pk_T
 
         let mut transcript_ref = prover.transcript();
+        log::debug!("Adding public inputs to transcript");
         add_to_transcript!(
             transcript_ref,
             NONCE_LABEL,
@@ -203,6 +215,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ID_LABEL,
             account.id
         );
+        log::debug!("Public inputs added to transcript");
 
         // D = pk_aff + g_k * asset_id + g_l * id
         let D = pk_aff.into_group()
@@ -243,6 +256,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &reduced_acc_comm,
             &mut transcript_ref,
         )?;
+        log::debug!("Pedersen commitment protocol challenge contribution added to transcript");
 
         // Prove pk_enc = enc_key_gen * sk_enc
         let pk_enc_protocol = PokDiscreteLogProtocol::init(
@@ -251,6 +265,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &enc_key_gen,
         );
         pk_enc_protocol.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
+        log::debug!("Proof of pk_enc relation added to transcript");
 
         // Prove pk_enc_inv = enc_key_gen * sk_enc^{-1} (partial sigma, shares sk_enc_inv_blinding)
         let pk_enc_inv_protocol =
@@ -260,11 +275,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &pk_enc_inv,
             &mut transcript_ref,
         )?;
+        log::debug!("Proof of pk_enc_inv relation added to transcript");
 
         // Prove enc_key_gen = pk_enc * sk_enc^{-1} (partial sigma, shares sk_enc_inv_blinding)
         let enc_key_gen_protocol =
             PokDiscreteLogProtocol::init(account.sk_enc_inv, sk_enc_inv_blinding, &pk_enc);
         enc_key_gen_protocol.challenge_contribution(&pk_enc, &enc_key_gen, &mut transcript_ref)?;
+        log::debug!("Proof of enc_key_gen relation added to transcript");
 
         // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
         // Break randomness `s` and `rho` each into `NUM_CHUNKS` chunks, encrypt every chunk using
@@ -333,6 +350,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             // decompose rho into chunks and encrypt each
             let (rho_chunks, rho_chunks_as_u64) =
                 digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.rho);
+            log::debug!("rho decomposed into chunks: {:?}", rho_chunks_as_u64);
 
             let rho_encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
                 enc_gen.into_group(),
@@ -415,13 +433,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // NOTE: We can save 2 group elements in total by committing all variables (including chunks) in
         // a single commitment. It complicates the implementation a bit
 
+        log::debug!("Committing to rho and sk with Bulletproofs vector commitment");
         let com_rho_bp_blinding = G::ScalarField::rand(rng);
         let (comm_rho_bp, vars) = prover.commit_vec(
             &[account.sk, account.rho],
             com_rho_bp_blinding,
             &leaf_level_bp_gens,
         );
+        log::debug!("Bulletproofs commitment for rho and sk committed, now enforcing constraints");
         Self::enforce_constraints(prover, account.asset_id, counter, vars, poseidon_config)?;
+        log::debug!("Constraints for rho and sk committed");
 
         let mut sk_blinding = G::ScalarField::rand(rng);
 
@@ -429,12 +450,18 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
             vec![G::ScalarField::rand(rng), sk_blinding, rho_blinding],
         );
+        log::debug!("Schnorr commitment for rho and sk committed");
 
         let t_pk_aff = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
+        log::debug!("Proof protocol for pk_aff initialized");
 
         sk_blinding.zeroize();
         sk_enc_blinding.zeroize();
         sk_enc_inv_blinding.zeroize();
+
+        log::debug!(
+            "Constraints for rho and sk committed, and proof protocols for pk_aff, pk_enc and pk_enc_inv initialized"
+        );
 
         // Commit to all chunks of s and rho in a single vector commitment and prove each chunk is in range
         let (comm_s_rho_chunks_bp, com_s_rho_bp_blinding) = if let Some((
@@ -478,6 +505,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
         t_pk_aff.challenge_contribution(&aff_key_gen, &pk_aff, &mut transcript_ref)?;
 
+        if true {
+            return Err(Error::ProofGenerationError(
+                "Account registration proof generation with given prover is currently disabled"
+                    .to_string(),
+            ));
+        }
         // TODO: Dedup logic between rho and s. Also, i make it twisted elgamal, can share logic between key dist proof and this
 
         // Take challenge contribution of ciphertext of each chunk (s and rho) using a single commitment
@@ -1135,7 +1168,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let lc_rho: LinearCombination<G::ScalarField> = var_rho.into();
         let combined = AccountState::<G>::concat_asset_id_counter(asset_id, counter);
         let c = LinearCombination::from(combined);
+        log::debug!("Enforcing Poseidon hash constraint for rho and sk");
         let lc_rho_1 = Poseidon_hash_2_constraints_simple(cs, var_sk.into(), c, poseidon_config)?;
+        log::debug!("Poseidon hash constraint for rho and sk enforced");
         cs.constrain(lc_rho_1 - lc_rho);
         Ok(())
     }
