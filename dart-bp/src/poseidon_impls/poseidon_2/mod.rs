@@ -3,6 +3,7 @@
 pub mod params;
 
 use crate::error::{Error, Result};
+use crate::poseidon_impls::poseidon_2::params::POSEIDON2_CONSTANTS;
 use ark_ff::PrimeField;
 use ark_std::borrow::ToOwned;
 use ark_std::{vec, vec::Vec};
@@ -33,26 +34,33 @@ impl<F: PrimeField> Poseidon2<F> {
         }
 
         let mut current_state = input.to_owned();
+        let mut temp_constants = [F::zero(); POSEIDON2_CONSTANTS];
 
         // Linear layer at beginning
         self.matmul_external(&mut current_state);
 
         for r in 0..self.params.rounds_f_beginning {
-            current_state = self.add_rc(&current_state, &self.params.round_constants[r]);
+            current_state = self.add_rc(
+                &current_state,
+                self.params.round_constants(r, &mut temp_constants),
+            );
             current_state = self.sbox(&current_state);
             self.matmul_external(&mut current_state);
         }
 
         let p_end = self.params.rounds_f_beginning + self.params.rounds_p;
         for r in self.params.rounds_f_beginning..p_end {
-            current_state[0].add_assign(&self.params.round_constants[r][0]);
+            current_state[0].add_assign(&self.params.round_constant(r, 0));
             current_state[0] = self.sbox_p(&current_state[0]);
             // self.matmul_internal(&mut current_state, &self.params.mat_internal_diag_m_1);
             self.matmul_internal(&mut current_state);
         }
 
         for r in p_end..self.params.rounds {
-            current_state = self.add_rc(&current_state, &self.params.round_constants[r]);
+            current_state = self.add_rc(
+                &current_state,
+                self.params.round_constants(r, &mut temp_constants),
+            );
             current_state = self.sbox(&current_state);
             self.matmul_external(&mut current_state);
         }
@@ -237,13 +245,17 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     }
 
     let mut output_vars = input;
+    let mut temp_constants = [F::zero(); POSEIDON2_CONSTANTS];
 
     // Linear layer at beginning
     matmul_external_constraints(&mut output_vars, params);
 
     // Full rounds before partial
     for r in 0..params.rounds_f_beginning {
-        apply_round_constants(&mut output_vars, &params.round_constants[r]);
+        apply_round_constants(
+            &mut output_vars,
+            params.round_constants(r, &mut temp_constants),
+        );
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
         for i in 0..t {
@@ -255,7 +267,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     // Partial rounds
     for r in params.rounds_f_beginning..p_end {
         output_vars[0] =
-            output_vars[0].clone() + LinearCombination::from(params.round_constants[r][0]);
+            output_vars[0].clone() + LinearCombination::from(params.round_constant(r, 0));
         output_vars[0] = sbox_p_constraints(cs, &output_vars[0], params)?;
         matmul_internal_constraints(&mut output_vars, params);
         for i in 0..t {
@@ -265,7 +277,10 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
 
     // Full rounds after partial
     for r in p_end..params.rounds {
-        apply_round_constants(&mut output_vars, &params.round_constants[r]);
+        apply_round_constants(
+            &mut output_vars,
+            params.round_constants(r, &mut temp_constants),
+        );
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
         for i in 0..t {

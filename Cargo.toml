@@ -202,6 +202,7 @@ default = [
     "scale-info",
     "large_baby_steps",
     "full_api",
+    "low_memory",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -215,6 +216,9 @@ full_api = ["generate_api", "verify_api", "decrypt_api", "polymesh-dart-bp?/full
 generate_api = ["polymesh-dart-bp?/generate_api"]
 verify_api = ["polymesh-dart-bp?/verify_api"]
 decrypt_api = ["polymesh-dart-bp?/decrypt_api"]
+
+# Enable for low memory (SRAM) devices (hardware wallets)
+low_memory = ["polymesh-dart-bp?/low_memory"]
 
 async_tree = []
 

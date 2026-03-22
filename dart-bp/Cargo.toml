@@ -71,6 +71,9 @@ generate_api = []
 verify_api = []
 decrypt_api = []
 
+# Enable for low memory (SRAM) devices (hardware wallets)
+low_memory = []
+
 large_baby_steps = []
 
 std = [
