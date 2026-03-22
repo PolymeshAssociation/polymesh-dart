@@ -167,6 +167,8 @@ curve_tree_relations = { workspace = true, default-features = false, optional = 
 ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 
+ledger_device_sdk = {version = "1.34.0", features = ["debug", "log_debug"], optional = true }
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 anyhow = { workspace = true }

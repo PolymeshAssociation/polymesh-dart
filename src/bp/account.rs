@@ -3,6 +3,9 @@ use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ledger_device_sdk")]
+use ledger_device_sdk::log;
+
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 
 use ark_ec::CurveConfig;
@@ -605,10 +608,15 @@ impl AccountAssetRegistrationProof {
         identity: &[u8],
         sl_params: &SingleLayerParameters<PallasParameters>,
     ) -> Result<(Self, AccountAssetState), Error> {
+        log::debug!("Generating DART account asset registration proof.");
         let account_state = keys.init_asset_state(asset_id, counter, identity)?;
+        log::debug!("Initialized account state for asset registration.");
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
+        log::debug!("Generate Poseidon parameters.");
         let params = PoseidonParameters::new()?;
+        log::debug!("Generate DART generators.");
         let gens = DartBPGenerators::new(DART_GEN_DOMAIN);
+        log::debug!("Generate account registration proof.");
         let proof = account_registration::RegTxnProof::new(
             rng,
             keys.acct.public.get_affine()?,
