@@ -55,7 +55,7 @@ fn send_txn() {
     let mut rng = rand::thread_rng();
 
     // Setup begins
-    const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
+    const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2
     const L: usize = 64;
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
