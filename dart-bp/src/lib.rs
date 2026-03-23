@@ -72,6 +72,7 @@ pub mod account_registration;
 mod error;
 pub mod poseidon_impls;
 
+pub mod auth_proofs;
 #[cfg(feature = "decrypt_api")]
 pub mod discrete_log;
 pub mod fee_account;

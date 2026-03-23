@@ -375,7 +375,10 @@ impl scale_info::TypeInfo for AccountCommitmentKey {
 
     fn type_info() -> scale_info::Type {
         scale_info::Type::builder()
-            .path(scale_info::Path::new("AccountCommitmentKey", module_path!()))
+            .path(scale_info::Path::new(
+                "AccountCommitmentKey",
+                module_path!(),
+            ))
             .composite(
                 scale_info::build::Fields::named()
                     .field(|f| f.name("sk_gen").ty::<CompressedAffine>())

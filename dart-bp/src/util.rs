@@ -23,7 +23,6 @@ use bulletproofs::r1cs::{
     batch_verify_with_rng, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
-use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters};
