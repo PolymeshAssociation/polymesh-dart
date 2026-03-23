@@ -505,12 +505,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
         t_pk_aff.challenge_contribution(&aff_key_gen, &pk_aff, &mut transcript_ref)?;
 
-        if true {
-            return Err(Error::ProofGenerationError(
-                "Account registration proof generation with given prover is currently disabled"
-                    .to_string(),
-            ));
-        }
+        //if true {
+        //    return Err(Error::ProofGenerationError(
+        //        "Account registration proof generation with given prover is currently disabled"
+        //            .to_string(),
+        //    ));
+        //}
         // TODO: Dedup logic between rho and s. Also, i make it twisted elgamal, can share logic between key dist proof and this
 
         // Take challenge contribution of ciphertext of each chunk (s and rho) using a single commitment

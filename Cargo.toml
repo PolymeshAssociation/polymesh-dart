@@ -38,6 +38,8 @@ schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = 
 #ark-helios = { path = "../arkworks-algebra/curves/helios" }
 #ark-selene = { path = "../arkworks-algebra/curves/selene" }
 #ark-wei25519 = { path = "../arkworks-algebra/curves/wei25519" }
+#ark-curve25519 = { path = "../arkworks-algebra/curves/curve25519" }
+#ark-ed25519 = { path = "../arkworks-algebra/curves/ed25519" }
 
 ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
 ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
@@ -223,6 +225,7 @@ decrypt_api = ["polymesh-dart-bp?/decrypt_api"]
 low_memory = [
     "polymesh-dart-bp?/low_memory",
     "bulletproofs?/low_memory",
+    "ark-ec?/low_memory",
 ]
 
 async_tree = []
@@ -247,7 +250,12 @@ large_baby_steps = [
     "polymesh-dart-bp/large_baby_steps",
 ]
 
-ledger_device_sdk = ["dep:ledger_device_sdk", "polymesh-dart-bp?/ledger_device_sdk"]
+ledger_device_sdk = [
+	"dep:ledger_device_sdk",
+	"polymesh-dart-bp?/ledger_device_sdk",
+	"bulletproofs/ledger_device_sdk",
+	"ark-ec/ledger_device_sdk",
+]
 
 no_std = ["alloc"]
 

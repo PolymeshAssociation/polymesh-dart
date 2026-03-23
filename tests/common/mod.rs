@@ -105,6 +105,10 @@ impl DartUserAccountInner {
                 asset_id
             ));
         }
+        eprintln!(
+            "Start generating account asset registration proof for asset ID {}",
+            asset_id
+        );
         let (proof, mut asset_state) = AccountAssetRegistrationProof::new(
             rng,
             &self.keys,
@@ -113,6 +117,10 @@ impl DartUserAccountInner {
             self.address.ctx(),
             chain.account_tree.parameters(),
         )?;
+        eprintln!(
+            "Finish generating account asset registration proof for asset ID {}",
+            asset_id
+        );
         chain.initialize_account_asset(&self.address, proof)?;
         asset_state.commit_pending_state()?;
         self.assets.insert(asset_id, asset_state);
