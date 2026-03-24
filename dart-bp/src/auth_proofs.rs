@@ -8,6 +8,8 @@ use crate::{
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::string::ToString;
+use ark_std::vec::Vec;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
