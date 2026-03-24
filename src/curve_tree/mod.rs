@@ -103,7 +103,7 @@ pub fn get_pallas_layer_parameters()
 -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_PALLAS.is_none() {
-            let parameters = SingleLayerProofParametersNew::from_single_layer_params::<PallasPoint>(
+            let parameters = SingleLayerProofParametersNew::from_single_layer_params(
                 SingleLayerParameters::<PallasParameters>::new_using_label(
                     CURVE_TREE_PARAMETERS_PALLAS_LABEL,
                     MAX_CURVE_TREE_GENS as u32,
@@ -122,7 +122,7 @@ pub fn get_vesta_layer_parameters()
 -> &'static SingleLayerProofParametersNew<VestaParameters, PallasParams> {
     unsafe {
         if CURVE_TREE_PARAMETERS_VESTA.is_none() {
-            let parameters = SingleLayerProofParametersNew::from_single_layer_params::<VestaPoint>(
+            let parameters = SingleLayerProofParametersNew::from_single_layer_params(
                 SingleLayerParameters::<VestaParameters>::new_using_label(
                     CURVE_TREE_PARAMETERS_VESTA_LABEL,
                     MAX_CURVE_TREE_GENS as u32,

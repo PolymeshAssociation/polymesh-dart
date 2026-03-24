@@ -51,16 +51,17 @@ pub struct AccountState {
 impl AccountState {
     pub fn bp_state(
         &self,
-        account: &AccountKeyPair,
-        enc_key: &EncryptionSecretKey,
+        keys: &AccountKeys,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        let sk_enc_inv = enc_key
+        let sk_enc_inv = keys
+            .enc
+            .secret
             .0
             .0
             .inverse()
             .ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
         let state = BPAccountState {
-            sk: account.secret.0.0,
+            sk: keys.acct.secret.0.0,
             id: self.identity.decode()?,
             balance: self.balance,
             counter: self.counter,
@@ -75,12 +76,8 @@ impl AccountState {
         Ok((state, commitment))
     }
 
-    pub fn commitment(
-        &self,
-        account: &AccountKeyPair,
-        enc_key: &EncryptionSecretKey,
-    ) -> Result<AccountStateCommitment, Error> {
-        let (_state, commitment) = self.bp_state(account, enc_key)?;
+    pub fn commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
+        let (_state, commitment) = self.bp_state(keys)?;
         AccountStateCommitment::from_affine(commitment.0)
     }
 
@@ -239,7 +236,7 @@ impl AccountAssetState {
     }
 
     pub fn current_commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
-        self.current_state.commitment(&keys.acct, &keys.enc.secret)
+        self.current_state.commitment(&keys)
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -250,7 +247,7 @@ impl AccountAssetState {
         &self,
         keys: &AccountKeys,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        self.current_state.bp_state(&keys.acct, &keys.enc.secret)
+        self.current_state.bp_state(keys)
     }
 
     fn state_change(
