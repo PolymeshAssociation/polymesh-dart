@@ -38,9 +38,7 @@ mod batched;
 #[cfg(feature = "full_api")]
 pub use batched::*;
 
-#[cfg(feature = "full_api")]
 mod leg;
-#[cfg(feature = "full_api")]
 pub use leg::*;
 
 mod keys;

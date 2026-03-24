@@ -1,3 +1,4 @@
+use bulletproofs::PedersenGens;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -18,24 +19,16 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
-use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
+use polymesh_dart_bp::{account as bp_account, account_registration, auth_proofs, leg as bp_leg};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::*;
 use crate::*;
 
 pub type PallasParameters = ark_pallas::PallasConfig;
-use curve_tree_relations::parameters::SingleLayerParameters;
 
-//const CURVE_TREE_PARAMETERS_PALLAS_LABEL: &[u8] = b"curve-tree-pallas";
-pub fn get_pallas_single_layer_params() -> SingleLayerParameters<PallasParameters> {
-    SingleLayerParameters::<PallasParameters>::new(MAX_CURVE_TREE_GENS as u32)
-        .expect("Failed to create SingleLayerParameters for Pallas")
-    //SingleLayerParameters::<PallasParameters>::new_using_label(
-    //    CURVE_TREE_PARAMETERS_PALLAS_LABEL,
-    //    MAX_CURVE_TREE_GENS as u32,
-    //)
-    //.expect("Failed to create SingleLayerParameters for Pallas")
+pub fn get_pc_gens() -> PedersenGens<PallasA> {
+    PedersenGens::<PallasA>::new().expect("Failed to create Pedersen generators")
 }
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
@@ -270,14 +263,21 @@ impl AccountAssetState {
         keys: &AccountKeys,
         update: impl FnOnce(&BPAccountState) -> Result<BPAccountState, Error>,
     ) -> Result<AccountAssetStateChange, Error> {
+        log::debug!("-- state_change: bp_current_state");
         let (current_state, current_commitment) = self.bp_current_state(keys)?;
+        log::debug!("-- state_change: bp_current_state computed");
 
         // Update the state.
+        log::debug!("-- state_change: update");
         let new_state = update(&current_state)?;
+        log::debug!("-- state_change: update computed");
         let new_commitment = new_state.commit(dart_gens().account_comm_key())?;
+        log::debug!("-- state_change: new commitment computed");
 
         // Set the pending state.
+        log::debug!("-- state_change: set pending state");
         self.pending_state = Some(new_state.clone().try_into()?);
+        log::debug!("-- state_change: pending state set");
 
         Ok(AccountAssetStateChange {
             current_state,
@@ -550,6 +550,70 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     }
 }
 
+/// Authorization of account asset registration.
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+pub struct AuthorizedAccountAssetRegistrationProof {
+    pub account: AccountPublicKeys,
+    pub asset_id: AssetId,
+    pub counter: NullifierSkGenCounter,
+    pub account_state_commitment: AccountStateCommitment,
+
+    inner: WrappedCanonical<auth_proofs::AuthProofRegOnlyAffSk<PallasA>>,
+}
+
+impl AuthorizedAccountAssetRegistrationProof {
+    /// Generate a new authorization proof for account asset registration.
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        keys: &AccountKeys,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+    ) -> Result<(Self, AccountAssetState), Error> {
+        let account_state = keys.init_asset_state(asset_id, counter, identity)?;
+        let (_bp_state, commitment) = account_state.bp_current_state(keys)?;
+        let pk_aff = keys.acct.public.get_affine()?;
+        let rand_1 = PallasScalar::rand(rng);
+        let gens = dart_gens();
+        let nonce = (asset_id, counter, identity).encode();
+        let proof = auth_proofs::AuthProofRegOnlyAffSk::new(
+            rng,
+            keys.acct.secret.0.0,
+            rand_1,
+            pk_aff,
+            &commitment,
+            &nonce,
+            gens.account_comm_key(),
+        )?;
+        Ok((
+            Self {
+                account: keys.public_keys(),
+                asset_id,
+                counter,
+                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
+
+                inner: WrappedCanonical::wrap(&proof)?,
+            },
+            account_state,
+        ))
+    }
+
+    /// Verify the authorization proof for account asset registration.
+    pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        let nonce = (self.asset_id, self.counter, identity).encode();
+        let gens = dart_gens();
+        proof.verify(
+            self.account.acct.get_affine()?,
+            &self.account_state_commitment.as_commitment()?,
+            &nonce,
+            gens.account_comm_key(),
+        )?;
+        Ok(())
+    }
+}
+
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
@@ -590,52 +654,6 @@ impl AccountAssetRegistrationProof {
             &params.params,
             None,
         )?;
-        Ok((
-            Self {
-                account: keys.public_keys(),
-                asset_id,
-                counter,
-                account_state_commitment: AccountStateCommitment::from_affine(commitment.0)?,
-
-                inner: WrappedCanonical::wrap(&proof)?,
-            },
-            account_state,
-        ))
-    }
-
-    /// Generate a new account state for an asset and a registration proof for it.
-    pub fn new_min<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        keys: &AccountKeys,
-        asset_id: AssetId,
-        counter: NullifierSkGenCounter,
-        identity: &[u8],
-        sl_params: &SingleLayerParameters<PallasParameters>,
-    ) -> Result<(Self, AccountAssetState), Error> {
-        log::debug!("Generating DART account asset registration proof.");
-        let account_state = keys.init_asset_state(asset_id, counter, identity)?;
-        log::debug!("Initialized account state for asset registration.");
-        let (bp_state, commitment) = account_state.bp_current_state(keys)?;
-        log::debug!("Generate Poseidon parameters.");
-        let params = PoseidonParameters::new()?;
-        log::debug!("Generate DART generators.");
-        let gens = DartBPGenerators::new(DART_GEN_DOMAIN);
-        log::debug!("Generate account registration proof.");
-        let proof = account_registration::RegTxnProof::new(
-            rng,
-            keys.acct.public.get_affine()?,
-            keys.enc.public.get_affine()?,
-            &bp_state,
-            commitment,
-            counter,
-            identity,
-            gens.account_comm_key(),
-            sl_params.pc_gens(),
-            sl_params.bp_gens(),
-            &params.params,
-            None,
-        )?;
-        log::debug!("Account registration proof generated.");
         Ok((
             Self {
                 account: keys.public_keys(),

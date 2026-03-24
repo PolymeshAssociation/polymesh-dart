@@ -1,5 +1,4 @@
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use scale_info::TypeInfo;
 
 use rand_core::{CryptoRng, RngCore};
 
@@ -10,13 +9,15 @@ use super::*;
 use ark_ec_divisors::curves::{pallas::Point as PallasPoint, vesta::Point as VestaPoint};
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::account as bp_account;
 use polymesh_dart_bp::leg::mediator;
+use polymesh_dart_bp::{account as bp_account, auth_proofs};
 use polymesh_dart_common::{LegId, MediatorId};
 
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg(feature = "full_api")]
 pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConfig> {
     /// The sender's affirmation proof.
     pub sender: Option<SenderAffirmationProof<C>>,
@@ -27,8 +28,10 @@ pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConf
 /// A batched settlement proof allows including the sender and receiver affirmation proofs
 /// with the settlement creation proof to reduce the number of transactions
 /// required to finalize a settlement.
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T))]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T)))]
+#[cfg(feature = "full_api")]
 pub struct BatchedSettlementProof<
     T: DartLimits = (),
     C: CurveTreeConfig = AssetTreeConfig,
@@ -41,6 +44,7 @@ pub struct BatchedSettlementProof<
     pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<A>, T::MaxSettlementLegs>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     T: DartLimits,
     C: CurveTreeConfig<
@@ -103,6 +107,79 @@ impl<
     }
 }
 
+/// Authorization of a sender affirmation.
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+pub struct AuthorizedSenderAffirmationProof {
+    pub leg_ref: LegRef,
+    //pub root_block: BlockNumber,
+    pub updated_account_state_commitment: AccountStateCommitment,
+    pub nullifier: AccountStateNullifier,
+
+    inner: WrappedCanonical<auth_proofs::AuthProofAffOnlyAffSk<PallasA>>,
+}
+
+impl AuthorizedSenderAffirmationProof {
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        keys: &AccountKeys,
+        rand_1_old_comm: PallasScalar,
+        rand_1_new_comm: PallasScalar,
+        leg_ref: &LegRef,
+        leg_enc: &LegEncrypted,
+        re_randomized_account_commitment: &PallasA,
+        updated_account_commitment: &AccountStateCommitment,
+        nullifier: AccountStateNullifier,
+        pc_gens: &PedersenGens<PallasA>,
+    ) -> Result<Self, Error> {
+        let ctx = leg_ref.context();
+
+        let proof = auth_proofs::AuthProofAffOnlyAffSk::new(
+            rng,
+            keys.acct.secret.0.0,
+            rand_1_old_comm,
+            rand_1_new_comm,
+            &leg_enc.decode()?,
+            re_randomized_account_commitment,
+            &updated_account_commitment.as_commitment()?,
+            nullifier.get_affine()?,
+            ctx.as_bytes(),
+            dart_gens().account_comm_key(),
+            pc_gens.B_blinding,
+        )?;
+
+        Ok(Self {
+            leg_ref: leg_ref.clone(),
+            //root_block,
+            updated_account_state_commitment: updated_account_commitment.clone(),
+            nullifier,
+
+            inner: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
+    pub fn verify<R: RngCore + CryptoRng>(
+        &self,
+        leg_enc: &LegEncrypted,
+        re_randomized_account_commitment: &PallasA,
+        pc_gens: &PedersenGens<PallasA>,
+    ) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        let ctx = self.leg_ref.context();
+        proof.verify(
+            &leg_enc.decode()?,
+            re_randomized_account_commitment,
+            &self.updated_account_state_commitment.as_commitment()?,
+            self.nullifier.get_affine()?,
+            ctx.as_bytes(),
+            dart_gens().account_comm_key(),
+            pc_gens.B_blinding,
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "full_api")]
 type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -112,8 +189,10 @@ type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
 >;
 
 /// The sender affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -123,6 +202,7 @@ pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -229,6 +309,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
@@ -243,6 +324,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPAffirmAsReceiverTxnProof<C> = bp_account::AffirmAsReceiverTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -252,8 +334,10 @@ type BPAffirmAsReceiverTxnProof<C> = bp_account::AffirmAsReceiverTxnProof<
 >;
 
 /// The receiver affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -263,6 +347,7 @@ pub struct ReceiverAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPAffirmAsReceiverTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -357,6 +442,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverAffirmationProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
@@ -371,6 +457,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverAffirmationProof<C> {
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPClaimReceivedTxnProof<C> = bp_account::ClaimReceivedTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -380,8 +467,10 @@ type BPClaimReceivedTxnProof<C> = bp_account::ClaimReceivedTxnProof<
 >;
 
 /// The proof for claiming received assets in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -391,6 +480,7 @@ pub struct ReceiverClaimProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPClaimReceivedTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -487,6 +577,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
@@ -501,6 +592,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for ReceiverClaimProof<C> {
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPReceiverCounterUpdateTxnProof<C> = bp_account::ReceiverCounterUpdateTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -512,8 +604,10 @@ type BPReceiverCounterUpdateTxnProof<C> = bp_account::ReceiverCounterUpdateTxnPr
 /// Receiver counter update proof in the Dart BP protocol.
 ///
 /// This is used for updating the receiver's account state after a settlement has been rejected.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct ReceiverCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -523,6 +617,7 @@ pub struct ReceiverCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPReceiverCounterUpdateTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -617,6 +712,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPSenderCounterUpdateTxnProof<C> = bp_account::SenderCounterUpdateTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -626,8 +722,10 @@ type BPSenderCounterUpdateTxnProof<C> = bp_account::SenderCounterUpdateTxnProof<
 >;
 
 /// Sender counter update proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -637,6 +735,7 @@ pub struct SenderCounterUpdateProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPSenderCounterUpdateTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -731,6 +830,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for SenderCounterUpdateProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
@@ -745,6 +845,7 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderCounterUpdateProof<C> {
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPSenderReverseTxnProof<C> = bp_account::SenderReverseTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -754,8 +855,10 @@ type BPSenderReverseTxnProof<C> = bp_account::SenderReverseTxnProof<
 >;
 
 /// Sender reversal proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -765,6 +868,7 @@ pub struct SenderReversalProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPSenderReverseTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -861,6 +965,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
@@ -876,7 +981,8 @@ impl<C: CurveTreeConfig> AccountStateUpdate for SenderReversalProof<C> {
 }
 
 /// Mediator affirmation proof in the Dart BP protocol.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct MediatorAffirmationProof {
     pub leg_ref: LegRef,
     pub accept: bool,

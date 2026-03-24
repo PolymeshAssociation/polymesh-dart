@@ -5,7 +5,6 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
@@ -34,11 +33,14 @@ use polymesh_dart_common::{LegId, MediatorId};
 pub mod proofs;
 pub use proofs::*;
 
+#[cfg(feature = "full_api")]
 pub mod instant;
+#[cfg(feature = "full_api")]
 pub use instant::*;
 
 /// Counts of the legs and sender/receiver affirmations in a settlement (batched or instant).
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct SettlementCounts {
     pub leg_count: u32,
     pub sender_count: u64,
@@ -62,11 +64,11 @@ impl SettlementCounts {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     PartialEq,
     Eq,
     Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
@@ -99,11 +101,11 @@ impl core::str::FromStr for SettlementRef {
     Encode,
     Decode,
     DecodeWithMemTracking,
-    TypeInfo,
     PartialEq,
     Eq,
     Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct LegRef {
@@ -142,18 +144,9 @@ impl LegRef {
 }
 
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    TypeInfo,
-    PartialEq,
-    Eq,
-    Hash,
+    Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LegRoleKind {
@@ -174,18 +167,9 @@ impl LegRoleKind {
 }
 
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    TypeInfo,
-    PartialEq,
-    Eq,
-    Hash,
+    Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LegRole {
@@ -233,18 +217,9 @@ impl LegRole {
 
 /// The decrypted leg details in the Dart BP protocol.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    TypeInfo,
-    PartialEq,
-    Eq,
-    Hash,
+    Copy, Clone, Debug, MaxEncodedLen, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Hash,
 )]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Leg {
@@ -328,7 +303,8 @@ impl Leg {
 ///
 /// This mirrors [`polymesh_dart_bp::leg::LegEncConfig`] but derives SCALE codec traits
 /// so it can be serialized as part of `LegBuilder`.
-#[derive(Clone, Copy, Debug, Encode, Decode, TypeInfo, PartialEq, Eq, DecodeWithMemTracking)]
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, DecodeWithMemTracking)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct LegConfig {
     /// If `true`, sender can decrypt receiver's pk and vice versa.
     pub parties_see_each_other: bool,
@@ -365,6 +341,7 @@ impl From<LegConfig> for bp_leg::LegEncConfig {
 /// The leg builder holds the necessary information to create a leg, encrypt it, and generate the proof.
 /// It is used as part of the settlement building process.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking)]
+#[cfg(feature = "full_api")]
 pub struct LegBuilder {
     pub sender: AccountPublicKeys,
     pub receiver: AccountPublicKeys,
@@ -376,6 +353,7 @@ pub struct LegBuilder {
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 }
 
+#[cfg(feature = "full_api")]
 impl LegBuilder {
     /// Creates a new leg with the given sender, receiver, asset ID, amount, and public keys.
     pub fn new(
@@ -466,8 +444,10 @@ impl LegBuilder {
 ///
 /// When the asset-id is hidden, the proof includes a curve tree membership proof.
 /// When the asset-id is revealed, a simpler proof (`PublicAssetLegCreationProof`) is used instead.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     /// Asset ID is hidden; uses `SettlementLegProof` with curve-tree membership.
     HiddenAssetId(SettlementLegProof<C>),
@@ -475,6 +455,7 @@ pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     RevealedAssetId(SettlementLegProofRevealedAssetId),
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
@@ -595,6 +576,7 @@ impl<
 }
 
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking)]
+#[cfg(feature = "full_api")]
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
@@ -602,6 +584,7 @@ pub struct SettlementBuilder<T: DartLimits = ()> {
     _marker: core::marker::PhantomData<T>,
 }
 
+#[cfg(feature = "full_api")]
 impl<T: DartLimits> SettlementBuilder<T> {
     pub fn new(memo: &[u8]) -> Self {
         Self::new_full(memo, 0, None)
@@ -706,8 +689,10 @@ impl<T: DartLimits> SettlementBuilder<T> {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(T, C))]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(T, C)))]
+#[cfg(feature = "full_api")]
 pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     pub root_block: BlockNumber,
@@ -715,6 +700,7 @@ pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeCon
     pub legs: BoundedVec<AnySettlementLegProof<C>, T::MaxSettlementLegs>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     T: DartLimits,
     C: CurveTreeConfig<
@@ -901,6 +887,7 @@ impl<
     }
 }
 
+#[cfg(feature = "full_api")]
 type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
     ASSET_TREE_L,
     <C as CurveTreeConfig>::F1,
@@ -913,8 +900,10 @@ type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
 ///
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
+#[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
+#[cfg(feature = "full_api")]
 pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
@@ -923,6 +912,7 @@ pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
     inner: WrappedCanonical<BPSettlementTxnProof<C>>,
 }
 
+#[cfg(feature = "full_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
@@ -1074,7 +1064,8 @@ fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
 
 /// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
 /// The auditor and mediator public keys are also known to the verifier.
-#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct SettlementLegProofRevealedAssetId {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
@@ -1213,7 +1204,8 @@ impl LegEncryptionRandomness {
 pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>;
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
