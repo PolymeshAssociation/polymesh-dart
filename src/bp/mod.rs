@@ -16,9 +16,9 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
 };
 use polymesh_dart_common::{
-    MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_MEDIATORS, MAX_BATCHED_PROOFS,
-    MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS, MAX_KEYS_PER_REG_PROOF,
-    MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_KEYS, MAX_ASSET_MEDIATORS,
+    MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
+    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
 
 #[cfg(feature = "sqlx")]
@@ -99,6 +99,9 @@ pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
 
     /// The maximum number of asset mediators.
     type MaxAssetMediators: GetExtra<u32>;
+
+    /// The maximum number of asset encryption keys (for both auditors and mediators) in the asset state.
+    type MaxAssetKeys: GetExtra<u32>;
 }
 
 impl DartLimits for () {
@@ -111,6 +114,7 @@ impl DartLimits for () {
     type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
+    type MaxAssetKeys = ConstSize<MAX_ASSET_KEYS>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +130,7 @@ impl DartLimits for PolymeshPrivateLimits {
     type MaxSettlementMemoLength = ConstSize<MEMO_MAX_LENGTH>;
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
+    type MaxAssetKeys = ConstSize<MAX_ASSET_KEYS>;
 }
 
 pub type LeafIndex = u64;

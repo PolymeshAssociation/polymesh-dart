@@ -49,7 +49,7 @@ lazy_static::lazy_static! {
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
             ASSET_COMMITMENT_PARAMETERS_LABEL,
-            MAX_ASSET_KEYS as u32,
+            MAX_ASSET_KEYS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens(),
         );
     static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();
@@ -155,7 +155,7 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
             let tree_parameters = get_asset_curve_tree_parameters();
             let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
                 ASSET_COMMITMENT_PARAMETERS_LABEL,
-                MAX_ASSET_KEYS as u32,
+                MAX_ASSET_KEYS,
                 &tree_parameters.even_parameters.bp_gens(),
             );
             ASSET_COMMITMENT_PARAMETERS = Some(parameters);

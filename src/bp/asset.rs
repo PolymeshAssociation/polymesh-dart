@@ -43,17 +43,15 @@ impl<T: DartLimits> AssetState<T> {
             mediators: Default::default(),
         };
 
+        // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
+        if (auditors.len() + mediators.len()) > T::MaxAssetKeys::get() as usize {
+            return Err(Error::BoundedContainerSizeLimitExceeded);
+        }
         // Try adding the encryption keys for auditors and mediators to the asset state, ensuring that the number of each does not exceed the maximum allowed by the protocol limits.
         for auditor in auditors {
             state
                 .auditors
                 .try_insert(*auditor)
-                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        }
-        for (_, enc_key) in mediators {
-            state
-                .auditors
-                .try_insert(*enc_key)
                 .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         }
 
@@ -72,16 +70,13 @@ impl<T: DartLimits> AssetState<T> {
         mediators: &BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
         auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
     ) -> Result<Self, Error> {
-        // Ensure that all mediator encryption keys are included in the auditors set.
-        let mut auditors = auditors.clone();
-        for enc_key in mediators.values() {
-            auditors
-                .try_insert(*enc_key)
-                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
+        if (auditors.len() + mediators.len()) > T::MaxAssetKeys::get() as usize {
+            return Err(Error::BoundedContainerSizeLimitExceeded);
         }
         Ok(Self {
             asset_id,
-            auditors,
+            auditors: auditors.clone(),
             mediators: mediators.clone(),
         })
     }
@@ -92,17 +87,18 @@ impl<T: DartLimits> AssetState<T> {
         let enc_keys = self
             .auditors
             .iter()
+            .chain(self.mediators.values())
             .map(|k| k.get_affine())
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<PallasA>, _>>()?;
 
         // Create a list of mediators with their corresponding encryption key indices.
         let mut med_keys = Vec::with_capacity(self.mediators.len());
         for (account_key, enc_key) in &self.mediators {
+            let enc_key = enc_key.get_affine()?;
             // Get the index of the encryption key for the mediator.  This shouldn't fail since the encryption keys for mediators are included in the `enc_key_list`.
-            let enc_idx = self
-                .auditors
+            let enc_idx = enc_keys
                 .iter()
-                .position(|auditor_key| auditor_key == enc_key)
+                .position(|auditor_key| auditor_key == &enc_key)
                 .ok_or_else(|| Error::EncryptionKeyMissing)?;
             med_keys.push((enc_idx as u8, account_key.get_affine()?));
         }
