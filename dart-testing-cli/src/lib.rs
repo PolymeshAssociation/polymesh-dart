@@ -210,7 +210,7 @@ pub struct AssetInfo {
     pub id: i64,
     pub asset_id: AssetId,
     pub issuer_signer_id: i64,
-    pub mediators: Vec<u8>, // Serialized Vec<(u8, AccountPublicKey)>
+    pub mediators: Vec<u8>, // Serialized Vec<(AccountPublicKey, EncryptionPublicKey)>
     pub auditors: Vec<u8>,  // Serialized Vec<EncryptionPublicKey>
     pub total_supply: Balance,
 }
@@ -220,7 +220,7 @@ impl AssetInfo {
         Ok(Decode::decode(&mut self.auditors.as_slice())?)
     }
 
-    pub fn mediators(&self) -> Result<Vec<(u8, AccountPublicKey)>> {
+    pub fn mediators(&self) -> Result<Vec<(AccountPublicKey, EncryptionPublicKey)>> {
         Ok(Decode::decode(&mut self.mediators.as_slice())?)
     }
 }
@@ -674,7 +674,7 @@ impl DartTestingDb {
     pub fn create_asset(
         &mut self,
         issuer_signer_name: &str,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Result<AssetInfo> {
         let signer = self.get_signer_by_name(issuer_signer_name)?;
@@ -716,10 +716,10 @@ impl DartTestingDb {
     fn create_asset_state(
         &self,
         asset_id: AssetId,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Result<AssetState> {
-        Ok(AssetState::new(asset_id, mediators, auditors))
+        Ok(AssetState::new(asset_id, mediators, auditors)?)
     }
 
     pub fn get_asset_by_id(&self, asset_id: AssetId) -> Result<AssetInfo> {
@@ -1043,7 +1043,7 @@ impl DartTestingDb {
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
             let mediators = asset_info.mediators()?;
             let auditors = asset_info.auditors()?;
-            let asset_state = AssetState::new(asset_id, &mediators, &auditors);
+            let asset_state = AssetState::new(asset_id, &mediators, &auditors)?;
 
             leg_builders.push(LegBuilder {
                 sender: sender_keys,
@@ -1087,7 +1087,7 @@ impl DartTestingDb {
                         let mediators = asset_info.mediators()?;
                         let auditors = asset_info.auditors()?;
                         asset_states
-                            .insert(asset_id, AssetState::new(asset_id, &mediators, &auditors));
+                            .insert(asset_id, AssetState::new(asset_id, &mediators, &auditors)?);
                     }
                 }
             }

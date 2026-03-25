@@ -385,7 +385,7 @@ fn main() -> Result<()> {
 
             let (auditors, mediators) = match auditor_type {
                 AuditorType::Auditor => (vec![auditor_keys.enc], vec![]),
-                AuditorType::Mediator => (vec![auditor_keys.enc], vec![(0, auditor_keys.acct)]),
+                AuditorType::Mediator => (vec![], vec![(auditor_keys.acct, auditor_keys.enc)]),
             };
 
             let asset = db.create_asset(&signer, &mediators, &auditors)?;

@@ -7,7 +7,7 @@ use scale_info::TypeInfo;
 use ark_ec::CurveConfig;
 use ark_std::vec::Vec;
 
-use bounded_collections::BoundedBTreeSet;
+use bounded_collections::{BoundedBTreeMap, BoundedBTreeSet};
 use rand_core::{CryptoRng, RngCore};
 
 use super::*;
@@ -16,19 +16,15 @@ use polymesh_dart_bp::account::mint::MintTxnProof;
 
 /// Represents the state of an asset in the Dart BP protocol.
 ///
-/// - `auditors`: encryption keys shared between auditors and mediators (used to decrypt leg contents)
-/// - `mediators`: pairs of `(enc_key_index, affirmation_key)` where `enc_key_index` is an index into the
-///   `auditors` set pointing to the shared encryption key this mediator uses for decryption, and
-///   `affirmation_key` is the mediator's signing/affirmation key used to prove their identity.
-///
-/// This mirrors [`dart_bp::leg::AssetData`]'s `enc_keys` / `med_keys` fields exactly.
+/// The asset state includes the asset ID, the encryption keys for auditors and mediators, and the mapping of mediators to their encryption keys.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetState<T: DartLimits = ()> {
     pub asset_id: AssetId,
-    /// `(enc_key_index, affirmation_key)` — index points into `auditors` (the shared enc-keys list)
-    pub mediators: BoundedBTreeSet<(u8, AccountPublicKey), T::MaxAssetMediators>,
-    pub auditors: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
+    // The encryption keys for both auditors and mediators are stored in the asset state.
+    auditors: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
+    // The mediators are stored as a map from their `affirmation_key` to their encryption key.
+    mediators: BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
 }
 
 impl<T: DartLimits> AssetState<T> {
@@ -38,57 +34,86 @@ impl<T: DartLimits> AssetState<T> {
     /// a valid entry in `auditors` (i.e., `< auditors.len()`).
     pub fn new(
         asset_id: AssetId,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let mut state = Self {
             asset_id,
             auditors: Default::default(),
             mediators: Default::default(),
         };
 
-        for mediator in mediators {
-            state
-                .mediators
-                .try_insert(*mediator)
-                .expect("Too many asset mediators");
-        }
+        // Try adding the encryption keys for auditors and mediators to the asset state, ensuring that the number of each does not exceed the maximum allowed by the protocol limits.
         for auditor in auditors {
             state
                 .auditors
                 .try_insert(*auditor)
-                .expect("Too many asset auditors");
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        }
+        for (_, enc_key) in mediators {
+            state
+                .auditors
+                .try_insert(*enc_key)
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         }
 
-        state
+        for (acc_key, enc_key) in mediators {
+            state
+                .mediators
+                .try_insert(*acc_key, *enc_key)
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        }
+        Ok(state)
     }
 
     /// Creates a new asset state from pre-bounded collections.
     pub fn new_bounded(
         asset_id: AssetId,
-        mediators: &BoundedBTreeSet<(u8, AccountPublicKey), T::MaxAssetMediators>,
+        mediators: &BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
         auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
-    ) -> Self {
-        Self {
-            asset_id,
-            auditors: auditors.clone(),
-            mediators: mediators.clone(),
+    ) -> Result<Self, Error> {
+        // Ensure that all mediator encryption keys are included in the auditors set.
+        let mut auditors = auditors.clone();
+        for enc_key in mediators.values() {
+            auditors
+                .try_insert(*enc_key)
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         }
+        Ok(Self {
+            asset_id,
+            auditors,
+            mediators: mediators.clone(),
+        })
+    }
+
+    pub fn get_encryption_and_mediator_keys(
+        &self,
+    ) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+        let enc_keys = self
+            .auditors
+            .iter()
+            .map(|k| k.get_affine())
+            .collect::<Result<_, _>>()?;
+
+        // Create a list of mediators with their corresponding encryption key indices.
+        let mut med_keys = Vec::with_capacity(self.mediators.len());
+        for (account_key, enc_key) in &self.mediators {
+            // Get the index of the encryption key for the mediator.  This shouldn't fail since the encryption keys for mediators are included in the `enc_key_list`.
+            let enc_idx = self
+                .auditors
+                .iter()
+                .position(|auditor_key| auditor_key == enc_key)
+                .ok_or_else(|| Error::EncryptionKeyMissing)?;
+            med_keys.push((enc_idx as u8, account_key.get_affine()?));
+        }
+
+        Ok((enc_keys, med_keys))
     }
 
     pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
         let tree_params = get_asset_curve_tree_parameters();
         let asset_comm_params = get_asset_commitment_parameters();
-        let enc_keys: Vec<PallasA> = self
-            .auditors
-            .iter()
-            .map(|a| a.get_affine())
-            .collect::<Result<_, _>>()?;
-        let med_keys: Vec<(u8, PallasA)> = self
-            .mediators
-            .iter()
-            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-            .collect::<Result<_, Error>>()?;
+        let (enc_keys, med_keys) = self.get_encryption_and_mediator_keys()?;
         let asset_data = AssetCommitmentData::new(
             self.asset_id,
             enc_keys,

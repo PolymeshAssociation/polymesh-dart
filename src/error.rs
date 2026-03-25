@@ -108,6 +108,10 @@ pub enum Error {
     #[error("Too many account asset registration proofs in transaction")]
     TooManyAccountAssetRegProofs,
 
+    /// Encryption key missing for mediator.
+    #[error("Encryption key missing for mediator")]
+    EncryptionKeyMissing,
+
     /// Too many proofs in batched proof.
     #[error("Too many proofs in batched proof")]
     TooManyBatchedProofs,

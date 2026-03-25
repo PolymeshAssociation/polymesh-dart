@@ -792,7 +792,7 @@ impl DartUser {
     pub fn create_asset(
         &self,
         chain: &mut DartChainState,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Result<AssetId> {
         chain
@@ -840,15 +840,14 @@ pub struct DartAssetDetails {
     pub owner: SignerAddress,
     pub total_supply: Balance,
     pub auditors: Vec<EncryptionPublicKey>,
-    /// `(enc_key_index, affirmation_key)` — same semantics as `AssetState::mediators`
-    pub mediators: Vec<(u8, AccountPublicKey)>,
+    pub mediators: Vec<(AccountPublicKey, EncryptionPublicKey)>,
 }
 
 impl DartAssetDetails {
     pub fn new(
         asset_id: AssetId,
         owner: SignerAddress,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Self {
         Self {
@@ -860,8 +859,12 @@ impl DartAssetDetails {
         }
     }
 
-    pub fn asset_state(&self) -> AssetState {
-        AssetState::new(self.asset_id, &self.mediators, &self.auditors)
+    pub fn asset_state(&self) -> Result<AssetState> {
+        Ok(AssetState::new(
+            self.asset_id,
+            &self.mediators,
+            &self.auditors,
+        )?)
     }
 }
 
@@ -1834,7 +1837,7 @@ impl DartChainState {
     pub fn create_dart_asset(
         &mut self,
         caller: &SignerAddress,
-        mediators: &[(u8, AccountPublicKey)],
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Result<DartAssetDetails> {
         self.ensure_caller(caller)?;
@@ -1843,7 +1846,7 @@ impl DartChainState {
         self.next_asset_id += 1;
 
         let asset_details = DartAssetDetails::new(asset_id, caller.clone(), mediators, auditors);
-        let asset_state = asset_details.asset_state();
+        let asset_state = asset_details.asset_state()?;
 
         self.asset_tree.set_asset_state(asset_state)?;
         self.asset_details.insert(asset_id, asset_details.clone());

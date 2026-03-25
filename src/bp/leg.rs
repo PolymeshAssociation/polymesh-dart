@@ -414,18 +414,7 @@ impl LegBuilder {
             self.asset.asset_id,
             self.amount,
         )?;
-        let enc_keys: Vec<PallasA> = self
-            .asset
-            .auditors
-            .iter()
-            .map(|a| a.get_affine())
-            .collect::<Result<_, _>>()?;
-        let med_keys: Vec<(u8, PallasA)> = self
-            .asset
-            .mediators
-            .iter()
-            .map(|(idx, pk)| Ok((*idx, pk.get_affine()?)))
-            .collect::<Result<_, Error>>()?;
+        let (enc_keys, med_keys) = self.asset.get_encryption_and_mediator_keys()?;
         let public_enc_keys: Vec<PallasA> = self
             .public_enc_keys
             .iter()

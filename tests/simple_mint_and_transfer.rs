@@ -38,11 +38,8 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
 
         // Create a Dart asset with the issuer as the owner, the mediator as both auditor and mediator.
         // Mediators need at least one auditor encryption key to reference.
-        let asset_id = issuer.create_asset(
-            &mut chain,
-            &[(0, mediator_acct.public_keys().acct)],
-            &[mediator_acct.public_keys().enc],
-        )?;
+        let med_keys = mediator_acct.public_keys();
+        let asset_id = issuer.create_asset(&mut chain, &[(med_keys.acct, med_keys.enc)], &[])?;
         let asset = chain.get_asset_state(asset_id)?;
 
         // Initialize account asset state for the issuer and investor.
@@ -529,11 +526,8 @@ fn test_atomic_swap() -> Result<()> {
         // Step 2: Each asset issuer creates an asset (one asset has an auditor the other has a mediator) and mints it to their respective accounts.
         let asset1_id = issuer1.create_asset(&mut chain, &[], &[auditor_acct.public_keys().enc])?;
         let asset1 = chain.get_asset_state(asset1_id)?;
-        let asset2_id = issuer2.create_asset(
-            &mut chain,
-            &[(0, mediator_acct.public_keys().acct)],
-            &[mediator_acct.public_keys().enc],
-        )?;
+        let med_keys = mediator_acct.public_keys();
+        let asset2_id = issuer2.create_asset(&mut chain, &[(med_keys.acct, med_keys.enc)], &[])?;
         let asset2 = chain.get_asset_state(asset2_id)?;
 
         // Initialize account asset state for the issuers.
@@ -916,11 +910,8 @@ fn test_reject_after_sender_affirms() -> Result<()> {
     let investor_acct = investor.create_and_register_account(&mut rng, &mut chain, "1")?;
 
     // Step 2: The asset issuer creates an asset and mints it to their account.
-    let asset_id = issuer.create_asset(
-        &mut chain,
-        &[(0, mediator_acct.public_keys().acct)],
-        &[mediator_acct.public_keys().enc],
-    )?;
+    let med_keys = mediator_acct.public_keys();
+    let asset_id = issuer.create_asset(&mut chain, &[(med_keys.acct, med_keys.enc)], &[])?;
     let asset = chain.get_asset_state(asset_id)?;
 
     // Initialize account asset state for the issuer and investor.
