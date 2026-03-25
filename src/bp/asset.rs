@@ -44,7 +44,7 @@ impl<T: DartLimits> AssetState<T> {
         };
 
         // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
-        if (auditors.len() + mediators.len()) > T::MaxAssetKeys::get() as usize {
+        if (auditors.len() + mediators.len()) > T::MaxAssetEncryptionKeys::get() as usize {
             return Err(Error::BoundedContainerSizeLimitExceeded);
         }
         // Try adding the encryption keys for auditors and mediators to the asset state, ensuring that the number of each does not exceed the maximum allowed by the protocol limits.
@@ -71,7 +71,7 @@ impl<T: DartLimits> AssetState<T> {
         auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
     ) -> Result<Self, Error> {
         // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
-        if (auditors.len() + mediators.len()) > T::MaxAssetKeys::get() as usize {
+        if (auditors.len() + mediators.len()) > T::MaxAssetEncryptionKeys::get() as usize {
             return Err(Error::BoundedContainerSizeLimitExceeded);
         }
         Ok(Self {

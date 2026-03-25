@@ -23,7 +23,10 @@ pub const MAX_ASSET_ID: u32 = ((1_u64 << ASSET_ID_BITS) - 1) as u32;
 pub const MAX_CURVE_TREE_GENS: usize = 1 << 13;
 pub const MAX_ASSET_AUDITORS: u32 = 2;
 pub const MAX_ASSET_MEDIATORS: u32 = 2;
-pub const MAX_ASSET_KEYS: u32 = MAX_ASSET_AUDITORS + MAX_ASSET_MEDIATORS;
+/// The maximum number of encryption keys (for both auditors and mediators) that can be associated with an asset.
+pub const MAX_ASSET_ENC_KEYS: u32 = MAX_ASSET_AUDITORS + MAX_ASSET_MEDIATORS;
+/// The maximum total number of keys both encryption keys for auditors and mediators and mediator account keys that can be associated with an asset.
+pub const MAX_ASSET_KEYS: u32 = MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS;
 
 pub const ACCOUNT_TREE_L: usize = 64;
 pub const ACCOUNT_TREE_M: usize = 1;
