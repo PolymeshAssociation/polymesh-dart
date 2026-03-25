@@ -84,24 +84,28 @@ impl<T: DartLimits> AssetState<T> {
     pub fn get_encryption_and_mediator_keys(
         &self,
     ) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
-        let enc_keys = self
-            .auditors
-            .iter()
-            .chain(self.mediators.values())
-            .map(|k| k.get_affine())
-            .collect::<Result<Vec<PallasA>, _>>()?;
+        // Create a sorted set of auditor and mediator encryption keys, ensuring that there are no duplicates.
+        let mut enc_key_set = self.auditors.clone().into_inner();
+        for enc_key in self.mediators.values() {
+            enc_key_set.insert(*enc_key);
+        }
 
         // Create a list of mediators with their corresponding encryption key indices.
         let mut med_keys = Vec::with_capacity(self.mediators.len());
         for (account_key, enc_key) in &self.mediators {
-            let enc_key = enc_key.get_affine()?;
             // Get the index of the encryption key for the mediator.  This shouldn't fail since the encryption keys for mediators are included in the `enc_key_list`.
-            let enc_idx = enc_keys
+            let enc_idx = enc_key_set
                 .iter()
-                .position(|auditor_key| auditor_key == &enc_key)
+                .position(|auditor_key| auditor_key == enc_key)
                 .ok_or_else(|| Error::EncryptionKeyMissing)?;
             med_keys.push((enc_idx as u8, account_key.get_affine()?));
         }
+
+        // Convert encryption keys to affine points and return them along with the mediator keys.
+        let enc_keys = enc_key_set
+            .into_iter()
+            .map(|enc_key| enc_key.get_affine())
+            .collect::<Result<_, _>>()?;
 
         Ok((enc_keys, med_keys))
     }
