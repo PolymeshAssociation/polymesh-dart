@@ -27,8 +27,10 @@ fn proof_benchmark(c: &mut Criterion) {
     let ctx = b"benchmark";
 
     let asset_id = 0 as _;
-    let asset_state = AssetState::new(asset_id, &[(mediator_acct.acct, mediator_acct.enc)], &[])
-        .expect("Failed to create asset state");
+    let asset_state =
+        AssetState::new::<()>(asset_id, &[(mediator_acct.acct, mediator_acct.enc)], &[])
+            .expect("Failed to create asset state");
+    let asset_lookup = AssetKeysLookup::from(&asset_state);
 
     // Create the asset.
     asset_tree
@@ -232,11 +234,7 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("SettlementProof verify", |b| {
         b.iter(|| {
             settlement
-                .verify(
-                    black_box(&asset_root),
-                    &|_id| Ok(asset_state.clone()),
-                    &mut rng,
-                )
+                .verify(black_box(&asset_root), &asset_lookup, &mut rng)
                 .expect("Failed to verify settlement proof");
         })
     });

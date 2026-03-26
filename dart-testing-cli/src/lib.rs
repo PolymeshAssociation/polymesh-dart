@@ -719,7 +719,7 @@ impl DartTestingDb {
         mediators: &[(AccountPublicKey, EncryptionPublicKey)],
         auditors: &[EncryptionPublicKey],
     ) -> Result<AssetState> {
-        Ok(AssetState::new(asset_id, mediators, auditors)?)
+        Ok(AssetState::new::<()>(asset_id, mediators, auditors)?)
     }
 
     pub fn get_asset_by_id(&self, asset_id: AssetId) -> Result<AssetInfo> {
@@ -1043,7 +1043,7 @@ impl DartTestingDb {
             let receiver_keys = self.get_account_public_keys(&receiver_info)?;
             let mediators = asset_info.mediators()?;
             let auditors = asset_info.auditors()?;
-            let asset_state = AssetState::new(asset_id, &mediators, &auditors)?;
+            let asset_state = AssetState::new::<()>(asset_id, &mediators, &auditors)?;
 
             leg_builders.push(LegBuilder {
                 sender: sender_keys,
@@ -1071,8 +1071,7 @@ impl DartTestingDb {
         rng: &mut R,
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
-        let mut asset_states: std::collections::HashMap<AssetId, AssetState> =
-            std::collections::HashMap::new();
+        let mut asset_lookup = AssetKeysLookup::new();
         for leg_proof in settlement.legs.iter() {
             if let AnySettlementLegProof::RevealedAssetId(_) = leg_proof {
                 let leg_enc = leg_proof
@@ -1082,29 +1081,17 @@ impl DartTestingDb {
                 if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) =
                     leg_enc.ct_asset_id
                 {
-                    if !asset_states.contains_key(&asset_id) {
+                    if !asset_lookup.contains_key(&asset_id) {
                         let asset_info = self.get_asset_by_id(asset_id)?;
                         let mediators = asset_info.mediators()?;
                         let auditors = asset_info.auditors()?;
-                        asset_states
-                            .insert(asset_id, AssetState::new(asset_id, &mediators, &auditors)?);
+                        asset_lookup.add(AssetState::new::<()>(asset_id, &mediators, &auditors)?);
                     }
                 }
             }
         }
 
-        settlement.verify(
-            &self.asset_roots,
-            &|asset_id| {
-                asset_states.get(&asset_id).cloned().ok_or_else(|| {
-                    polymesh_dart::Error::ProofGenerationError(format!(
-                        "Asset {} not found",
-                        asset_id
-                    ))
-                })
-            },
-            rng,
-        )?;
+        settlement.verify(&self.asset_roots, &asset_lookup, rng)?;
 
         let settlement_ref = settlement.settlement_ref();
         // Store settlement

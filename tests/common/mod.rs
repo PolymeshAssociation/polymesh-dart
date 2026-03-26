@@ -860,7 +860,7 @@ impl DartAssetDetails {
     }
 
     pub fn asset_state(&self) -> Result<AssetState> {
-        Ok(AssetState::new(
+        Ok(AssetState::new::<()>(
             self.asset_id,
             &self.mediators,
             &self.auditors,
@@ -1854,6 +1854,10 @@ impl DartChainState {
         Ok(asset_details)
     }
 
+    pub fn get_asset_lookup(&self) -> &AssetKeysLookup {
+        self.asset_tree.get_key_lookup()
+    }
+
     pub fn get_asset_state(&self, asset_id: AssetId) -> Result<AssetState> {
         self.ensure_asset_exists(asset_id)?;
         self.asset_tree
@@ -2000,12 +2004,9 @@ impl DartChainState {
 
         let mut rng = new_rng();
         // verify the settlement proof.
-        let asset_lookup = |id| {
-            self.get_asset_state(id)
-                .map_err(|_| polymesh_dart::Error::ProofGenerationError("Asset not found".into()))
-        };
+        let asset_lookup = self.get_asset_lookup();
         proof
-            .verify(&self.asset_tree, &asset_lookup, &mut rng)
+            .verify(&self.asset_tree, asset_lookup, &mut rng)
             .context("Invalid settlement proof")?;
 
         // Save the settlement.
@@ -2043,14 +2044,11 @@ impl DartChainState {
         }
 
         let mut rng = new_rng();
-        let asset_lookup = |id| {
-            self.get_asset_state(id)
-                .map_err(|_| Error::ProofGenerationError("Asset not found".into()))
-        };
+        let asset_lookup = self.get_asset_lookup();
         // verify the settlement proof.
         proof
             .settlement
-            .verify(&self.asset_tree, &asset_lookup, &mut rng)
+            .verify(&self.asset_tree, asset_lookup, &mut rng)
             .context("Invalid settlement proof")?;
 
         // Create the settlement.

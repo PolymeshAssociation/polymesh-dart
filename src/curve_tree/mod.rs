@@ -600,6 +600,7 @@ impl<
 pub struct AssetCurveTree {
     pub tree: CurveTreeWithBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     assets: BTreeMap<AssetId, (LeafIndex, AssetState)>,
+    keys_lookup: AssetKeysLookup,
 }
 
 impl AssetCurveTree {
@@ -608,7 +609,13 @@ impl AssetCurveTree {
         Ok(Self {
             tree: CurveTreeWithBackend::new(ASSET_TREE_HEIGHT)?,
             assets: BTreeMap::new(),
+            keys_lookup: AssetKeysLookup::new(),
         })
+    }
+
+    /// Returns a reference to the asset keys lookup.
+    pub fn get_key_lookup(&self) -> &AssetKeysLookup {
+        &self.keys_lookup
     }
 
     /// Returns the asset state for the given asset ID, if it exists.
@@ -619,6 +626,8 @@ impl AssetCurveTree {
     /// Sets the asset state in the tree and returns the index of the asset state.
     pub fn set_asset_state(&mut self, state: AssetState) -> Result<LeafIndex, Error> {
         let asset_id = state.asset_id;
+        // Update the keys lookup with the new asset keys.
+        self.keys_lookup.insert(asset_id, state.keys.clone());
         // Get the new asset state commitment.
         let asset_data = state.asset_data()?;
         let leaf = CompressedLeafValue::from_affine(asset_data.commitment)?;

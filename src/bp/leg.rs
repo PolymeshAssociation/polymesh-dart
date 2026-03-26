@@ -496,7 +496,7 @@ impl<
     /// Extract asset keys if the asset ID is revealed, otherwise return None.
     fn get_asset_keys_if_revealed(
         &self,
-        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
+        asset_lookup: &AssetKeysLookup,
     ) -> Result<Option<(Vec<PallasA>, Vec<(u8, PallasA)>, Vec<PallasA>)>, Error> {
         match self {
             Self::HiddenAssetId(_) => Ok(None),
@@ -504,8 +504,10 @@ impl<
                 // Try to decode the leg encryption and extract the revealed asset ID
                 let leg_enc = self.leg_enc().decode()?;
                 if let bp_leg::AssetIdEncryption::Revealed(asset_id) = leg_enc.ct_asset_id {
-                    let asset = asset_lookup(asset_id)?;
-                    let asset_data = asset.asset_data()?;
+                    let asset = asset_lookup.assets.get(&asset_id).ok_or_else(|| {
+                        Error::ProofGenerationError("Asset not found in lookup".into())
+                    })?;
+                    let asset_data = asset.asset_data(asset_id)?;
 
                     let public_enc_keys: Vec<PallasA> = proof
                         .public_enc_keys
@@ -739,7 +741,7 @@ impl<
     pub fn verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
-        asset_lookup: &(impl Fn(AssetId) -> Result<AssetState, Error> + Sync + Send),
+        asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
@@ -767,7 +769,7 @@ impl<
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
-        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
+        asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
         // Get the curve tree root.
@@ -790,7 +792,7 @@ impl<
     pub fn batched_verify<R: RngCore + CryptoRng + Send + Sync + Clone>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
-        asset_lookup: &(impl Fn(AssetId) -> Result<AssetState, Error> + Sync + Send),
+        asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();
@@ -847,7 +849,7 @@ impl<
     pub fn batched_verify<R: RngCore + CryptoRng>(
         &self,
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
-        asset_lookup: &impl Fn(AssetId) -> Result<AssetState, Error>,
+        asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();

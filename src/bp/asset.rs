@@ -1,3 +1,6 @@
+use ark_std::collections::{BTreeMap, BTreeSet};
+use core::ops::{Deref, DerefMut};
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -14,59 +17,58 @@ use super::*;
 use crate::*;
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
-/// Represents the state of an asset in the Dart BP protocol.
-///
-/// The asset state includes the asset ID, the encryption keys for auditors and mediators, and the mapping of mediators to their encryption keys.
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+#[derive(Clone, Debug, Encode, Decode, Default, DecodeWithMemTracking, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct AssetState<T: DartLimits = ()> {
-    pub asset_id: AssetId,
-    // The encryption keys for both auditors and mediators are stored in the asset state.
-    auditors: BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
-    // The mediators are stored as a map from their `affirmation_key` to their encryption key.
-    mediators: BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
+pub struct AssetKeysLookup {
+    pub assets: BTreeMap<AssetId, AssetKeys>,
 }
 
-impl<T: DartLimits> AssetState<T> {
-    /// Creates a new asset state with the given asset ID, mediators, and auditors.
-    ///
-    /// `mediators` is a slice of `(enc_key_index, affirmation_key)` pairs. The index must point to
-    /// a valid entry in `auditors` (i.e., `< auditors.len()`).
-    pub fn new(
-        asset_id: AssetId,
-        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
-        auditors: &[EncryptionPublicKey],
-    ) -> Result<Self, Error> {
-        let mut state = Self {
-            asset_id,
-            auditors: Default::default(),
-            mediators: Default::default(),
-        };
-
-        // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
-        if (auditors.len() + mediators.len()) > T::MaxAssetEncryptionKeys::get() as usize {
-            return Err(Error::BoundedContainerSizeLimitExceeded);
+impl AssetKeysLookup {
+    pub fn new() -> Self {
+        Self {
+            assets: BTreeMap::new(),
         }
-        // Try adding the encryption keys for auditors and mediators to the asset state, ensuring that the number of each does not exceed the maximum allowed by the protocol limits.
-        for auditor in auditors {
-            state
-                .auditors
-                .try_insert(*auditor)
-                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        }
-
-        for (acc_key, enc_key) in mediators {
-            state
-                .mediators
-                .try_insert(*acc_key, *enc_key)
-                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
-        }
-        Ok(state)
     }
 
-    /// Creates a new asset state from pre-bounded collections.
-    pub fn new_bounded(
-        asset_id: AssetId,
+    pub fn add(&mut self, asset_state: AssetState) {
+        self.assets.insert(asset_state.asset_id, asset_state.keys);
+    }
+}
+
+impl Deref for AssetKeysLookup {
+    type Target = BTreeMap<AssetId, AssetKeys>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.assets
+    }
+}
+
+impl DerefMut for AssetKeysLookup {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.assets
+    }
+}
+
+impl From<&AssetState> for AssetKeysLookup {
+    fn from(asset_state: &AssetState) -> Self {
+        let mut assets = BTreeMap::new();
+        assets.insert(asset_state.asset_id, asset_state.keys.clone());
+        Self { assets }
+    }
+}
+
+/// Represents the encryption keys and mediator affirmation keys associated with an asset in the Dart BP protocol.
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct AssetKeys {
+    /// The encryption keys for auditors and mediators are stored in a set to ensure uniqueness.
+    pub enc_keys: BTreeSet<EncryptionPublicKey>,
+    /// The mediators are stored as a map from their `affirmation_key` to their encryption key.
+    pub mediators: BTreeMap<AccountPublicKey, u8>,
+}
+
+impl AssetKeys {
+    pub fn new_bounded<T: DartLimits>(
         mediators: &BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
         auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
     ) -> Result<Self, Error> {
@@ -74,48 +76,56 @@ impl<T: DartLimits> AssetState<T> {
         if (auditors.len() + mediators.len()) > T::MaxAssetEncryptionKeys::get() as usize {
             return Err(Error::BoundedContainerSizeLimitExceeded);
         }
-        Ok(Self {
-            asset_id,
-            auditors: auditors.clone(),
-            mediators: mediators.clone(),
-        })
-    }
-
-    pub fn get_encryption_and_mediator_keys(
-        &self,
-    ) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+        let mut asset = AssetKeys {
+            enc_keys: Default::default(),
+            mediators: Default::default(),
+        };
         // Create a sorted set of auditor and mediator encryption keys, ensuring that there are no duplicates.
-        let mut enc_key_set = self.auditors.clone().into_inner();
-        for enc_key in self.mediators.values() {
-            enc_key_set.insert(*enc_key);
+        for auditor_key in auditors {
+            asset.enc_keys.insert(*auditor_key);
+        }
+        for enc_key in mediators.values() {
+            asset.enc_keys.insert(*enc_key);
         }
 
         // Create a list of mediators with their corresponding encryption key indices.
-        let mut med_keys = Vec::with_capacity(self.mediators.len());
-        for (account_key, enc_key) in &self.mediators {
+        for (account_key, enc_key) in mediators {
             // Get the index of the encryption key for the mediator.  This shouldn't fail since the encryption keys for mediators are included in the `enc_key_list`.
-            let enc_idx = enc_key_set
+            let enc_idx = asset
+                .enc_keys
                 .iter()
                 .position(|auditor_key| auditor_key == enc_key)
                 .ok_or_else(|| Error::EncryptionKeyMissing)?;
-            med_keys.push((enc_idx as u8, account_key.get_affine()?));
+            asset.mediators.insert(*account_key, enc_idx as u8);
         }
 
-        // Convert encryption keys to affine points and return them along with the mediator keys.
-        let enc_keys = enc_key_set
-            .into_iter()
+        Ok(asset)
+    }
+
+    pub fn get_keys(&self) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+        // Convert encryption keys to affine points.
+        let enc_keys = self
+            .enc_keys
+            .iter()
             .map(|enc_key| enc_key.get_affine())
             .collect::<Result<_, _>>()?;
+        // Convert mediator encryption keys to affine points and pair them with their corresponding affirmation key indices.
+        let med_keys = self
+            .mediators
+            .iter()
+            .map(|(account_key, enc_idx)| Ok((*enc_idx, account_key.get_affine()?)))
+            .collect::<Result<_, Error>>()?;
 
         Ok((enc_keys, med_keys))
     }
 
-    pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
+    /// Generates the asset commitment data for this asset state, which includes the asset ID, encryption keys, mediator keys, and the parameters for the asset commitment scheme.
+    pub fn asset_data(&self, asset_id: AssetId) -> Result<AssetCommitmentData, Error> {
         let tree_params = get_asset_curve_tree_parameters();
         let asset_comm_params = get_asset_commitment_parameters();
-        let (enc_keys, med_keys) = self.get_encryption_and_mediator_keys()?;
+        let (enc_keys, med_keys) = self.get_keys()?;
         let asset_data = AssetCommitmentData::new(
-            self.asset_id,
+            asset_id,
             enc_keys,
             med_keys,
             asset_comm_params,
@@ -124,9 +134,87 @@ impl<T: DartLimits> AssetState<T> {
         Ok(asset_data)
     }
 
-    pub fn commitment(&self) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
-        let asset_data = self.asset_data()?;
+    /// Computes the commitment for this asset state, which is used in the Dart BP protocol to represent the asset state in a compact form.
+    pub fn commitment(
+        &self,
+        asset_id: AssetId,
+    ) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
+        let asset_data = self.asset_data(asset_id)?;
         CompressedLeafValue::from_affine(asset_data.commitment)
+    }
+}
+
+/// Represents the state of an asset in the Dart BP protocol.
+///
+/// The asset state includes the asset ID, the encryption keys for auditors and mediators, and the mapping of mediators to their encryption keys.
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct AssetState {
+    /// The unique identifier for the asset.
+    pub asset_id: AssetId,
+    /// The encryption keys for auditors and mediators, along with the mapping of mediators to their encryption key indices.
+    pub keys: AssetKeys,
+}
+
+impl AssetState {
+    /// Creates a new asset state with the given asset ID, mediators, and auditors.
+    ///
+    /// `mediators` is a slice of `(enc_key_index, affirmation_key)` pairs. The index must point to
+    /// a valid entry in `auditors` (i.e., `< auditors.len()`).
+    pub fn new<T: DartLimits>(
+        asset_id: AssetId,
+        mediators: &[(AccountPublicKey, EncryptionPublicKey)],
+        auditors: &[EncryptionPublicKey],
+    ) -> Result<Self, Error> {
+        // Ensure the total number of encryption keys does not exceed the maximum allowed by the protocol limits.
+        if (auditors.len() + mediators.len()) > T::MaxAssetEncryptionKeys::get() as usize {
+            return Err(Error::BoundedContainerSizeLimitExceeded);
+        }
+        let mut enc_keys = BoundedBTreeSet::new();
+        let mut mediator_keys = BoundedBTreeMap::new();
+
+        // Try adding the encryption keys for auditors and mediators to the asset state, ensuring that the number of each does not exceed the maximum allowed by the protocol limits.
+        for auditor in auditors {
+            enc_keys
+                .try_insert(*auditor)
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        }
+
+        for (acc_key, enc_key) in mediators {
+            mediator_keys
+                .try_insert(*acc_key, *enc_key)
+                .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
+        }
+        Self::new_bounded::<T>(asset_id, &mediator_keys, &enc_keys)
+    }
+
+    /// Creates a new asset state from pre-bounded collections.
+    pub fn new_bounded<T: DartLimits>(
+        asset_id: AssetId,
+        mediators: &BoundedBTreeMap<AccountPublicKey, EncryptionPublicKey, T::MaxAssetMediators>,
+        auditors: &BoundedBTreeSet<EncryptionPublicKey, T::MaxAssetAuditors>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            asset_id,
+            keys: AssetKeys::new_bounded::<T>(mediators, auditors)?,
+        })
+    }
+
+    /// Retrieves the encryption keys for auditors and mediators, along with the indices of the mediator keys in the list of encryption keys.
+    pub fn get_encryption_and_mediator_keys(
+        &self,
+    ) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+        self.keys.get_keys()
+    }
+
+    /// Generates the asset commitment data for this asset state, which includes the asset ID, encryption keys, mediator keys, and the parameters for the asset commitment scheme.
+    pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
+        self.keys.asset_data(self.asset_id)
+    }
+
+    /// Computes the commitment for this asset state, which is used in the Dart BP protocol to represent the asset state in a compact form.
+    pub fn commitment(&self) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
+        self.keys.commitment(self.asset_id)
     }
 }
 
