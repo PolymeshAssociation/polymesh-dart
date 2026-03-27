@@ -141,7 +141,7 @@ fn create_account_and_tree<
     let asset_id = 1;
     let id = PallasFr::rand(rng);
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
-    let mut account =
+    let (mut account, _) =
         AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap();
     account.balance = 200;
 

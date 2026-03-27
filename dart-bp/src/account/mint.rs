@@ -650,7 +650,7 @@ mod tests {
         let (sk_enc, _) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
         let id = PallasFr::rand(&mut rng);
-        let (account, _, _) = new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
+        let (account, _, _, _) = new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,

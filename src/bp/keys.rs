@@ -8,7 +8,6 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::String, vec::Vec};
 
 use blake2::Blake2s256;
-use dock_crypto_utils::hashing_utils::hash_to_field;
 
 use bounded_collections::BoundedVec;
 use digest::Digest;
@@ -230,7 +229,7 @@ impl AccountKeyPair {
         identity: &[u8],
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-    ) -> PallasScalar {
+    ) -> (PallasScalar, PallasScalar) {
         // For creating randomness, use `secret_key//identity//asset_id//counter_n`
         let mut extended_seed = self.secret.encode();
         extended_seed.extend(DERIVE_SEPARATOR);
@@ -239,9 +238,13 @@ impl AccountKeyPair {
         extended_seed.extend(asset_id.to_le_bytes().as_slice());
         extended_seed.extend(DERIVE_SEPARATOR);
         extended_seed.extend(counter.to_le_bytes());
-        let randomness = hash_to_field::<_, Blake2b512>(b"Commitment randomness", &extended_seed);
+        // Need two independent field elements, `randomness`, `rho_randomness`
+        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(
+            b"commitment and rho randomness",
+        );
+        let [randomness, rho_randomness]: [PallasScalar; 2] = hasher.hash_to_field(&extended_seed);
         extended_seed.zeroize();
-        randomness
+        (randomness, rho_randomness)
     }
 
     /// Creates an account state for the given asset, counter, and identity.
@@ -251,9 +254,10 @@ impl AccountKeyPair {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
-    ) -> Result<AccountState, Error> {
+    ) -> Result<(AccountState, PallasScalar), Error> {
         let params = poseidon_params();
-        let randomness = self.derive_account_randomness(identity, asset_id, counter);
+        let (randomness, rho_randomness) =
+            self.derive_account_randomness(identity, asset_id, counter);
         let id = hash_identity::<PallasScalar>(identity);
         let state = BPAccountState::new_given_randomness(
             id,
@@ -262,9 +266,10 @@ impl AccountKeyPair {
             asset_id,
             counter,
             randomness,
+            rho_randomness,
             params.params.clone(),
         )?;
-        Ok(state.try_into()?)
+        Ok((state.try_into()?, rho_randomness))
     }
 }
 
@@ -354,7 +359,7 @@ impl AccountKeys {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
-    ) -> Result<AccountAssetState, Error> {
+    ) -> Result<(AccountAssetState, PallasScalar), Error> {
         AccountAssetState::new(self, asset_id, counter, identity)
     }
 
@@ -364,7 +369,7 @@ impl AccountKeys {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
-    ) -> Result<AccountState, Error> {
+    ) -> Result<(AccountState, PallasScalar), Error> {
         self.acct
             .account_state(&self.enc.secret, asset_id, counter, identity)
     }

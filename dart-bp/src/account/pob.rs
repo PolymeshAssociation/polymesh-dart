@@ -911,7 +911,7 @@ mod tests {
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 1000;
         account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -959,7 +959,7 @@ mod tests {
 
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1082,7 +1082,7 @@ mod tests {
         let num_pending_txns = 20;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1213,7 +1213,7 @@ mod tests {
         let num_pending_txns = 10;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1322,7 +1322,7 @@ mod tests {
         let num_pending_txns = 12;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -1455,7 +1455,7 @@ mod tests {
         let num_pending_txns = 6;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
         account.balance = 1000000;
         account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();

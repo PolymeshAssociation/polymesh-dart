@@ -49,6 +49,10 @@ pub struct FeeAccountState<G: AffineRepr> {
     /// This is 0 for PolyX is always revealed when paying fee
     /// Including the asset-id as we might need to support multiple fee currencies in future.
     pub asset_id: AssetId,
+    /// Not committed in fee account commitment
+    pub initial_rho: G::ScalarField,
+    /// Not committed in fee account commitment
+    pub initial_randomness: G::ScalarField,
     pub rho: G::ScalarField,
     pub randomness: G::ScalarField,
 }
@@ -70,6 +74,8 @@ impl<G: AffineRepr> FeeAccountState<G> {
             sk,
             balance,
             asset_id,
+            initial_rho: rho,
+            initial_randomness: randomness,
             rho,
             randomness,
         })
@@ -99,7 +105,7 @@ impl<G: AffineRepr> FeeAccountState<G> {
         Ok(FeeAccountStateCommitment(comm.into_affine()))
     }
 
-    pub fn get_state_for_topup<R: CryptoRngCore>(&self, rng: &mut R, amount: u64) -> Result<Self> {
+    pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
         let new_balance = amount
             .checked_add(self.balance)
             .ok_or_else(|| Error::AmountTooLarge(u64::MAX))?;
@@ -108,27 +114,23 @@ impl<G: AffineRepr> FeeAccountState<G> {
         }
         let mut new_state = self.clone();
         new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change(rng);
+        new_state.refresh_randomness_for_state_change();
         Ok(new_state)
     }
 
-    pub fn get_state_for_payment<R: CryptoRngCore>(
-        &self,
-        rng: &mut R,
-        fee_amount: u64,
-    ) -> Result<Self> {
+    pub fn get_state_for_payment(&self, fee_amount: u64) -> Result<Self> {
         if fee_amount > self.balance {
             return Err(Error::AmountTooLarge(fee_amount));
         }
         let mut new_state = self.clone();
         new_state.balance -= fee_amount;
-        new_state.refresh_randomness_for_state_change(rng);
+        new_state.refresh_randomness_for_state_change();
         Ok(new_state)
     }
 
-    pub fn refresh_randomness_for_state_change<R: CryptoRngCore>(&mut self, rng: &mut R) {
-        self.rho = G::ScalarField::rand(rng);
-        self.randomness = G::ScalarField::rand(rng);
+    pub fn refresh_randomness_for_state_change(&mut self) {
+        self.rho *= self.initial_rho;
+        self.randomness *= self.initial_randomness;
     }
 
     pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
@@ -1536,9 +1538,7 @@ pub mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account
-            .get_state_for_topup(&mut rng, increase_bal_by)
-            .unwrap();
+        let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
         assert_eq!(updated_account.balance, account.balance + increase_bal_by);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -1685,7 +1685,7 @@ pub mod tests {
 
         let clock = Instant::now();
 
-        let updated_account = account.get_state_for_payment(&mut rng, fee_amount).unwrap();
+        let updated_account = account.get_state_for_payment(fee_amount).unwrap();
         assert_eq!(updated_account.balance, account.balance - fee_amount);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -1845,9 +1845,7 @@ pub mod tests {
         );
 
         for i in 0..batch_size {
-            let updated_account = accounts[i]
-                .get_state_for_payment(&mut rng, fee_amount)
-                .unwrap();
+            let updated_account = accounts[i].get_state_for_payment(fee_amount).unwrap();
             assert_eq!(updated_account.balance, accounts[i].balance - fee_amount);
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
             let path = account_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
@@ -2036,9 +2034,7 @@ pub mod tests {
             let nonce = b"test-nonce";
 
             // Create updated account but increase balance more than expected
-            let mut updated_account = account
-                .get_state_for_topup(&mut rng, increase_bal_by)
-                .unwrap();
+            let mut updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
             updated_account.balance = account.balance + 50; // Add extra on top of the actual increase amount
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
@@ -2109,7 +2105,7 @@ pub mod tests {
             let nonce = b"a_txn_id,a_payee_id";
 
             // Create updated account but decrease balance less than expected
-            let mut updated_account = account.get_state_for_payment(&mut rng, fee_amount).unwrap();
+            let mut updated_account = account.get_state_for_payment(fee_amount).unwrap();
             updated_account.balance = account.balance + 5; // Decrease by 5 less than the actual fee amount
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();

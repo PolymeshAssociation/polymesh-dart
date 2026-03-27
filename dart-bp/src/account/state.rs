@@ -315,6 +315,7 @@ where
 {
     /// `sk_aff` is the affirmation secret key
     /// `sk_enc` is the encryption secret key
+    /// Returns `(AccountState, rho_randomness)` where `rho_randomness` is needed for the registration proof.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         id: G::ScalarField, // User can hash its string ID onto the field
@@ -323,19 +324,24 @@ where
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         poseidon_config: Poseidon2Params<G::ScalarField>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, G::ScalarField)> {
         let randomness = G::ScalarField::rand(rng);
-        Self::new_given_randomness(
+        let rho_randomness = G::ScalarField::rand(rng);
+        let account = Self::new_given_randomness(
             id,
             sk_aff,
             sk_enc,
             asset_id,
             counter,
             randomness,
+            rho_randomness,
             poseidon_config,
-        )
+        )?;
+        Ok((account, rho_randomness))
     }
 
+    /// `rho_randomness` is the random value used to derive `rho` via Poseidon hash. It is NOT
+    /// stored in `AccountState` and must be retained by the caller for creating the registration proof.
     pub fn new_given_randomness(
         id: G::ScalarField, // User can hash its string ID onto the field
         sk_aff: G::ScalarField,
@@ -343,6 +349,7 @@ where
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         randomness: G::ScalarField,
+        rho_randomness: G::ScalarField,
         poseidon_config: Poseidon2Params<G::ScalarField>,
     ) -> Result<Self> {
         if asset_id > MAX_ASSET_ID {
@@ -350,9 +357,10 @@ where
         }
         let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let combined = Self::concat_asset_id_counter(asset_id, counter);
-        let rho = Poseidon_hash_2_simple::<G::ScalarField>(sk_aff, combined, poseidon_config)?;
-        let current_rho = rho;
-        let current_randomness = randomness;
+        let rho =
+            Poseidon_hash_2_simple::<G::ScalarField>(rho_randomness, combined, poseidon_config)?;
+        let current_rho = rho.square();
+        let current_randomness = randomness.square();
 
         Ok(Self {
             id,
@@ -520,8 +528,8 @@ where
     /// Set rho and commitment randomness to new values. Used as each update to the account state
     /// needs these refreshed.
     pub fn refresh_randomness_for_state_change(&mut self) {
-        self.current_rho = self.current_rho * self.rho;
-        self.current_randomness = self.current_randomness * self.randomness;
+        self.current_rho *= self.rho;
+        self.current_randomness *= self.randomness;
     }
 
     pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {

@@ -943,7 +943,7 @@ mod tests {
 
             // Create Carol's account
             let carol_id = PallasFr::rand(&mut rng);
-            let (mut carol_account, _, _) = new_account(
+            let (mut carol_account, _, _, _) = new_account(
                 &mut rng,
                 asset_id,
                 sk_carol.clone(),
@@ -1170,7 +1170,7 @@ mod tests {
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) =
+        let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
@@ -1387,7 +1387,7 @@ mod tests {
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) =
+        let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
@@ -1518,7 +1518,7 @@ mod tests {
 
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) =
+        let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 
@@ -1677,7 +1677,7 @@ mod tests {
 
         // Create Alice's accounts for both assets
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account_asset1, _, _) = new_account(
+        let (mut alice_account_asset1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_alice.clone(),
@@ -1686,7 +1686,7 @@ mod tests {
         );
         alice_account_asset1.balance = 1000;
 
-        let (mut alice_account_asset2, _, _) =
+        let (mut alice_account_asset2, _, _, _) =
             new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id);
         alice_account_asset2.balance = 2000;
 
@@ -2019,7 +2019,7 @@ mod tests {
             .unwrap();
 
         let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _) =
+        let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
         alice_account.balance = 1000;
 

@@ -45,7 +45,9 @@ fn new_account<R: CryptoRngCore>(
     id: PallasFr,
 ) -> AccountState<PallasA> {
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
-    AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap()
+    AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config)
+        .unwrap()
+        .0
 }
 
 /// Create shared setup params

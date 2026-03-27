@@ -37,6 +37,8 @@ pub trait FeeAccountStateUpdate {
 pub struct FeeAccountState {
     pub balance: Balance,
     pub asset_id: AssetId,
+    pub initial_rho: WrappedCanonical<PallasScalar>,
+    pub initial_randomness: WrappedCanonical<PallasScalar>,
     pub rho: WrappedCanonical<PallasScalar>,
     pub randomness: WrappedCanonical<PallasScalar>,
 }
@@ -60,6 +62,8 @@ impl FeeAccountState {
             sk: account.secret.0.0,
             balance: self.balance,
             asset_id: self.asset_id,
+            initial_rho: self.initial_rho.decode()?,
+            initial_randomness: self.initial_randomness.decode()?,
             rho: self.rho.decode()?,
             randomness: self.randomness.decode()?,
         };
@@ -87,6 +91,8 @@ impl TryFrom<BPFeeAccountState> for FeeAccountState {
         Ok(Self {
             balance: state.balance,
             asset_id: state.asset_id,
+            initial_rho: WrappedCanonical::wrap(&state.initial_rho)?,
+            initial_randomness: WrappedCanonical::wrap(&state.initial_randomness)?,
             rho: WrappedCanonical::wrap(&state.rho)?,
             randomness: WrappedCanonical::wrap(&state.randomness)?,
         })
@@ -270,7 +276,7 @@ impl FeeAccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<FeeAccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_topup(rng, amount)?))
+        self.state_change(account, |state| Ok(state.get_state_for_topup(amount)?))
     }
 
     pub fn get_payment_state<R: RngCore + CryptoRng>(
@@ -279,9 +285,7 @@ impl FeeAccountAssetState {
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<FeeAccountAssetStateChange, Error> {
-        self.state_change(account, |state| {
-            Ok(state.get_state_for_payment(rng, amount)?)
-        })
+        self.state_change(account, |state| Ok(state.get_state_for_payment(amount)?))
     }
 
     pub fn commit_pending_state(&mut self) -> Result<bool, Error> {

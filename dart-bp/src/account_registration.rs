@@ -11,6 +11,7 @@ use crate::util::bp_gens_for_vec_commitment;
 use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
@@ -33,7 +34,7 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter, SkGenCounter};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
@@ -85,8 +86,13 @@ pub struct EncryptionForRegistration<
 pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
     /// `pk_enc_inv = enc_key_gen * sk_enc^{-1}`
     pub pk_enc_inv: G,
-    pub resp_acc_comm: PokPedersenCommitment<G>,
-    /// Bulletproof vector commitment to `sk, rho`
+    pub t_comm: G,
+    pub resp_comm: SchnorrResponse<G>,
+    /// `N = current_rho_gen * rho`, called the "initial nullifier".
+    pub initial_nullifier: G,
+    /// Proof of knowledge of `rho` in `initial_nullifier = current_rho_gen * rho`
+    pub resp_initial_nullifier: PartialPokDiscreteLog<G>,
+    /// Bulletproof vector commitment to `rho_randomness, rho, current_rho`
     pub comm_rho_bp: G,
     pub t_comm_rho_bp: G,
     pub resp_comm_rho_bp: PartialSchnorrResponse<G>,
@@ -116,6 +122,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
     /// `pk_aff` is the affirmation public key
     /// `pk_enc` is the encryption public key
+    /// `rho_randomness` is the random value used to derive `rho`
     /// `T` are the public key `pk_T`, generator used when creating key `pk_T` and the generator used to encrypt randomness chunk.
     /// This is intentionally kept different from the generator for randomness in account commitment to prevent anyone from
     /// learning the next nullifier
@@ -125,6 +132,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
+        rho_randomness: G::ScalarField,
         counter: NullifierSkGenCounter,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -141,6 +149,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             pk_enc,
             account,
             account_commitment,
+            rho_randomness,
             counter,
             nonce,
             account_comm_key,
@@ -163,6 +172,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
+        rho_randomness: G::ScalarField,
         counter: NullifierSkGenCounter,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -210,37 +220,42 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.id_gen() * account.id);
 
         let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut rho_sq_blinding = G::ScalarField::rand(rng);
         let mut s_blinding = G::ScalarField::rand(rng);
+        let mut s_sq_blinding = G::ScalarField::rand(rng);
         let mut sk_enc_blinding = G::ScalarField::rand(rng);
         let mut sk_enc_inv_blinding = G::ScalarField::rand(rng);
 
         // Compute pk_enc_inv = enc_key_gen * sk_enc^{-1} (this will be public)
         let pk_enc_inv = (enc_key_gen * account.sk_enc_inv).into_affine();
 
-        // For proving Comm - D - pk_enc_inv = (rho_gen + current_rho_gen) * rho + (randomness_gen + current_randomness_gen) * s
-        // Since pk_enc_inv is revealed, we can reduce it from the commitment.
-        // Since current_rho = rho at registration, rho appears in both G_4 and G_5 slots.
-        // Since current_randomness = randomness at registration, s appears in both G_6 and G_7 slots.
-        let combined_rho_gen = (account_comm_key.rho_gen().into_group()
-            + account_comm_key.current_rho_gen())
-        .into_affine();
-        let combined_s_gen = (account_comm_key.randomness_gen().into_group()
-            + account_comm_key.current_randomness_gen())
-        .into_affine();
+        // For proving Comm - D - pk_enc_inv = rho_gen * rho + current_rho_gen * rho^2 + randomness_gen * s + current_randomness_gen * s^2
+        // Since pk_enc_inv and current_rho_gen * rho (initial_nullifier) are revealed, we can reduce them, from the commitment.
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - pk_enc_inv.into_group()).into_affine();
-        let comm_protocol = PokPedersenCommitmentProtocol::init(
+        let comm_protocol = SchnorrCommitment::new(
+            &[
+                account_comm_key.rho_gen(),
+                account_comm_key.current_rho_gen(),
+                account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
+            ],
+            vec![rho_blinding, rho_sq_blinding, s_blinding, s_sq_blinding],
+        );
+        comm_protocol.challenge_contribution(&mut transcript_ref)?;
+        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+
+        // N = current_rho_gen * rho (initial nullifier). Proves knowledge of rho in N, sharing rho_blinding
+        // with comm_protocol so the same rho is used in both.
+        let initial_nullifier = (account_comm_key.current_rho_gen() * account.rho).into_affine();
+        let init_null_protocol = PokDiscreteLogProtocol::init(
             account.rho,
             rho_blinding,
-            &combined_rho_gen,
-            account.randomness,
-            s_blinding,
-            &combined_s_gen,
+            &account_comm_key.current_rho_gen(),
         );
-        comm_protocol.challenge_contribution(
-            &combined_rho_gen,
-            &combined_s_gen,
-            &reduced_acc_comm,
+        init_null_protocol.challenge_contribution(
+            &account_comm_key.current_rho_gen(),
+            &initial_nullifier,
             &mut transcript_ref,
         )?;
 
@@ -417,17 +432,31 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let com_rho_bp_blinding = G::ScalarField::rand(rng);
         let (comm_rho_bp, vars) = prover.commit_vec(
-            &[account.sk, account.rho],
+            &[
+                rho_randomness,
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.current_randomness,
+            ],
             com_rho_bp_blinding,
             &leaf_level_bp_gens,
         );
         Self::enforce_constraints(prover, account.asset_id, counter, vars, poseidon_config)?;
 
         let mut sk_blinding = G::ScalarField::rand(rng);
+        let rho_randomness_blinding = G::ScalarField::rand(rng);
 
         let t_comm_rho_bp = SchnorrCommitment::new(
             &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
-            vec![G::ScalarField::rand(rng), sk_blinding, rho_blinding],
+            vec![
+                G::ScalarField::rand(rng),
+                rho_randomness_blinding,
+                rho_blinding,
+                rho_sq_blinding,
+                s_blinding,
+                s_sq_blinding,
+            ],
         );
 
         let t_pk_aff = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
@@ -538,6 +567,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             );
 
             s_blinding.zeroize();
+            s_sq_blinding.zeroize();
             combined_enc_rand.zeroize();
 
             combined_s_proto.challenge_contribution(
@@ -559,7 +589,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 Zeroize::zeroize(&mut e);
             }
 
-            // rho_blinding is reused here; its response is shared with resp_acc_comm.response1
             let combined_rho_proto = PokPedersenCommitmentProtocol::init(
                 combined_rho_enc_rand,
                 G::ScalarField::rand(rng),
@@ -570,6 +599,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             );
 
             rho_blinding.zeroize();
+            rho_sq_blinding.zeroize();
             combined_rho_enc_rand.zeroize();
 
             combined_rho_proto.challenge_contribution(
@@ -592,14 +622,23 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .transcript()
             .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        let resp_comm = comm_protocol.gen_proof(&challenge);
+        let resp_comm = comm_protocol.response(
+            &[
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.current_randomness,
+            ],
+            &challenge,
+        )?;
         let resp_pk_enc = pk_enc_protocol.gen_proof(&challenge);
         let resp_pk_enc_inv = pk_enc_inv_protocol.gen_proof(&challenge);
         let resp_enc_key_gen = enc_key_gen_protocol.gen_partial_proof();
+        let resp_initial_nullifier = init_null_protocol.gen_partial_proof();
 
         let mut wits = BTreeMap::new();
         wits.insert(0, com_rho_bp_blinding);
-        // Missing responses at index 1 (sk) and 2 (rho) come from resp_pk_aff and resp_acc_comm
+        wits.insert(1, rho_randomness);
         let resp_comm_rho_bp = t_comm_rho_bp.partial_response(wits, &challenge)?;
 
         let resp_pk_aff = t_pk_aff.gen_proof(&challenge);
@@ -675,7 +714,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         Ok(Self {
             pk_enc_inv,
-            resp_acc_comm: resp_comm,
+            t_comm: comm_protocol.t,
+            resp_comm,
+            initial_nullifier,
+            resp_initial_nullifier,
             comm_rho_bp,
             t_comm_rho_bp: t_comm_rho_bp.t,
             resp_comm_rho_bp,
@@ -800,9 +842,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         if T.is_none() ^ self.encryption_for_T.is_none() {
             return Err(Error::PkTAndEncryptedRandomnessInconsistent);
         }
-        if self.resp_comm_rho_bp.responses.len() != 1 {
+        if self.resp_comm_rho_bp.responses.len() != 2 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                1,
+                2,
                 self.resp_comm_rho_bp.responses.len(),
             ));
         }
@@ -839,22 +881,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
             + (account_comm_key.id_gen() * id);
 
-        // Since current_rho = rho at registration, rho appears in both G_4 and G_5 slots.
-        let combined_rho_gen = (account_comm_key.rho_gen().into_group()
-            + account_comm_key.current_rho_gen())
-        .into_affine();
-        // Since current_randomness = randomness at registration, s appears in both G_6 and G_7 slots.
-        let combined_s_gen = (account_comm_key.randomness_gen().into_group()
-            + account_comm_key.current_randomness_gen())
-        .into_affine();
-
         // Reduce pk_enc_inv from commitment since it's revealed
         let reduced_acc_comm =
             (account_commitment.0.into_group() - D - self.pk_enc_inv.into_group()).into_affine();
-        self.resp_acc_comm.challenge_contribution(
-            &combined_rho_gen,
-            &combined_s_gen,
-            &reduced_acc_comm,
+        self.t_comm.serialize_compressed(&mut transcript_ref)?;
+        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+
+        // N = current_rho_gen * rho — challenge contribution for initial nullifier sigma
+        self.resp_initial_nullifier.challenge_contribution(
+            &account_comm_key.current_rho_gen(),
+            &self.initial_nullifier,
             &mut transcript_ref,
         )?;
 
@@ -903,7 +939,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             }
         }
 
-        let vars = verifier.commit_vec(2, self.comm_rho_bp);
+        let vars = verifier.commit_vec(5, self.comm_rho_bp);
         Self::enforce_constraints(verifier, asset_id, counter, vars, poseidon_config)?;
 
         // Check if each s and rho chunk is in range using the merged commitment
@@ -978,15 +1014,21 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let challenge = transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         // Perform all the verifications except bulletproof verification
-        verify_or_rmc_3!(
+        let bases = vec![
+            account_comm_key.rho_gen(),
+            account_comm_key.current_rho_gen(),
+            account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
+        ];
+        verify_schnorr_resp_or_rmc!(
             rmc,
-            self.resp_acc_comm,
-            "Account commitment verification failed",
+            self.resp_comm,
+            bases,
             reduced_acc_comm,
-            combined_rho_gen,
-            combined_s_gen,
+            self.t_comm,
             &challenge,
         );
+
         verify_or_rmc_2!(
             rmc,
             self.resp_pk_enc,
@@ -1014,8 +1056,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         );
 
         let mut missing_resps = BTreeMap::new();
-        missing_resps.insert(1, self.resp_pk_aff.response);
-        missing_resps.insert(2, self.resp_acc_comm.response1);
+        missing_resps.insert(2, self.resp_comm.0[0]);
+        missing_resps.insert(3, self.resp_comm.0[1]);
+        missing_resps.insert(4, self.resp_comm.0[2]);
+        missing_resps.insert(5, self.resp_comm.0[3]);
 
         verify_partial_schnorr_resp_or_rmc!(
             rmc,
@@ -1025,6 +1069,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             self.t_comm_rho_bp,
             &challenge,
             missing_resps,
+        );
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_initial_nullifier,
+            "Initial nullifier verification failed",
+            self.initial_nullifier,
+            account_comm_key.current_rho_gen(),
+            &challenge,
+            &self.resp_comm.0[0]
         );
         verify_or_rmc_2!(
             rmc,
@@ -1070,7 +1123,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 *pk_T,
                 *enc_gen,
                 &challenge,
-                &self.resp_acc_comm.response2,
+                &self.resp_comm.0[2],
             );
 
             // Verify rho encryption
@@ -1106,7 +1159,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 enc_for_T.t_comm_s_rho_chunks_bp,
                 &challenge,
             );
-            // Response for rho is shared with resp_acc_comm.response1 (same blinding used)
+
             verify_or_rmc_3!(
                 rmc,
                 enc_rho.resp_combined_s,
@@ -1115,7 +1168,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 *pk_T,
                 *enc_gen,
                 &challenge,
-                &self.resp_acc_comm.response1,
+                &self.resp_comm.0[0],
             );
         }
 
@@ -1129,24 +1182,36 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         mut vars: Vec<Variable<G::ScalarField>>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
     ) -> Result<()> {
+        let var_current_randomness = vars.pop().unwrap();
+        let var_randomness = vars.pop().unwrap();
+        let var_current_rho = vars.pop().unwrap();
         let var_rho = vars.pop().unwrap();
-        let var_sk = vars.pop().unwrap();
+        let var_rho_randomness = vars.pop().unwrap();
 
         let lc_rho: LinearCombination<G::ScalarField> = var_rho.into();
+        let lc_randomness: LinearCombination<G::ScalarField> = var_randomness.into();
         let combined = AccountState::<G>::concat_asset_id_counter(asset_id, counter);
         let c = LinearCombination::from(combined);
-        let lc_rho_1 = Poseidon_hash_2_constraints_simple(cs, var_sk.into(), c, poseidon_config)?;
-        cs.constrain(lc_rho_1 - lc_rho);
+        let lc_rho_1 =
+            Poseidon_hash_2_constraints_simple(cs, var_rho_randomness.into(), c, poseidon_config)?;
+        cs.constrain(lc_rho_1 - lc_rho.clone());
+        let (_, _, var_rho_sq_out) = cs.multiply(lc_rho.clone(), lc_rho);
+        cs.constrain(var_rho_sq_out - var_current_rho);
+        let (_, _, var_randomness_sq_out) = cs.multiply(lc_randomness.clone(), lc_randomness);
+        cs.constrain(var_randomness_sq_out - var_current_randomness);
         Ok(())
     }
 
     fn bp_gens_for_comm_rho(
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
-    ) -> [G; 3] {
-        let mut gens = bp_gens_for_vec_commitment(2, leaf_level_bp_gens);
+    ) -> [G; 6] {
+        let mut gens = bp_gens_for_vec_commitment(5, leaf_level_bp_gens);
         [
             leaf_level_pc_gens.B_blinding,
+            gens.next().unwrap(),
+            gens.next().unwrap(),
+            gens.next().unwrap(),
             gens.next().unwrap(),
             gens.next().unwrap(),
         ]
@@ -1611,9 +1676,14 @@ fn ensure_correct_registration_state<G: AffineRepr>(
                 "Counter must be 0 for registration".to_string(),
             ));
         }
-        if account.rho != account.current_rho {
+        if account.rho.square() != account.current_rho {
             return Err(Error::RegistrationError(
                 "Rho relation not satisfied".to_string(),
+            ));
+        }
+        if account.randomness.square() != account.current_randomness {
+            return Err(Error::RegistrationError(
+                "Randomness relation not satisfied".to_string(),
             ));
         }
         if (aff_key_gen * account.sk).into_affine() != pk {
@@ -1705,13 +1775,15 @@ impl MasterSeed {
         ((sk, vk), (dk, ek))
     }
 
+    /// Returns `(randomness, rho_randomness)` where `randomness` is for the account commitment
+    /// and `rho_randomness` is used to derive `rho`
     pub fn derive_account_randomness<G: AffineRepr, D: FullDigest>(
         &self,
         path: &[u8],
         counter_s: SkGenCounter,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-    ) -> G::ScalarField {
+    ) -> (G::ScalarField, G::ScalarField) {
         // For creating randomness, use `seed//path//counter_s//asset_id//counter_n`
         let mut extended_seed = self.0.to_vec();
         extended_seed.extend(SEPARATOR);
@@ -1722,10 +1794,14 @@ impl MasterSeed {
         extended_seed.extend(asset_id.to_le_bytes().as_slice());
         extended_seed.extend(SEPARATOR);
         extended_seed.extend(counter.to_le_bytes());
-        let randomness =
-            hash_to_field::<G::ScalarField, D>(b"Commitment randomness", &extended_seed);
+        // Need two independent field elements, `randomness`, `rho_randomness`
+        let hasher = <DefaultFieldHasher<D> as HashToField<G::ScalarField>>::new(
+            b"commitment and rho randomness",
+        );
+        let [randomness, rho_randomness]: [G::ScalarField; 2] =
+            hasher.hash_to_field(&extended_seed);
         extended_seed.zeroize();
-        randomness
+        (randomness, rho_randomness)
     }
 }
 
@@ -1849,12 +1925,13 @@ pub mod tests {
         id: Fr,
     ) -> (
         AccountState<PallasA>,
+        Fr,
         NullifierSkGenCounter,
         Poseidon2Params<Fr>,
     ) {
         let params = test_params_for_poseidon2();
         let counter = 1;
-        let account = AccountState::new(
+        let (account, rho_randomness) = AccountState::new(
             rng,
             id,
             sk_aff.0,
@@ -1864,7 +1941,7 @@ pub mod tests {
             params.clone(),
         )
         .unwrap();
-        (account, counter, params)
+        (account, rho_randomness, counter, params)
     }
 
     #[test]
@@ -1882,7 +1959,7 @@ pub mod tests {
         // User hashes it id onto the field
         let id = Fr::rand(&mut rng);
 
-        let (mut account, c, poseidon_config) =
+        let (mut account, rho_randomness, c, poseidon_config) =
             new_account(&mut rng, asset_id, sk_i, sk_enc.clone(), id);
         assert_eq!(account.id, id);
         assert_eq!(account.asset_id, asset_id);
@@ -1894,28 +1971,26 @@ pub mod tests {
 
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, c);
         let expected_rho =
-            Poseidon_hash_2_simple::<Fr>(account.sk, combined, poseidon_config).unwrap();
+            Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_config).unwrap();
         assert_eq!(account.rho, expected_rho);
-        assert_eq!(account.current_rho, account.rho);
+        assert_eq!(account.current_rho, account.rho.square());
 
         account.commit(account_comm_key).unwrap();
 
         let initial_rho = account.rho;
         let initial_randomness = account.randomness;
-        assert_eq!(account.current_randomness, initial_randomness);
+        assert_eq!(account.current_randomness, initial_randomness.square());
 
         // Test current_rho and current_randomness change correctly
-        // After i iterations: current_rho = rho^{1+i} and current_randomness = initial_randomness^{i+1}
+        // After i iterations: current_rho = rho^{2+i} and current_randomness = initial_randomness^{2+i}
         // randomness (base s) remains constant
         let n = 10;
         for i in 1..=n {
             account.refresh_randomness_for_state_change();
 
-            // After i iterations: current_rho = rho^{1+i}
-            let expected_current_rho = initial_rho.pow([1 + i as u64]);
+            let expected_current_rho = initial_rho.pow([2 + i as u64]);
 
-            // After i iterations: current_randomness = initial_randomness^{i+1}
-            let expected_current_randomness = initial_randomness.pow([1 + i as u64]);
+            let expected_current_randomness = initial_randomness.pow([2 + i as u64]);
 
             assert_eq!(account.current_rho, expected_current_rho);
             assert_eq!(account.randomness, initial_randomness); // base s stays constant
@@ -1957,6 +2032,7 @@ pub mod tests {
         let result5 = seed2.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
         assert_ne!(result1, result5);
 
+        // Returns (randomness, rho_randomness) tuple
         let rand1 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
             b"path", counter_s, asset_id, counter_n,
         );
@@ -1996,7 +2072,8 @@ pub mod tests {
             sk1,
             asset_id,
             counter_n,
-            rand1,
+            rand1.0,
+            rand1.1,
             params.clone(),
         )
         .unwrap();
@@ -2006,7 +2083,8 @@ pub mod tests {
             sk1,
             asset_id,
             counter_n,
-            rand1,
+            rand2.0,
+            rand2.1,
             params.clone(),
         )
         .unwrap();
@@ -2019,7 +2097,8 @@ pub mod tests {
             sk1,
             asset_id,
             counter_n,
-            rand3,
+            rand3.0,
+            rand3.1,
             params.clone(),
         )
         .unwrap();
@@ -2032,7 +2111,8 @@ pub mod tests {
             sk2,
             asset_id,
             counter_n,
-            rand1,
+            rand1.0,
+            rand1.1,
             params.clone(),
         )
         .unwrap();
@@ -2066,7 +2146,7 @@ pub mod tests {
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
 
         let clock = Instant::now();
-        let (account, nullifier_gen_counter, poseidon_params) =
+        let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
             new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -2081,6 +2161,7 @@ pub mod tests {
             pk_enc,
             &account,
             account_comm.clone(),
+            rho_randomness,
             nullifier_gen_counter,
             nonce,
             account_comm_key.clone(),
@@ -2181,12 +2262,12 @@ pub mod tests {
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
 
         let clock = Instant::now();
-        let (mut account, nullifier_gen_counter, poseidon_params) =
+        let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
             new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         // Make randomness small to run test faster
         account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
-        // At registration current_randomness = randomness, keep them in sync
-        account.current_randomness = account.randomness;
+        // current_randomness = randomness^2 (same relation as current_rho = rho^2)
+        account.current_randomness = account.randomness.square();
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let pk_enc = (enc_key_gen * account.sk_enc_inv.inverse().unwrap()).into_affine();
@@ -2199,6 +2280,7 @@ pub mod tests {
             pk_enc,
             &account,
             account_comm.clone(),
+            rho_randomness,
             nullifier_gen_counter,
             nonce,
             account_comm_key.clone(),
@@ -2422,13 +2504,21 @@ pub mod tests {
     fn prove_verify_rho_gen_constraints(
         pc_gens: &PedersenGens<PallasA>,
         bp_gens: &BulletproofGens<PallasA>,
-        sk: Fr,
+        rho_randomness: Fr,
         rho: Fr,
+        randomness: Fr,
+        current_randomness: Fr,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         poseidon_params: &Poseidon2Params<Fr>,
     ) -> bool {
-        let values = vec![sk, rho];
+        let values = vec![
+            rho_randomness,
+            rho,
+            rho.square(),
+            randomness,
+            current_randomness,
+        ];
 
         let prover_transcript = MerlinTranscript::new(b"test");
         let mut prover = Prover::new(pc_gens, prover_transcript);
@@ -2453,7 +2543,7 @@ pub mod tests {
 
         let verifier_transcript = MerlinTranscript::new(b"test");
         let mut verifier = Verifier::new(verifier_transcript);
-        let vars = verifier.commit_vec(2, comm);
+        let vars = verifier.commit_vec(5, comm);
 
         if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(
             &mut verifier,
@@ -2476,30 +2566,54 @@ pub mod tests {
         let bp_gens = BulletproofGens::new(256, 1);
         let mut rng = rand::thread_rng();
 
-        let sk = Fr::rand(&mut rng);
+        let rho_randomness = Fr::rand(&mut rng);
         let asset_id = 2;
         let counter = 1;
 
         let poseidon_params = test_params_for_poseidon2();
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, counter);
-        let rho = Poseidon_hash_2_simple::<Fr>(sk, combined, poseidon_params.clone()).unwrap();
+        let rho = Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_params.clone())
+            .unwrap();
 
+        let randomness = Fr::rand(&mut rng);
+        let current_randomness = randomness.square();
+
+        // Correct inputs: proof must verify
         assert!(prove_verify_rho_gen_constraints(
             &pc_gens,
             &bp_gens,
-            sk,
+            rho_randomness,
             rho,
+            randomness,
+            current_randomness,
             asset_id,
             counter,
             &poseidon_params
         ));
 
+        // Wrong rho (Poseidon pre-image fails): proof must not verify
         let wrong_rho = Fr::rand(&mut rng);
         assert!(!prove_verify_rho_gen_constraints(
             &pc_gens,
             &bp_gens,
-            sk,
+            rho_randomness,
             wrong_rho,
+            randomness,
+            current_randomness,
+            asset_id,
+            counter,
+            &poseidon_params
+        ));
+
+        // Wrong current_randomness (square relation breaks): proof must not verify
+        let wrong_current_randomness = Fr::rand(&mut rng);
+        assert!(!prove_verify_rho_gen_constraints(
+            &pc_gens,
+            &bp_gens,
+            rho_randomness,
+            rho,
+            randomness,
+            wrong_current_randomness,
             asset_id,
             counter,
             &poseidon_params
@@ -2547,6 +2661,7 @@ pub mod tests {
         let mut pk_encs = Vec::new();
         let mut accounts = Vec::new();
         let mut account_comms = Vec::new();
+        let mut rho_randomnesses = Vec::new();
 
         for i in 0..batch_size {
             // Create unique keys and account for each proof
@@ -2554,7 +2669,7 @@ pub mod tests {
             let id = Fr::rand(&mut rng);
             let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
-            let account = AccountState::new(
+            let (account, rho_randomness) = AccountState::new(
                 &mut rng,
                 id,
                 sk_i.0,
@@ -2571,6 +2686,7 @@ pub mod tests {
             pk_encs.push(pk_enc.0);
             accounts.push(account);
             account_comms.push(account_comm);
+            rho_randomnesses.push(rho_randomness);
         }
 
         for i in 0..batch_size {
@@ -2580,6 +2696,7 @@ pub mod tests {
                 pk_encs[i],
                 &accounts[i],
                 account_comms[i],
+                rho_randomnesses[i],
                 nullifier_gen_counter,
                 nonces[i].as_slice(),
                 account_comm_key.clone(),
@@ -2674,6 +2791,7 @@ pub mod tests {
                 pk_encs[i],
                 &accounts[i],
                 account_comms[i],
+                rho_randomnesses[i],
                 nullifier_gen_counter,
                 nonces[i].as_slice(),
                 account_comm_key.clone(),
@@ -2878,6 +2996,7 @@ pub mod tests {
         let mut pk_encs = vec![];
         let mut accounts = vec![];
         let mut account_comms = vec![];
+        let mut rho_randomnesses = vec![];
 
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
@@ -2889,7 +3008,7 @@ pub mod tests {
             ids.push(id);
             let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
 
-            let account = AccountState::new(
+            let (account, rho_randomness) = AccountState::new(
                 &mut rng,
                 id,
                 sk_i.0,
@@ -2900,6 +3019,7 @@ pub mod tests {
             )
             .unwrap();
             accounts.push(account);
+            rho_randomnesses.push(rho_randomness);
 
             let account_comm = accounts[i].commit(account_comm_key.clone()).unwrap();
             account_comms.push(account_comm);
@@ -2920,6 +3040,7 @@ pub mod tests {
                 pk_encs[i],
                 &accounts[i],
                 account_comms[i].clone(),
+                rho_randomnesses[i],
                 nullifier_gen_counter,
                 &nonces[i],
                 account_comm_key.clone(),
@@ -3036,6 +3157,7 @@ pub mod tests {
                 pk_encs[i],
                 &accounts[i],
                 account_comms[i].clone(),
+                rho_randomnesses[i],
                 nullifier_gen_counter,
                 &nonces[i],
                 account_comm_key.clone(),
@@ -3201,7 +3323,7 @@ pub mod tests {
             let enc_key_gen = account_comm_key.sk_enc_gen();
             let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
 
-            let (mut account, nullifier_gen_counter, poseidon_params) =
+            let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
                 new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
 
             // Set non-zero balance - this should cause proof verification to fail
@@ -3220,6 +3342,7 @@ pub mod tests {
                 pk_enc,
                 &account,
                 account_comm.clone(),
+                rho_randomness,
                 nullifier_gen_counter,
                 nonce,
                 account_comm_key.clone(),
@@ -3342,7 +3465,7 @@ pub mod tests {
                 let (sk_enc_wrong, _) = keygen_enc(&mut rng, enc_key_gen);
 
                 // Create account with wrong encryption key inverse
-                let account = AccountState::new(
+                let (account, rho_randomness) = AccountState::new(
                     &mut rng,
                     id,
                     sk_i.0,
@@ -3363,6 +3486,7 @@ pub mod tests {
                     pk_enc.0,
                     &account,
                     account_comm.clone(),
+                    rho_randomness,
                     nullifier_gen_counter,
                     nonce,
                     account_comm_key.clone(),
@@ -3403,7 +3527,7 @@ pub mod tests {
                 let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
 
                 // Create account with encryption key NOT inverted
-                let account = AccountState::new(
+                let (account, rho_randomness) = AccountState::new(
                     &mut rng,
                     id,
                     sk_i.0,
@@ -3424,6 +3548,7 @@ pub mod tests {
                     pk_enc.0,
                     &account,
                     account_comm.clone(),
+                    rho_randomness,
                     nullifier_gen_counter,
                     nonce,
                     account_comm_key.clone(),

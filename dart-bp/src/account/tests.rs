@@ -68,7 +68,7 @@ fn send_txn() {
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
     account.balance = 200;
 
@@ -213,7 +213,7 @@ fn receive_txn() {
 
     // Receiver account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
     account.balance = 200;
     let account_tree = get_tree_with_account_comm::<L, _>(
@@ -356,7 +356,7 @@ fn claim_received_funds() {
 
     // Receiver account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
     // Assume that account had some balance and it had sent the receive transaction to increase its counter
     account.balance = 200;
     account.counter += 1;
@@ -500,7 +500,7 @@ fn counter_update_txn_by_sender() {
 
     // Sender account with non-zero counter
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     account.balance = 50;
     account.counter = 1;
 
@@ -639,7 +639,7 @@ fn reverse_send_txn() {
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     // Assume that account had some balance and it had sent the send transaction to increase its counter
     account.balance = 200;
     account.counter += 1;
@@ -783,7 +783,7 @@ fn reverse_receive_txn() {
 
     // Receiver account with non-zero counter
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
     account.balance = 50;
     account.counter = 1;
 
@@ -1849,24 +1849,24 @@ fn single_shot_swap() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) =
+    let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
@@ -2963,24 +2963,24 @@ fn single_shot_swap_asset_id_revealed() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) =
+    let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
@@ -3430,24 +3430,24 @@ fn swap_settlement_asset_id_revealed() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
+    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
     bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
@@ -3883,13 +3883,13 @@ fn reverse_settlement_asset_id_revealed() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 500;
     alice_account_1.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     alice_account_2.counter = 1;
@@ -3897,13 +3897,13 @@ fn reverse_settlement_asset_id_revealed() {
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 500;
     bob_account_1.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) =
+    let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_2.balance = 50;
     bob_account_2.counter = 1;
@@ -4251,7 +4251,8 @@ fn batch_send_txn_proofs() {
 
         // Create sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
         account.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -4470,7 +4471,8 @@ fn combined_send_txn_proofs() {
 
         // Create sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
         account.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -4692,7 +4694,7 @@ fn combined_create_and_send() {
     );
 
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     account.balance = 200;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
@@ -4950,7 +4952,8 @@ fn batch_receive_txn_proofs() {
 
         // Create receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
         account.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5168,7 +5171,8 @@ fn combined_receive_txn_proofs() {
 
         // Create receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
         account.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -5424,24 +5428,24 @@ fn swap_settlement() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
+    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
     bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
@@ -6646,13 +6650,13 @@ fn reverse_settlement() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _) =
+    let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_1.balance = 500;
     alice_account_1.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _) =
+    let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
     alice_account_2.balance = 50;
     alice_account_2.counter = 1;
@@ -6660,13 +6664,13 @@ fn reverse_settlement() {
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _) =
+    let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_1.balance = 500;
     bob_account_1.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _) =
+    let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
     bob_account_2.balance = 50;
     bob_account_2.counter = 1;
@@ -8280,7 +8284,7 @@ fn multi_asset_state_transition_different_confs() {
         let mut alice_account_comms = Vec::with_capacity(num_legs);
 
         for asset_id in 1..=num_legs as u32 {
-            let (mut account, _, _) = new_account(
+            let (mut account, _, _, _) = new_account(
                 &mut rng,
                 asset_id,
                 sk_alice.clone(),
@@ -8299,7 +8303,7 @@ fn multi_asset_state_transition_different_confs() {
         let mut bob_account_comms = Vec::with_capacity(num_legs);
 
         for asset_id in 1..=num_legs as u32 {
-            let (mut account, _, _) =
+            let (mut account, _, _, _) =
                 new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
             account.balance = 300;
             let comm = account.commit(account_comm_key.clone()).unwrap();
@@ -8790,13 +8794,14 @@ pub fn setup_single_leg_settlement_common<
 
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
     sender_account.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
-    let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
+    let (mut receiver_account, _, _, _) =
+        new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
     receiver_account.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9009,7 +9014,7 @@ pub fn setup_multi_asset_settlement<
     let mut alice_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let (mut account, _, _) = new_account(
+        let (mut account, _, _, _) = new_account(
             &mut rng,
             asset_id,
             sk_alice.clone(),
@@ -9027,7 +9032,7 @@ pub fn setup_multi_asset_settlement<
     let mut bob_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let (mut account, _, _) =
+        let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
         account.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
@@ -9168,13 +9173,14 @@ pub fn setup_single_leg_settlement_public_asset_common<
 
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
     sender_account.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
-    let (mut receiver_account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
+    let (mut receiver_account, _, _, _) =
+        new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
     receiver_account.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9310,7 +9316,7 @@ mod input_sanitation_disabled {
 
         // Sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -9445,7 +9451,7 @@ mod input_sanitation_disabled {
 
         // Receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -9540,7 +9546,7 @@ mod input_sanitation_disabled {
 
         // Receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 2;
@@ -9676,7 +9682,7 @@ mod input_sanitation_disabled {
 
         // Sender account with non-zero counter
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         account.balance = 50;
         account.counter = 2;
 
@@ -9808,7 +9814,7 @@ mod input_sanitation_disabled {
 
         // Sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 2;
@@ -9941,7 +9947,7 @@ mod input_sanitation_disabled {
 
         // Create sender account
         let sender_id = PallasFr::rand(&mut rng);
-        let (mut sender_account, _, _) =
+        let (mut sender_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), sender_id);
         sender_account.balance = 200; // Ensure sufficient balance
         sender_account.counter = 5; // Set non-zero counter for testing
@@ -9949,7 +9955,7 @@ mod input_sanitation_disabled {
 
         // Create receiver account
         let receiver_id = PallasFr::rand(&mut rng);
-        let (mut receiver_account, _, _) =
+        let (mut receiver_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
         receiver_account.balance = 150; // Some initial balance
         receiver_account.counter = 3; // Set non-zero counter for testing

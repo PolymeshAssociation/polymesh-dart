@@ -1307,7 +1307,7 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 100;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1402,7 +1402,7 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         account.balance = 50;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
@@ -1504,7 +1504,7 @@ mod tests {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -1704,7 +1704,7 @@ mod tests {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -1918,7 +1918,7 @@ mod tests {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
@@ -2118,7 +2118,7 @@ mod tests {
             let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
             account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 

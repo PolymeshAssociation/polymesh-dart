@@ -433,7 +433,7 @@ mod tests {
         // Here the same keys are used but in practice, different accounts use different keys
         // Alice's account for asset 1
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) = new_account(
+        let (mut alice_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_alice.clone(),
@@ -444,13 +444,13 @@ mod tests {
 
         // Alice's account for asset 2
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) =
+        let (mut alice_account_2, _, _, _) =
             new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id_2);
         alice_account_2.balance = 300;
 
         // Bob's account for asset 1
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) = new_account(
+        let (mut bob_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_bob.clone(),
@@ -461,7 +461,7 @@ mod tests {
 
         // Bob's account for asset 2
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) =
+        let (mut bob_account_2, _, _, _) =
             new_account(&mut rng, asset_id_2, sk_bob, sk_bob_e, bob_id_2);
         bob_account_2.balance = 800;
 
@@ -779,7 +779,7 @@ mod tests {
 
         // Create Alice's 6 accounts (one per asset)
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) = new_account(
+        let (mut alice_account_1, _, _, _) = new_account(
             &mut rng,
             asset_ids[0],
             sk_alice.clone(),
@@ -789,7 +789,7 @@ mod tests {
         alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) = new_account(
+        let (mut alice_account_2, _, _, _) = new_account(
             &mut rng,
             asset_ids[1],
             sk_alice.clone(),
@@ -799,7 +799,7 @@ mod tests {
         alice_account_2.balance = 1000;
 
         let alice_id_3 = PallasFr::rand(&mut rng);
-        let (mut alice_account_3, _, _) = new_account(
+        let (mut alice_account_3, _, _, _) = new_account(
             &mut rng,
             asset_ids[2],
             sk_alice.clone(),
@@ -810,7 +810,7 @@ mod tests {
         alice_account_3.counter = 1;
 
         let alice_id_4 = PallasFr::rand(&mut rng);
-        let (mut alice_account_4, _, _) = new_account(
+        let (mut alice_account_4, _, _, _) = new_account(
             &mut rng,
             asset_ids[3],
             sk_alice.clone(),
@@ -821,7 +821,7 @@ mod tests {
         alice_account_4.counter = 1;
 
         let alice_id_5 = PallasFr::rand(&mut rng);
-        let (mut alice_account_5, _, _) = new_account(
+        let (mut alice_account_5, _, _, _) = new_account(
             &mut rng,
             asset_ids[4],
             sk_alice.clone(),
@@ -832,7 +832,7 @@ mod tests {
         alice_account_5.counter = 1;
 
         let alice_id_6 = PallasFr::rand(&mut rng);
-        let (mut alice_account_6, _, _) = new_account(
+        let (mut alice_account_6, _, _, _) = new_account(
             &mut rng,
             asset_ids[5],
             sk_alice.clone(),
@@ -844,7 +844,7 @@ mod tests {
 
         // Create Bob's 6 accounts (one per asset)
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) = new_account(
+        let (mut bob_account_1, _, _, _) = new_account(
             &mut rng,
             asset_ids[0],
             sk_bob.clone(),
@@ -854,7 +854,7 @@ mod tests {
         bob_account_1.balance = 1000;
 
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) = new_account(
+        let (mut bob_account_2, _, _, _) = new_account(
             &mut rng,
             asset_ids[1],
             sk_bob.clone(),
@@ -864,7 +864,7 @@ mod tests {
         bob_account_2.balance = 1000;
 
         let bob_id_3 = PallasFr::rand(&mut rng);
-        let (mut bob_account_3, _, _) = new_account(
+        let (mut bob_account_3, _, _, _) = new_account(
             &mut rng,
             asset_ids[2],
             sk_bob.clone(),
@@ -875,7 +875,7 @@ mod tests {
         bob_account_3.counter = 1;
 
         let bob_id_4 = PallasFr::rand(&mut rng);
-        let (mut bob_account_4, _, _) = new_account(
+        let (mut bob_account_4, _, _, _) = new_account(
             &mut rng,
             asset_ids[3],
             sk_bob.clone(),
@@ -886,7 +886,7 @@ mod tests {
         bob_account_4.counter = 1;
 
         let bob_id_5 = PallasFr::rand(&mut rng);
-        let (mut bob_account_5, _, _) = new_account(
+        let (mut bob_account_5, _, _, _) = new_account(
             &mut rng,
             asset_ids[4],
             sk_bob.clone(),
@@ -897,7 +897,7 @@ mod tests {
         bob_account_5.counter = 1;
 
         let bob_id_6 = PallasFr::rand(&mut rng);
-        let (mut bob_account_6, _, _) = new_account(
+        let (mut bob_account_6, _, _, _) = new_account(
             &mut rng,
             asset_ids[5],
             sk_bob.clone(),
@@ -1440,7 +1440,7 @@ mod tests {
 
         // Create Alice's 2 accounts (one per asset)
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) = new_account(
+        let (mut alice_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_alice.clone(),
@@ -1450,7 +1450,7 @@ mod tests {
         alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) = new_account(
+        let (mut alice_account_2, _, _, _) = new_account(
             &mut rng,
             asset_id_2,
             sk_alice.clone(),
@@ -1461,7 +1461,7 @@ mod tests {
 
         // Create Bob's 2 accounts (one per asset)
         let bob_id_1 = PallasFr::rand(&mut rng);
-        let (mut bob_account_1, _, _) = new_account(
+        let (mut bob_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_bob.clone(),
@@ -1471,7 +1471,7 @@ mod tests {
         bob_account_1.balance = 1000;
 
         let bob_id_2 = PallasFr::rand(&mut rng);
-        let (mut bob_account_2, _, _) = new_account(
+        let (mut bob_account_2, _, _, _) = new_account(
             &mut rng,
             asset_id_2,
             sk_bob.clone(),
@@ -1914,7 +1914,7 @@ mod tests {
         );
 
         let alice_id_1 = PallasFr::rand(&mut rng);
-        let (mut alice_account_1, _, _) = new_account(
+        let (mut alice_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
             sk_alice.clone(),
@@ -1924,7 +1924,7 @@ mod tests {
         alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
-        let (mut alice_account_2, _, _) = new_account(
+        let (mut alice_account_2, _, _, _) = new_account(
             &mut rng,
             asset_id_2,
             sk_alice.clone(),
@@ -1934,7 +1934,7 @@ mod tests {
         alice_account_2.balance = 1000;
 
         let alice_id_3 = PallasFr::rand(&mut rng);
-        let (mut alice_account_3, _, _) =
+        let (mut alice_account_3, _, _, _) =
             new_account(&mut rng, asset_id_3, sk_alice, sk_alice_e, alice_id_3);
         alice_account_3.balance = 1000;
 

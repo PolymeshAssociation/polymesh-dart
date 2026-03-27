@@ -227,12 +227,15 @@ impl AccountAssetState {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
-    ) -> Result<Self, Error> {
-        let current_state = keys.account_state(asset_id, counter, identity)?;
-        Ok(Self {
-            current_state,
-            pending_state: None,
-        })
+    ) -> Result<(Self, PallasScalar), Error> {
+        let (current_state, rho_randomness) = keys.account_state(asset_id, counter, identity)?;
+        Ok((
+            Self {
+                current_state,
+                pending_state: None,
+            },
+            rho_randomness,
+        ))
     }
 
     pub fn current_commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
@@ -555,7 +558,7 @@ impl AccountAssetRegistrationProof {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
-        let account_state = keys.init_asset_state(asset_id, counter, identity)?;
+        let (account_state, rho_randomness) = keys.init_asset_state(asset_id, counter, identity)?;
         let (bp_state, commitment) = account_state.bp_current_state(keys)?;
         let params = poseidon_params();
         let gens = dart_gens();
@@ -565,6 +568,7 @@ impl AccountAssetRegistrationProof {
             keys.enc.public.get_affine()?,
             &bp_state,
             commitment,
+            rho_randomness,
             counter,
             identity,
             gens.account_comm_key(),
