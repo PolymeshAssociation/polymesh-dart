@@ -270,18 +270,16 @@ impl FeeAccountAssetState {
         })
     }
 
-    pub fn topup<R: RngCore + CryptoRng>(
+    pub fn topup(
         &mut self,
-        rng: &mut R,
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<FeeAccountAssetStateChange, Error> {
         self.state_change(account, |state| Ok(state.get_state_for_topup(amount)?))
     }
 
-    pub fn get_payment_state<R: RngCore + CryptoRng>(
+    pub fn get_payment_state(
         &mut self,
-        rng: &mut R,
         account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<FeeAccountAssetStateChange, Error> {
@@ -505,7 +503,7 @@ impl<
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         let pk = account.public;
-        let state_change = account_state.topup(rng, account, amount)?;
+        let state_change = account_state.topup(account, amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(tree_lookup)?;
 
@@ -895,7 +893,7 @@ impl<
         amount: Balance,
         tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let state_change = account_state.get_payment_state(rng, account, amount)?;
+        let state_change = account_state.get_payment_state(account, amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
