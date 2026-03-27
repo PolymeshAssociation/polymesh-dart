@@ -76,7 +76,6 @@ pub mod auth_proofs;
 #[cfg(feature = "decrypt_api")]
 pub mod discrete_log;
 pub mod fee_account;
-#[cfg(feature = "full_api")]
 pub mod key_distribution;
 pub mod leg;
 

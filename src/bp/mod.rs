@@ -49,7 +49,6 @@ mod fee;
 #[cfg(feature = "full_api")]
 pub use fee::*;
 
-#[cfg(feature = "full_api")]
 pub mod key_distribution_proof;
 
 use crate::curve_tree::{

@@ -1,5 +1,6 @@
 use crate::account_registration::{ENC_PK_LABEL, digits, powers_of_base};
 use crate::add_to_transcript;
+#[cfg(feature = "decrypt_api")]
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
 use crate::util::bp_gens_for_vec_commitment;
@@ -412,6 +413,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
     }
 
+    #[cfg(feature = "decrypt_api")]
     pub fn decrypt(
         &self,
         recipient_index: usize,

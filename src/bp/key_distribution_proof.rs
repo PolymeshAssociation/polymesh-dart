@@ -1,11 +1,11 @@
+use bulletproofs::{BulletproofGens, PedersenGens};
 use codec::{Decode, Encode};
-use scale_info::TypeInfo;
 
 use super::{
     AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
     dart_gens,
 };
-use crate::{PallasA, PallasScalar, WrappedCanonical};
+use crate::{DartBPGenerators, PallasA, PallasScalar, WrappedCanonical};
 use ark_ec::AffineRepr;
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
@@ -18,7 +18,8 @@ use rand_core::{CryptoRng, RngCore};
 ///
 /// The proof owner distributes their encryption secret key to `recipient_pks`
 /// so each recipient can independently decrypt it.
-#[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
+#[derive(Clone, Encode, Decode, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 pub struct KeyDistributionProof {
     /// The public key corresponding to the distributed secret key (`enc_key_gen * sk`).
     pub public_key: EncryptionPublicKey,
@@ -66,6 +67,41 @@ impl KeyDistributionProof {
         })
     }
 
+    pub fn new_with_gens<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        sk: EncryptionSecretKey,
+        pk_enc: &EncryptionPublicKey,
+        recipient_pks: &[EncryptionPublicKey],
+        nonce: &[u8],
+        leaf_level_pc_gens: &PedersenGens<PallasA>,
+        leaf_level_bp_gens: &BulletproofGens<PallasA>,
+        gens: &DartBPGenerators,
+    ) -> Result<Self, Error> {
+        let pk = pk_enc.get_affine()?;
+        let rec_pks: Vec<PallasA> = recipient_pks
+            .iter()
+            .map(|k| k.get_affine())
+            .collect::<Result<_, _>>()?;
+
+        let proof = key_distribution::KeyDistributionProof::new(
+            rng,
+            sk.inner().0,
+            pk,
+            &rec_pks,
+            gens.enc_key_gen(),
+            gens.leg_asset_value_gen(),
+            nonce,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+        )?;
+
+        Ok(Self {
+            public_key: pk_enc.clone(),
+            recipient_pks: recipient_pks.to_vec(),
+            inner: WrappedCanonical::wrap(&proof)?,
+        })
+    }
+
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         nonce: &[u8],
@@ -102,6 +138,7 @@ impl KeyDistributionProof {
     ///
     /// The caller provides their own `recipient_key` whose public key must match
     /// `self.recipient_pks[recipient_index]`.
+    #[cfg(feature = "decrypt_api")]
     pub fn decrypt(
         &self,
         recipient_index: usize,

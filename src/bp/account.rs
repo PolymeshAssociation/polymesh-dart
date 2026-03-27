@@ -1,4 +1,4 @@
-use bulletproofs::PedersenGens;
+use bulletproofs::{BulletproofGens, PedersenGens};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -29,6 +29,10 @@ pub type PallasParameters = ark_pallas::PallasConfig;
 
 pub fn get_pc_gens() -> PedersenGens<PallasA> {
     PedersenGens::<PallasA>::new().expect("Failed to create Pedersen generators")
+}
+
+pub fn get_bp_gens() -> BulletproofGens<PallasA> {
+    BulletproofGens::<PallasA>::new(MAX_CURVE_TREE_GENS as u32, 1)
 }
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
