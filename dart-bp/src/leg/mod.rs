@@ -15,11 +15,7 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
 use ark_pallas::PallasConfig;
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
-};
-use ark_std::io::Read;
-use ark_std::io::Write;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
 use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
@@ -226,15 +222,6 @@ impl Default for LegEncConfig {
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EphemeralPublicKey<G: AffineRepr>(pub G, pub G, pub G, pub Option<G>);
 
-/// Asset-id can be encrypted or revealed by the leg creator
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum AssetIdEncryption<G: AffineRepr> {
-    /// asset-id as encrypted
-    Ciphertext(G),
-    /// asset-id as revealed
-    Revealed(AssetId),
-}
-
 /// Sender's ephemeral public keys. Index 1 is None when the sender cannot decrypt the receiver's pk.
 /// Index 3 is None when asset-id is revealed (not encrypted).
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -273,6 +260,14 @@ impl<G: AffineRepr> PartyEphemeralPublicKey<G> {
             Self::Receiver(r) => r.3,
         }
     }
+
+    /// Ephemeral key identifying the party (index 0 for sender, index 1 for receiver)
+    pub fn eph_pk_participant(&self) -> G {
+        match self {
+            Self::Sender(s) => s.0,
+            Self::Receiver(r) => r.1,
+        }
+    }
 }
 
 /// (r_1, r_2, r_3, r_4) — r_4 is `None` when asset-id is revealed
@@ -288,28 +283,46 @@ pub struct LegEncryptionRandomness<F: PrimeField> {
     pub r_meds: Vec<F>,
 }
 
-/// Twisted Elgamal encryption of sender pk, receiver pk, amount and asset id
-// TODO: Split this into multiple parts as big chunks of this are not needed by sender/receiver/mediator affirmations
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct LegEncryption<G: AffineRepr> {
+pub struct LegEncryptionCore<G: AffineRepr> {
     pub ct_s: G,
     pub ct_r: G,
     pub ct_amount: G,
-    pub ct_asset_id: AssetIdEncryption<G>,
-    pub eph_pk_s: SenderEphemeralPublicKey<G>,
-    pub eph_pk_r: ReceiverEphemeralPublicKey<G>,
-    /// Encryption of mediator affirmation keys in the order they appear in [`AssetData`].
-    /// These only need to be decrypted by the corresponding mediator and none other.
-    pub ct_meds: Vec<G>,
-    /// Ephemeral public keys of auditors in the order they appear in [`AssetData`].
-    pub eph_pk_enc_keys: Vec<EphemeralPublicKey<G>>,
-    /// Ephemeral public keys of auditors in the order they were passed by leg creator.
-    pub eph_pk_public_enc_keys: Vec<EphemeralPublicKey<G>>,
+    /// `None` when asset-id is revealed (not encrypted); `Some(ct)` when encrypted
+    pub ct_asset_id: Option<G>,
+}
+
+impl<G: AffineRepr> LegEncryptionCore<G> {
+    /// Returns the ciphertext for the participant, `ct_s` for sender, `ct_r` for receiver
+    pub fn ct_participant(&self, is_sender: bool) -> G {
+        if is_sender { self.ct_s } else { self.ct_r }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct MediatorEncryptions<G: AffineRepr> {
     /// Ephemeral encryption public keys for mediators in the order they appear in `ct_meds`.
     /// The index corresponds to the encryption key from [`AssetData`].
     ///
     /// Invariant: `ct_meds.len() == eph_pk_med_keys.len()`.
     pub eph_pk_med_keys: Vec<(u8, G)>,
+    /// Encryption of mediator affirmation keys in the order they appear in [`AssetData`].
+    /// These only need to be decrypted by the corresponding mediator and none other.
+    pub ct_meds: Vec<G>,
+}
+
+/// Twisted Elgamal encryption of sender pk, receiver pk, amount and asset id
+// TODO: Capture core, eph_pk_s, eph_pk_r into a struct that can be passed to sender/receiver affirmations
+#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct LegEncryption<G: AffineRepr> {
+    pub core: LegEncryptionCore<G>,
+    pub eph_pk_s: SenderEphemeralPublicKey<G>,
+    pub eph_pk_r: ReceiverEphemeralPublicKey<G>,
+    /// Ephemeral public keys of auditors in the order they appear in [`AssetData`].
+    pub eph_pk_enc_keys: Vec<EphemeralPublicKey<G>>,
+    /// Ephemeral public keys of auditors in the order they were passed by leg creator.
+    pub eph_pk_public_enc_keys: Vec<EphemeralPublicKey<G>>,
+    pub mediators: MediatorEncryptions<G>,
 }
 
 impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
@@ -378,11 +391,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         // Encrypt asset-id if it isn't revealed
         let ct_asset_id = if config.reveal_asset_id {
-            AssetIdEncryption::Revealed(self.core.asset_id)
+            None
         } else {
-            AssetIdEncryption::Ciphertext(
-                (enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine(),
-            )
+            Some((enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine())
         };
 
         // If parties are allowed to see each other create ephemeral public keys for those parts else skip
@@ -446,16 +457,20 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         Ok((
             LegEncryption {
-                ct_s,
-                ct_r,
-                ct_amount,
-                ct_asset_id,
+                core: LegEncryptionCore {
+                    ct_s,
+                    ct_r,
+                    ct_amount,
+                    ct_asset_id,
+                },
                 eph_pk_s,
                 eph_pk_r,
                 eph_pk_enc_keys: enc_keys.collect(),
                 eph_pk_public_enc_keys: public_enc_keys.collect(),
-                ct_meds: G::Group::normalize_batch(&ct_meds),
-                eph_pk_med_keys,
+                mediators: MediatorEncryptions {
+                    ct_meds: G::Group::normalize_batch(&ct_meds),
+                    eph_pk_med_keys,
+                },
             },
             LegEncryptionRandomness {
                 r1,
@@ -470,7 +485,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
 impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     pub fn is_asset_id_revealed(&self) -> bool {
-        matches!(self.ct_asset_id, AssetIdEncryption::Revealed(_))
+        self.core.ct_asset_id.is_none()
     }
 
     /// Returns true if senders and receivers are allowed to see each other. Here the leg encryption
@@ -479,20 +494,30 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         self.eph_pk_s.1.is_some() & self.eph_pk_r.0.is_some()
     }
 
-    /// None when asset-id is not revealed to the verifier
-    pub fn asset_id(&self) -> Option<AssetId> {
-        match self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => Some(asset_id),
-            _ => None,
-        }
+    /// `None` when asset-id is encrypted (not revealed to the verifier).
+    pub fn asset_id_ciphertext(&self) -> Option<G> {
+        self.core.ct_asset_id
     }
 
-    /// None when asset-id is revealed to the verifier
-    pub fn asset_id_ciphertext(&self) -> Option<G> {
-        match self.ct_asset_id {
-            AssetIdEncryption::Ciphertext(ct) => Some(ct),
-            _ => None,
-        }
+    pub fn ct_s(&self) -> G {
+        self.core.ct_s
+    }
+
+    pub fn ct_r(&self) -> G {
+        self.core.ct_r
+    }
+
+    pub fn ct_amount(&self) -> G {
+        self.core.ct_amount
+    }
+
+    /// Returns the ciphertext for the participant, `ct_s` for sender, `ct_r` for receiver
+    pub fn ct_participant(&self, is_sender: bool) -> G {
+        self.core.ct_participant(is_sender)
+    }
+
+    pub fn num_mediators(&self) -> usize {
+        self.mediators.ct_meds.len()
     }
 
     pub fn eph_pk_participant(&self, is_sender: bool) -> G {
@@ -505,9 +530,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 
     pub fn eph_pk_and_ct_participant(&self, is_sender: bool) -> (G, G) {
         if is_sender {
-            (self.eph_pk_s.0, self.ct_s)
+            (self.eph_pk_s.0, self.core.ct_s)
         } else {
-            (self.eph_pk_r.1, self.ct_r)
+            (self.eph_pk_r.1, self.core.ct_r)
         }
     }
 
@@ -533,13 +558,14 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         ct.into_group() - eph_pk * sk_inv
     }
 
-    /// Decrypt as sender using `sk_enc`. Sender can always decrypt own pk, amount, asset_id.
+    /// Decrypt as sender using `sk_enc`. Sender can always decrypt own pk, amount, and asset_id
+    /// when it was encrypted; returns `None` for asset_id if it was not encrypted (revealed).
     /// Receiver pk is only decryptable when `eph_pk_s.1` is present.
     pub fn decrypt_as_sender(
         &self,
         sk_enc: &F,
         enc_gen: G,
-    ) -> Result<(G, Option<G>, AssetId, Balance)> {
+    ) -> Result<(G, Option<G>, Option<AssetId>, Balance)> {
         self.decrypt_as_sender_with_limits(sk_enc, enc_gen, None, None)
     }
 
@@ -549,7 +575,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(G, Option<G>, AssetId, Balance)> {
+    ) -> Result<(G, Option<G>, Option<AssetId>, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
@@ -558,43 +584,32 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
-        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
-        let asset_id = match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => *asset_id,
-            AssetIdEncryption::Ciphertext(ct) => {
-                let eph_pk_asset_id = self.eph_pk_s.3.ok_or_else(|| {
-                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
-                })?;
-                let asset_id_pt =
-                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })? as AssetId
-            }
-        };
+        let asset_id =
+            self.decrypt_asset_id_as_participant(true, &sk_enc_inv, enc_gen, max_asset_id)?;
 
         let amount_pt =
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_s.2);
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_amount, self.eph_pk_s.2);
         let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
 
-        let sender = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, self.eph_pk_s.0)
-            .into_affine();
+        let sender =
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_s, self.eph_pk_s.0)
+                .into_affine();
         let receiver = self.eph_pk_s.1.map(|eph| {
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, eph).into_affine()
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_r, eph).into_affine()
         });
 
         Ok((sender, receiver, asset_id, amount))
     }
 
-    /// Decrypt as receiver using `sk_enc`. Receiver can always decrypt own pk, amount, asset_id.
+    /// Decrypt as receiver using `sk_enc`. Receiver can always decrypt own pk, amount, and asset_id
+    /// when it was encrypted; returns `None` for asset_id if it was not encrypted (revealed).
     /// Sender pk is only decryptable when `eph_pk_r.0` is present.
     pub fn decrypt_as_receiver(
         &self,
         sk_enc: &F,
         enc_gen: G,
-    ) -> Result<(Option<G>, G, AssetId, Balance)> {
+    ) -> Result<(Option<G>, G, Option<AssetId>, Balance)> {
         self.decrypt_as_receiver_with_limits(sk_enc, enc_gen, None, None)
     }
 
@@ -604,7 +619,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(Option<G>, G, AssetId, Balance)> {
+    ) -> Result<(Option<G>, G, Option<AssetId>, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
@@ -613,31 +628,19 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
-        // Decrypt or get revealed asset-id first (fails quickly if wrong key)
-        let asset_id = match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => *asset_id,
-            AssetIdEncryption::Ciphertext(ct) => {
-                let eph_pk_asset_id = self.eph_pk_r.3.ok_or_else(|| {
-                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
-                })?;
-                let asset_id_pt =
-                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })? as AssetId
-            }
-        };
+        let asset_id =
+            self.decrypt_asset_id_as_participant(false, &sk_enc_inv, enc_gen, max_asset_id)?;
 
         let amount_pt =
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_amount, self.eph_pk_r.2);
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_amount, self.eph_pk_r.2);
         let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
 
-        let receiver = Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_r, self.eph_pk_r.1)
-            .into_affine();
+        let receiver =
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_r, self.eph_pk_r.1)
+                .into_affine();
         let sender = self.eph_pk_r.0.map(|eph| {
-            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.ct_s, eph).into_affine()
+            Self::decrypt_element_with_sk_inv(&sk_enc_inv, self.core.ct_s, eph).into_affine()
         });
 
         Ok((sender, receiver, asset_id, amount))
@@ -648,11 +651,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     pub fn decrypt_given_key(
         &self,
         sk: &F,
-        is_public: bool,
+        is_public_enc_key: bool,
         key_index: usize,
         enc_gen: G,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        self.decrypt_given_key_with_limits(sk, is_public, key_index, enc_gen, None, None)
+    ) -> Result<(G, G, Option<AssetId>, Balance)> {
+        self.decrypt_given_key_with_limits(sk, is_public_enc_key, key_index, enc_gen, None, None)
     }
 
     /// Return (sender-pk, receiver-pk, asset-id, amount) in the leg given decryption key of auditor/mediator.
@@ -660,13 +663,13 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     pub fn decrypt_given_key_with_limits(
         &self,
         sk: &F,
-        is_public: bool,
+        is_public_enc_key: bool,
         key_index: usize,
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(G, G, AssetId, Balance)> {
-        let eph_keys = if is_public {
+    ) -> Result<(G, G, Option<AssetId>, Balance)> {
+        let eph_keys = if is_public_enc_key {
             &self.eph_pk_public_enc_keys
         } else {
             &self.eph_pk_enc_keys
@@ -685,18 +688,20 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         // Try to decrypt asset-id and amount first as they will fail if the wrong secret key is used.
         let enc_gen = enc_gen.into_group();
         let asset_id =
-            self.decrypt_asset_id(&sk_inv, is_public, key_index, enc_gen, max_asset_id)? as AssetId;
-        let amount = self.decrypt_amount(&sk_inv, is_public, key_index, enc_gen, max_amount)?;
+            self.decrypt_asset_id(&sk_inv, is_public_enc_key, key_index, enc_gen, max_asset_id)?;
+        let amount =
+            self.decrypt_amount(&sk_inv, is_public_enc_key, key_index, enc_gen, max_amount)?;
 
-        let sender = Self::decrypt_as_group_element(&sk_inv, self.ct_s, eph_keys[key_index].0);
-        let receiver = Self::decrypt_as_group_element(&sk_inv, self.ct_r, eph_keys[key_index].1);
+        let sender = Self::decrypt_as_group_element(&sk_inv, self.core.ct_s, eph_keys[key_index].0);
+        let receiver =
+            Self::decrypt_as_group_element(&sk_inv, self.core.ct_r, eph_keys[key_index].1);
 
         Zeroize::zeroize(&mut sk_inv);
 
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
-            asset_id,
+            asset_id.map(|a| a as AssetId),
             amount,
         ))
     }
@@ -708,7 +713,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         key_index: usize,
         enc_gen: G::Group,
         max_asset_id: AssetId,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         let eph_keys = if is_public {
             &self.eph_pk_public_enc_keys
         } else {
@@ -718,18 +723,17 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             return Err(Error::InvalidKeyIndex(key_index));
         }
 
-        match &self.ct_asset_id {
-            AssetIdEncryption::Revealed(asset_id) => Ok(*asset_id as u64),
-            AssetIdEncryption::Ciphertext(ct) => {
+        self.core
+            .ct_asset_id
+            .map(|ct| {
                 let asset_id =
-                    Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].3.unwrap());
-
+                    Self::decrypt_as_group_element(sk_inv, ct, eph_keys[key_index].3.unwrap());
                 solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
                     .ok_or_else(|| {
                         Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
                     })
-            }
-        }
+            })
+            .transpose()
     }
 
     pub fn decrypt_amount(
@@ -748,7 +752,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         if key_index >= eph_keys.len() {
             return Err(Error::InvalidKeyIndex(key_index));
         }
-        let amount = Self::decrypt_as_group_element(sk_inv, self.ct_amount, eph_keys[key_index].2);
+        let amount =
+            Self::decrypt_as_group_element(sk_inv, self.core.ct_amount, eph_keys[key_index].2);
 
         solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
@@ -757,38 +762,73 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     pub fn decrypt_as_group_element(sk_inv: &F, encrypted: G, eph_pk: G) -> G::Group {
         encrypted.into_group() - eph_pk * sk_inv
     }
+
+    fn decrypt_asset_id_as_participant(
+        &self,
+        is_sender: bool,
+        sk_enc_inv: &F,
+        enc_gen: G::Group,
+        max_asset_id: AssetId,
+    ) -> Result<Option<AssetId>> {
+        let eph_pk = self.eph_pk_asset_id(is_sender);
+        self.core
+            .ct_asset_id
+            .map(|ct| {
+                let eph_pk_asset_id = eph_pk.ok_or_else(|| {
+                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
+                })?;
+                let asset_id_pt =
+                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, ct, eph_pk_asset_id);
+                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
+                    .ok_or_else(|| {
+                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+                    })
+                    .map(|id| id as AssetId)
+            })
+            .transpose()
+    }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct AmountCiphertext<G: AffineRepr>(
+    /// ct_amount
+    pub G,
+    /// eph_pk_amount
+    pub G,
+);
 
 mod serialization {
     use super::*;
+    use ark_serialize::{Compress, SerializationError, Valid, Validate};
+    use ark_std::io::{Read, Write};
 
-    impl<G: AffineRepr> CanonicalSerialize for AssetIdEncryption<G> {
+    impl<G: AffineRepr> CanonicalSerialize for PartyEphemeralPublicKey<G> {
         fn serialize_with_mode<W: Write>(
             &self,
             mut writer: W,
             compress: Compress,
         ) -> Result<(), SerializationError> {
             match self {
-                AssetIdEncryption::Ciphertext(g) => {
+                PartyEphemeralPublicKey::Sender(eph_pk) => {
                     0u8.serialize_with_mode(&mut writer, compress)?;
-                    g.serialize_with_mode(&mut writer, compress)
+                    eph_pk.serialize_with_mode(&mut writer, compress)
                 }
-                AssetIdEncryption::Revealed(asset_id) => {
+                PartyEphemeralPublicKey::Receiver(eph_pk) => {
                     1u8.serialize_with_mode(&mut writer, compress)?;
-                    asset_id.serialize_with_mode(&mut writer, compress)
+                    eph_pk.serialize_with_mode(&mut writer, compress)
                 }
             }
         }
 
         fn serialized_size(&self, compress: Compress) -> usize {
             1 + match self {
-                AssetIdEncryption::Ciphertext(g) => g.serialized_size(compress),
-                AssetIdEncryption::Revealed(asset_id) => asset_id.serialized_size(compress),
+                PartyEphemeralPublicKey::Sender(eph_pk) => eph_pk.serialized_size(compress),
+                PartyEphemeralPublicKey::Receiver(eph_pk) => eph_pk.serialized_size(compress),
             }
         }
     }
 
-    impl<G: AffineRepr> CanonicalDeserialize for AssetIdEncryption<G> {
+    impl<G: AffineRepr> CanonicalDeserialize for PartyEphemeralPublicKey<G> {
         fn deserialize_with_mode<R: Read>(
             mut reader: R,
             compress: Compress,
@@ -796,26 +836,30 @@ mod serialization {
         ) -> Result<Self, SerializationError> {
             let discriminant = u8::deserialize_with_mode(&mut reader, compress, validate)?;
             match discriminant {
-                0 => Ok(AssetIdEncryption::Ciphertext(G::deserialize_with_mode(
-                    &mut reader,
-                    compress,
-                    validate,
-                )?)),
-                1 => Ok(AssetIdEncryption::Revealed(AssetId::deserialize_with_mode(
-                    &mut reader,
-                    compress,
-                    validate,
-                )?)),
+                0 => Ok(PartyEphemeralPublicKey::Sender(
+                    SenderEphemeralPublicKey::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                )),
+                1 => Ok(PartyEphemeralPublicKey::Receiver(
+                    ReceiverEphemeralPublicKey::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                )),
                 _ => Err(SerializationError::InvalidData),
             }
         }
     }
 
-    impl<G: AffineRepr> Valid for AssetIdEncryption<G> {
+    impl<G: AffineRepr> Valid for PartyEphemeralPublicKey<G> {
         fn check(&self) -> Result<(), SerializationError> {
             match self {
-                AssetIdEncryption::Ciphertext(g) => g.check(),
-                AssetIdEncryption::Revealed(_) => Ok(()),
+                PartyEphemeralPublicKey::Sender(eph_pk) => eph_pk.check(),
+                PartyEphemeralPublicKey::Receiver(eph_pk) => eph_pk.check(),
             }
         }
     }

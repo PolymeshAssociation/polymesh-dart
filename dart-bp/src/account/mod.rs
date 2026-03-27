@@ -10,7 +10,7 @@ pub mod transparent;
 #[cfg(test)]
 pub mod tests;
 
-pub use crate::leg::PartyEphemeralPublicKey;
+pub use crate::leg::{AmountCiphertext, PartyEphemeralPublicKey};
 pub use common::{
     BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver, CommonStateChangeProof,
     CommonStateChangeProver, LegProverConfig, LegVerifierConfig, StateChangeVerifier,
@@ -41,7 +41,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::Balance;
+use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 pub use state_transition::AccountStateTransitionProofBuilder;
 pub use state_transition::AccountStateTransitionProofVerifier;
@@ -160,7 +160,7 @@ impl<
         // 10. encryption sk inverse is same in both old and new account commitment
         // 11. inverse of secret key of encryption pk in leg is present in account commitment
 
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_s.clone();
         let eph_pk_amount = eph_pk.2;
 
@@ -173,7 +173,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
@@ -237,6 +238,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -257,6 +259,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -279,6 +282,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -289,13 +293,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_s.clone();
         let eph_pk_amount = eph_pk.2;
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: Some(false),
@@ -311,7 +316,7 @@ impl<
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -326,7 +331,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -343,6 +348,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -356,12 +362,13 @@ impl<
     ) -> Result<()> {
         let eph_pk = leg_enc.eph_pk_s.clone();
         let eph_pk_amount = eph_pk.2;
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: Some(false),
@@ -379,7 +386,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -392,7 +399,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -512,7 +519,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
                     has_balance_changed: false,
                 }],
@@ -541,6 +549,7 @@ impl<
         Ok((Self { common_proof }, nullifier))
     }
 
+    /// `asset_id` is None when leg does not reveal asset-id else it contains the asset-id
     pub fn verify<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
@@ -549,6 +558,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -569,6 +579,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -584,6 +595,7 @@ impl<
     }
 
     /// Verifies the proof except for final Bulletproof verification
+    /// `asset_id` is None when leg does not reveal asset-id else it contains the asset-id
     pub fn verify_and_return_tuples<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
@@ -591,6 +603,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -604,7 +617,8 @@ impl<
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(false),
@@ -629,7 +643,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -646,6 +660,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -660,7 +675,8 @@ impl<
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(false),
@@ -684,7 +700,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -815,7 +831,7 @@ impl<
         // 8. randomness in new account commitment is square of randomness in old account commitment
         // 9. pk in leg has the sk in account commitment
 
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_s.clone();
         let eph_pk_amount = eph_pk.2;
 
@@ -823,7 +839,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
@@ -887,6 +904,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -907,6 +925,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -929,6 +948,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -939,13 +959,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: None,
@@ -961,7 +982,7 @@ impl<
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -976,7 +997,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -993,6 +1014,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1004,13 +1026,14 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(true),
                 has_counter_decreased: None,
@@ -1028,7 +1051,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1041,7 +1064,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1170,7 +1193,7 @@ impl<
         // 8. randomness in new account commitment is square of randomness in old account commitment
         // 9. pk in leg has the sk in account commitment
 
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_r.clone();
         let eph_pk_amount = eph_pk.2;
 
@@ -1178,7 +1201,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
                     has_balance_changed: true,
                 }],
@@ -1242,6 +1266,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1261,6 +1286,7 @@ impl<
 
         let (even_tuple, odd_tuple) = self.verify_and_return_tuples(
             leg_enc,
+            asset_id,
             account_tree_root,
             updated_account_commitment,
             nullifier,
@@ -1283,6 +1309,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1293,13 +1320,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: None,
@@ -1315,7 +1343,7 @@ impl<
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -1330,7 +1358,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1347,6 +1375,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1358,13 +1387,14 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: None,
@@ -1382,7 +1412,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1395,7 +1425,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1510,7 +1540,7 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_r.clone();
         let eph_pk_amount = eph_pk.2;
 
@@ -1518,7 +1548,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
                     has_balance_changed: true,
                 }],
@@ -1582,6 +1613,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1602,6 +1634,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -1623,6 +1656,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1633,13 +1667,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
@@ -1655,7 +1690,7 @@ impl<
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -1670,7 +1705,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1687,6 +1722,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1698,13 +1734,14 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_r.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
@@ -1722,7 +1759,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -1735,7 +1772,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -1850,7 +1887,7 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk = leg_enc.eph_pk_s.clone();
         let eph_pk_amount = eph_pk.2;
 
@@ -1858,7 +1895,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
                     has_balance_changed: true,
                 }],
@@ -1922,6 +1960,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1942,6 +1981,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -1963,6 +2003,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -1973,13 +2014,14 @@ impl<
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
@@ -1995,7 +2037,7 @@ impl<
 
         verifier.init_balance_change_verification(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
         )?;
 
@@ -2010,7 +2052,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2027,6 +2069,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2038,13 +2081,14 @@ impl<
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let ct_amount = leg_enc.ct_amount;
+        let ct_amount = leg_enc.core.ct_amount;
         let eph_pk_amount = leg_enc.eph_pk_s.2;
 
         let mut verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: Some(false),
                 has_counter_decreased: Some(true),
@@ -2062,7 +2106,7 @@ impl<
 
         verifier.init_balance_change_verification_with_given_verifier(
             &self.balance_proof,
-            &[(ct_amount, eph_pk_amount)],
+            &[AmountCiphertext(ct_amount, eph_pk_amount)],
             enc_gen,
             even_verifier,
         )?;
@@ -2075,7 +2119,7 @@ impl<
             &self.common_proof,
             Some(&self.balance_proof),
             &challenge,
-            vec![leg_enc.clone()],
+            vec![AmountCiphertext(ct_amount, eph_pk_amount)],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2199,7 +2243,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
                     has_balance_changed: false,
                 }],
@@ -2236,6 +2281,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2256,6 +2302,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -2278,6 +2325,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2291,7 +2339,8 @@ impl<
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
@@ -2316,7 +2365,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2333,6 +2382,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2347,7 +2397,8 @@ impl<
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Sender(leg_enc.eph_pk_s.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
@@ -2371,7 +2422,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2495,7 +2546,8 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 vec![LegProverConfig {
-                    encryption: leg_enc,
+                    encryption: leg_enc.core.clone(),
+                    asset_id: leg_enc.is_asset_id_revealed().then(|| account.asset_id),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
                     has_balance_changed: false,
                 }],
@@ -2532,6 +2584,7 @@ impl<
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2552,6 +2605,7 @@ impl<
         let (even_tuple, odd_tuple) = self
             .verify_and_return_tuples::<_, Parameters0, Parameters1>(
                 leg_enc,
+                asset_id,
                 account_tree_root,
                 updated_account_commitment,
                 nullifier,
@@ -2574,6 +2628,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2587,7 +2642,8 @@ impl<
         let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
@@ -2612,7 +2668,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -2629,6 +2685,7 @@ impl<
     >(
         &self,
         leg_enc: LegEncryption<Affine<G0>>,
+        asset_id: Option<AssetId>,
         account_tree_root: &Root<L, 1, G0, G1>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
@@ -2643,7 +2700,8 @@ impl<
         let verifier = StateChangeVerifier::init_with_given_verifier(
             &self.common_proof,
             vec![LegVerifierConfig {
-                encryption: leg_enc.clone(),
+                encryption: leg_enc.core.clone(),
+                asset_id,
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(leg_enc.eph_pk_r.clone()),
                 has_balance_decreased: None,
                 has_counter_decreased: Some(true),
@@ -2667,7 +2725,7 @@ impl<
             &self.common_proof,
             None,
             &challenge,
-            vec![leg_enc.clone()],
+            vec![],
             updated_account_commitment,
             nullifier,
             account_tree_params,

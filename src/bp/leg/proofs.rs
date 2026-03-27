@@ -882,7 +882,7 @@ impl MediatorAffirmationProof {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        leg_enc: &LegEncrypted,
+        leg_enc: &MediatorsEncrypted,
         mediator_keys: &AccountKeys,
         key_index: MediatorId,
         accept: bool,
@@ -908,7 +908,7 @@ impl MediatorAffirmationProof {
         })
     }
 
-    pub fn verify(&self, leg_enc: &LegEncrypted) -> Result<(), Error> {
+    pub fn verify(&self, leg_enc: &MediatorsEncrypted) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
         proof.verify(

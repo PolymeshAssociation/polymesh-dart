@@ -321,17 +321,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ));
         }
 
-        for leg in &legs {
-            if let Some(revealed_asset_id) = leg.asset_id() {
-                if revealed_asset_id != account.asset_id {
-                    return Err(Error::ProofGenerationError(format!(
-                        "Asset-id mismatch: leg reveals {}, but account has {}",
-                        revealed_asset_id, account.asset_id
-                    )));
-                }
-            }
-        }
-
         let num_pending_txns = legs.len();
         // Need to prove that:
         // 1. sk used in commitment is for the revealed pk
@@ -423,11 +412,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
                 eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
-                enc_total_recv += legs[i].ct_amount;
+                enc_total_recv += legs[i].ct_amount();
                 eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
             } else if sender_in_leg_indices.contains(&i) {
                 eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
-                enc_total_send += legs[i].ct_amount;
+                enc_total_send += legs[i].ct_amount();
                 eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
@@ -621,17 +610,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             }
         }
 
-        for leg in &legs {
-            if let Some(revealed_asset_id) = leg.asset_id() {
-                if revealed_asset_id != asset_id {
-                    return Err(Error::ProofVerificationError(format!(
-                        "Asset-id mismatch: leg reveals {}, but expected {}",
-                        revealed_asset_id, asset_id
-                    )));
-                }
-            }
-        }
-
         let num_pending_txns = legs.len();
 
         let at = G::ScalarField::from(asset_id);
@@ -681,11 +659,11 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let mut y_asset_id = Vec::with_capacity(legs.len());
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
-                enc_total_recv += legs[i].ct_amount;
+                enc_total_recv += legs[i].ct_amount();
                 eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
                 eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
             } else if sender_in_leg_indices.contains(&i) {
-                enc_total_send += legs[i].ct_amount;
+                enc_total_send += legs[i].ct_amount();
                 eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
                 eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
             } else {

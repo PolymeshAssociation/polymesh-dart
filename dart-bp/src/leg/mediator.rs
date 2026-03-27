@@ -1,4 +1,4 @@
-use crate::leg::LegEncryption;
+use crate::leg::MediatorEncryptions;
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, error::Result};
 use ark_ec::AffineRepr;
 use ark_ff::Field;
@@ -29,7 +29,7 @@ pub struct MediatorTxnProof<G: AffineRepr> {
 impl<G: AffineRepr> MediatorTxnProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: LegEncryption<G>,
+        leg_enc: MediatorEncryptions<G>,
         enc_sk: G::ScalarField,
         mediator_sk: G::ScalarField,
         accept: bool,
@@ -53,7 +53,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: LegEncryption<G>,
+        leg_enc: MediatorEncryptions<G>,
         enc_sk: G::ScalarField,
         mut mediator_sk: G::ScalarField,
         accept: bool,
@@ -104,7 +104,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
     pub fn verify(
         &self,
-        leg_enc: LegEncryption<G>,
+        leg_enc: MediatorEncryptions<G>,
         accept: bool,
         index: usize,
         nonce: &[u8],
@@ -125,7 +125,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
     pub fn verify_with_given_transcript(
         &self,
-        leg_enc: LegEncryption<G>,
+        leg_enc: MediatorEncryptions<G>,
         accept: bool,
         index: usize,
         nonce: &[u8],
@@ -181,7 +181,10 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
     }
 }
 
-fn ensure_correct_index<G: AffineRepr>(leg_enc: &LegEncryption<G>, index: usize) -> Result<()> {
+fn ensure_correct_index<G: AffineRepr>(
+    leg_enc: &MediatorEncryptions<G>,
+    index: usize,
+) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
         return Ok(());
@@ -286,7 +289,7 @@ mod tests {
             let clock = Instant::now();
             let proof = MediatorTxnProof::new(
                 &mut rng,
-                leg_enc.clone(),
+                leg_enc.mediators.clone(),
                 keys_auditor[mediator_enc_key_indices[mediator_index] as usize]
                     .0
                     .0,
@@ -303,7 +306,7 @@ mod tests {
 
             proof
                 .verify(
-                    leg_enc.clone(),
+                    leg_enc.mediators.clone(),
                     accept,
                     mediator_index,
                     nonce,
@@ -319,7 +322,7 @@ mod tests {
             let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
             proof
                 .verify(
-                    leg_enc.clone(),
+                    leg_enc.mediators.clone(),
                     accept,
                     mediator_index,
                     nonce,
@@ -340,7 +343,14 @@ mod tests {
             );
 
             match proof
-                .verify(leg_enc.clone(), accept, 10, nonce, sig_key_gen, None)
+                .verify(
+                    leg_enc.mediators.clone(),
+                    accept,
+                    10,
+                    nonce,
+                    sig_key_gen,
+                    None,
+                )
                 .err()
                 .unwrap()
             {
@@ -390,7 +400,7 @@ mod tests {
 
         let proof = MediatorTxnProof::new(
             &mut rng,
-            leg_enc.clone(),
+            leg_enc.mediators.clone(),
             sk_aud_enc.0,
             sk_med.0,
             accept,
@@ -401,11 +411,11 @@ mod tests {
         .unwrap();
 
         let mut malformed = leg_enc.clone();
-        malformed.eph_pk_med_keys.pop();
+        malformed.mediators.eph_pk_med_keys.pop();
 
         assert!(
             proof
-                .verify(malformed, accept, index, nonce, sig_key_gen, None)
+                .verify(malformed.mediators, accept, index, nonce, sig_key_gen, None)
                 .is_err()
         );
     }

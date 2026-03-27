@@ -664,7 +664,7 @@ impl<
             // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
             let t_k = PokDiscreteLogProtocol::init(k[i], k_blindings[i], &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.eph_pk_med_keys[i].0 as usize].0;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
 
             // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
             let t_eph_m = PokDiscreteLogProtocol::init(m_r_1_inv[i], m_r_1_inv_blindings[i], base);
@@ -721,21 +721,21 @@ impl<
         ct_s_proto.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_s.0,
-            &leg_enc.ct_s,
+            &leg_enc.ct_s(),
             &mut transcript,
         )?;
 
         ct_r_proto.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_r.1,
-            &leg_enc.ct_r,
+            &leg_enc.ct_r(),
             &mut transcript,
         )?;
 
         ct_amount_proto.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
-            &leg_enc.ct_amount,
+            &leg_enc.ct_amount(),
             &mut transcript,
         )?;
 
@@ -813,9 +813,9 @@ impl<
         }
 
         for i in 0..r_meds.len() {
-            let y = leg_enc.ct_meds[i]
+            let y = leg_enc.mediators.ct_meds[i]
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
                 - re_randomized_points.re_randomized_points[l.len() + i + 1];
             pk_m_proto[i].0.challenge_contribution(
                 &enc_key_gen,
@@ -830,10 +830,10 @@ impl<
                 &mut transcript,
             )?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.eph_pk_med_keys[i].0 as usize].0;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
             pk_m_proto[i].2.challenge_contribution(
                 &base,
-                &leg_enc.eph_pk_med_keys[i].1,
+                &leg_enc.mediators.eph_pk_med_keys[i].1,
                 &mut transcript,
             )?;
         }
@@ -1143,17 +1143,17 @@ impl<
                 num_enc_keys
             )));
         }
-        if leg_enc.ct_meds.len() != num_med_keys {
+        if leg_enc.num_mediators() != num_med_keys {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.ct_meds.len() != resp_eph_pk_meds.len() ({} != {})",
-                leg_enc.ct_meds.len(),
+                leg_enc.num_mediators(),
                 num_med_keys
             )));
         }
-        if leg_enc.eph_pk_med_keys.len() != num_med_keys {
+        if leg_enc.mediators.eph_pk_med_keys.len() != num_med_keys {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_med_keys.len() != resp_eph_pk_meds.len() ({} != {})",
-                leg_enc.eph_pk_med_keys.len(),
+                leg_enc.mediators.eph_pk_med_keys.len(),
                 num_med_keys
             )));
         }
@@ -1221,7 +1221,7 @@ impl<
         }
 
         for i in 0..num_med_keys {
-            let idx = leg_enc.eph_pk_med_keys[i].0 as usize;
+            let idx = leg_enc.mediators.eph_pk_med_keys[i].0 as usize;
             if idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
@@ -1293,21 +1293,21 @@ impl<
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_s.0,
-            &leg_enc.ct_s,
+            &leg_enc.ct_s(),
             &mut transcript,
         )?;
 
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_r.1,
-            &leg_enc.ct_r,
+            &leg_enc.ct_r(),
             &mut transcript,
         )?;
 
         self.resp_amount_enc.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
-            &leg_enc.ct_amount,
+            &leg_enc.ct_amount(),
             &mut transcript,
         )?;
 
@@ -1416,9 +1416,9 @@ impl<
 
         for i in 0..num_med_keys {
             let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let y = leg_enc.ct_meds[i]
+            let y = leg_enc.mediators.ct_meds[i]
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
             p_0.challenge_contribution(
                 &enc_key_gen,
@@ -1433,8 +1433,12 @@ impl<
                 &mut transcript,
             )?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.eph_pk_med_keys[i].0 as usize].0;
-            p_2.challenge_contribution(&base, &leg_enc.eph_pk_med_keys[i].1, &mut transcript)?;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
+            p_2.challenge_contribution(
+                &base,
+                &leg_enc.mediators.eph_pk_med_keys[i].1,
+                &mut transcript,
+            )?;
         }
 
         for i in 0..self.resp_eph_pk_public_enc.len() {
@@ -1469,7 +1473,7 @@ impl<
             rmc,
             self.resp_ct_s,
             "resp_ct_s verification failed",
-            leg_enc.ct_s,
+            leg_enc.ct_s(),
             enc_key_gen,
             leg_enc.eph_pk_s.0,
             &challenge,
@@ -1481,7 +1485,7 @@ impl<
             rmc,
             self.resp_ct_r,
             "resp_ct_r verification failed",
-            leg_enc.ct_r,
+            leg_enc.ct_r(),
             enc_key_gen,
             leg_enc.eph_pk_r.1,
             &challenge,
@@ -1493,7 +1497,7 @@ impl<
             rmc,
             self.resp_amount_enc,
             "resp_amount_enc verification failed",
-            leg_enc.ct_amount,
+            leg_enc.ct_amount(),
             enc_key_gen,
             enc_gen,
             &challenge,
@@ -1668,11 +1672,11 @@ impl<
 
         for i in 0..num_med_keys {
             let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let y = leg_enc.ct_meds[i]
+            let y = leg_enc.mediators.ct_meds[i]
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
-            let med_key_idx = leg_enc.eph_pk_med_keys[i].0 as usize;
+            let med_key_idx = leg_enc.mediators.eph_pk_med_keys[i].0 as usize;
             if med_key_idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
@@ -1706,7 +1710,7 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_meds[{}].2 verification failed", i),
-                leg_enc.eph_pk_med_keys[i].1,
+                leg_enc.mediators.eph_pk_med_keys[i].1,
                 base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
@@ -1919,18 +1923,18 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
-        if leg_enc.ct_meds.len() != leg.med_keys.len() {
+        if leg_enc.num_mediators() != leg.med_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in ct_meds length: leg_enc has {} but leg has {} med_keys",
-                leg_enc.ct_meds.len(),
+                leg_enc.num_mediators(),
                 leg.med_keys.len()
             )));
         }
 
-        if leg_enc.eph_pk_med_keys.len() != leg.med_keys.len() {
+        if leg_enc.mediators.eph_pk_med_keys.len() != leg.med_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in eph_pk_med_keys length: leg_enc has {} but leg has {} med_keys",
-                leg_enc.eph_pk_med_keys.len(),
+                leg_enc.mediators.eph_pk_med_keys.len(),
                 leg.med_keys.len()
             )));
         }

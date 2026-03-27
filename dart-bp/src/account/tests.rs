@@ -136,6 +136,7 @@ fn send_txn() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -158,6 +159,7 @@ fn send_txn() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -279,6 +281,7 @@ fn receive_txn() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -301,6 +304,7 @@ fn receive_txn() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -425,6 +429,7 @@ fn claim_received_funds() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -447,6 +452,7 @@ fn claim_received_funds() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -566,6 +572,7 @@ fn counter_update_txn_by_sender() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -588,6 +595,7 @@ fn counter_update_txn_by_sender() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -708,6 +716,7 @@ fn reverse_send_txn() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -730,6 +739,7 @@ fn reverse_send_txn() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -850,6 +860,7 @@ fn reverse_receive_txn() {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -872,6 +883,7 @@ fn reverse_receive_txn() {
             .verify(
                 &mut rng,
                 leg_enc,
+                reveal_asset_id.then_some(asset_id),
                 &root,
                 updated_account_comm,
                 nullifier,
@@ -1026,6 +1038,7 @@ fn single_shot_settlement() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -1041,6 +1054,7 @@ fn single_shot_settlement() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1094,6 +1108,7 @@ fn single_shot_settlement() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -1109,6 +1124,7 @@ fn single_shot_settlement() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1299,6 +1315,7 @@ fn single_shot_combined_create_and_send() {
     sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -1319,6 +1336,7 @@ fn single_shot_combined_create_and_send() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1376,6 +1394,7 @@ fn single_shot_combined_create_and_send() {
     sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -1396,6 +1415,7 @@ fn single_shot_combined_create_and_send() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1597,6 +1617,7 @@ fn single_shot_combined_create_and_recv() {
     receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1617,6 +1638,7 @@ fn single_shot_combined_create_and_recv() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -1682,6 +1704,7 @@ fn single_shot_combined_create_and_recv() {
     receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -1702,6 +1725,7 @@ fn single_shot_combined_create_and_recv() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -2174,6 +2198,7 @@ fn single_shot_swap() {
     alice_sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_sender_nullifier,
@@ -2190,6 +2215,7 @@ fn single_shot_swap() {
     alice_receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_receiver_nullifier,
@@ -2219,6 +2245,7 @@ fn single_shot_swap() {
     bob_receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_receiver_nullifier,
@@ -2235,6 +2262,7 @@ fn single_shot_swap() {
     bob_sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_sender_nullifier,
@@ -2414,6 +2442,7 @@ fn single_shot_settlement_asset_id_revealed() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -2429,6 +2458,7 @@ fn single_shot_settlement_asset_id_revealed() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -2622,6 +2652,7 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
     sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -2642,6 +2673,7 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
     let (receiver_even, receiver_odd) = receiver_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -2843,6 +2875,7 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
     receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_receiver_account_comm,
             receiver_nullifier,
@@ -2863,6 +2896,7 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
     let (sender_even, sender_odd) = sender_proof
         .verify_and_return_tuples(
             leg_enc.clone(),
+            Some(leg.core.asset_id),
             &account_tree_root,
             updated_sender_account_comm,
             sender_nullifier,
@@ -3253,6 +3287,7 @@ fn single_shot_swap_asset_id_revealed() {
     alice_sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_sender_nullifier,
@@ -3269,6 +3304,7 @@ fn single_shot_swap_asset_id_revealed() {
     alice_receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_receiver_nullifier,
@@ -3298,6 +3334,7 @@ fn single_shot_swap_asset_id_revealed() {
     bob_receiver_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_receiver_nullifier,
@@ -3314,6 +3351,7 @@ fn single_shot_swap_asset_id_revealed() {
     bob_sender_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_sender_nullifier,
@@ -3707,6 +3745,7 @@ fn swap_settlement_asset_id_revealed() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -3723,6 +3762,7 @@ fn swap_settlement_asset_id_revealed() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -3758,6 +3798,7 @@ fn swap_settlement_asset_id_revealed() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -3774,6 +3815,7 @@ fn swap_settlement_asset_id_revealed() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -4082,6 +4124,7 @@ fn reverse_settlement_asset_id_revealed() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -4098,6 +4141,7 @@ fn reverse_settlement_asset_id_revealed() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -4133,6 +4177,7 @@ fn reverse_settlement_asset_id_revealed() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            Some(asset_id_1),
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -4149,6 +4194,7 @@ fn reverse_settlement_asset_id_revealed() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            Some(asset_id_2),
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -4314,6 +4360,7 @@ fn batch_send_txn_proofs() {
             .verify(
                 &mut rng,
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -4338,6 +4385,7 @@ fn batch_send_txn_proofs() {
         let (even, odd) = proofs[i]
             .verify_and_return_tuples(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -4382,6 +4430,7 @@ fn batch_send_txn_proofs() {
         let (even, odd) = proofs[i]
             .verify_and_return_tuples(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -4554,6 +4603,7 @@ fn combined_send_txn_proofs() {
         proofs[i]
             .enforce_constraints_and_verify_only_sigma_protocols(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -4592,6 +4642,7 @@ fn combined_send_txn_proofs() {
         proofs[i]
             .enforce_constraints_and_verify_only_sigma_protocols(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -4796,6 +4847,7 @@ fn combined_create_and_send() {
     send_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_account_comm,
             nullifier,
@@ -4852,6 +4904,7 @@ fn combined_create_and_send() {
     send_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc.clone(),
+            None,
             &account_tree_root,
             updated_account_comm,
             nullifier,
@@ -5014,6 +5067,7 @@ fn batch_receive_txn_proofs() {
             .verify(
                 &mut rng,
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -5038,6 +5092,7 @@ fn batch_receive_txn_proofs() {
         let (even, odd) = proofs[i]
             .verify_and_return_tuples(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -5082,6 +5137,7 @@ fn batch_receive_txn_proofs() {
         let (even, odd) = proofs[i]
             .verify_and_return_tuples(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -5253,6 +5309,7 @@ fn combined_receive_txn_proofs() {
         proofs[i]
             .enforce_constraints_and_verify_only_sigma_protocols(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -5291,6 +5348,7 @@ fn combined_receive_txn_proofs() {
         proofs[i]
             .enforce_constraints_and_verify_only_sigma_protocols(
                 leg_encs[i].clone(),
+                None,
                 &root,
                 updated_account_comms[i],
                 nullifiers[i],
@@ -5684,7 +5742,7 @@ fn swap_settlement() {
 
     let med_proof_1 = MediatorTxnProof::new_with_given_transcript(
         &mut rng,
-        leg_enc_1.clone(),
+        leg_enc_1.mediators.clone(),
         sk_e.0,
         sk_m.0,
         accept,
@@ -5697,7 +5755,7 @@ fn swap_settlement() {
 
     let med_proof_2 = MediatorTxnProof::new_with_given_transcript(
         &mut rng,
-        leg_enc_2.clone(),
+        leg_enc_2.mediators.clone(),
         sk_e.0,
         sk_m.0,
         accept,
@@ -5715,7 +5773,7 @@ fn swap_settlement() {
 
     med_proof_1
         .verify_with_given_transcript(
-            leg_enc_1.clone(),
+            leg_enc_1.mediators.clone(),
             accept,
             index_in_asset_data,
             nonce,
@@ -5727,7 +5785,7 @@ fn swap_settlement() {
 
     med_proof_2
         .verify_with_given_transcript(
-            leg_enc_2.clone(),
+            leg_enc_2.mediators.clone(),
             accept,
             index_in_asset_data,
             nonce,
@@ -5745,7 +5803,7 @@ fn swap_settlement() {
 
     med_proof_1
         .verify_with_given_transcript(
-            leg_enc_1.clone(),
+            leg_enc_1.mediators.clone(),
             accept,
             index_in_asset_data,
             nonce,
@@ -5757,7 +5815,7 @@ fn swap_settlement() {
 
     med_proof_2
         .verify_with_given_transcript(
-            leg_enc_2.clone(),
+            leg_enc_2.mediators.clone(),
             accept,
             index_in_asset_data,
             nonce,
@@ -5895,6 +5953,7 @@ fn swap_settlement() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -5911,6 +5970,7 @@ fn swap_settlement() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -5946,6 +6006,7 @@ fn swap_settlement() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -5962,6 +6023,7 @@ fn swap_settlement() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -6000,6 +6062,7 @@ fn swap_settlement() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -6016,6 +6079,7 @@ fn swap_settlement() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -6064,6 +6128,7 @@ fn swap_settlement() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -6080,6 +6145,7 @@ fn swap_settlement() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -6304,6 +6370,7 @@ fn swap_settlement() {
     alice_counter_update_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_4,
             alice_cu_nullifier,
@@ -6320,6 +6387,7 @@ fn swap_settlement() {
     alice_claim_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_3,
             alice_claim_nullifier,
@@ -6358,6 +6426,7 @@ fn swap_settlement() {
     bob_claim_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_3,
             bob_claim_nullifier,
@@ -6374,6 +6443,7 @@ fn swap_settlement() {
     bob_counter_update_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_4,
             bob_cu_nullifier,
@@ -6413,6 +6483,7 @@ fn swap_settlement() {
     alice_counter_update_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_4,
             alice_cu_nullifier,
@@ -6429,6 +6500,7 @@ fn swap_settlement() {
     alice_claim_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_3,
             alice_claim_nullifier,
@@ -6478,6 +6550,7 @@ fn swap_settlement() {
     bob_claim_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_3,
             bob_claim_nullifier,
@@ -6494,6 +6567,7 @@ fn swap_settlement() {
     bob_counter_update_proof
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_4,
             bob_cu_nullifier,
@@ -6849,6 +6923,7 @@ fn reverse_settlement() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -6865,6 +6940,7 @@ fn reverse_settlement() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -6900,6 +6976,7 @@ fn reverse_settlement() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -6916,6 +6993,7 @@ fn reverse_settlement() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -6954,6 +7032,7 @@ fn reverse_settlement() {
     alice_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_1,
             alice_nullifier_leg1,
@@ -6970,6 +7049,7 @@ fn reverse_settlement() {
     alice_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_alice_account_comm_2,
             alice_nullifier_leg2,
@@ -7018,6 +7098,7 @@ fn reverse_settlement() {
     bob_proof_leg1
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_1.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_1,
             bob_nullifier_leg1,
@@ -7034,6 +7115,7 @@ fn reverse_settlement() {
     bob_proof_leg2
         .enforce_constraints_and_verify_only_sigma_protocols(
             leg_enc_2.clone(),
+            None,
             &account_tree_root,
             updated_bob_account_comm_2,
             bob_nullifier_leg2,
@@ -7277,7 +7359,7 @@ fn multi_asset_settlement() {
     }
 
     for i in 0..num_legs {
-        alice_verifiers[i].add_irreversible_send(leg_encs[i].clone());
+        alice_verifiers[i].add_irreversible_send(leg_encs[i].clone(), None);
     }
 
     // Setup verifiers for Bob
@@ -7294,7 +7376,7 @@ fn multi_asset_settlement() {
     }
 
     for i in 0..num_legs {
-        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone());
+        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone(), None);
     }
 
     let (settlement_even, settlement_odd) = settlement_proof
@@ -7386,7 +7468,7 @@ fn multi_asset_settlement() {
             PallasParameters,
             VestaParameters,
         >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-        verifier.add_irreversible_send(leg_encs[i].clone());
+        verifier.add_irreversible_send(leg_encs[i].clone(), None);
         alice_verifiers.push(verifier);
     }
 
@@ -7411,7 +7493,7 @@ fn multi_asset_settlement() {
             PallasParameters,
             VestaParameters,
         >::init(bob_updated_comms[i], bob_nullifiers[i], nonce);
-        verifier.add_irreversible_receive(leg_encs[i].clone());
+        verifier.add_irreversible_receive(leg_encs[i].clone(), None);
         bob_verifiers.push(verifier);
     }
 
@@ -7655,7 +7737,7 @@ fn multi_asset_combined_create_and_send() {
             PallasParameters,
             VestaParameters,
         >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-        verifier.add_irreversible_send(leg_encs[i].clone());
+        verifier.add_irreversible_send(leg_encs[i].clone(), None);
         alice_verifiers.push(verifier);
     }
 
@@ -7681,7 +7763,7 @@ fn multi_asset_combined_create_and_send() {
             PallasParameters,
             VestaParameters,
         >::init(bob_updated_comms[i], bob_nullifiers[i], nonce);
-        verifier.add_irreversible_receive(leg_encs[i].clone());
+        verifier.add_irreversible_receive(leg_encs[i].clone(), None);
         bob_verifiers.push(verifier);
     }
 
@@ -7752,7 +7834,7 @@ fn multi_asset_combined_create_and_send() {
             PallasParameters,
             VestaParameters,
         >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-        verifier.add_irreversible_send(leg_encs[i].clone());
+        verifier.add_irreversible_send(leg_encs[i].clone(), None);
         alice_verifiers.push(verifier);
     }
 
@@ -7778,7 +7860,7 @@ fn multi_asset_combined_create_and_send() {
             PallasParameters,
             VestaParameters,
         >::init(bob_updated_comms[i], bob_nullifiers[i], nonce);
-        verifier.add_irreversible_receive(leg_encs[i].clone());
+        verifier.add_irreversible_receive(leg_encs[i].clone(), None);
         bob_verifiers.push(verifier);
     }
 
@@ -8042,7 +8124,7 @@ fn multi_asset_combined_create_and_recv() {
     }
 
     for i in 0..num_legs {
-        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone());
+        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone(), None);
     }
 
     bob_proof
@@ -8071,7 +8153,7 @@ fn multi_asset_combined_create_and_recv() {
             PallasParameters,
             VestaParameters,
         >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-        verifier.add_irreversible_send(leg_encs[i].clone());
+        verifier.add_irreversible_send(leg_encs[i].clone(), None);
         alice_verifiers.push(verifier);
     }
 
@@ -8142,7 +8224,7 @@ fn multi_asset_combined_create_and_recv() {
     }
 
     for i in 0..num_legs {
-        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone());
+        bob_verifiers[i].add_irreversible_receive(leg_encs[i].clone(), None);
     }
 
     bob_proof
@@ -8171,7 +8253,7 @@ fn multi_asset_combined_create_and_recv() {
             PallasParameters,
             VestaParameters,
         >::init(alice_updated_comms[i], alice_nullifiers[i], nonce);
-        verifier.add_irreversible_send(leg_encs[i].clone());
+        verifier.add_irreversible_send(leg_encs[i].clone(), None);
         alice_verifiers.push(verifier);
     }
 
@@ -8398,7 +8480,7 @@ fn multi_asset_state_transition_different_confs() {
             >::init(
                 alice_updated_comms[i], alice_nullifiers[i], nonce
             );
-            verifier.add_receive_affirmation(leg_encs[i].clone());
+            verifier.add_receive_affirmation(leg_encs[i].clone(), None);
             alice_verifiers.push(verifier);
         }
 
@@ -8445,7 +8527,7 @@ fn multi_asset_state_transition_different_confs() {
             >::init(
                 alice_updated_comms[i], alice_nullifiers[i], nonce
             );
-            verifier.add_receive_affirmation(leg_encs[i].clone());
+            verifier.add_receive_affirmation(leg_encs[i].clone(), None);
             alice_verifiers.push(verifier);
         }
 
@@ -9360,6 +9442,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9399,6 +9482,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc,
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9494,6 +9578,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9591,6 +9676,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9630,6 +9716,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc,
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9725,6 +9812,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9763,6 +9851,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc,
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9859,6 +9948,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9898,6 +9988,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc,
+                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -10008,6 +10099,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &account_tree_root,
                     malicious_sender_comm,
                     nullifier,
@@ -10053,6 +10145,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &account_tree_root,
                     malicious_receiver_comm,
                     nullifier,
@@ -10097,6 +10190,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc.clone(),
+                    None,
                     &account_tree_root,
                     malicious_sender_comm,
                     nullifier,
@@ -10141,6 +10235,7 @@ mod input_sanitation_disabled {
                 .verify(
                     &mut rng,
                     leg_enc,
+                    None,
                     &account_tree_root,
                     malicious_receiver_comm,
                     nullifier,

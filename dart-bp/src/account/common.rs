@@ -1,7 +1,6 @@
-use crate::Balance;
 use crate::account::state::{BALANCE_GEN_INDEX, NUM_GENERATORS, SK_ENC_INV_GEN_INDEX};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::leg::{LegEncryption, PartyEphemeralPublicKey};
+use crate::leg::{AmountCiphertext, LegEncryptionCore, PartyEphemeralPublicKey};
 use crate::util::generate_schnorr_responses_for_balance_change;
 use crate::util::{
     BPProof, add_verification_tuples_to_rmc, enforce_balance_change_prover,
@@ -13,6 +12,7 @@ use crate::util::{
     verify_given_verification_tuples, verify_sigma_for_balance_change,
     verify_sigma_for_common_state_change,
 };
+use crate::{AssetId, Balance};
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
     TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
@@ -130,6 +130,12 @@ pub struct StateChangeVerifier<
     /// Counter can increase, decrease or not change at all
     pub has_counter_decreased: Vec<Option<bool>>,
     pub re_randomized_leaf: Affine<G0>,
+    /// Stored leg data (core ciphertexts, ephemeral key, and revealed asset_id if any) for sigma verification
+    pub leg_cores: Vec<(
+        LegEncryptionCore<Affine<G0>>,
+        PartyEphemeralPublicKey<Affine<G0>>,
+        Option<AssetId>,
+    )>,
 }
 
 impl<
@@ -350,13 +356,15 @@ impl<
         // If asset-id is revealed in any of the leg encryptions, then its assumed that its revealed and the proof
         // is done accordingly
         let mut is_asset_id_revealed = false;
-        let mut leg_enc = Vec::with_capacity(legs_with_conf.len());
-        let mut is_sender: Vec<bool> = Vec::with_capacity(legs_with_conf.len());
+        let mut legs: Vec<(
+            LegEncryptionCore<Affine<G0>>,
+            PartyEphemeralPublicKey<Affine<G0>>,
+        )> = Vec::with_capacity(legs_with_conf.len());
 
         // For legs that have asset-id ciphertext, prove that asset-id ciphertext is correctly formed when is_asset_id_revealed = true
 
         for leg_conf in legs_with_conf {
-            if let Some(a) = leg_conf.encryption.asset_id() {
+            if let Some(a) = leg_conf.asset_id {
                 if a != account.asset_id {
                     return Err(Error::ProofGenerationError(format!(
                         "Asset-id mismatch between leg config and account state: leg config = {a}, account = {}",
@@ -365,12 +373,17 @@ impl<
                 }
                 is_asset_id_revealed = true;
             }
-            leg_enc.push(leg_conf.encryption);
-            is_sender.push(leg_conf.party_eph_pk.is_sender());
+            legs.push((leg_conf.encryption, leg_conf.party_eph_pk));
         }
 
-        for l in &leg_enc {
-            add_to_transcript!(even_prover.transcript(), LEG_ENC_LABEL, l);
+        for (leg_core, eph_pk) in &legs {
+            add_to_transcript!(
+                even_prover.transcript(),
+                LEG_ENC_LABEL,
+                leg_core,
+                LEG_ENC_LABEL,
+                eph_pk
+            );
         }
 
         let mut id_blinding = F0::rand(rng);
@@ -404,10 +417,9 @@ impl<
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             account.asset_id,
-            leg_enc,
+            legs,
             account,
             updated_account,
-            is_sender,
             id_blinding,
             sk_blinding,
             old_balance_blinding,
@@ -549,7 +561,7 @@ impl<
     pub fn init_balance_change_verification(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amount: &[(Affine<G0>, Affine<G0>)],
+        ct_amounts: &[AmountCiphertext<Affine<G0>>],
         enc_gen: Affine<G0>,
     ) -> Result<()> {
         let mut even_verifier = self.even_verifier.take().ok_or_else(|| {
@@ -560,7 +572,7 @@ impl<
         })?;
         self.init_balance_change_verification_with_given_verifier(
             proof,
-            ct_amount,
+            ct_amounts,
             enc_gen,
             &mut even_verifier,
         )?;
@@ -578,7 +590,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: Vec<LegEncryption<Affine<G0>>>,
+        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -598,7 +610,7 @@ impl<
             common_state_change_proof,
             balance_change_proof,
             challenge,
-            leg_enc,
+            ct_amounts,
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -630,7 +642,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: Vec<LegEncryption<Affine<G0>>>,
+        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -652,7 +664,7 @@ impl<
             common_state_change_proof,
             balance_change_proof,
             challenge,
-            leg_enc,
+            ct_amounts,
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -755,10 +767,8 @@ impl<
         let mut asset_id = None;
         for leg_conf in &legs_with_conf {
             if asset_id.is_none() {
-                asset_id = leg_conf.encryption.asset_id();
-            } else if leg_conf.encryption.is_asset_id_revealed()
-                && (asset_id != leg_conf.encryption.asset_id())
-            {
+                asset_id = leg_conf.asset_id;
+            } else if leg_conf.asset_id.is_some() && (asset_id != leg_conf.asset_id) {
                 return Err(Error::ProofVerificationError(
                     "All legs must have the same asset id".to_string(),
                 ));
@@ -803,25 +813,41 @@ impl<
             updated_account_commitment
         );
 
-        let mut leg_enc = Vec::with_capacity(legs_with_conf.len());
+        let mut leg_cores: Vec<(
+            LegEncryptionCore<Affine<G0>>,
+            PartyEphemeralPublicKey<Affine<G0>>,
+            Option<AssetId>,
+        )> = Vec::with_capacity(legs_with_conf.len());
         let mut prover_is_sender = Vec::with_capacity(legs_with_conf.len());
         let mut has_counter_decreased = Vec::with_capacity(legs_with_conf.len());
         let mut has_balance_decreased = Vec::with_capacity(legs_with_conf.len());
 
         for leg_conf in legs_with_conf {
-            leg_enc.push(leg_conf.encryption);
             prover_is_sender.push(leg_conf.party_eph_pk.is_sender());
             has_balance_decreased.push(leg_conf.has_balance_decreased);
             has_counter_decreased.push(leg_conf.has_counter_decreased);
+            leg_cores.push((
+                leg_conf.encryption,
+                leg_conf.party_eph_pk,
+                leg_conf.asset_id,
+            ));
         }
 
-        for leg_enc in &leg_enc {
-            add_to_transcript!(even_verifier.transcript(), LEG_ENC_LABEL, leg_enc,);
+        for (leg_core, eph_pk, _) in &leg_cores {
+            add_to_transcript!(
+                even_verifier.transcript(),
+                LEG_ENC_LABEL,
+                leg_core,
+                LEG_ENC_LABEL,
+                eph_pk
+            );
         }
 
         enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
-            leg_enc,
-            &prover_is_sender,
+            leg_cores
+                .iter()
+                .map(|(c, p, _)| (c.clone(), p.clone()))
+                .collect(),
             asset_id,
             &nullifier,
             proof.comm_bp_randomness_relations,
@@ -843,13 +869,14 @@ impl<
             has_counter_decreased,
             has_balance_decreased,
             re_randomized_leaf,
+            leg_cores,
         })
     }
 
     pub fn init_balance_change_verification_with_given_verifier(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amount: &[(Affine<G0>, Affine<G0>)],
+        ct_amounts: &[AmountCiphertext<Affine<G0>>],
         enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     ) -> Result<()> {
@@ -872,7 +899,7 @@ impl<
         let mut verifier_transcript = even_verifier.transcript();
 
         take_challenge_contrib_of_sigma_t_values_for_balance_change(
-            ct_amount,
+            ct_amounts,
             &proof.t_comm_bp_bal,
             &proof.resp_leg_amount,
             enc_gen,
@@ -889,7 +916,7 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        leg_enc: Vec<LegEncryption<Affine<G0>>>,
+        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -901,8 +928,7 @@ impl<
         let bp_gens = account_tree_params.even_parameters.bp_gens();
 
         let asset_id = verify_sigma_for_common_state_change(
-            &leg_enc,
-            self.prover_is_sender.clone(),
+            &self.leg_cores,
             self.has_counter_decreased,
             balance_change_proof.is_some(),
             &nullifier,
@@ -926,18 +952,16 @@ impl<
         )?;
 
         if let Some(balance_change_proof) = balance_change_proof {
-            // Filter leg_enc and prover_is_sender to only include legs with balance changes
-            let (leg_enc, prover_is_sender): (Vec<_>, Vec<_>) = leg_enc
+            // Filter legs to only include legs with balance changes
+            let balance_ct_amounts: Vec<AmountCiphertext<Affine<G0>>> = ct_amounts
                 .into_iter()
-                .zip(self.prover_is_sender.into_iter())
                 .zip(self.has_balance_decreased.iter())
-                .filter(|((_, _), has_bal_dec)| has_bal_dec.is_some())
-                .map(|((leg, is_sender), _)| (leg, is_sender))
-                .unzip();
+                .filter(|(_, has_bal_dec)| has_bal_dec.is_some())
+                .map(|(ct, _)| ct)
+                .collect();
 
             verify_sigma_for_balance_change(
-                &leg_enc,
-                prover_is_sender,
+                &balance_ct_amounts,
                 &balance_change_proof.resp_leg_amount,
                 &balance_change_proof.comm_bp_bal,
                 &balance_change_proof.t_comm_bp_bal,
@@ -1054,18 +1078,22 @@ pub fn ensure_same_accounts<G: AffineRepr>(
 /// Configuration for a leg in common state change operations (prover side)
 #[derive(Clone)]
 pub struct LegProverConfig<G0: SWCurveConfig + Clone + Copy> {
-    pub encryption: LegEncryption<Affine<G0>>,
+    pub encryption: LegEncryptionCore<Affine<G0>>,
     pub party_eph_pk: PartyEphemeralPublicKey<Affine<G0>>,
     pub has_balance_changed: bool,
+    /// `None` when asset-id is encrypted; `Some(id)` when asset-id is revealed in this leg
+    pub asset_id: Option<AssetId>,
 }
 
 /// Configuration for a leg in common state change operations (verifier side)
 #[derive(Clone)]
 pub struct LegVerifierConfig<G0: SWCurveConfig + Clone + Copy> {
-    pub encryption: LegEncryption<Affine<G0>>,
+    pub encryption: LegEncryptionCore<Affine<G0>>,
     pub party_eph_pk: PartyEphemeralPublicKey<Affine<G0>>,
     pub has_balance_decreased: Option<bool>,
     pub has_counter_decreased: Option<bool>,
+    /// `None` when asset-id is encrypted; `Some(id)` when asset-id is revealed in this leg
+    pub asset_id: Option<AssetId>,
 }
 
 /// Configuration for balance change in a single leg

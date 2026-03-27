@@ -245,12 +245,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             (None, None)
         };
 
-        let mut ct_meds_proto = Vec::with_capacity(leg_enc.ct_meds.len());
-        let mut eph_pk_meds_proto = Vec::with_capacity(leg_enc.ct_meds.len());
+        let mut ct_meds_proto = Vec::with_capacity(leg_enc.num_mediators());
+        let mut eph_pk_meds_proto = Vec::with_capacity(leg_enc.num_mediators());
         let mut eph_pk_enc_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg_enc.eph_pk_public_enc_keys.len());
 
-        for i in 0..leg_enc.ct_meds.len() {
+        for i in 0..leg_enc.num_mediators() {
             // For proving ct_m[i] - pk_m[i] = enc_key_gen * r_meds[i]
             ct_meds_proto.push(PokDiscreteLogProtocol::init(
                 r_meds[i],
@@ -370,21 +370,21 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             ct_s_proto.challenge_contribution(
                 &enc_key_gen,
                 &leg_enc.eph_pk_s.0,
-                &leg_enc.ct_s,
+                &leg_enc.ct_s(),
                 &mut transcript_ref,
             )?;
 
             ct_r_proto.challenge_contribution(
                 &enc_key_gen,
                 &leg_enc.eph_pk_r.1,
-                &leg_enc.ct_r,
+                &leg_enc.ct_r(),
                 &mut transcript_ref,
             )?;
 
             ct_amount_proto.challenge_contribution(
                 &enc_key_gen,
                 &enc_gen,
-                &leg_enc.ct_amount,
+                &leg_enc.ct_amount(),
                 &mut transcript_ref,
             )?;
 
@@ -424,11 +424,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 )?;
             }
 
-            let y_ct_meds = (0..leg_enc.ct_meds.len())
-                .map(|i| leg_enc.ct_meds[i] - leg.med_keys[i].1)
+            let y_ct_meds = (0..leg_enc.num_mediators())
+                .map(|i| leg_enc.mediators.ct_meds[i] - leg.med_keys[i].1)
                 .collect::<Vec<_>>();
             let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
-            for i in 0..leg_enc.ct_meds.len() {
+            for i in 0..leg_enc.num_mediators() {
                 ct_meds_proto[i].challenge_contribution(
                     &enc_key_gen,
                     &y_ct_meds[i],
@@ -436,7 +436,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 )?;
                 eph_pk_meds_proto[i].challenge_contribution(
                     &leg.enc_keys[leg.med_keys[i].0 as usize],
-                    &leg_enc.eph_pk_med_keys[i].1,
+                    &leg_enc.mediators.eph_pk_med_keys[i].1,
                     &mut transcript_ref,
                 )?;
             }
@@ -552,8 +552,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     /// Verifier will know the asset-id and thus know the encryption (auditor) and mediator keys.
     /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
-    /// specified by leg creator and are always known to the verifier
+    /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and
+    /// are always known to the verifier
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
@@ -725,17 +725,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
-        if leg_enc.ct_meds.len() != med_keys.len() {
+        if leg_enc.num_mediators() != med_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.ct_meds.len() != med_keys.len() ({} != {})",
-                leg_enc.ct_meds.len(),
+                leg_enc.num_mediators(),
                 med_keys.len()
             )));
         }
-        if leg_enc.eph_pk_med_keys.len() != med_keys.len() {
+        if leg_enc.mediators.eph_pk_med_keys.len() != med_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_med_keys.len() != med_keys.len() ({} != {})",
-                leg_enc.eph_pk_med_keys.len(),
+                leg_enc.mediators.eph_pk_med_keys.len(),
                 med_keys.len()
             )));
         }
@@ -763,10 +763,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     enc_keys.len()
                 )));
             }
-            if leg_enc.eph_pk_med_keys[i].0 != *idx {
+            if leg_enc.mediators.eph_pk_med_keys[i].0 != *idx {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 ({}) != med_keys[{i}].0 ({})",
-                    leg_enc.eph_pk_med_keys[i].0, *idx
+                    leg_enc.mediators.eph_pk_med_keys[i].0, *idx
                 )));
             }
         }
@@ -817,21 +817,21 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_s.0,
-            &leg_enc.ct_s,
+            &leg_enc.ct_s(),
             &mut transcript_ref,
         )?;
 
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
             &leg_enc.eph_pk_r.1,
-            &leg_enc.ct_r,
+            &leg_enc.ct_r(),
             &mut transcript_ref,
         )?;
 
         self.resp_amount_enc.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
-            &leg_enc.ct_amount,
+            &leg_enc.ct_amount(),
             &mut transcript_ref,
         )?;
 
@@ -873,8 +873,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp.challenge_contribution(&leg_enc.eph_pk_r.1, &eph_pk_r_s, &mut transcript_ref)?;
         }
 
-        let y_ct_meds = (0..leg_enc.ct_meds.len())
-            .map(|i| leg_enc.ct_meds[i] - med_keys[i].1)
+        let y_ct_meds = (0..leg_enc.num_mediators())
+            .map(|i| leg_enc.mediators.ct_meds[i] - med_keys[i].1)
             .collect::<Vec<_>>();
         let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
 
@@ -887,7 +887,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             // M[i] = pk_en[med_keys[i].0] * r_meds[i]
             self.resp_eph_pk_meds[i].challenge_contribution(
                 &enc_keys[med_keys[i].0 as usize],
-                &leg_enc.eph_pk_med_keys[i].1,
+                &leg_enc.mediators.eph_pk_med_keys[i].1,
                 &mut transcript_ref,
             )?;
         }
@@ -940,7 +940,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_ct_s,
             "resp_ct_s verification failed",
-            leg_enc.ct_s,
+            leg_enc.core.ct_s,
             enc_key_gen,
             leg_enc.eph_pk_s.0,
             &challenge,
@@ -953,7 +953,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_ct_r,
             "resp_ct_r verification failed",
-            leg_enc.ct_r,
+            leg_enc.core.ct_r,
             enc_key_gen,
             leg_enc.eph_pk_r.1,
             &challenge,
@@ -966,7 +966,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_amount_enc,
             "resp_amount_enc verification failed",
-            leg_enc.ct_amount,
+            leg_enc.core.ct_amount,
             enc_key_gen,
             enc_gen,
             &challenge,
@@ -1054,7 +1054,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_meds[i],
                 format!("resp_eph_pk_meds[{}] verification failed", i),
-                leg_enc.eph_pk_med_keys[i].1,
+                leg_enc.mediators.eph_pk_med_keys[i].1,
                 enc_keys[med_keys[i].0 as usize],
                 &challenge,
                 &self.resp_ct_meds[i].response,
@@ -1303,7 +1303,6 @@ mod tests {
             .unwrap();
 
         assert!(leg_enc.is_asset_id_revealed());
-        assert_eq!(leg_enc.asset_id(), Some(asset_id));
 
         // Test with parties_see_each_other = true
         let clock = Instant::now();
@@ -1381,7 +1380,6 @@ mod tests {
             .unwrap();
 
         assert!(leg_enc.is_asset_id_revealed());
-        assert_eq!(leg_enc.asset_id(), Some(asset_id));
 
         let clock = Instant::now();
         let proof = PublicAssetLegCreationProof::<PallasConfig>::new(

@@ -1079,7 +1079,7 @@ impl DartTestingDb {
                     .decode()
                     .map_err(|e| anyhow!("{:?}", e))?;
                 if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) =
-                    leg_enc.ct_asset_id
+                    leg_enc.core.ct_asset_id
                 {
                     if !asset_lookup.contains_key(&asset_id) {
                         let asset_info = self.get_asset_by_id(asset_id)?;
