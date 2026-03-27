@@ -67,6 +67,16 @@ impl AccountState {
         account: &AccountKeyPair,
         enc_key: &EncryptionSecretKey,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        let dart_gens = dart_gens();
+        Self::bp_state_with_gens(&self, account, enc_key, &dart_gens)
+    }
+
+    pub fn bp_state_with_gens(
+        &self,
+        account: &AccountKeyPair,
+        enc_key: &EncryptionSecretKey,
+        dart_gens: &DartBPGenerators,
+    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         log::debug!("-- bp_state: sk_enc_inv");
         let sk_enc_inv = enc_key
             .0
@@ -87,7 +97,7 @@ impl AccountState {
             sk_enc_inv,
         };
         log::debug!("-- bp_state: BPAccountState constructed");
-        let commitment = state.commit(dart_gens().account_comm_key())?;
+        let commitment = state.commit(dart_gens.account_comm_key())?;
         log::debug!("-- bp_state: commitment computed");
         Ok((state, commitment))
     }
@@ -260,6 +270,15 @@ impl AccountAssetState {
         keys: &AccountKeys,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         self.current_state.bp_state(&keys.acct, &keys.enc.secret)
+    }
+
+    pub fn bp_current_state_with_gens(
+        &self,
+        keys: &AccountKeys,
+        dart_gens: &DartBPGenerators,
+    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        self.current_state
+            .bp_state_with_gens(&keys.acct, &keys.enc.secret, dart_gens)
     }
 
     fn state_change(
@@ -574,12 +593,12 @@ impl AuthorizedAccountAssetRegistrationProof {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
+        dart_gens: &DartBPGenerators,
     ) -> Result<(Self, AccountAssetState), Error> {
         let account_state = keys.init_asset_state(asset_id, counter, identity)?;
-        let (_bp_state, commitment) = account_state.bp_current_state(keys)?;
+        let (_bp_state, commitment) = account_state.bp_current_state_with_gens(keys, dart_gens)?;
         let pk_aff = keys.acct.public.get_affine()?;
         let rand_1 = PallasScalar::rand(rng);
-        let gens = dart_gens();
         let nonce = (asset_id, counter, identity).encode();
         let proof = auth_proofs::AuthProofRegOnlyAffSk::new(
             rng,
@@ -588,7 +607,7 @@ impl AuthorizedAccountAssetRegistrationProof {
             pk_aff,
             &commitment,
             &nonce,
-            gens.account_comm_key(),
+            dart_gens.account_comm_key(),
         )?;
         Ok((
             Self {

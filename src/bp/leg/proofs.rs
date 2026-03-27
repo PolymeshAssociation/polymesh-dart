@@ -131,6 +131,7 @@ impl AuthorizedSenderAffirmationProof {
         updated_account_commitment: &AccountStateCommitment,
         nullifier: AccountStateNullifier,
         pc_gens: &PedersenGens<PallasA>,
+        dart_gens: &DartBPGenerators,
     ) -> Result<Self, Error> {
         let ctx = leg_ref.context();
 
@@ -144,7 +145,7 @@ impl AuthorizedSenderAffirmationProof {
             &updated_account_commitment.as_commitment()?,
             nullifier.get_affine()?,
             ctx.as_bytes(),
-            dart_gens().account_comm_key(),
+            dart_gens.account_comm_key(),
             pc_gens.B_blinding,
         )?;
 

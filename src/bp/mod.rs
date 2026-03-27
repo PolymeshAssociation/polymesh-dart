@@ -163,6 +163,10 @@ pub fn dart_gens() -> DartBPGenerators {
     DartBPGenerators::new(DART_GEN_DOMAIN)
 }
 
+pub fn dart_key_gens() -> DartKeyGenerators {
+    DartKeyGenerators::new(DART_GEN_DOMAIN)
+}
+
 //#[cfg(feature = "std")]
 //lazy_static::lazy_static! {
 //    pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
@@ -250,7 +254,7 @@ pub struct AccountCommitmentKey {
 
 impl AccountCommitmentKey {
     /// Create a new account commitment key
-    pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA, enc_key_gen: PallasA) -> Self {
+    pub fn new<D: Digest>(label: &[u8], key_gens: &DartKeyGenerators) -> Self {
         let balance_gen = hash_to_pallas(label, b" : balance_gen").into_affine();
         let counter_gen = hash_to_pallas(label, b" : counter_gen").into_affine();
         let asset_id_gen = hash_to_pallas(label, b" : asset_id_gen").into_affine();
@@ -260,10 +264,9 @@ impl AccountCommitmentKey {
         let current_randomness_gen =
             hash_to_pallas(label, b" : current_randomness_gen").into_affine();
         let identity_gen = hash_to_pallas(label, b" : identity_gen").into_affine();
-        let sk_enc_gen = enc_key_gen;
 
         Self {
-            sk_gen,
+            sk_gen: key_gens.sig_key_gen(),
             balance_gen,
             counter_gen,
             asset_id_gen,
@@ -272,7 +275,7 @@ impl AccountCommitmentKey {
             randomness_gen,
             current_randomness_gen,
             identity_gen,
-            sk_enc_gen,
+            sk_enc_gen: key_gens.enc_key_gen(),
         }
     }
 }
@@ -319,13 +322,40 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     }
 }
 
-/// The generators for the Dart BP protocol.
+/// The account and encryption key generators for the Dart BP protocol.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
-pub struct DartBPGenerators {
+pub struct DartKeyGenerators {
     #[codec(encoded_as = "CompressedAffine")]
     sig_key_gen: PallasA,
     #[codec(encoded_as = "CompressedAffine")]
     enc_key_gen: PallasA,
+}
+
+impl DartKeyGenerators {
+    /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
+    pub fn new(label: &[u8]) -> Self {
+        let sig_key_gen = hash_to_pallas(label, b" : sig_key_gen").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b" : enc_key_gen").into_affine();
+
+        Self {
+            sig_key_gen,
+            enc_key_gen,
+        }
+    }
+
+    pub fn sig_key_gen(&self) -> PallasA {
+        self.sig_key_gen
+    }
+
+    pub fn enc_key_gen(&self) -> PallasA {
+        self.enc_key_gen
+    }
+}
+
+/// The generators for the Dart BP protocol.
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+pub struct DartBPGenerators {
+    key_gens: DartKeyGenerators,
     account_comm_key: AccountCommitmentKey,
     #[codec(encoded_as = "CompressedAffine")]
     leg_asset_value_gen: PallasA,
@@ -334,17 +364,15 @@ pub struct DartBPGenerators {
 impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
     pub fn new(label: &[u8]) -> Self {
-        let sig_key_gen = hash_to_pallas(label, b" : sig_key_gen").into_affine();
-        let enc_key_gen = hash_to_pallas(label, b" : enc_key_gen").into_affine();
+        let key_gens = DartKeyGenerators::new(label);
 
         let account_comm_key =
-            AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen, enc_key_gen);
+            AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, &key_gens);
 
         let leg_asset_value_gen = hash_to_pallas(label, b" : leg_asset_value_gen").into_affine();
 
         Self {
-            sig_key_gen,
-            enc_key_gen,
+            key_gens,
             account_comm_key,
             leg_asset_value_gen,
         }
@@ -355,12 +383,16 @@ impl DartBPGenerators {
         self.account_comm_key
     }
 
+    pub fn key_gens(&self) -> &DartKeyGenerators {
+        &self.key_gens
+    }
+
     pub fn sig_key_gen(&self) -> PallasA {
-        self.sig_key_gen
+        self.key_gens.sig_key_gen()
     }
 
     pub fn enc_key_gen(&self) -> PallasA {
-        self.enc_key_gen
+        self.key_gens.enc_key_gen()
     }
 
     pub fn leg_asset_value_gen(&self) -> PallasA {

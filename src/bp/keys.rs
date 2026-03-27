@@ -125,6 +125,18 @@ impl EncryptionKeyPair {
             secret: EncryptionSecretKey(enc),
         })
     }
+
+    /// Generates a new set of encryption keys using the provided RNG.
+    pub fn rand_with_gens<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        dart_gens: &DartKeyGenerators,
+    ) -> Result<Self, Error> {
+        let (enc, enc_pk) = bp_keys::keygen_enc(rng, dart_gens.enc_key_gen());
+        Ok(Self {
+            public: EncryptionPublicKey::from_bp_key(enc_pk)?,
+            secret: EncryptionSecretKey(enc),
+        })
+    }
 }
 
 /// The account public key, which can be shared freely.
@@ -217,6 +229,18 @@ impl AccountKeyPair {
     /// Generates a new set of account keys using the provided RNG.
     pub fn rand<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Self, Error> {
         let (account, account_pk) = bp_keys::keygen_sig(rng, dart_gens().sig_key_gen());
+        Ok(Self {
+            public: AccountPublicKey::from_bp_key(account_pk)?,
+            secret: AccountSecretKey(account),
+        })
+    }
+
+    /// Generates a new set of account keys using the provided RNG.
+    pub fn rand_with_gens<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        dart_gens: &DartKeyGenerators,
+    ) -> Result<Self, Error> {
+        let (account, account_pk) = bp_keys::keygen_sig(rng, dart_gens.sig_key_gen());
         Ok(Self {
             public: AccountPublicKey::from_bp_key(account_pk)?,
             secret: AccountSecretKey(account),
@@ -331,11 +355,28 @@ impl AccountKeys {
         Ok(Self { enc, acct })
     }
 
+    /// Generates a new set of account keys using the provided RNG and DartKeyGenerators.
+    pub fn rand_with_gens<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        dart_gens: &DartKeyGenerators,
+    ) -> Result<Self, Error> {
+        let enc = EncryptionKeyPair::rand_with_gens(rng, dart_gens)?;
+        let acct = AccountKeyPair::rand_with_gens(rng, dart_gens)?;
+        Ok(Self { enc, acct })
+    }
+
     /// Genreates a new set of account keys using the provided string as a seed.
     pub fn from_seed(seed: &str) -> Result<Self, Error> {
         let mut rng =
             rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(seed.as_bytes()).into());
         Self::rand(&mut rng)
+    }
+
+    /// Genreates a new set of account keys using the provided string as a seed.
+    pub fn from_seed_with_gens(seed: &str, dart_gens: &DartKeyGenerators) -> Result<Self, Error> {
+        let mut rng =
+            rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(seed.as_bytes()).into());
+        Self::rand_with_gens(&mut rng, dart_gens)
     }
 
     /// Initializes a new asset state for the account.
