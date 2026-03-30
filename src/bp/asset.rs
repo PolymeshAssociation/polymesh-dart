@@ -33,6 +33,14 @@ impl AssetKeysLookup {
     pub fn add(&mut self, asset_state: AssetState) {
         self.assets.insert(asset_state.asset_id, asset_state.keys);
     }
+
+    pub fn get_keys(&self, asset_id: AssetId) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+        let asset_keys = self
+            .assets
+            .get(&asset_id)
+            .ok_or_else(|| Error::AssetNotFound(asset_id))?;
+        asset_keys.get_keys()
+    }
 }
 
 impl Deref for AssetKeysLookup {

@@ -150,10 +150,11 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::AffirmAsSenderTxnProof::new::<_, _, _>(
             rng,
             amount,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_sender(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -207,7 +208,8 @@ impl<
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc,
+            leg_enc.core_and_eph_keys_for_sender(),
+            None, // TODO:
             &root,
             acc_cm,
             nullifier,
@@ -288,9 +290,10 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::AffirmAsReceiverTxnProof::new::<_, _, _>(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -328,13 +331,15 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -416,10 +421,11 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::ClaimReceivedTxnProof::new::<_, _, _>(
             rng,
             amount,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -457,13 +463,15 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -546,9 +554,10 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::ReceiverCounterUpdateTxnProof::new::<_, _, _>(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -586,13 +595,15 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -659,9 +670,10 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::SenderCounterUpdateTxnProof::new::<_, _, _>(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_sender(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -699,13 +711,15 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_sender(),
+            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -787,10 +801,11 @@ impl<
         let root = root.root_node()?;
 
         let ctx = leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let (proof, nullifier) = bp_account::SenderReverseTxnProof::new::<_, _, _>(
             rng,
             amount,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_sender(),
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -828,13 +843,15 @@ impl<
         let root = root.root_node()?;
 
         let ctx = self.leg_ref.context();
+        let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         proof.verify(
             rng,
-            leg_enc.decode()?,
+            leg_enc.core_and_eph_keys_for_sender(),
+            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -894,7 +911,6 @@ impl MediatorAffirmationProof {
             mediator_keys.enc.secret.0.0,
             mediator_keys.acct.secret.0.0,
             accept,
-            key_index as usize,
             ctx.as_bytes(),
             &dart_gens().sig_key_gen(),
         )?;
@@ -914,7 +930,6 @@ impl MediatorAffirmationProof {
         proof.verify(
             leg_enc.decode()?,
             self.accept,
-            self.key_index as usize,
             ctx.as_bytes(),
             dart_gens().sig_key_gen(),
             None,

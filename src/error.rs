@@ -72,9 +72,9 @@ pub enum Error {
     #[error("Curve tree cannot update a leaf in an append-only tree.")]
     CurveTreeCannotUpdateLeafInAppendOnlyTree,
 
-    /// Asset state not found.
-    #[error("Asset state not found: {0:?}")]
-    AssetStateNotFound(AssetId),
+    /// Asset not found.
+    #[error("Asset not found: {0:?}")]
+    AssetNotFound(AssetId),
 
     /// Arkworks serialization error.
     #[error("Arkworks serialization error: {0}")]
