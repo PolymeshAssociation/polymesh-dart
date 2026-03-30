@@ -420,10 +420,13 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate mediator affirmation proof.
     c.bench_function("MediatorAffirmationProof generate", |b| {
         b.iter(|| {
+            let med_enc = leg_enc
+                .mediator_encryption(0)
+                .expect("Failed to get mediator encryption for mediator affirmation proof");
             let _proof = MediatorAffirmationProof::new(
                 &mut rng,
                 &leg_ref,
-                &leg_enc,
+                &med_enc,
                 &mediator_keys,
                 0,
                 true,
@@ -433,15 +436,21 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
+    let med_enc = leg_enc
+        .mediator_encryption(0)
+        .expect("Failed to get mediator encryption for mediator affirmation proof");
     let proof =
-        MediatorAffirmationProof::new(&mut rng, &leg_ref, &leg_enc, &mediator_keys, 0, true)
+        MediatorAffirmationProof::new(&mut rng, &leg_ref, &med_enc, &mediator_keys, 0, true)
             .expect("Failed to generate mediator affirmation proof");
 
     // Benchmark: Verify mediator affirmation proof.
     c.bench_function("MediatorAffirmationProof verify", |b| {
         b.iter(|| {
+            let med_enc = leg_enc
+                .mediator_encryption(0)
+                .expect("Failed to get mediator encryption for mediator affirmation proof");
             proof
-                .verify(&leg_enc)
+                .verify(&med_enc)
                 .expect("Failed to verify mediator affirmation proof");
         })
     });

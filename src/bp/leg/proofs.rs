@@ -209,7 +209,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_sender(),
-            None, // TODO:
             &root,
             acc_cm,
             nullifier,
@@ -339,7 +338,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_receiver(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -471,7 +469,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_receiver(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -603,7 +600,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_receiver(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -719,7 +715,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_sender(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -851,7 +846,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_sender(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -899,7 +893,7 @@ impl MediatorAffirmationProof {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        leg_enc: &MediatorsEncrypted,
+        leg_enc: &MediatorEncryption,
         mediator_keys: &AccountKeys,
         key_index: MediatorId,
         accept: bool,
@@ -924,7 +918,7 @@ impl MediatorAffirmationProof {
         })
     }
 
-    pub fn verify(&self, leg_enc: &MediatorsEncrypted) -> Result<(), Error> {
+    pub fn verify(&self, leg_enc: &MediatorEncryption) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
         let proof = self.inner.decode()?;
         proof.verify(

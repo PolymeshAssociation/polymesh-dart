@@ -1418,6 +1418,7 @@ impl DartTestingDb {
 
         // Get settlement leg
         let (encrypted_leg, leg_ref) = self.get_encrypted_leg(settlement_id, leg_index)?;
+        let med_enc = encrypted_leg.mediator_encryption(0)?;
 
         let proof = if let Some(proof) = proof_action.get_proof()? {
             proof
@@ -1426,7 +1427,7 @@ impl DartTestingDb {
             let _leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
-            MediatorAffirmationProof::new(rng, &leg_ref, &encrypted_leg, &account_keys, 0, accept)?
+            MediatorAffirmationProof::new(rng, &leg_ref, &med_enc, &account_keys, 0, accept)?
         };
 
         // If proof action is to generate only, save proof and return
@@ -1437,7 +1438,7 @@ impl DartTestingDb {
         }
 
         // Verify proof
-        proof.verify(&encrypted_leg)?;
+        proof.verify(&med_enc)?;
 
         if proof_action.is_dry_run() {
             // If dry run, just verify and return

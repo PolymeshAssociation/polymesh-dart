@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use polymesh_dart_common::AssetId;
+use polymesh_dart_common::{AssetId, MediatorId};
 
 use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
 use ark_std::string::String;
@@ -75,6 +75,10 @@ pub enum Error {
     /// Asset not found.
     #[error("Asset not found: {0:?}")]
     AssetNotFound(AssetId),
+
+    /// Mediator not found.
+    #[error("Mediator not found: {0}")]
+    MediatorNotFound(MediatorId),
 
     /// Arkworks serialization error.
     #[error("Arkworks serialization error: {0}")]

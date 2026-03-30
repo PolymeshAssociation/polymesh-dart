@@ -109,18 +109,19 @@ fn leg_encryption_configs() {
         .unwrap();
 
     assert!(leg_enc.is_asset_id_revealed());
+    assert_eq!(leg_enc.asset_id(), Some(asset_id));
     assert_eq!(leg_enc.asset_id_ciphertext(), None);
 
     let (s_pk, r_pk_opt, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
     assert_eq!(s_pk, pk_s_e.0);
     assert_eq!(r_pk_opt, Some(pk_r_e.0));
-    assert!(a_id.is_none()); // asset_id was revealed (not encrypted), so unavailable via sender decryption
+    assert_eq!(a_id, asset_id);
     assert_eq!(amt, amount);
 
     let (s_pk_opt, r_pk, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
     assert_eq!(s_pk_opt, Some(pk_s_e.0));
     assert_eq!(r_pk, pk_r_e.0);
-    assert!(a_id.is_none()); // asset_id was revealed (not encrypted), so unavailable via receiver decryption
+    assert_eq!(a_id, asset_id);
     assert_eq!(amt, amount);
 
     for (i, (sk_enc, _)) in keys_enc.iter().enumerate() {
@@ -129,7 +130,7 @@ fn leg_encryption_configs() {
             .unwrap();
         assert_eq!(s_pk, pk_s_e.0);
         assert_eq!(r_pk, pk_r_e.0);
-        assert!(a_id.is_none());
+        assert_eq!(a_id, asset_id);
         assert_eq!(amt, amount);
     }
 
@@ -139,7 +140,7 @@ fn leg_encryption_configs() {
             .unwrap();
         assert_eq!(s_pk, pk_s_e.0);
         assert_eq!(r_pk, pk_r_e.0);
-        assert!(a_id.is_none());
+        assert_eq!(a_id, asset_id);
         assert_eq!(amt, amount);
     }
 
@@ -171,13 +172,13 @@ fn leg_encryption_configs() {
     let (s_pk, r_pk_opt, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
     assert_eq!(s_pk, pk_s_e.0);
     assert_eq!(r_pk_opt, None);
-    assert_eq!(a_id, Some(asset_id));
+    assert_eq!(a_id, asset_id);
     assert_eq!(amt, amount);
 
     let (s_pk_opt, r_pk, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
     assert_eq!(s_pk_opt, None);
     assert_eq!(r_pk, pk_r_e.0);
-    assert_eq!(a_id, Some(asset_id));
+    assert_eq!(a_id, asset_id);
     assert_eq!(amt, amount);
 
     for (i, (sk_enc, _)) in keys_enc.iter().enumerate() {
@@ -186,7 +187,7 @@ fn leg_encryption_configs() {
             .unwrap();
         assert_eq!(s_pk, pk_s_e.0);
         assert_eq!(r_pk, pk_r_e.0);
-        assert_eq!(a_id, Some(asset_id));
+        assert_eq!(a_id, asset_id);
         assert_eq!(amt, amount);
     }
 
@@ -196,7 +197,7 @@ fn leg_encryption_configs() {
             .unwrap();
         assert_eq!(s_pk, pk_s_e.0);
         assert_eq!(r_pk, pk_r_e.0);
-        assert_eq!(a_id, Some(asset_id));
+        assert_eq!(a_id, asset_id);
         assert_eq!(amt, amount);
     }
 }
@@ -374,7 +375,7 @@ fn leg_verification() {
         } else {
             assert!(p2.is_none());
         }
-        assert_eq!(a, Some(asset_id));
+        assert_eq!(a, asset_id);
         assert_eq!(b, amount);
 
         let (p1, p2, a, b) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
@@ -384,7 +385,7 @@ fn leg_verification() {
             assert!(p1.is_none());
         }
         assert_eq!(p2, pk_r_e.0);
-        assert_eq!(a, Some(asset_id));
+        assert_eq!(a, asset_id);
         assert_eq!(b, amount);
 
         println!(

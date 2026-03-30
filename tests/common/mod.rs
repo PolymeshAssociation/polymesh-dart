@@ -412,8 +412,11 @@ impl DartUserAccountInner {
 
         // Create the mediator affirmation proof.
         log::info!("Mediator generate affirmation proof");
-        let proof =
-            MediatorAffirmationProof::new(rng, leg_ref, &leg_data.enc, &self.keys, 0, accept)?;
+        let med_enc = leg_data
+            .enc
+            .mediator_encryption(0)
+            .map_err(|_| anyhow!("Failed to get mediator encryption for mediator affirmation"))?;
+        let proof = MediatorAffirmationProof::new(rng, leg_ref, &med_enc, &self.keys, 0, accept)?;
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())
@@ -1091,8 +1094,12 @@ impl DartSettlementLeg {
             return Err(anyhow!("Mediator has already affirmed this leg"));
         }
         // verify the proof.
+        let med_enc = self
+            .enc
+            .mediator_encryption(mediator_id)
+            .map_err(|_| anyhow!("Failed to get mediator encryption for mediator affirmation"))?;
         proof
-            .verify(&self.enc)
+            .verify(&med_enc)
             .context("Invalid mediator affirmation proof")?;
 
         // Update the leg's mediator status based on the proof.

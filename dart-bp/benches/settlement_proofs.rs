@@ -865,7 +865,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 >::init(
                     alice_updated_comms[i], alice_nullifiers[i], nonce
                 );
-                verifier.add_irreversible_send(leg_encs[i].core_and_eph_keys_for_sender(), None);
+                verifier.add_irreversible_send(leg_encs[i].core_and_eph_keys_for_sender());
                 alice_verifiers.push(verifier);
             }
 
@@ -880,8 +880,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 >::init(
                     bob_updated_comms[i], bob_nullifiers[i], nonce
                 );
-                verifier
-                    .add_irreversible_receive(leg_encs[i].core_and_eph_keys_for_receiver(), None);
+                verifier.add_irreversible_receive(leg_encs[i].core_and_eph_keys_for_receiver());
                 bob_verifiers.push(verifier);
             }
 
@@ -961,7 +960,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 >::init(
                     alice_updated_comms[i], alice_nullifiers[i], nonce
                 );
-                verifier.add_irreversible_send(leg_encs[i].core_and_eph_keys_for_sender(), None);
+                verifier.add_irreversible_send(leg_encs[i].core_and_eph_keys_for_sender());
                 alice_verifiers.push(verifier);
             }
 
@@ -976,8 +975,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 >::init(
                     bob_updated_comms[i], bob_nullifiers[i], nonce
                 );
-                verifier
-                    .add_irreversible_receive(leg_encs[i].core_and_eph_keys_for_receiver(), None);
+                verifier.add_irreversible_receive(leg_encs[i].core_and_eph_keys_for_receiver());
                 bob_verifiers.push(verifier);
             }
 

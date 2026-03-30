@@ -227,6 +227,37 @@ pub struct EphemeralPublicKey<G: AffineRepr> {
     pub r4: Option<G>,
 }
 
+/// Asset-id can be encrypted or revealed by the leg creator
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum AssetIdEncryption<G: AffineRepr> {
+    /// asset-id as encrypted
+    Ciphertext(G),
+    /// asset-id as revealed
+    Revealed(AssetId),
+}
+
+impl<G: AffineRepr> AssetIdEncryption<G> {
+    pub fn is_revealed(&self) -> bool {
+        matches!(self, Self::Revealed(_))
+    }
+
+    /// `None` when asset-id is encrypted (not revealed to the verifier).
+    pub fn asset_id(&self) -> Option<AssetId> {
+        match self {
+            AssetIdEncryption::Ciphertext(_) => None,
+            AssetIdEncryption::Revealed(id) => Some(*id),
+        }
+    }
+
+    /// `None` when asset-id is encrypted (not revealed to the verifier).
+    pub fn asset_id_ciphertext(&self) -> Option<G> {
+        match self {
+            AssetIdEncryption::Ciphertext(ct) => Some(*ct),
+            AssetIdEncryption::Revealed(_) => None,
+        }
+    }
+}
+
 /// Sender's ephemeral public keys. Index 1 is None when the sender cannot decrypt the receiver's pk.
 /// Index 3 is None when asset-id is revealed (not encrypted).
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -303,8 +334,7 @@ pub struct LegEncryptionCore<G: AffineRepr> {
     pub ct_s: G,
     pub ct_r: G,
     pub ct_amount: G,
-    /// `None` when asset-id is revealed (not encrypted); `Some(ct)` when encrypted
-    pub ct_asset_id: Option<G>,
+    pub ct_asset_id: AssetIdEncryption<G>,
 }
 
 impl<G: AffineRepr> LegEncryptionCore<G> {
@@ -314,12 +344,17 @@ impl<G: AffineRepr> LegEncryptionCore<G> {
     }
 
     pub fn is_asset_id_revealed(&self) -> bool {
-        self.ct_asset_id.is_none()
+        matches!(self.ct_asset_id, AssetIdEncryption::Revealed(_))
     }
 
     /// `None` when asset-id is encrypted (not revealed to the verifier).
+    pub fn asset_id(&self) -> Option<AssetId> {
+        self.ct_asset_id.asset_id()
+    }
+
+    /// `None` when asset-id is revealed (hidden from the verifier).
     pub fn asset_id_ciphertext(&self) -> Option<G> {
-        self.ct_asset_id
+        self.ct_asset_id.asset_id_ciphertext()
     }
 
     pub fn ct_s(&self) -> G {
@@ -445,9 +480,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         // Encrypt asset-id if it isn't revealed
         let ct_asset_id = if config.reveal_asset_id {
-            None
+            AssetIdEncryption::Revealed(self.core.asset_id)
         } else {
-            Some((enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine())
+            AssetIdEncryption::Ciphertext(
+                (enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine(),
+            )
         };
 
         // If parties are allowed to see each other create ephemeral public keys for those parts else skip
@@ -546,6 +583,11 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     }
 
     /// `None` when asset-id is encrypted (not revealed to the verifier).
+    pub fn asset_id(&self) -> Option<AssetId> {
+        self.leg_enc_core_and_eph_keys.core.asset_id()
+    }
+
+    /// `None` when asset-id is revealed (hidden from the verifier).
     pub fn asset_id_ciphertext(&self) -> Option<G> {
         self.leg_enc_core_and_eph_keys.core.asset_id_ciphertext()
     }
@@ -571,6 +613,12 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
 
     pub fn num_mediators(&self) -> usize {
         self.mediators.len()
+    }
+
+    pub fn mediator_encryption(&self, index: usize) -> Result<&MediatorEncryption<G>> {
+        self.mediators
+            .get(index)
+            .ok_or_else(|| Error::MediatorNotFoundAtIndex(index))
     }
 
     pub fn eph_pk_participant(&self, is_sender: bool) -> G {
@@ -642,7 +690,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         &self,
         sk_enc: &F,
         enc_gen: G,
-    ) -> Result<(G, Option<G>, Option<AssetId>, Balance)> {
+    ) -> Result<(G, Option<G>, AssetId, Balance)> {
         self.decrypt_as_sender_with_limits(sk_enc, enc_gen, None, None)
     }
 
@@ -652,7 +700,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(G, Option<G>, Option<AssetId>, Balance)> {
+    ) -> Result<(G, Option<G>, AssetId, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
@@ -697,7 +745,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         &self,
         sk_enc: &F,
         enc_gen: G,
-    ) -> Result<(Option<G>, G, Option<AssetId>, Balance)> {
+    ) -> Result<(Option<G>, G, AssetId, Balance)> {
         self.decrypt_as_receiver_with_limits(sk_enc, enc_gen, None, None)
     }
 
@@ -707,7 +755,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(Option<G>, G, Option<AssetId>, Balance)> {
+    ) -> Result<(Option<G>, G, AssetId, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
@@ -753,7 +801,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         is_public_enc_key: bool,
         key_index: usize,
         enc_gen: G,
-    ) -> Result<(G, G, Option<AssetId>, Balance)> {
+    ) -> Result<(G, G, AssetId, Balance)> {
         self.decrypt_given_key_with_limits(sk, is_public_enc_key, key_index, enc_gen, None, None)
     }
 
@@ -767,7 +815,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         enc_gen: G,
         max_asset_id: Option<AssetId>,
         max_amount: Option<Balance>,
-    ) -> Result<(G, G, Option<AssetId>, Balance)> {
+    ) -> Result<(G, G, AssetId, Balance)> {
         let eph_keys = if is_public_enc_key {
             &self.eph_pk_public_enc_keys
         } else {
@@ -807,7 +855,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         Ok((
             sender.into_affine(),
             receiver.into_affine(),
-            asset_id.map(|a| a as AssetId),
+            asset_id,
             amount,
         ))
     }
@@ -819,7 +867,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         key_index: usize,
         enc_gen: G::Group,
         max_asset_id: AssetId,
-    ) -> Result<Option<u64>> {
+    ) -> Result<AssetId> {
         let eph_keys = if is_public {
             &self.eph_pk_public_enc_keys
         } else {
@@ -829,18 +877,18 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             return Err(Error::InvalidKeyIndex(key_index));
         }
 
-        self.leg_enc_core_and_eph_keys
-            .core
-            .ct_asset_id
-            .map(|ct| {
+        match &self.leg_enc_core_and_eph_keys.core.ct_asset_id {
+            AssetIdEncryption::Revealed(id) => Ok(*id as AssetId),
+            AssetIdEncryption::Ciphertext(ct) => {
                 let asset_id =
-                    Self::decrypt_as_group_element(sk_inv, ct, eph_keys[key_index].r4.unwrap());
+                    Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].r4.unwrap());
                 solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
+                    .map(|id| id as AssetId)
                     .ok_or_else(|| {
                         Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
                     })
-            })
-            .transpose()
+            }
+        }
     }
 
     pub fn decrypt_amount(
@@ -879,24 +927,23 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         sk_enc_inv: &F,
         enc_gen: G::Group,
         max_asset_id: AssetId,
-    ) -> Result<Option<AssetId>> {
+    ) -> Result<AssetId> {
         let eph_pk = self.eph_pk_asset_id(is_sender);
-        self.leg_enc_core_and_eph_keys
-            .core
-            .ct_asset_id
-            .map(|ct| {
+        match &self.leg_enc_core_and_eph_keys.core.ct_asset_id {
+            AssetIdEncryption::Revealed(id) => Ok(*id as AssetId),
+            AssetIdEncryption::Ciphertext(ct) => {
                 let eph_pk_asset_id = eph_pk.ok_or_else(|| {
                     Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
                 })?;
                 let asset_id_pt =
-                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, ct, eph_pk_asset_id);
+                    Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
                 solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
                     .ok_or_else(|| {
                         Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
                     })
                     .map(|id| id as AssetId)
-            })
-            .transpose()
+            }
+        }
     }
 }
 
@@ -912,6 +959,64 @@ mod serialization {
     use super::*;
     use ark_serialize::{Compress, SerializationError, Valid, Validate};
     use ark_std::io::{Read, Write};
+
+    impl<G: AffineRepr> CanonicalSerialize for AssetIdEncryption<G> {
+        fn serialize_with_mode<W: Write>(
+            &self,
+            mut writer: W,
+            compress: Compress,
+        ) -> Result<(), SerializationError> {
+            match self {
+                AssetIdEncryption::Ciphertext(ct) => {
+                    0u8.serialize_with_mode(&mut writer, compress)?;
+                    ct.serialize_with_mode(&mut writer, compress)
+                }
+                AssetIdEncryption::Revealed(id) => {
+                    1u8.serialize_with_mode(&mut writer, compress)?;
+                    id.serialize_with_mode(&mut writer, compress)
+                }
+            }
+        }
+
+        fn serialized_size(&self, compress: Compress) -> usize {
+            1 + match self {
+                AssetIdEncryption::Ciphertext(ct) => ct.serialized_size(compress),
+                AssetIdEncryption::Revealed(id) => id.serialized_size(compress),
+            }
+        }
+    }
+
+    impl<G: AffineRepr> CanonicalDeserialize for AssetIdEncryption<G> {
+        fn deserialize_with_mode<R: Read>(
+            mut reader: R,
+            compress: Compress,
+            validate: Validate,
+        ) -> Result<Self, SerializationError> {
+            let discriminant = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+            match discriminant {
+                0 => Ok(AssetIdEncryption::Ciphertext(G::deserialize_with_mode(
+                    &mut reader,
+                    compress,
+                    validate,
+                )?)),
+                1 => Ok(AssetIdEncryption::Revealed(AssetId::deserialize_with_mode(
+                    &mut reader,
+                    compress,
+                    validate,
+                )?)),
+                _ => Err(SerializationError::InvalidData),
+            }
+        }
+    }
+
+    impl<G: AffineRepr> Valid for AssetIdEncryption<G> {
+        fn check(&self) -> Result<(), SerializationError> {
+            match self {
+                AssetIdEncryption::Ciphertext(ct) => ct.check(),
+                AssetIdEncryption::Revealed(id) => id.check(),
+            }
+        }
+    }
 
     impl<G: AffineRepr> CanonicalSerialize for PartyEphemeralPublicKey<G> {
         fn serialize_with_mode<W: Write>(

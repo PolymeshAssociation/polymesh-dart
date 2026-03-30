@@ -906,7 +906,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             None => {
                 // Asset id is revealed in atleast one leg
 
-                if !core.ct_asset_id.is_none() {
+                if !core.is_asset_id_revealed() {
                     // Asset id not revealed in this leg
 
                     // unwrap is fine as the check is done in outer function
@@ -972,7 +972,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     for (i, (core, party_eph_pk)) in legs.into_iter().enumerate() {
         let is_sender = party_eph_pk.is_sender();
         if is_asset_id_revealed {
-            if core.ct_asset_id.is_none() {
+            if core.is_asset_id_revealed() {
                 // Asset id revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_participant();
                 let y = core.ct_participant(is_sender);
@@ -985,7 +985,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             } else {
                 // Asset id not revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_asset_id().unwrap();
-                let y = core.ct_asset_id.as_ref().unwrap().into_group() - h_at.unwrap();
+                let y = core.asset_id_ciphertext().as_ref().unwrap().into_group() - h_at.unwrap();
                 t_leg_link[i].dl().unwrap().challenge_contribution(
                     &eph_pk_base,
                     &y.into_affine(),
@@ -998,7 +998,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             t_leg_link[i].pc().unwrap().challenge_contribution(
                 &eph_pk_base,
                 &enc_gen,
-                &core.ct_asset_id.unwrap(),
+                &core.asset_id_ciphertext().unwrap(),
                 &mut transcript,
             )?;
         }
@@ -1281,7 +1281,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
         let is_sender = party_eph_pk.is_sender();
         if is_asset_id_revealed {
             // Asset id is revealed in atleast one leg
-            if core.ct_asset_id.is_none() {
+            if core.is_asset_id_revealed() {
                 // Asset id revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_participant();
                 let y = core.ct_participant(is_sender);
@@ -1298,7 +1298,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
                         "Expected eph_pk_asset_id for leg {i} (asset-id hidden in this leg)"
                     ))
                 })?;
-                let ct = core.ct_asset_id.ok_or_else(|| {
+                let ct = core.asset_id_ciphertext().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Expected asset_id_ciphertext for leg {i} (asset-id hidden in this leg)"
                     ))
@@ -1330,7 +1330,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
             resp.challenge_contribution(
                 &eph_pk_base,
                 &enc_gen,
-                &core.ct_asset_id.ok_or_else(|| {
+                &core.asset_id_ciphertext().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Expected asset_id_ciphertext for leg {i} (asset-id hidden in all legs)"
                     ))
@@ -1377,7 +1377,6 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     legs: &[(
         LegEncryptionCore<Affine<G0>>,
         PartyEphemeralPublicKey<Affine<G0>>,
-        Option<AssetId>,
     )],
     has_counter_decreased: Vec<Option<bool>>,
     has_balance_changed: bool,
@@ -1417,15 +1416,13 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
 
     // Determine asset_id from the legs (None = hidden in all legs)
     let mut asset_id: Option<AssetId> = None;
-    for (_, _, leg_asset_id) in legs {
+    for (l, _) in legs {
         if asset_id.is_none() {
-            asset_id = *leg_asset_id;
-        } else if let Some(a) = leg_asset_id {
-            if asset_id != Some(*a) {
-                return Err(Error::ProofVerificationError(
-                    "All legs must have the same asset id".to_string(),
-                ));
-            }
+            asset_id = l.asset_id();
+        } else if l.is_asset_id_revealed() && (asset_id != l.asset_id()) {
+            return Err(Error::ProofVerificationError(
+                "All legs must have the same asset id".to_string(),
+            ));
         }
     }
 
@@ -1551,7 +1548,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     );
 
     for i in 0..legs.len() {
-        let (core, party_eph_pk, _) = &legs[i];
+        let (core, party_eph_pk) = &legs[i];
         let is_sender = party_eph_pk.is_sender();
         if asset_id.is_none() {
             // Asset id is not revealed in any leg
@@ -1566,7 +1563,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                     "Asset id is not revealed in leg {i} but response for leg-link is not provided"
                 ))
             })?;
-            let ct_asset_id = core.ct_asset_id.ok_or_else(|| {
+            let ct_asset_id = core.asset_id_ciphertext().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Asset id is not revealed in any leg but leg {i} is missing asset-id ciphertext"
                 ))
@@ -1584,7 +1581,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             );
         } else {
             // Asset id is revealed in atleast one leg
-            if core.ct_asset_id.is_none() {
+            if core.is_asset_id_revealed() {
                 // Asset id revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_participant();
                 let y = core.ct_participant(is_sender);
@@ -1620,7 +1617,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                         "Asset id is not revealed in leg {i} but eph_pk_asset_id is missing"
                     ))
                 })?;
-                let ct_asset_id = core.ct_asset_id.ok_or_else(|| {
+                let ct_asset_id = core.asset_id_ciphertext().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Asset id is not revealed in leg {i} but asset-id ciphertext is missing"
                     ))

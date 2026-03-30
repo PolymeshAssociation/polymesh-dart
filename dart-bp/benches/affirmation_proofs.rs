@@ -213,7 +213,6 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.core_and_eph_keys_for_sender(),
-                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -283,7 +282,6 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.core_and_eph_keys_for_receiver(),
-                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -358,7 +356,6 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.core_and_eph_keys_for_sender(),
-                    None,
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -432,7 +429,6 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
                     leg_enc.core_and_eph_keys_for_receiver(),
-                    None,
                     &root,
                     updated_account_comm,
                     nullifier,

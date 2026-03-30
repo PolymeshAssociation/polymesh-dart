@@ -233,7 +233,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_sender(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
@@ -365,7 +364,6 @@ impl<
         proof.verify(
             rng,
             leg_enc.core_and_eph_keys_for_receiver(),
-            None, // TODO:
             &root,
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,

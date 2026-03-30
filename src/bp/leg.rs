@@ -1175,13 +1175,13 @@ pub type WrappedMediatorEncryption = WrappedCanonical<bp_leg::MediatorEncryption
 #[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct LegEncrypted(WrappedLegEncryption);
 
-/// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
+/// Represents an encrypted mediator entry in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
-pub struct MediatorsEncrypted(WrappedMediatorEncryption);
+pub struct MediatorEncryption(WrappedMediatorEncryption);
 
 impl LegEncrypted {
     pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {
@@ -1193,12 +1193,22 @@ impl LegEncrypted {
     }
 
     pub fn mediator_count(&self) -> Result<usize, Error> {
-        self.get_mediator_ids().map(|ids| ids.len())
+        let leg_enc = self.decode()?;
+        Ok(leg_enc.num_mediators())
+    }
+
+    pub fn mediator_encryption(
+        &self,
+        mediator_id: MediatorId,
+    ) -> Result<MediatorEncryption, Error> {
+        let leg_enc = self.decode()?;
+        let mediator = leg_enc.mediator_encryption(mediator_id as usize)?;
+        Ok(MediatorEncryption(WrappedCanonical::wrap(mediator)?))
     }
 
     pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
         let leg_enc = self.decode()?;
-        let mediators = (0..leg_enc.mediators.len())
+        let mediators = (0..leg_enc.num_mediators())
             .map(|idx| idx as MediatorId)
             .collect();
         Ok(mediators)
@@ -1297,15 +1307,10 @@ impl LegEncrypted {
                 ..
             } => {
                 let leg_enc = self.decode()?;
-                let (sender, receiver_opt, asset_id_opt, amount) =
+                let (sender, receiver_opt, asset_id, amount) =
                     leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
                 let receiver = receiver_opt.ok_or_else(|| {
                     Error::LegDecryptionError("Sender cannot see receiver".to_string())
-                })?;
-                let asset_id = asset_id_opt.ok_or_else(|| {
-                    Error::LegDecryptionError(
-                        "Asset ID not encrypted: cannot decrypt as sender".to_string(),
-                    )
                 })?;
                 (sender, receiver, asset_id, amount)
             }
@@ -1314,15 +1319,10 @@ impl LegEncrypted {
                 ..
             } => {
                 let leg_enc = self.decode()?;
-                let (sender_opt, receiver, asset_id_opt, amount) =
+                let (sender_opt, receiver, asset_id, amount) =
                     leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
                 let sender = sender_opt.ok_or_else(|| {
                     Error::LegDecryptionError("Receiver cannot see sender".to_string())
-                })?;
-                let asset_id = asset_id_opt.ok_or_else(|| {
-                    Error::LegDecryptionError(
-                        "Asset ID not encrypted: cannot decrypt as receiver".to_string(),
-                    )
                 })?;
                 (sender, receiver, asset_id, amount)
             }
@@ -1363,15 +1363,10 @@ impl LegEncrypted {
                 ..
             } => {
                 let leg_enc = self.decode()?;
-                let (sender, receiver_opt, asset_id_opt, amount) =
+                let (sender, receiver_opt, asset_id, amount) =
                     leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
                 let receiver = receiver_opt.ok_or_else(|| {
                     Error::LegDecryptionError("Sender cannot see receiver".to_string())
-                })?;
-                let asset_id = asset_id_opt.ok_or_else(|| {
-                    Error::LegDecryptionError(
-                        "Asset ID not encrypted: cannot decrypt as sender".to_string(),
-                    )
                 })?;
                 (sender, receiver, asset_id, amount)
             }
@@ -1380,15 +1375,10 @@ impl LegEncrypted {
                 ..
             } => {
                 let leg_enc = self.decode()?;
-                let (sender_opt, receiver, asset_id_opt, amount) =
+                let (sender_opt, receiver, asset_id, amount) =
                     leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
                 let sender = sender_opt.ok_or_else(|| {
                     Error::LegDecryptionError("Receiver cannot see sender".to_string())
-                })?;
-                let asset_id = asset_id_opt.ok_or_else(|| {
-                    Error::LegDecryptionError(
-                        "Asset ID not encrypted: cannot decrypt as receiver".to_string(),
-                    )
                 })?;
                 (sender, receiver, asset_id, amount)
             }
@@ -1401,8 +1391,14 @@ impl LegEncrypted {
                 index: Some(idx),
             } => {
                 let leg_enc = self.decode()?;
+                let med_enc = leg_enc.mediator_encryption(idx as usize)?;
                 let is_public = false;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
+                leg_enc.decrypt_given_key(
+                    &keys.enc.secret.0.0,
+                    is_public,
+                    med_enc.enc_key_index as usize,
+                    enc_gen,
+                )?
             }
             _ => {
                 return Err(Error::LegDecryptionError(
@@ -1419,7 +1415,7 @@ impl LegEncrypted {
     }
 }
 
-impl MediatorsEncrypted {
+impl MediatorEncryption {
     pub fn new(mediators_enc: bp_leg::MediatorEncryption<PallasA>) -> Result<Self, Error> {
         Ok(Self(WrappedCanonical::wrap(&mediators_enc)?))
     }

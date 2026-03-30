@@ -1,3 +1,4 @@
+use crate::Balance;
 use crate::account::state::{BALANCE_GEN_INDEX, NUM_GENERATORS, SK_ENC_INV_GEN_INDEX};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::{AmountCiphertext, LegEncryptionCore, PartyEphemeralPublicKey};
@@ -12,7 +13,6 @@ use crate::util::{
     verify_given_verification_tuples, verify_sigma_for_balance_change,
     verify_sigma_for_common_state_change,
 };
-use crate::{AssetId, Balance};
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
     TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
@@ -134,7 +134,6 @@ pub struct StateChangeVerifier<
     pub leg_cores: Vec<(
         LegEncryptionCore<Affine<G0>>,
         PartyEphemeralPublicKey<Affine<G0>>,
-        Option<AssetId>,
     )>,
 }
 
@@ -364,7 +363,7 @@ impl<
         // For legs that have asset-id ciphertext, prove that asset-id ciphertext is correctly formed when is_asset_id_revealed = true
 
         for leg_conf in legs_with_conf {
-            if let Some(a) = leg_conf.asset_id {
+            if let Some(a) = leg_conf.encryption.asset_id() {
                 if a != account.asset_id {
                     return Err(Error::ProofGenerationError(format!(
                         "Asset-id mismatch between leg config and account state: leg config = {a}, account = {}",
@@ -767,8 +766,10 @@ impl<
         let mut asset_id = None;
         for leg_conf in &legs_with_conf {
             if asset_id.is_none() {
-                asset_id = leg_conf.asset_id;
-            } else if leg_conf.asset_id.is_some() && (asset_id != leg_conf.asset_id) {
+                asset_id = leg_conf.encryption.asset_id();
+            } else if leg_conf.encryption.is_asset_id_revealed()
+                && (asset_id != leg_conf.encryption.asset_id())
+            {
                 return Err(Error::ProofVerificationError(
                     "All legs must have the same asset id".to_string(),
                 ));
@@ -816,7 +817,6 @@ impl<
         let mut leg_cores: Vec<(
             LegEncryptionCore<Affine<G0>>,
             PartyEphemeralPublicKey<Affine<G0>>,
-            Option<AssetId>,
         )> = Vec::with_capacity(legs_with_conf.len());
         let mut prover_is_sender = Vec::with_capacity(legs_with_conf.len());
         let mut has_counter_decreased = Vec::with_capacity(legs_with_conf.len());
@@ -826,14 +826,10 @@ impl<
             prover_is_sender.push(leg_conf.party_eph_pk.is_sender());
             has_balance_decreased.push(leg_conf.has_balance_decreased);
             has_counter_decreased.push(leg_conf.has_counter_decreased);
-            leg_cores.push((
-                leg_conf.encryption,
-                leg_conf.party_eph_pk,
-                leg_conf.asset_id,
-            ));
+            leg_cores.push((leg_conf.encryption, leg_conf.party_eph_pk));
         }
 
-        for (leg_core, eph_pk, _) in &leg_cores {
+        for (leg_core, eph_pk) in &leg_cores {
             add_to_transcript!(
                 even_verifier.transcript(),
                 LEG_ENC_LABEL,
@@ -846,7 +842,7 @@ impl<
         enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
             leg_cores
                 .iter()
-                .map(|(c, p, _)| (c.clone(), p.clone()))
+                .map(|(c, p)| (c.clone(), p.clone()))
                 .collect(),
             asset_id,
             &nullifier,
@@ -1081,8 +1077,6 @@ pub struct LegProverConfig<G0: SWCurveConfig + Clone + Copy> {
     pub encryption: LegEncryptionCore<Affine<G0>>,
     pub party_eph_pk: PartyEphemeralPublicKey<Affine<G0>>,
     pub has_balance_changed: bool,
-    /// `None` when asset-id is encrypted; `Some(id)` when asset-id is revealed in this leg
-    pub asset_id: Option<AssetId>,
 }
 
 /// Configuration for a leg in common state change operations (verifier side)
@@ -1092,8 +1086,6 @@ pub struct LegVerifierConfig<G0: SWCurveConfig + Clone + Copy> {
     pub party_eph_pk: PartyEphemeralPublicKey<Affine<G0>>,
     pub has_balance_decreased: Option<bool>,
     pub has_counter_decreased: Option<bool>,
-    /// `None` when asset-id is encrypted; `Some(id)` when asset-id is revealed in this leg
-    pub asset_id: Option<AssetId>,
 }
 
 /// Configuration for balance change in a single leg
