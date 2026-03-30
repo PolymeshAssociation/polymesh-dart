@@ -6,8 +6,8 @@ use crate::account::{
     BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig,
 };
 use crate::leg::AmountCiphertext;
-use crate::leg::LegEncryption;
 use crate::leg::PartyEphemeralPublicKey;
+use crate::leg::{LegEncryptionCore, ReceiverEphemeralPublicKey, SenderEphemeralPublicKey};
 use crate::util::{
     BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
 };
@@ -92,18 +92,26 @@ impl<
         self.updated_account_commitment
     }
 
-    pub fn add_send_affirmation(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
-        let ct_amount = leg_enc.ct_amount();
-        let eph_pk = leg_enc.eph_pk_s.clone();
-        let eph_pk_amount = eph_pk.2;
+    pub fn add_send_affirmation(
+        &mut self,
+        amount: Balance,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let ct_amount = leg_enc.0.ct_amount;
+        let (leg_enc_core, eph_pk) = leg_enc;
+        let eph_pk_amount = eph_pk.r3;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
 
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -116,32 +124,47 @@ impl<
         self.net_counter_change += 1;
     }
 
-    pub fn add_receive_affirmation(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+    pub fn add_receive_affirmation(
+        &mut self,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let (leg_enc_core, eph_pk_r) = leg_enc;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_changed: false,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.net_counter_change += 1;
     }
 
-    pub fn add_claim_received(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
-        let ct_amount = leg_enc.ct_amount();
-        let eph_pk = leg_enc.eph_pk_r.clone();
-        let eph_pk_amount = eph_pk.2;
+    pub fn add_claim_received(
+        &mut self,
+        amount: Balance,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let ct_amount = leg_enc.0.ct_amount;
+        let (leg_enc_core, eph_pk) = leg_enc;
+        let eph_pk_amount = eph_pk.r3;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
 
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             has_balance_changed: true,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -154,32 +177,47 @@ impl<
         self.net_counter_change -= 1;
     }
 
-    pub fn add_sender_counter_update(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
-        let eph_pk_s = leg_enc.eph_pk_s.clone();
+    pub fn add_sender_counter_update(
+        &mut self,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let (leg_enc_core, eph_pk_s) = leg_enc;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_changed: false,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_sender_reverse(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
-        let ct_amount = leg_enc.ct_amount();
-        let eph_pk = leg_enc.eph_pk_s.clone();
-        let eph_pk_amount = eph_pk.2;
+    pub fn add_sender_reverse(
+        &mut self,
+        amount: Balance,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let ct_amount = leg_enc.0.ct_amount;
+        let (leg_enc_core, eph_pk) = leg_enc;
+        let eph_pk_amount = eph_pk.r3;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
 
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -192,32 +230,47 @@ impl<
         self.net_counter_change -= 1;
     }
 
-    pub fn add_receiver_reverse(&mut self, leg_enc: LegEncryption<Affine<G0>>) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+    pub fn add_receiver_reverse(
+        &mut self,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let (leg_enc_core, eph_pk_r) = leg_enc;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_changed: false,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.net_counter_change -= 1;
     }
 
-    pub fn add_irreversible_send(&mut self, amount: Balance, leg_enc: LegEncryption<Affine<G0>>) {
-        let ct_amount = leg_enc.ct_amount();
-        let eph_pk = leg_enc.eph_pk_s.clone();
-        let eph_pk_amount = eph_pk.2;
+    pub fn add_irreversible_send(
+        &mut self,
+        amount: Balance,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
+    ) {
+        let ct_amount = leg_enc.0.ct_amount;
+        let (leg_enc_core, eph_pk) = leg_enc;
+        let eph_pk_amount = eph_pk.r3;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
 
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             has_balance_changed: true,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -231,19 +284,23 @@ impl<
     pub fn add_irreversible_receive(
         &mut self,
         amount: Balance,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
     ) {
-        let ct_amount = leg_enc.ct_amount();
-        let eph_pk = leg_enc.eph_pk_r.clone();
-        let eph_pk_amount = eph_pk.2;
+        let ct_amount = leg_enc.0.ct_amount;
+        let (leg_enc_core, eph_pk) = leg_enc;
+        let eph_pk_amount = eph_pk.r3;
+        let asset_id = leg_enc_core
+            .is_asset_id_revealed()
+            .then(|| self.account.asset_id);
 
         self.legs.push(LegProverConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             has_balance_changed: true,
-            asset_id: leg_enc
-                .is_asset_id_revealed()
-                .then(|| self.account.asset_id),
+            asset_id,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -514,12 +571,15 @@ impl<
 
     pub fn add_send_affirmation(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_s = leg_enc.eph_pk_s.clone();
+        let (leg_enc_core, eph_pk_s) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(true),
             has_counter_decreased: Some(false),
@@ -530,12 +590,15 @@ impl<
 
     pub fn add_receive_affirmation(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+        let (leg_enc_core, eph_pk_r) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: None,
             has_counter_decreased: Some(false),
@@ -546,12 +609,15 @@ impl<
 
     pub fn add_claim_received(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+        let (leg_enc_core, eph_pk_r) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: Some(false),
             has_counter_decreased: Some(true),
@@ -562,12 +628,15 @@ impl<
 
     pub fn add_sender_counter_update(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_s = leg_enc.eph_pk_s.clone();
+        let (leg_enc_core, eph_pk_s) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: None,
             has_counter_decreased: Some(true),
@@ -578,12 +647,15 @@ impl<
 
     pub fn add_sender_reverse(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_s = leg_enc.eph_pk_s.clone();
+        let (leg_enc_core, eph_pk_s) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(false),
             has_counter_decreased: Some(true),
@@ -594,12 +666,15 @@ impl<
 
     pub fn add_receiver_reverse(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+        let (leg_enc_core, eph_pk_r) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: None,
             has_counter_decreased: Some(true),
@@ -610,12 +685,15 @@ impl<
 
     pub fn add_irreversible_send(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            SenderEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_s = leg_enc.eph_pk_s.clone();
+        let (leg_enc_core, eph_pk_s) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             has_balance_decreased: Some(true),
             has_counter_decreased: None,
@@ -625,12 +703,15 @@ impl<
 
     pub fn add_irreversible_receive(
         &mut self,
-        leg_enc: LegEncryption<Affine<G0>>,
+        leg_enc: (
+            LegEncryptionCore<Affine<G0>>,
+            ReceiverEphemeralPublicKey<Affine<G0>>,
+        ),
         asset_id: Option<AssetId>,
     ) {
-        let eph_pk_r = leg_enc.eph_pk_r.clone();
+        let (leg_enc_core, eph_pk_r) = leg_enc;
         self.legs.push(LegVerifierConfig {
-            encryption: leg_enc.core.clone(),
+            encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             has_balance_decreased: Some(false),
             has_counter_decreased: None,
@@ -1048,8 +1129,8 @@ mod tests {
                 carol_receives_comm,
                 nonce_1,
             );
-            carol_builder_1.add_receive_affirmation(leg_enc_1.clone());
-            carol_builder_1.add_receive_affirmation(leg_enc_2.clone());
+            carol_builder_1.add_receive_affirmation(leg_enc_1.core_and_eph_keys_for_receiver());
+            carol_builder_1.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
 
             let start = Instant::now();
             let (carol_proof_1, carol_nullifier_1) = carol_builder_1
@@ -1070,10 +1151,14 @@ mod tests {
                 carol_nullifier_1,
                 nonce_1,
             );
-            carol_verifier_1
-                .add_receive_affirmation(leg_enc_1.clone(), reveal_asset_id.then_some(asset_id));
-            carol_verifier_1
-                .add_receive_affirmation(leg_enc_2.clone(), reveal_asset_id.then_some(asset_id));
+            carol_verifier_1.add_receive_affirmation(
+                leg_enc_1.core_and_eph_keys_for_receiver(),
+                reveal_asset_id.then_some(asset_id),
+            );
+            carol_verifier_1.add_receive_affirmation(
+                leg_enc_2.core_and_eph_keys_for_receiver(),
+                reveal_asset_id.then_some(asset_id),
+            );
 
             let start = Instant::now();
             carol_verifier_1
@@ -1129,8 +1214,12 @@ mod tests {
                 carol_final_comm,
                 nonce_2,
             );
-            carol_builder_2.add_claim_received(alice_send_amount, leg_enc_1.clone());
-            carol_builder_2.add_claim_received(bob_send_amount, leg_enc_2.clone());
+            carol_builder_2.add_claim_received(
+                alice_send_amount,
+                leg_enc_1.core_and_eph_keys_for_receiver(),
+            );
+            carol_builder_2
+                .add_claim_received(bob_send_amount, leg_enc_2.core_and_eph_keys_for_receiver());
 
             let start = Instant::now();
             let (carol_proof_2, carol_nullifier_2) = carol_builder_2
@@ -1151,10 +1240,14 @@ mod tests {
                 carol_nullifier_2,
                 nonce_2,
             );
-            carol_verifier_2
-                .add_claim_received(leg_enc_1.clone(), reveal_asset_id.then_some(asset_id));
-            carol_verifier_2
-                .add_claim_received(leg_enc_2.clone(), reveal_asset_id.then_some(asset_id));
+            carol_verifier_2.add_claim_received(
+                leg_enc_1.core_and_eph_keys_for_receiver(),
+                reveal_asset_id.then_some(asset_id),
+            );
+            carol_verifier_2.add_claim_received(
+                leg_enc_2.core_and_eph_keys_for_receiver(),
+                reveal_asset_id.then_some(asset_id),
+            );
 
             let start = Instant::now();
             carol_verifier_2
@@ -1267,8 +1360,11 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
-        alice_builder.add_receive_affirmation(leg_enc_2.clone());
+        alice_builder.add_send_affirmation(
+            alice_to_bob_amount,
+            leg_enc_1.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
@@ -1286,8 +1382,8 @@ mod tests {
         // Verify Alice's proof 1
         let mut alice_verifier =
             AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_send_affirmation(leg_enc_1.clone(), None);
-        alice_verifier.add_receive_affirmation(leg_enc_2.clone(), None);
+        alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender(), None);
+        alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver(), None);
 
         let start = Instant::now();
         alice_verifier
@@ -1328,8 +1424,11 @@ mod tests {
                 alice_final_comm,
                 nonce_2,
             );
-        alice_builder_2.add_claim_received(carol_to_alice_amount, leg_enc_2.clone());
-        alice_builder_2.add_sender_counter_update(leg_enc_1.clone());
+        alice_builder_2.add_claim_received(
+            carol_to_alice_amount,
+            leg_enc_2.core_and_eph_keys_for_receiver(),
+        );
+        alice_builder_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
 
         let start = Instant::now();
         let (alice_proof_2, alice_nullifier_2) = alice_builder_2
@@ -1347,8 +1446,8 @@ mod tests {
         // Verify Alice's proof 2
         let mut alice_verifier_2 =
             AccountStateTransitionProofVerifier::init(alice_final_comm, alice_nullifier_2, nonce_2);
-        alice_verifier_2.add_claim_received(leg_enc_2.clone(), None);
-        alice_verifier_2.add_sender_counter_update(leg_enc_1.clone(), None);
+        alice_verifier_2.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver(), None);
+        alice_verifier_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender(), None);
 
         let start = Instant::now();
         alice_verifier_2
@@ -1486,10 +1585,16 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
-        alice_builder.add_receive_affirmation(leg_enc_2.clone());
-        alice_builder.add_sender_reverse(alice_to_dave_amount, leg_enc_3.clone());
-        alice_builder.add_receiver_reverse(leg_enc_4.clone());
+        alice_builder.add_send_affirmation(
+            alice_to_bob_amount,
+            leg_enc_1.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+        alice_builder.add_sender_reverse(
+            alice_to_dave_amount,
+            leg_enc_3.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_receiver_reverse(leg_enc_4.core_and_eph_keys_for_receiver());
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
@@ -1507,10 +1612,10 @@ mod tests {
         // Verify Alice's proof
         let mut alice_verifier =
             AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_send_affirmation(leg_enc_1.clone(), None);
-        alice_verifier.add_receive_affirmation(leg_enc_2.clone(), None);
-        alice_verifier.add_sender_reverse(leg_enc_3.clone(), None);
-        alice_verifier.add_receiver_reverse(leg_enc_4.clone(), None);
+        alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender(), None);
+        alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver(), None);
+        alice_verifier.add_sender_reverse(leg_enc_3.core_and_eph_keys_for_sender(), None);
+        alice_verifier.add_receiver_reverse(leg_enc_4.core_and_eph_keys_for_receiver(), None);
 
         let start = Instant::now();
         alice_verifier
@@ -1617,8 +1722,14 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_irreversible_send(alice_to_bob_amount, leg_enc_1.clone());
-        alice_builder.add_irreversible_receive(carol_to_alice_amount, leg_enc_2.clone());
+        alice_builder.add_irreversible_send(
+            alice_to_bob_amount,
+            leg_enc_1.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_irreversible_receive(
+            carol_to_alice_amount,
+            leg_enc_2.core_and_eph_keys_for_receiver(),
+        );
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
@@ -1636,8 +1747,8 @@ mod tests {
         // Verify Alice's proof
         let mut alice_verifier =
             AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_irreversible_send(leg_enc_1.clone(), None);
-        alice_verifier.add_irreversible_receive(leg_enc_2.clone(), None);
+        alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender(), None);
+        alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver(), None);
 
         let start = Instant::now();
         alice_verifier
@@ -1814,8 +1925,10 @@ mod tests {
                 alice_updated_comm_asset1,
                 nonce_alice_1,
             );
-        alice_builder_asset1.add_send_affirmation(amount_1, leg_enc_1_asset1.clone());
-        alice_builder_asset1.add_receive_affirmation(leg_enc_2_asset1.clone());
+        alice_builder_asset1
+            .add_send_affirmation(amount_1, leg_enc_1_asset1.core_and_eph_keys_for_sender());
+        alice_builder_asset1
+            .add_receive_affirmation(leg_enc_2_asset1.core_and_eph_keys_for_receiver());
 
         let mut alice_builder_asset2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1824,8 +1937,17 @@ mod tests {
                 alice_updated_comm_asset2,
                 nonce_alice_2,
             );
-        alice_builder_asset2.add_send_affirmation(amount_3, leg_enc_1_asset2.clone());
-        alice_builder_asset2.add_receive_affirmation(leg_enc_2_asset2.clone());
+        alice_builder_asset2.add_send_affirmation(
+            amount_3,
+            (
+                leg_enc_1_asset2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1_asset2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        alice_builder_asset2.add_receive_affirmation((
+            leg_enc_2_asset2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_2_asset2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let start = Instant::now();
 
@@ -1879,8 +2001,10 @@ mod tests {
             alice_nullifier_1,
             nonce_alice_1,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1_asset1.clone(), None);
-        alice_verifier_1.add_receive_affirmation(leg_enc_2_asset1.clone(), None);
+        alice_verifier_1
+            .add_send_affirmation(leg_enc_1_asset1.core_and_eph_keys_for_sender(), None);
+        alice_verifier_1
+            .add_receive_affirmation(leg_enc_2_asset1.core_and_eph_keys_for_receiver(), None);
 
         alice_verifier_1
             .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
@@ -1900,8 +2024,20 @@ mod tests {
             alice_nullifier_2,
             nonce_alice_2,
         );
-        alice_verifier_2.add_send_affirmation(leg_enc_1_asset2.clone(), None);
-        alice_verifier_2.add_receive_affirmation(leg_enc_2_asset2.clone(), None);
+        alice_verifier_2.add_send_affirmation(
+            (
+                leg_enc_1_asset2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1_asset2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_2.add_receive_affirmation(
+            (
+                leg_enc_2_asset2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2_asset2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         alice_verifier_2
             .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
@@ -2116,11 +2252,20 @@ mod tests {
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(alice_to_bob_amount, leg_enc_1.clone());
-        alice_builder.add_send_affirmation(alice_to_carol_amount, leg_enc_2.clone());
-        alice_builder.add_receive_affirmation(leg_enc_3.clone());
-        alice_builder.add_receive_affirmation(leg_enc_4.clone());
-        alice_builder.add_receive_affirmation(leg_enc_5.clone());
+        alice_builder.add_send_affirmation(
+            alice_to_bob_amount,
+            leg_enc_1.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_send_affirmation(
+            alice_to_carol_amount,
+            leg_enc_2.core_and_eph_keys_for_sender(),
+        );
+        alice_builder.add_receive_affirmation(leg_enc_3.core_and_eph_keys_for_receiver());
+        alice_builder.add_receive_affirmation(leg_enc_4.core_and_eph_keys_for_receiver());
+        alice_builder.add_receive_affirmation((
+            leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
@@ -2137,11 +2282,21 @@ mod tests {
 
         let mut alice_verifier =
             AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_send_affirmation(leg_enc_1.clone(), Some(asset_id));
-        alice_verifier.add_send_affirmation(leg_enc_2.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_3.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_4.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_5.clone(), Some(asset_id));
+        alice_verifier
+            .add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender(), Some(asset_id));
+        alice_verifier
+            .add_send_affirmation(leg_enc_2.core_and_eph_keys_for_sender(), Some(asset_id));
+        alice_verifier
+            .add_receive_affirmation(leg_enc_3.core_and_eph_keys_for_receiver(), Some(asset_id));
+        alice_verifier
+            .add_receive_affirmation(leg_enc_4.core_and_eph_keys_for_receiver(), Some(asset_id));
+        alice_verifier.add_receive_affirmation(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            Some(asset_id),
+        );
 
         let start = Instant::now();
         alice_verifier
@@ -2159,11 +2314,16 @@ mod tests {
 
         let mut alice_verifier =
             AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_send_affirmation(leg_enc_1.clone(), Some(asset_id));
-        alice_verifier.add_send_affirmation(leg_enc_2.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_3.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_4.clone(), Some(asset_id));
-        alice_verifier.add_receive_affirmation(leg_enc_5.clone(), Some(asset_id));
+        alice_verifier
+            .add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender(), Some(asset_id));
+        alice_verifier
+            .add_send_affirmation(leg_enc_2.core_and_eph_keys_for_sender(), Some(asset_id));
+        alice_verifier
+            .add_receive_affirmation(leg_enc_3.core_and_eph_keys_for_receiver(), Some(asset_id));
+        alice_verifier
+            .add_receive_affirmation(leg_enc_4.core_and_eph_keys_for_receiver(), Some(asset_id));
+        alice_verifier
+            .add_receive_affirmation(leg_enc_5.core_and_eph_keys_for_receiver(), Some(asset_id));
 
         let start = Instant::now();
         let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));

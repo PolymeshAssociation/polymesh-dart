@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::leg::leg_proof::ensure_leg_encryption_consistent;
+use crate::leg::leg_proof::{ensure_leg_encryption_consistent, ensure_sender_receiver_not_same};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
@@ -144,10 +144,13 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         enc_gen: Affine<G>,
         prover: &mut Prover<MerlinTranscript, Affine<G>>,
     ) -> Result<Self> {
-        if !leg_enc.is_asset_id_revealed() {
-            return Err(Error::ProofGenerationError(
-                "asset-id is hidden in leg encryption".to_string(),
-            ));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if !leg_enc.is_asset_id_revealed() {
+                return Err(Error::ProofGenerationError(
+                    "asset-id is hidden in leg encryption".to_string(),
+                ));
+            }
         }
 
         ensure_leg_encryption_consistent(&leg, &leg_enc)?;
@@ -195,7 +198,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &enc_key_gen,
             r_1_inv,
             r_1_inv_blinding,
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
         // For proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
@@ -205,7 +208,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &enc_key_gen,
             r_2_inv,
             r_2_inv_blinding,
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
         // For proving ct_amount = enc_key_gen * r_3 + enc_gen * amount
@@ -219,12 +222,18 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         );
 
         // For proving S[2] = S[0] * r_3/r_1
-        let eph_pk_s_v_proto =
-            PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, &leg_enc.eph_pk_s.0);
+        let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_1_inv,
+            r_3_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
 
         // For proving R[2] = R[1] * r_3/r_2
-        let eph_pk_r_v_proto =
-            PokDiscreteLogProtocol::init(r_3_r_2_inv, r_3_r_2_inv_blinding, &leg_enc.eph_pk_r.1);
+        let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_2_inv,
+            r_3_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
 
         // If parties_see_each_other is true, then S[1] and R[0] is present in leg encryption
         // For proving S[1] = S[0] * r_2/r_1 and R[0] = R[1] * r_1/r_2
@@ -233,12 +242,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 Some(PokDiscreteLogProtocol::init(
                     r_2_r_1_inv.unwrap(),
                     r_2_r_1_inv_blinding.unwrap(),
-                    &leg_enc.eph_pk_s.0,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 )),
                 Some(PokDiscreteLogProtocol::init(
                     r_1_r_2_inv.unwrap(),
                     r_1_r_2_inv_blinding.unwrap(),
-                    &leg_enc.eph_pk_r.1,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 )),
             )
         } else {
@@ -369,14 +378,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
             ct_s_proto.challenge_contribution(
                 &enc_key_gen,
-                &leg_enc.eph_pk_s.0,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &leg_enc.ct_s(),
                 &mut transcript_ref,
             )?;
 
             ct_r_proto.challenge_contribution(
                 &enc_key_gen,
-                &leg_enc.eph_pk_r.1,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &leg_enc.ct_r(),
                 &mut transcript_ref,
             )?;
@@ -389,43 +398,51 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )?;
 
             eph_pk_s_v_proto.challenge_contribution(
-                &leg_enc.eph_pk_s.0,
-                &leg_enc.eph_pk_s.2,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
                 &mut transcript_ref,
             )?;
 
             eph_pk_r_v_proto.challenge_contribution(
-                &leg_enc.eph_pk_r.1,
-                &leg_enc.eph_pk_r.2,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
                 &mut transcript_ref,
             )?;
 
             if let Some(p) = &eph_pk_s_r_proto {
                 p.challenge_contribution(
-                    &leg_enc.eph_pk_s.0,
-                    &leg_enc.eph_pk_s.1.ok_or_else(|| {
-                        Error::IncompatibleLegAndLegEncryption(
-                            "Missing sender-to-receiver ephemeral key".into(),
-                        )
-                    })?,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                    &leg_enc
+                        .leg_enc_core_and_eph_keys
+                        .eph_pk_s
+                        .r2
+                        .ok_or_else(|| {
+                            Error::IncompatibleLegAndLegEncryption(
+                                "Missing sender-to-receiver ephemeral key".into(),
+                            )
+                        })?,
                     &mut transcript_ref,
                 )?;
             }
 
             if let Some(p) = &eph_pk_r_s_proto {
                 p.challenge_contribution(
-                    &leg_enc.eph_pk_r.1,
-                    &leg_enc.eph_pk_r.0.ok_or_else(|| {
-                        Error::IncompatibleLegAndLegEncryption(
-                            "Missing receiver-to-sender ephemeral key".into(),
-                        )
-                    })?,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                    &leg_enc
+                        .leg_enc_core_and_eph_keys
+                        .eph_pk_r
+                        .r1
+                        .ok_or_else(|| {
+                            Error::IncompatibleLegAndLegEncryption(
+                                "Missing receiver-to-sender ephemeral key".into(),
+                            )
+                        })?,
                     &mut transcript_ref,
                 )?;
             }
 
             let y_ct_meds = (0..leg_enc.num_mediators())
-                .map(|i| leg_enc.mediators.ct_meds[i] - leg.med_keys[i].1)
+                .map(|i| leg_enc.mediators[i].ct_med - leg.med_keys[i].1)
                 .collect::<Vec<_>>();
             let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
             for i in 0..leg_enc.num_mediators() {
@@ -436,7 +453,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 )?;
                 eph_pk_meds_proto[i].challenge_contribution(
                     &leg.enc_keys[leg.med_keys[i].0 as usize],
-                    &leg_enc.mediators.eph_pk_med_keys[i].1,
+                    &leg_enc.mediators[i].eph_pk_med_key,
                     &mut transcript_ref,
                 )?;
             }
@@ -444,17 +461,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             for i in 0..leg_enc.eph_pk_enc_keys.len() {
                 eph_pk_enc_proto[i].0.challenge_contribution(
                     &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].0,
+                    &leg_enc.eph_pk_enc_keys[i].r1,
                     &mut transcript_ref,
                 )?;
                 eph_pk_enc_proto[i].1.challenge_contribution(
                     &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].1,
+                    &leg_enc.eph_pk_enc_keys[i].r2,
                     &mut transcript_ref,
                 )?;
                 eph_pk_enc_proto[i].2.challenge_contribution(
                     &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].2,
+                    &leg_enc.eph_pk_enc_keys[i].r3,
                     &mut transcript_ref,
                 )?;
             }
@@ -462,17 +479,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             for i in 0..leg_enc.eph_pk_public_enc_keys.len() {
                 eph_pk_public_enc_proto[i].0.challenge_contribution(
                     &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].0,
+                    &leg_enc.eph_pk_public_enc_keys[i].r1,
                     &mut transcript_ref,
                 )?;
                 eph_pk_public_enc_proto[i].1.challenge_contribution(
                     &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].1,
+                    &leg_enc.eph_pk_public_enc_keys[i].r2,
                     &mut transcript_ref,
                 )?;
                 eph_pk_public_enc_proto[i].2.challenge_contribution(
                     &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].2,
+                    &leg_enc.eph_pk_public_enc_keys[i].r3,
                     &mut transcript_ref,
                 )?;
             }
@@ -732,13 +749,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 med_keys.len()
             )));
         }
-        if leg_enc.mediators.eph_pk_med_keys.len() != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "leg_enc.eph_pk_med_keys.len() != med_keys.len() ({} != {})",
-                leg_enc.mediators.eph_pk_med_keys.len(),
-                med_keys.len()
-            )));
-        }
 
         if leg_enc.eph_pk_enc_keys.len() != enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
@@ -761,12 +771,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     "med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
                     *idx,
                     enc_keys.len()
-                )));
-            }
-            if leg_enc.mediators.eph_pk_med_keys[i].0 != *idx {
-                return Err(Error::ProofVerificationError(format!(
-                    "leg_enc.eph_pk_med_keys[{i}].0 ({}) != med_keys[{i}].0 ({})",
-                    leg_enc.mediators.eph_pk_med_keys[i].0, *idx
                 )));
             }
         }
@@ -806,6 +810,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
+        ensure_sender_receiver_not_same(&leg_enc)?;
+
         let vars = verifier.commit_vec(
             8 + if parties_see_each_other { 2 } else { 0 },
             self.comm_r_i_amount,
@@ -816,14 +822,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
             &mut transcript_ref,
         )?;
 
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             &mut transcript_ref,
         )?;
@@ -836,14 +842,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         )?;
 
         self.resp_eph_pk_s_v.challenge_contribution(
-            &leg_enc.eph_pk_s.0,
-            &leg_enc.eph_pk_s.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
             &mut transcript_ref,
         )?;
 
         self.resp_eph_pk_r_v.challenge_contribution(
-            &leg_enc.eph_pk_r.1,
-            &leg_enc.eph_pk_r.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             &mut transcript_ref,
         )?;
 
@@ -853,28 +859,46 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
                 )
             })?;
-            let eph_pk_s_r = leg_enc.eph_pk_s.1.ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing".to_string(),
-                )
-            })?;
-            resp.challenge_contribution(&leg_enc.eph_pk_s.0, &eph_pk_s_r, &mut transcript_ref)?;
+            let eph_pk_s_r = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_s
+                .r2
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing"
+                            .to_string(),
+                    )
+                })?;
+            resp.challenge_contribution(
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                &eph_pk_s_r,
+                &mut transcript_ref,
+            )?;
 
             let resp = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
                     "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
                 )
             })?;
-            let eph_pk_r_s = leg_enc.eph_pk_r.0.ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing".to_string(),
-                )
-            })?;
-            resp.challenge_contribution(&leg_enc.eph_pk_r.1, &eph_pk_r_s, &mut transcript_ref)?;
+            let eph_pk_r_s = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r1
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing"
+                            .to_string(),
+                    )
+                })?;
+            resp.challenge_contribution(
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                &eph_pk_r_s,
+                &mut transcript_ref,
+            )?;
         }
 
         let y_ct_meds = (0..leg_enc.num_mediators())
-            .map(|i| leg_enc.mediators.ct_meds[i] - med_keys[i].1)
+            .map(|i| leg_enc.mediators[i].ct_med - med_keys[i].1)
             .collect::<Vec<_>>();
         let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
 
@@ -887,7 +911,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             // M[i] = pk_en[med_keys[i].0] * r_meds[i]
             self.resp_eph_pk_meds[i].challenge_contribution(
                 &enc_keys[med_keys[i].0 as usize],
-                &leg_enc.mediators.eph_pk_med_keys[i].1,
+                &leg_enc.mediators[i].eph_pk_med_key,
                 &mut transcript_ref,
             )?;
         }
@@ -896,17 +920,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         for i in 0..self.resp_eph_pk_enc.len() {
             self.resp_eph_pk_enc[i].0.challenge_contribution(
                 &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].0,
+                &leg_enc.eph_pk_enc_keys[i].r1,
                 &mut transcript_ref,
             )?;
             self.resp_eph_pk_enc[i].1.challenge_contribution(
                 &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].1,
+                &leg_enc.eph_pk_enc_keys[i].r2,
                 &mut transcript_ref,
             )?;
             self.resp_eph_pk_enc[i].2.challenge_contribution(
                 &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].2,
+                &leg_enc.eph_pk_enc_keys[i].r3,
                 &mut transcript_ref,
             )?;
         }
@@ -915,17 +939,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         for i in 0..self.resp_eph_pk_public_enc.len() {
             self.resp_eph_pk_public_enc[i].0.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].0,
+                &leg_enc.eph_pk_public_enc_keys[i].r1,
                 &mut transcript_ref,
             )?;
             self.resp_eph_pk_public_enc[i].1.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].1,
+                &leg_enc.eph_pk_public_enc_keys[i].r2,
                 &mut transcript_ref,
             )?;
             self.resp_eph_pk_public_enc[i].2.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].2,
+                &leg_enc.eph_pk_public_enc_keys[i].r3,
                 &mut transcript_ref,
             )?;
         }
@@ -940,9 +964,9 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_ct_s,
             "resp_ct_s verification failed",
-            leg_enc.core.ct_s,
+            leg_enc.leg_enc_core_and_eph_keys.core.ct_s,
             enc_key_gen,
-            leg_enc.eph_pk_s.0,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &challenge,
             &self.resp_comm_r_i_amount.0[2],
             &self.resp_comm_r_i_amount.0[5],
@@ -953,9 +977,9 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_ct_r,
             "resp_ct_r verification failed",
-            leg_enc.core.ct_r,
+            leg_enc.leg_enc_core_and_eph_keys.core.ct_r,
             enc_key_gen,
-            leg_enc.eph_pk_r.1,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[3],
             &self.resp_comm_r_i_amount.0[6],
@@ -966,7 +990,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_amount_enc,
             "resp_amount_enc verification failed",
-            leg_enc.core.ct_amount,
+            leg_enc.leg_enc_core_and_eph_keys.core.ct_amount,
             enc_key_gen,
             enc_gen,
             &challenge,
@@ -979,8 +1003,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_eph_pk_s_v,
             "resp_eph_pk_s_v verification failed",
-            leg_enc.eph_pk_s.2,
-            leg_enc.eph_pk_s.0,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &challenge,
             &self.resp_comm_r_i_amount.0[7],
         );
@@ -990,8 +1014,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_eph_pk_r_v,
             "resp_eph_pk_r_v verification failed",
-            leg_enc.eph_pk_r.2,
-            leg_enc.eph_pk_r.1,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[8],
         );
@@ -1002,17 +1026,22 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
                 )
             })?;
-            let eph_pk_s_r = leg_enc.eph_pk_s.1.ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing".to_string(),
-                )
-            })?;
+            let eph_pk_s_r = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_s
+                .r2
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing"
+                            .to_string(),
+                    )
+                })?;
             verify_or_rmc_2!(
                 rmc,
                 resp,
                 "resp_eph_pk_s_r verification failed",
                 eph_pk_s_r,
-                leg_enc.eph_pk_s.0,
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[9],
             );
@@ -1022,17 +1051,22 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
                 )
             })?;
-            let eph_pk_r_s = leg_enc.eph_pk_r.0.ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing".to_string(),
-                )
-            })?;
+            let eph_pk_r_s = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r1
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing"
+                            .to_string(),
+                    )
+                })?;
             verify_or_rmc_2!(
                 rmc,
                 resp,
                 "resp_eph_pk_r_s verification failed",
                 eph_pk_r_s,
-                leg_enc.eph_pk_r.1,
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[10],
             );
@@ -1054,7 +1088,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_meds[i],
                 format!("resp_eph_pk_meds[{}] verification failed", i),
-                leg_enc.mediators.eph_pk_med_keys[i].1,
+                leg_enc.mediators[i].eph_pk_med_key,
                 enc_keys[med_keys[i].0 as usize],
                 &challenge,
                 &self.resp_ct_meds[i].response,
@@ -1067,7 +1101,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_enc[i].0,
                 format!("resp_eph_pk_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].0,
+                leg_enc.eph_pk_enc_keys[i].r1,
                 enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
@@ -1076,7 +1110,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_enc[i].1,
                 format!("resp_eph_pk_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].1,
+                leg_enc.eph_pk_enc_keys[i].r2,
                 enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
@@ -1085,7 +1119,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_enc[i].2,
                 format!("resp_eph_pk_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].2,
+                leg_enc.eph_pk_enc_keys[i].r3,
                 enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
@@ -1098,7 +1132,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_public_enc[i].0,
                 format!("resp_eph_pk_public_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].0,
+                leg_enc.eph_pk_public_enc_keys[i].r1,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
@@ -1107,7 +1141,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_public_enc[i].1,
                 format!("resp_eph_pk_public_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].1,
+                leg_enc.eph_pk_public_enc_keys[i].r2,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
@@ -1116,7 +1150,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 rmc,
                 self.resp_eph_pk_public_enc[i].2,
                 format!("resp_eph_pk_public_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].2,
+                leg_enc.eph_pk_public_enc_keys[i].r3,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],

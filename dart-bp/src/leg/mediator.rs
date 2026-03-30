@@ -1,10 +1,9 @@
-use crate::leg::MediatorEncryptions;
+use crate::leg::MediatorEncryption;
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, error::Result};
 use ark_ec::AffineRepr;
 use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -29,11 +28,10 @@ pub struct MediatorTxnProof<G: AffineRepr> {
 impl<G: AffineRepr> MediatorTxnProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: MediatorEncryptions<G>,
+        leg_enc: MediatorEncryption<G>,
         enc_sk: G::ScalarField,
         mediator_sk: G::ScalarField,
         accept: bool,
-        index: usize,
         nonce: &[u8],
         sig_key_gen: &G,
     ) -> Result<Self> {
@@ -44,7 +42,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             enc_sk,
             mediator_sk,
             accept,
-            index,
             nonce,
             sig_key_gen,
             &mut transcript,
@@ -53,17 +50,14 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        leg_enc: MediatorEncryptions<G>,
+        leg_enc: MediatorEncryption<G>,
         enc_sk: G::ScalarField,
         mut mediator_sk: G::ScalarField,
         accept: bool,
-        index: usize,
         nonce: &[u8],
         sig_key_gen: &G,
         mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
-        ensure_correct_index(&leg_enc, index)?;
-
         // Hash the mediator's response
         if accept {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
@@ -71,8 +65,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
         }
 
-        let y = leg_enc.ct_meds[index];
-        let eph_pk = &leg_enc.eph_pk_med_keys[index].1;
+        let y = leg_enc.ct_med;
+        let eph_pk = &leg_enc.eph_pk_med_key;
         let enc_pk = PokPedersenCommitmentProtocol::init(
             enc_sk.inverse().ok_or(Error::InvertingZero)?,
             G::ScalarField::rand(rng),
@@ -86,15 +80,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
         enc_pk.challenge_contribution(eph_pk, sig_key_gen, &y, &mut transcript)?;
 
-        add_to_transcript!(
-            transcript,
-            LEG_ENC_LABEL,
-            leg_enc,
-            INDEX_IN_ASSET_DATA_LABEL,
-            index,
-            NONCE_LABEL,
-            nonce
-        );
+        add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
@@ -104,44 +90,25 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
 
     pub fn verify(
         &self,
-        leg_enc: MediatorEncryptions<G>,
+        leg_enc: MediatorEncryption<G>,
         accept: bool,
-        index: usize,
         nonce: &[u8],
         sig_key_gen: G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
-        self.verify_with_given_transcript(
-            leg_enc,
-            accept,
-            index,
-            nonce,
-            sig_key_gen,
-            &mut transcript,
-            rmc,
-        )
+        self.verify_with_given_transcript(leg_enc, accept, nonce, sig_key_gen, &mut transcript, rmc)
     }
 
     pub fn verify_with_given_transcript(
         &self,
-        leg_enc: MediatorEncryptions<G>,
+        leg_enc: MediatorEncryption<G>,
         accept: bool,
-        index: usize,
         nonce: &[u8],
         sig_key_gen: G,
         mut transcript: &mut MerlinTranscript,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        if leg_enc.ct_meds.len() != leg_enc.eph_pk_med_keys.len() {
-            return Err(Error::ProofVerificationError(
-                "ct_meds and eph_pk_med_keys length mismatch".to_string(),
-            ));
-        }
-        if index >= leg_enc.ct_meds.len() {
-            return Err(Error::InvalidKeyIndex(index));
-        }
-
         // Hash the mediator's response
         if accept {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
@@ -149,21 +116,13 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
         }
 
-        let y = leg_enc.ct_meds[index];
-        let eph_pk = leg_enc.eph_pk_med_keys[index].1;
+        let y = leg_enc.ct_med;
+        let eph_pk = leg_enc.eph_pk_med_key;
 
         self.resp_enc_pk
             .challenge_contribution(&eph_pk, &sig_key_gen, &y, &mut transcript)?;
 
-        add_to_transcript!(
-            transcript,
-            LEG_ENC_LABEL,
-            leg_enc,
-            INDEX_IN_ASSET_DATA_LABEL,
-            index,
-            NONCE_LABEL,
-            nonce
-        );
+        add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_CHALLENGE_LABEL);
 
@@ -176,25 +135,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             sig_key_gen,
             &challenge,
         );
-
-        Ok(())
-    }
-}
-
-fn ensure_correct_index<G: AffineRepr>(
-    leg_enc: &MediatorEncryptions<G>,
-    index: usize,
-) -> Result<()> {
-    #[cfg(feature = "ignore_prover_input_sanitation")]
-    {
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-    {
-        if index >= leg_enc.ct_meds.len() {
-            return Err(Error::InvalidKeyIndex(index));
-        }
 
         Ok(())
     }
@@ -289,13 +229,12 @@ mod tests {
             let clock = Instant::now();
             let proof = MediatorTxnProof::new(
                 &mut rng,
-                leg_enc.mediators.clone(),
+                leg_enc.mediators[mediator_index].clone(),
                 keys_auditor[mediator_enc_key_indices[mediator_index] as usize]
                     .0
                     .0,
                 keys_mediator[mediator_index].0.0,
                 accept,
-                mediator_index,
                 nonce,
                 &sig_key_gen,
             )
@@ -306,9 +245,8 @@ mod tests {
 
             proof
                 .verify(
-                    leg_enc.mediators.clone(),
+                    leg_enc.mediators[mediator_index].clone(),
                     accept,
-                    mediator_index,
                     nonce,
                     sig_key_gen,
                     None,
@@ -322,9 +260,8 @@ mod tests {
             let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
             proof
                 .verify(
-                    leg_enc.mediators.clone(),
+                    leg_enc.mediators[mediator_index].clone(),
                     accept,
-                    mediator_index,
                     nonce,
                     sig_key_gen,
                     Some(&mut rmc),
@@ -341,82 +278,6 @@ mod tests {
                 verifier_time_regular,
                 verifier_time_rmc
             );
-
-            match proof
-                .verify(
-                    leg_enc.mediators.clone(),
-                    accept,
-                    10,
-                    nonce,
-                    sig_key_gen,
-                    None,
-                )
-                .err()
-                .unwrap()
-            {
-                Error::InvalidKeyIndex(i) => assert_eq!(i, 10),
-                _ => panic!("Didn't error but should have"),
-            }
         }
-    }
-
-    #[test]
-    fn mediator_verifier_rejects_mismatched_mediator_vectors() {
-        let mut rng = rand::thread_rng();
-
-        let label = b"testing";
-        let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
-        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
-        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
-
-        // Encryption keys
-        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
-        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
-
-        let asset_id = 1;
-        let amount = 100;
-
-        // One auditor encryption key, one mediator affirmation key.
-        let (sk_aud_enc, pk_aud_enc) = keygen_enc(&mut rng, enc_key_gen);
-        let (sk_med, pk_med) = keygen_enc(&mut rng, sig_key_gen);
-
-        let leg = Leg::new(
-            pk_s_e.0,
-            pk_r_e.0,
-            amount,
-            asset_id,
-            vec![pk_aud_enc.0],
-            vec![(0u8, pk_med.0)],
-            vec![],
-        )
-        .unwrap();
-        let (leg_enc, _) = leg
-            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
-            .unwrap();
-
-        let nonce = b"test-nonce";
-        let accept = true;
-        let index = 0usize;
-
-        let proof = MediatorTxnProof::new(
-            &mut rng,
-            leg_enc.mediators.clone(),
-            sk_aud_enc.0,
-            sk_med.0,
-            accept,
-            index,
-            nonce,
-            &sig_key_gen,
-        )
-        .unwrap();
-
-        let mut malformed = leg_enc.clone();
-        malformed.mediators.eph_pk_med_keys.pop();
-
-        assert!(
-            proof
-                .verify(malformed.mediators, accept, index, nonce, sig_key_gen, None)
-                .is_err()
-        );
     }
 }

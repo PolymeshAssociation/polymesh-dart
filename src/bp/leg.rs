@@ -503,7 +503,9 @@ impl<
             Self::RevealedAssetId(proof) => {
                 // Try to decode the leg encryption and extract the revealed asset ID
                 let leg_enc = self.leg_enc().decode()?;
-                if let bp_leg::AssetIdEncryption::Revealed(asset_id) = leg_enc.core.ct_asset_id {
+                if let bp_leg::AssetIdEncryption::Revealed(asset_id) =
+                    leg_enc.leg_enc_core_and_eph_keys.core.ct_asset_id
+                {
                     let asset = asset_lookup.assets.get(&asset_id).ok_or_else(|| {
                         Error::ProofGenerationError("Asset not found in lookup".into())
                     })?;

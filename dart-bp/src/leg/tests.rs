@@ -157,10 +157,16 @@ fn leg_encryption_configs() {
 
     assert!(!leg_enc.is_asset_id_revealed());
     assert!(leg_enc.asset_id_ciphertext().is_some());
-    assert_eq!(leg_enc.eph_pk_s.1, None);
-    assert_eq!(leg_enc.eph_pk_r.0, None);
-    assert_eq!(leg_enc.eph_pk_s.3.is_some(), true);
-    assert_eq!(leg_enc.eph_pk_r.3.is_some(), true);
+    assert_eq!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2, None);
+    assert_eq!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1, None);
+    assert_eq!(
+        leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r4.is_some(),
+        true
+    );
+    assert_eq!(
+        leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r4.is_some(),
+        true
+    );
 
     let (s_pk, r_pk_opt, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
     assert_eq!(s_pk, pk_s_e.0);

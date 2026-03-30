@@ -261,10 +261,13 @@ impl<
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G1, G0>>,
     ) -> Result<Self> {
-        if leg_enc.is_asset_id_revealed() {
-            return Err(Error::ProofGenerationError(
-                "asset-id is revealed in leg encryption".to_string(),
-            ));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if leg_enc.is_asset_id_revealed() {
+                return Err(Error::ProofGenerationError(
+                    "asset-id is revealed in leg encryption".to_string(),
+                ));
+            }
         }
 
         ensure_leg_encryption_consistent(&leg, &leg_enc)?;
@@ -528,7 +531,7 @@ impl<
             &enc_key_gen,
             r_1_inv,
             r_1_inv_blinding,
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
         // For proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
@@ -538,7 +541,7 @@ impl<
             &enc_key_gen,
             r_2_inv,
             r_2_inv_blinding,
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
         // For proving ct_amount = enc_key_gen * r_3 + enc_gen * amount
@@ -562,20 +565,32 @@ impl<
         );
 
         // For proving S[2] = S[0] * r_3/r_1
-        let eph_pk_s_v_proto =
-            PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, &leg_enc.eph_pk_s.0);
+        let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_1_inv,
+            r_3_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
 
         // For proving S[3] = S[0] * r_4/r_1
-        let eph_pk_s_at_proto =
-            PokDiscreteLogProtocol::init(r_4_r_1_inv, r_4_r_1_inv_blinding, &leg_enc.eph_pk_s.0);
+        let eph_pk_s_at_proto = PokDiscreteLogProtocol::init(
+            r_4_r_1_inv,
+            r_4_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
 
         // For proving R[2] = R[1] * r_3/r_2
-        let eph_pk_r_v_proto =
-            PokDiscreteLogProtocol::init(r_3_r_2_inv, r_3_r_2_inv_blinding, &leg_enc.eph_pk_r.1);
+        let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_2_inv,
+            r_3_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
 
         // For proving R[3] = R[1] * r_4/r_2
-        let eph_pk_r_at_proto =
-            PokDiscreteLogProtocol::init(r_4_r_2_inv, r_4_r_2_inv_blinding, &leg_enc.eph_pk_r.1);
+        let eph_pk_r_at_proto = PokDiscreteLogProtocol::init(
+            r_4_r_2_inv,
+            r_4_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
 
         // If parties_see_each_other is true, then S[1] and R[0] is present in leg encryption
         // For proving S[1] = S[0] * r_2/r_1 and R[0] = R[1] * r_1/r_2
@@ -584,12 +599,12 @@ impl<
                 Some(PokDiscreteLogProtocol::init(
                     r_2_r_1_inv.unwrap(),
                     r_2_r_1_inv_blinding.unwrap(),
-                    &leg_enc.eph_pk_s.0,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 )),
                 Some(PokDiscreteLogProtocol::init(
                     r_1_r_2_inv.unwrap(),
                     r_1_r_2_inv_blinding.unwrap(),
-                    &leg_enc.eph_pk_r.1,
+                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 )),
             )
         } else {
@@ -625,7 +640,7 @@ impl<
             // For proving relation `re_randomized_points[i + 1].1 = B * l_i`
             let t_1_1 = PokDiscreteLogProtocol::init(l[i], l_blindings[i], &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[i].0;
+            let base = &leg_enc.eph_pk_enc_keys[i].r1;
             // unwrap is fine since its created in this proof and guaranteed to be not None if l is non-empty
 
             // For proving relation `A_i[1] = A_i[0] * r_2/r_1`
@@ -664,7 +679,7 @@ impl<
             // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
             let t_k = PokDiscreteLogProtocol::init(k[i], k_blindings[i], &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
 
             // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
             let t_eph_m = PokDiscreteLogProtocol::init(m_r_1_inv[i], m_r_1_inv_blindings[i], base);
@@ -720,14 +735,14 @@ impl<
 
         ct_s_proto.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
             &mut transcript,
         )?;
 
         ct_r_proto.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             &mut transcript,
         )?;
@@ -747,38 +762,58 @@ impl<
         )?;
 
         eph_pk_s_v_proto.challenge_contribution(
-            &leg_enc.eph_pk_s.0,
-            &leg_enc.eph_pk_s.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
             &mut transcript,
         )?;
 
         eph_pk_s_at_proto.challenge_contribution(
-            &leg_enc.eph_pk_s.0,
-            leg_enc.eph_pk_s.3.as_ref().unwrap(),
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_s
+                .r4
+                .as_ref()
+                .unwrap(),
             &mut transcript,
         )?;
 
         eph_pk_r_v_proto.challenge_contribution(
-            &leg_enc.eph_pk_r.1,
-            &leg_enc.eph_pk_r.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             &mut transcript,
         )?;
 
         eph_pk_r_at_proto.challenge_contribution(
-            &leg_enc.eph_pk_r.1,
-            leg_enc.eph_pk_r.3.as_ref().unwrap(),
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r4
+                .as_ref()
+                .unwrap(),
             &mut transcript,
         )?;
 
         if parties_see_each_other {
             eph_pk_s_r_proto.as_ref().unwrap().challenge_contribution(
-                &leg_enc.eph_pk_s.0,
-                leg_enc.eph_pk_s.1.as_ref().unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                leg_enc
+                    .leg_enc_core_and_eph_keys
+                    .eph_pk_s
+                    .r2
+                    .as_ref()
+                    .unwrap(),
                 &mut transcript,
             )?;
             eph_pk_r_s_proto.as_ref().unwrap().challenge_contribution(
-                &leg_enc.eph_pk_r.1,
-                leg_enc.eph_pk_r.0.as_ref().unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                leg_enc
+                    .leg_enc_core_and_eph_keys
+                    .eph_pk_r
+                    .r1
+                    .as_ref()
+                    .unwrap(),
                 &mut transcript,
             )?;
         }
@@ -787,7 +822,7 @@ impl<
             pk_en_proto[i].0.challenge_contribution(
                 &re_randomized_points.re_randomized_points[i + 1],
                 &blinding_base,
-                &leg_enc.eph_pk_enc_keys[i].0,
+                &leg_enc.eph_pk_enc_keys[i].r1,
                 &mut transcript,
             )?;
             pk_en_proto[i].1.challenge_contribution(
@@ -796,26 +831,26 @@ impl<
                 &mut transcript,
             )?;
             pk_en_proto[i].2.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                &leg_enc.eph_pk_enc_keys[i].1,
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                &leg_enc.eph_pk_enc_keys[i].r2,
                 &mut transcript,
             )?;
             pk_en_proto[i].3.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                &leg_enc.eph_pk_enc_keys[i].2,
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                &leg_enc.eph_pk_enc_keys[i].r3,
                 &mut transcript,
             )?;
             pk_en_proto[i].4.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                leg_enc.eph_pk_enc_keys[i].3.as_ref().unwrap(),
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                leg_enc.eph_pk_enc_keys[i].r4.as_ref().unwrap(),
                 &mut transcript,
             )?;
         }
 
         for i in 0..r_meds.len() {
-            let y = leg_enc.mediators.ct_meds[i]
+            let y = leg_enc.mediators[i].ct_med
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators[i].enc_key_index))
                 - re_randomized_points.re_randomized_points[l.len() + i + 1];
             pk_m_proto[i].0.challenge_contribution(
                 &enc_key_gen,
@@ -830,10 +865,10 @@ impl<
                 &mut transcript,
             )?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
             pk_m_proto[i].2.challenge_contribution(
                 &base,
-                &leg_enc.mediators.eph_pk_med_keys[i].1,
+                &leg_enc.mediators[i].eph_pk_med_key,
                 &mut transcript,
             )?;
         }
@@ -841,17 +876,17 @@ impl<
         for i in 0..leg.public_enc_keys.len() {
             eph_pk_public_enc_proto[i].0.challenge_contribution(
                 &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].0,
+                &leg_enc.eph_pk_public_enc_keys[i].r1,
                 &mut transcript,
             )?;
             eph_pk_public_enc_proto[i].1.challenge_contribution(
                 &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].1,
+                &leg_enc.eph_pk_public_enc_keys[i].r2,
                 &mut transcript,
             )?;
             eph_pk_public_enc_proto[i].2.challenge_contribution(
                 &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].2,
+                &leg_enc.eph_pk_public_enc_keys[i].r3,
                 &mut transcript,
             )?;
         }
@@ -1150,13 +1185,6 @@ impl<
                 num_med_keys
             )));
         }
-        if leg_enc.mediators.eph_pk_med_keys.len() != num_med_keys {
-            return Err(Error::ProofVerificationError(format!(
-                "leg_enc.eph_pk_med_keys.len() != resp_eph_pk_meds.len() ({} != {})",
-                leg_enc.mediators.eph_pk_med_keys.len(),
-                num_med_keys
-            )));
-        }
 
         if self.resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
@@ -1188,7 +1216,9 @@ impl<
                         .to_string(),
                 ));
             }
-            if leg_enc.eph_pk_s.1.is_none() || leg_enc.eph_pk_r.0.is_none() {
+            if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2.is_none()
+                || leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1.is_none()
+            {
                 return Err(Error::ProofVerificationError(
                     "parties_see_each_other is true but leg_enc.eph_pk_s.1/leg_enc.eph_pk_r.0 is missing"
                         .to_string(),
@@ -1201,19 +1231,29 @@ impl<
             ));
         }
 
-        let eph_pk_s_at = leg_enc.eph_pk_s.3.clone().ok_or_else(|| {
-            Error::ProofVerificationError(
-                "leg_enc.eph_pk_s.3 must be present when asset-id is encrypted".to_string(),
-            )
-        })?;
-        let eph_pk_r_at = leg_enc.eph_pk_r.3.clone().ok_or_else(|| {
-            Error::ProofVerificationError(
-                "leg_enc.eph_pk_r.3 must be present when asset-id is encrypted".to_string(),
-            )
-        })?;
+        let eph_pk_s_at = leg_enc
+            .leg_enc_core_and_eph_keys
+            .eph_pk_s
+            .r4
+            .clone()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_s.3 must be present when asset-id is encrypted".to_string(),
+                )
+            })?;
+        let eph_pk_r_at = leg_enc
+            .leg_enc_core_and_eph_keys
+            .eph_pk_r
+            .r4
+            .clone()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "leg_enc.eph_pk_r.3 must be present when asset-id is encrypted".to_string(),
+                )
+            })?;
 
         for i in 0..num_enc_keys {
-            if leg_enc.eph_pk_enc_keys[i].3.is_none() {
+            if leg_enc.eph_pk_enc_keys[i].r4.is_none() {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                 )));
@@ -1221,14 +1261,16 @@ impl<
         }
 
         for i in 0..num_med_keys {
-            let idx = leg_enc.mediators.eph_pk_med_keys[i].0 as usize;
+            let idx = leg_enc.mediators[i].enc_key_index as usize;
             if idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
-                    "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
+                    "leg_enc.mediators[i].enc_key_index is out of bounds for eph_pk_enc_keys ({} >= {})",
                     idx, num_enc_keys
                 )));
             }
         }
+
+        ensure_sender_receiver_not_same(&leg_enc)?;
 
         // If ct_s and ct_r need to be decrypted.
         let sender_receiver_decryption_needed = parties_see_each_other || num_enc_keys > 0;
@@ -1292,14 +1334,14 @@ impl<
 
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
             &mut transcript,
         )?;
 
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             &mut transcript,
         )?;
@@ -1319,25 +1361,25 @@ impl<
         )?;
 
         self.resp_eph_pk_s_v.challenge_contribution(
-            &leg_enc.eph_pk_s.0,
-            &leg_enc.eph_pk_s.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_s_at.challenge_contribution(
-            &leg_enc.eph_pk_s.0,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &eph_pk_s_at,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_v.challenge_contribution(
-            &leg_enc.eph_pk_r.1,
-            &leg_enc.eph_pk_r.2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_at.challenge_contribution(
-            &leg_enc.eph_pk_r.1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &eph_pk_r_at,
             &mut transcript,
         )?;
@@ -1355,26 +1397,36 @@ impl<
                         .to_string(),
                 )
             })?;
-            let eph_pk_s_r = leg_enc.eph_pk_s.1.clone().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
-            let eph_pk_r_s = leg_enc.eph_pk_r.0.clone().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
+            let eph_pk_s_r = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_s
+                .r2
+                .clone()
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
+                            .to_string(),
+                    )
+                })?;
+            let eph_pk_r_s = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r1
+                .clone()
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
+                            .to_string(),
+                    )
+                })?;
 
             resp_eph_pk_s_r.challenge_contribution(
-                &leg_enc.eph_pk_s.0,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &eph_pk_s_r,
                 &mut transcript,
             )?;
             resp_eph_pk_r_s.challenge_contribution(
-                &leg_enc.eph_pk_r.1,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &eph_pk_r_s,
                 &mut transcript,
             )?;
@@ -1385,7 +1437,7 @@ impl<
             p_0.challenge_contribution(
                 &self.re_randomized_points.re_randomized_points[i + 1],
                 &blinding_base,
-                &leg_enc.eph_pk_enc_keys[i].0,
+                &leg_enc.eph_pk_enc_keys[i].r1,
                 &mut transcript,
             )?;
             p_1.challenge_contribution(
@@ -1394,18 +1446,18 @@ impl<
                 &mut transcript,
             )?;
             p_2.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                &leg_enc.eph_pk_enc_keys[i].1,
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                &leg_enc.eph_pk_enc_keys[i].r2,
                 &mut transcript,
             )?;
             p_3.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                &leg_enc.eph_pk_enc_keys[i].2,
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                &leg_enc.eph_pk_enc_keys[i].r3,
                 &mut transcript,
             )?;
             p_4.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].0,
-                leg_enc.eph_pk_enc_keys[i].3.as_ref().ok_or_else(|| {
+                &leg_enc.eph_pk_enc_keys[i].r1,
+                leg_enc.eph_pk_enc_keys[i].r4.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
@@ -1416,9 +1468,9 @@ impl<
 
         for i in 0..num_med_keys {
             let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let y = leg_enc.mediators.ct_meds[i]
+            let y = leg_enc.mediators[i].ct_med
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators[i].enc_key_index))
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
             p_0.challenge_contribution(
                 &enc_key_gen,
@@ -1433,10 +1485,10 @@ impl<
                 &mut transcript,
             )?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators.eph_pk_med_keys[i].0 as usize].0;
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
             p_2.challenge_contribution(
                 &base,
-                &leg_enc.mediators.eph_pk_med_keys[i].1,
+                &leg_enc.mediators[i].eph_pk_med_key,
                 &mut transcript,
             )?;
         }
@@ -1445,17 +1497,17 @@ impl<
             let (p_0, p_1, p_2) = &self.resp_eph_pk_public_enc[i];
             p_0.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].0,
+                &leg_enc.eph_pk_public_enc_keys[i].r1,
                 &mut transcript,
             )?;
             p_1.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].1,
+                &leg_enc.eph_pk_public_enc_keys[i].r2,
                 &mut transcript,
             )?;
             p_2.challenge_contribution(
                 &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].2,
+                &leg_enc.eph_pk_public_enc_keys[i].r3,
                 &mut transcript,
             )?;
         }
@@ -1475,7 +1527,7 @@ impl<
             "resp_ct_s verification failed",
             leg_enc.ct_s(),
             enc_key_gen,
-            leg_enc.eph_pk_s.0,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &challenge,
             &self.resp_comm_r_i_amount.0[2],
             &self.resp_comm_r_i_amount.0[6],
@@ -1487,7 +1539,7 @@ impl<
             "resp_ct_r verification failed",
             leg_enc.ct_r(),
             enc_key_gen,
-            leg_enc.eph_pk_r.1,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[3],
             &self.resp_comm_r_i_amount.0[7],
@@ -1531,8 +1583,8 @@ impl<
             rmc,
             self.resp_eph_pk_s_v,
             "resp_eph_pk_s_v verification failed",
-            leg_enc.eph_pk_s.2,
-            leg_enc.eph_pk_s.0,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &challenge,
             &self.resp_comm_r_i_amount.0[8],
         );
@@ -1541,8 +1593,8 @@ impl<
             rmc,
             self.resp_eph_pk_r_v,
             "resp_eph_pk_r_v verification failed",
-            leg_enc.eph_pk_r.2,
-            leg_enc.eph_pk_r.1,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[9],
         );
@@ -1552,7 +1604,7 @@ impl<
             self.resp_eph_pk_s_at,
             "resp_eph_pk_s_at verification failed",
             eph_pk_s_at,
-            leg_enc.eph_pk_s.0,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &challenge,
             &self.resp_comm_r_i_amount.0[10],
         );
@@ -1562,7 +1614,7 @@ impl<
             self.resp_eph_pk_r_at,
             "resp_eph_pk_r_at verification failed",
             eph_pk_r_at,
-            leg_enc.eph_pk_r.1,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[11],
         );
@@ -1580,25 +1632,35 @@ impl<
                         .to_string(),
                 )
             })?;
-            let eph_pk_s_r = leg_enc.eph_pk_s.1.clone().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
-            let eph_pk_r_s = leg_enc.eph_pk_r.0.clone().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
+            let eph_pk_s_r = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_s
+                .r2
+                .clone()
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
+                            .to_string(),
+                    )
+                })?;
+            let eph_pk_r_s = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r1
+                .clone()
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
+                            .to_string(),
+                    )
+                })?;
 
             verify_or_rmc_2!(
                 rmc,
                 resp_eph_pk_s_r,
                 "resp_eph_pk_s_r verification failed",
                 eph_pk_s_r,
-                leg_enc.eph_pk_s.0,
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[12],
             );
@@ -1607,7 +1669,7 @@ impl<
                 resp_eph_pk_r_s,
                 "resp_eph_pk_r_s verification failed",
                 eph_pk_r_s,
-                leg_enc.eph_pk_r.1,
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[13],
             );
@@ -1621,7 +1683,7 @@ impl<
                 rmc,
                 p_0,
                 format!("resp_eph_pk_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].0,
+                leg_enc.eph_pk_enc_keys[i].r1,
                 self.re_randomized_points.re_randomized_points[i + 1],
                 blinding_base,
                 &challenge,
@@ -1641,8 +1703,8 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].1,
-                leg_enc.eph_pk_enc_keys[i].0,
+                leg_enc.eph_pk_enc_keys[i].r2,
+                leg_enc.eph_pk_enc_keys[i].r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[12],
             );
@@ -1650,8 +1712,8 @@ impl<
                 rmc,
                 p_3,
                 format!("resp_eph_pk_enc[{}].3 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].2,
-                leg_enc.eph_pk_enc_keys[i].0,
+                leg_enc.eph_pk_enc_keys[i].r3,
+                leg_enc.eph_pk_enc_keys[i].r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[8],
             );
@@ -1659,12 +1721,12 @@ impl<
                 rmc,
                 p_4,
                 format!("resp_eph_pk_enc[{}].4 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].3.clone().ok_or_else(|| {
+                leg_enc.eph_pk_enc_keys[i].r4.clone().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
-                leg_enc.eph_pk_enc_keys[i].0,
+                leg_enc.eph_pk_enc_keys[i].r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[10],
             );
@@ -1672,18 +1734,18 @@ impl<
 
         for i in 0..num_med_keys {
             let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let y = leg_enc.mediators.ct_meds[i]
+            let med_key_idx = leg_enc.mediators[i].enc_key_index as usize;
+            let y = leg_enc.mediators[i].ct_med
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators.eph_pk_med_keys[i].0))
+                + (asset_comm_params.j_1 * F0::from(med_key_idx as u64))
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
-            let med_key_idx = leg_enc.mediators.eph_pk_med_keys[i].0 as usize;
             if med_key_idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
                     med_key_idx, num_enc_keys
                 )));
             }
-            let base = leg_enc.eph_pk_enc_keys[med_key_idx].0;
+            let base = leg_enc.eph_pk_enc_keys[med_key_idx].r1;
 
             verify_or_rmc_3!(
                 rmc,
@@ -1710,7 +1772,7 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_meds[{}].2 verification failed", i),
-                leg_enc.mediators.eph_pk_med_keys[i].1,
+                leg_enc.mediators[i].eph_pk_med_key,
                 base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
@@ -1724,7 +1786,7 @@ impl<
                 rmc,
                 p_0,
                 format!("resp_eph_pk_public_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].0,
+                leg_enc.eph_pk_public_enc_keys[i].r1,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
@@ -1733,7 +1795,7 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_public_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].1,
+                leg_enc.eph_pk_public_enc_keys[i].r2,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
@@ -1742,7 +1804,7 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_public_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].2,
+                leg_enc.eph_pk_public_enc_keys[i].r3,
                 public_enc_keys[i],
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
@@ -1931,16 +1993,48 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
-        if leg_enc.mediators.eph_pk_med_keys.len() != leg.med_keys.len() {
-            return Err(Error::ProofGenerationError(format!(
-                "Mismatch in eph_pk_med_keys length: leg_enc has {} but leg has {} med_keys",
-                leg_enc.mediators.eph_pk_med_keys.len(),
-                leg.med_keys.len()
-            )));
-        }
+        ensure_sender_receiver_not_same(leg_enc)?;
 
         Ok(())
     }
+}
+
+pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
+    leg_enc: &LegEncryption<Affine<G0>>,
+) -> Result<()> {
+    if let Some(r2) = leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2 {
+        if leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2 == r2 {
+            return Err(Error::ProofGenerationError(
+                "leg_enc.eph_pk_r.r2 == leg_enc.eph_pk_s.r2".to_string(),
+            ));
+        }
+    }
+
+    if let Some(r1) = leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1 {
+        if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1 == r1 {
+            return Err(Error::ProofGenerationError(
+                "leg_enc.eph_pk_r.r1 == leg_enc.eph_pk_s.r1".to_string(),
+            ));
+        }
+    }
+
+    if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3
+        == leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3
+    {
+        return Err(Error::ProofGenerationError(
+            "leg_enc.eph_pk_s.r3 and leg_enc.eph_pk_r.r3 are equal".to_string(),
+        ));
+    }
+
+    if !leg_enc.is_asset_id_revealed()
+        && (leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r4
+            == leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r4)
+    {
+        return Err(Error::ProofGenerationError(
+            "leg_enc.eph_pk_s.r4 and leg_enc.eph_pk_r.r4 are equal".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Proof of knowledge of `pk` and `r_i` in `(pk * r_1, pk * r_2, pk * r_3, pk * r_4)` without revealing `pk`

@@ -193,7 +193,7 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, _, _>(
         &mut rng,
         amount,
-        leg_enc.clone(),
+        leg_enc.core_and_eph_keys_for_sender(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -212,7 +212,7 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
             proof
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
-                    leg_enc.clone(),
+                    leg_enc.core_and_eph_keys_for_sender(),
                     None,
                     &root,
                     updated_account_comm,
@@ -263,7 +263,7 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
-        leg_enc.clone(),
+        leg_enc.core_and_eph_keys_for_receiver(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -282,7 +282,7 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
             proof
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
-                    leg_enc.clone(),
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     None,
                     &root,
                     updated_account_comm,
@@ -335,7 +335,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, _, _>(
         &mut rng,
         amount,
-        leg_enc.clone(),
+        leg_enc.core_and_eph_keys_for_sender(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -357,7 +357,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
             proof
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
-                    leg_enc.clone(),
+                    leg_enc.core_and_eph_keys_for_sender(),
                     None,
                     &root,
                     updated_account_comm,
@@ -409,7 +409,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
-        leg_enc.clone(),
+        leg_enc.core_and_eph_keys_for_receiver(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -431,7 +431,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
             proof
                 .verify::<_, PallasParams, VestaParams>(
                     &mut local_rng,
-                    leg_enc.clone(),
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     None,
                     &root,
                     updated_account_comm,

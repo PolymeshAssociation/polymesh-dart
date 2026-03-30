@@ -411,13 +411,17 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
-                eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
+                eph_pk_amount_total_recv +=
+                    legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r3.into_group();
                 enc_total_recv += legs[i].ct_amount();
-                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
+                eph_pk_bases_for_asset_id
+                    .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r4.clone());
             } else if sender_in_leg_indices.contains(&i) {
-                eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
+                eph_pk_amount_total_send +=
+                    legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r3.into_group();
                 enc_total_send += legs[i].ct_amount();
-                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
+                eph_pk_bases_for_asset_id
+                    .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r4.clone());
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"
@@ -660,12 +664,16 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
                 enc_total_recv += legs[i].ct_amount();
-                eph_pk_amount_total_recv += legs[i].eph_pk_r.2.into_group();
-                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_r.3.clone());
+                eph_pk_amount_total_recv +=
+                    legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r3.into_group();
+                eph_pk_bases_for_asset_id
+                    .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r4.clone());
             } else if sender_in_leg_indices.contains(&i) {
                 enc_total_send += legs[i].ct_amount();
-                eph_pk_amount_total_send += legs[i].eph_pk_s.2.into_group();
-                eph_pk_bases_for_asset_id.push(legs[i].eph_pk_s.3.clone());
+                eph_pk_amount_total_send +=
+                    legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r3.into_group();
+                eph_pk_bases_for_asset_id
+                    .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r4.clone());
             } else {
                 return Err(Error::ProofOfBalanceError(format!(
                     "Could not find index {i} in sent or recv"

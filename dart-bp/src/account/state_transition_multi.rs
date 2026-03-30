@@ -523,7 +523,13 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-        alice_builder_1.add_send_affirmation(alice_send_amount, leg_enc_1.clone());
+        alice_builder_1.add_send_affirmation(
+            alice_send_amount,
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         // Alice's builder for asset 2 account
         let mut alice_builder_2 =
@@ -533,7 +539,10 @@ mod tests {
                 alice_account_2_after_comm,
                 alice_nonce,
             );
-        alice_builder_2.add_receive_affirmation(leg_enc_2.clone());
+        alice_builder_2.add_receive_affirmation((
+            leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         // Bob's builder for asset 1 account
         let mut bob_builder_1 =
@@ -543,7 +552,10 @@ mod tests {
                 bob_account_1_updated_comm,
                 bob_nonce,
             );
-        bob_builder_1.add_receive_affirmation(leg_enc_1.clone());
+        bob_builder_1.add_receive_affirmation((
+            leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         // Bob's builder for asset 2 account
         let mut bob_builder_2 =
@@ -553,7 +565,13 @@ mod tests {
                 bob_account_2_updated_comm,
                 bob_nonce,
             );
-        bob_builder_2.add_send_affirmation(bob_send_amount, leg_enc_2.clone());
+        bob_builder_2.add_send_affirmation(
+            bob_send_amount,
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         // Alice create multi-asset proof
         let start = Instant::now();
@@ -584,14 +602,26 @@ mod tests {
             alice_nullifier_1,
             alice_nonce,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_after_comm,
             alice_nullifier_2,
             alice_nonce,
         );
-        alice_verifier_2.add_receive_affirmation(leg_enc_2.clone(), None);
+        alice_verifier_2.add_receive_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         multi_asset_proof
@@ -642,14 +672,26 @@ mod tests {
             bob_nullifier_1,
             bob_nonce,
         );
-        bob_verifier_1.add_receive_affirmation(leg_enc_1.clone(), None);
+        bob_verifier_1.add_receive_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_2 = AccountStateTransitionProofVerifier::init(
             bob_account_2_updated_comm,
             bob_nullifier_2,
             bob_nonce,
         );
-        bob_verifier_2.add_send_affirmation(leg_enc_2.clone(), None);
+        bob_verifier_2.add_send_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         multi_asset_proof
@@ -1025,7 +1067,13 @@ mod tests {
                 alice_account_1_updated_comm,
                 nonce_alice,
             );
-        alice_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
+        alice_builder_1.add_send_affirmation(
+            leg_1_amount,
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut alice_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1034,7 +1082,10 @@ mod tests {
                 alice_account_2_updated_comm,
                 nonce_alice,
             );
-        alice_builder_2.add_receive_affirmation(leg_enc_2.clone());
+        alice_builder_2.add_receive_affirmation((
+            leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let mut alice_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1043,7 +1094,13 @@ mod tests {
                 alice_account_3_updated_comm,
                 nonce_alice,
             );
-        alice_builder_3.add_sender_reverse(leg_3_amount, leg_enc_3.clone());
+        alice_builder_3.add_sender_reverse(
+            leg_3_amount,
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut alice_builder_4 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1052,7 +1109,10 @@ mod tests {
                 alice_account_4_updated_comm,
                 nonce_alice,
             );
-        alice_builder_4.add_receiver_reverse(leg_enc_4.clone());
+        alice_builder_4.add_receiver_reverse((
+            leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let mut alice_builder_5 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1061,7 +1121,10 @@ mod tests {
                 alice_account_5_updated_comm,
                 nonce_alice,
             );
-        alice_builder_5.add_sender_counter_update(leg_enc_5.clone());
+        alice_builder_5.add_sender_counter_update((
+            leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+        ));
 
         let mut alice_builder_6 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1070,7 +1133,13 @@ mod tests {
                 alice_account_6_updated_comm,
                 nonce_alice,
             );
-        alice_builder_6.add_claim_received(leg_6_amount, leg_enc_6.clone());
+        alice_builder_6.add_claim_received(
+            leg_6_amount,
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
 
         // Alice creates multi-asset proof with all 6 accounts
         let start = Instant::now();
@@ -1105,42 +1174,78 @@ mod tests {
             alice_nullifiers[0],
             nonce_alice,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_updated_comm,
             alice_nullifiers[1],
             nonce_alice,
         );
-        alice_verifier_2.add_receive_affirmation(leg_enc_2.clone(), None);
+        alice_verifier_2.add_receive_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_3 = AccountStateTransitionProofVerifier::init(
             alice_account_3_updated_comm,
             alice_nullifiers[2],
             nonce_alice,
         );
-        alice_verifier_3.add_sender_reverse(leg_enc_3.clone(), None);
+        alice_verifier_3.add_sender_reverse(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_4 = AccountStateTransitionProofVerifier::init(
             alice_account_4_updated_comm,
             alice_nullifiers[3],
             nonce_alice,
         );
-        alice_verifier_4.add_receiver_reverse(leg_enc_4.clone(), None);
+        alice_verifier_4.add_receiver_reverse(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_5 = AccountStateTransitionProofVerifier::init(
             alice_account_5_updated_comm,
             alice_nullifiers[4],
             nonce_alice,
         );
-        alice_verifier_5.add_sender_counter_update(leg_enc_5.clone(), None);
+        alice_verifier_5.add_sender_counter_update(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_6 = AccountStateTransitionProofVerifier::init(
             alice_account_6_updated_comm,
             alice_nullifiers[5],
             nonce_alice,
         );
-        alice_verifier_6.add_claim_received(leg_enc_6.clone(), None);
+        alice_verifier_6.add_claim_received(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         // Verify Alice's proof
         let start = Instant::now();
@@ -1178,7 +1283,10 @@ mod tests {
                 bob_account_1_updated_comm,
                 nonce_bob,
             );
-        bob_builder_1.add_receive_affirmation(leg_enc_1.clone());
+        bob_builder_1.add_receive_affirmation((
+            leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let mut bob_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1187,7 +1295,13 @@ mod tests {
                 bob_account_2_updated_comm,
                 nonce_bob,
             );
-        bob_builder_2.add_send_affirmation(leg_2_amount, leg_enc_2.clone());
+        bob_builder_2.add_send_affirmation(
+            leg_2_amount,
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut bob_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1196,7 +1310,10 @@ mod tests {
                 bob_account_3_updated_comm,
                 nonce_bob,
             );
-        bob_builder_3.add_receiver_reverse(leg_enc_3.clone());
+        bob_builder_3.add_receiver_reverse((
+            leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let mut bob_builder_4 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1205,7 +1322,13 @@ mod tests {
                 bob_account_4_updated_comm,
                 nonce_bob,
             );
-        bob_builder_4.add_sender_reverse(leg_4_amount, leg_enc_4.clone());
+        bob_builder_4.add_sender_reverse(
+            leg_4_amount,
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut bob_builder_5 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1214,7 +1337,13 @@ mod tests {
                 bob_account_5_updated_comm,
                 nonce_bob,
             );
-        bob_builder_5.add_claim_received(leg_5_amount, leg_enc_5.clone());
+        bob_builder_5.add_claim_received(
+            leg_5_amount,
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
 
         let mut bob_builder_6 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1223,7 +1352,10 @@ mod tests {
                 bob_account_6_updated_comm,
                 nonce_bob,
             );
-        bob_builder_6.add_sender_counter_update(leg_enc_6.clone());
+        bob_builder_6.add_sender_counter_update((
+            leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+        ));
 
         // Bob creates multi-asset proof with all 6 accounts
         let start = Instant::now();
@@ -1259,42 +1391,78 @@ mod tests {
             bob_nullifiers[0],
             nonce_bob,
         );
-        bob_verifier_1.add_receive_affirmation(leg_enc_1.clone(), None);
+        bob_verifier_1.add_receive_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_2 = AccountStateTransitionProofVerifier::init(
             bob_account_2_updated_comm,
             bob_nullifiers[1],
             nonce_bob,
         );
-        bob_verifier_2.add_send_affirmation(leg_enc_2.clone(), None);
+        bob_verifier_2.add_send_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_3 = AccountStateTransitionProofVerifier::init(
             bob_account_3_updated_comm,
             bob_nullifiers[2],
             nonce_bob,
         );
-        bob_verifier_3.add_receiver_reverse(leg_enc_3.clone(), None);
+        bob_verifier_3.add_receiver_reverse(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_4 = AccountStateTransitionProofVerifier::init(
             bob_account_4_updated_comm,
             bob_nullifiers[3],
             nonce_bob,
         );
-        bob_verifier_4.add_sender_reverse(leg_enc_4.clone(), None);
+        bob_verifier_4.add_sender_reverse(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_5 = AccountStateTransitionProofVerifier::init(
             bob_account_5_updated_comm,
             bob_nullifiers[4],
             nonce_bob,
         );
-        bob_verifier_5.add_claim_received(leg_enc_5.clone(), None);
+        bob_verifier_5.add_claim_received(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_6 = AccountStateTransitionProofVerifier::init(
             bob_account_6_updated_comm,
             bob_nullifiers[5],
             nonce_bob,
         );
-        bob_verifier_6.add_sender_counter_update(leg_enc_6.clone(), None);
+        bob_verifier_6.add_sender_counter_update(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         // Verify Bob's proof
         let start = Instant::now();
@@ -1552,10 +1720,34 @@ mod tests {
                 nonce_alice,
             );
         // Add all 4 operations for asset 1
-        alice_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
-        alice_builder_1.add_claim_received(leg_2_amount, leg_enc_2.clone());
-        alice_builder_1.add_send_affirmation(leg_3_amount, leg_enc_3.clone());
-        alice_builder_1.add_claim_received(leg_4_amount, leg_enc_4.clone());
+        alice_builder_1.add_send_affirmation(
+            leg_1_amount,
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        alice_builder_1.add_claim_received(
+            leg_2_amount,
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
+        alice_builder_1.add_send_affirmation(
+            leg_3_amount,
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        alice_builder_1.add_claim_received(
+            leg_4_amount,
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
 
         let mut alice_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1564,8 +1756,20 @@ mod tests {
                 alice_account_2_updated_comm,
                 nonce_alice,
             );
-        alice_builder_2.add_irreversible_send(leg_5_amount, leg_enc_5.clone());
-        alice_builder_2.add_irreversible_receive(leg_6_amount, leg_enc_6.clone());
+        alice_builder_2.add_irreversible_send(
+            leg_5_amount,
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        alice_builder_2.add_irreversible_receive(
+            leg_6_amount,
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
 
         // Alice creates multi-asset proof with both accounts
         let start = Instant::now();
@@ -1596,10 +1800,34 @@ mod tests {
                 bob_account_1_updated_comm,
                 nonce_bob,
             );
-        bob_builder_1.add_claim_received(leg_1_amount, leg_enc_1.clone());
-        bob_builder_1.add_send_affirmation(leg_2_amount, leg_enc_2.clone());
-        bob_builder_1.add_claim_received(leg_3_amount, leg_enc_3.clone());
-        bob_builder_1.add_send_affirmation(leg_4_amount, leg_enc_4.clone());
+        bob_builder_1.add_claim_received(
+            leg_1_amount,
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
+        bob_builder_1.add_send_affirmation(
+            leg_2_amount,
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        bob_builder_1.add_claim_received(
+            leg_3_amount,
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
+        bob_builder_1.add_send_affirmation(
+            leg_4_amount,
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut bob_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1608,8 +1836,20 @@ mod tests {
                 bob_account_2_updated_comm,
                 nonce_bob,
             );
-        bob_builder_2.add_irreversible_receive(leg_5_amount, leg_enc_5.clone());
-        bob_builder_2.add_irreversible_send(leg_6_amount, leg_enc_6.clone());
+        bob_builder_2.add_irreversible_receive(
+            leg_5_amount,
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+        );
+        bob_builder_2.add_irreversible_send(
+            leg_6_amount,
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let start = Instant::now();
         let (bob_proof, bob_nullifiers) =
@@ -1634,18 +1874,54 @@ mod tests {
             alice_nullifiers[0],
             nonce_alice,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), None);
-        alice_verifier_1.add_claim_received(leg_enc_2.clone(), None);
-        alice_verifier_1.add_send_affirmation(leg_enc_3.clone(), None);
-        alice_verifier_1.add_claim_received(leg_enc_4.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_claim_received(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_claim_received(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_updated_comm,
             alice_nullifiers[1],
             nonce_alice,
         );
-        alice_verifier_2.add_irreversible_send(leg_enc_5.clone(), None);
-        alice_verifier_2.add_irreversible_receive(leg_enc_6.clone(), None);
+        alice_verifier_2.add_irreversible_send(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_2.add_irreversible_receive(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         alice_proof
@@ -1666,18 +1942,54 @@ mod tests {
             alice_nullifiers[0],
             nonce_alice,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), None);
-        alice_verifier_1.add_claim_received(leg_enc_2.clone(), None);
-        alice_verifier_1.add_send_affirmation(leg_enc_3.clone(), None);
-        alice_verifier_1.add_claim_received(leg_enc_4.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_claim_received(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_1.add_claim_received(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_updated_comm,
             alice_nullifiers[1],
             nonce_alice,
         );
-        alice_verifier_2.add_irreversible_send(leg_enc_5.clone(), None);
-        alice_verifier_2.add_irreversible_receive(leg_enc_6.clone(), None);
+        alice_verifier_2.add_irreversible_send(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        alice_verifier_2.add_irreversible_receive(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
@@ -1701,18 +2013,54 @@ mod tests {
             bob_nullifiers[0],
             nonce_bob,
         );
-        bob_verifier_1.add_claim_received(leg_enc_1.clone(), None);
-        bob_verifier_1.add_send_affirmation(leg_enc_2.clone(), None);
-        bob_verifier_1.add_claim_received(leg_enc_3.clone(), None);
-        bob_verifier_1.add_send_affirmation(leg_enc_4.clone(), None);
+        bob_verifier_1.add_claim_received(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_send_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_claim_received(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_send_affirmation(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_2 = AccountStateTransitionProofVerifier::init(
             bob_account_2_updated_comm,
             bob_nullifiers[1],
             nonce_bob,
         );
-        bob_verifier_2.add_irreversible_receive(leg_enc_5.clone(), None);
-        bob_verifier_2.add_irreversible_send(leg_enc_6.clone(), None);
+        bob_verifier_2.add_irreversible_receive(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_2.add_irreversible_send(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         bob_proof
@@ -1733,18 +2081,54 @@ mod tests {
             bob_nullifiers[0],
             nonce_bob,
         );
-        bob_verifier_1.add_claim_received(leg_enc_1.clone(), None);
-        bob_verifier_1.add_send_affirmation(leg_enc_2.clone(), None);
-        bob_verifier_1.add_claim_received(leg_enc_3.clone(), None);
-        bob_verifier_1.add_send_affirmation(leg_enc_4.clone(), None);
+        bob_verifier_1.add_claim_received(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_send_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_claim_received(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_1.add_send_affirmation(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut bob_verifier_2 = AccountStateTransitionProofVerifier::init(
             bob_account_2_updated_comm,
             bob_nullifiers[1],
             nonce_bob,
         );
-        bob_verifier_2.add_irreversible_receive(leg_enc_5.clone(), None);
-        bob_verifier_2.add_irreversible_send(leg_enc_6.clone(), None);
+        bob_verifier_2.add_irreversible_receive(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        bob_verifier_2.add_irreversible_send(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
@@ -1986,8 +2370,17 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-        alice_proof_builder_1.add_send_affirmation(leg_1_amount, leg_enc_1.clone());
-        alice_proof_builder_1.add_receive_affirmation(leg_enc_2.clone());
+        alice_proof_builder_1.add_send_affirmation(
+            leg_1_amount,
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
+        alice_proof_builder_1.add_receive_affirmation((
+            leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let mut alice_proof_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -1996,8 +2389,17 @@ mod tests {
                 alice_account_2_updated_comm,
                 alice_nonce,
             );
-        alice_proof_builder_2.add_receive_affirmation(leg_enc_3.clone());
-        alice_proof_builder_2.add_send_affirmation(leg_4_amount, leg_enc_4.clone());
+        alice_proof_builder_2.add_receive_affirmation((
+            leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
+        alice_proof_builder_2.add_send_affirmation(
+            leg_4_amount,
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+        );
 
         let mut alice_proof_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
@@ -2006,8 +2408,14 @@ mod tests {
                 alice_account_3_updated_comm,
                 alice_nonce,
             );
-        alice_proof_builder_3.add_receive_affirmation(leg_enc_5.clone());
-        alice_proof_builder_3.add_receive_affirmation(leg_enc_6.clone());
+        alice_proof_builder_3.add_receive_affirmation((
+            leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
+        alice_proof_builder_3.add_receive_affirmation((
+            leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
 
         let start = Instant::now();
         let (alice_proof, alice_nullifiers) =
@@ -2038,24 +2446,60 @@ mod tests {
             alice_nullifiers[0],
             alice_nonce,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), Some(asset_id_1));
-        alice_verifier_1.add_receive_affirmation(leg_enc_2.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            Some(asset_id_1),
+        );
+        alice_verifier_1.add_receive_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_updated_comm,
             alice_nullifiers[1],
             alice_nonce,
         );
-        alice_verifier_2.add_receive_affirmation(leg_enc_3.clone(), Some(asset_id_2));
-        alice_verifier_2.add_send_affirmation(leg_enc_4.clone(), None);
+        alice_verifier_2.add_receive_affirmation(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            Some(asset_id_2),
+        );
+        alice_verifier_2.add_send_affirmation(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_3 = AccountStateTransitionProofVerifier::init(
             alice_account_3_updated_comm,
             alice_nullifiers[2],
             alice_nonce,
         );
-        alice_verifier_3.add_receive_affirmation(leg_enc_5.clone(), None);
-        alice_verifier_3.add_receive_affirmation(leg_enc_6.clone(), None);
+        alice_verifier_3.add_receive_affirmation(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        alice_verifier_3.add_receive_affirmation(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         alice_proof
@@ -2076,24 +2520,60 @@ mod tests {
             alice_nullifiers[0],
             alice_nonce,
         );
-        alice_verifier_1.add_send_affirmation(leg_enc_1.clone(), Some(asset_id_1));
-        alice_verifier_1.add_receive_affirmation(leg_enc_2.clone(), None);
+        alice_verifier_1.add_send_affirmation(
+            (
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            Some(asset_id_1),
+        );
+        alice_verifier_1.add_receive_affirmation(
+            (
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
             alice_account_2_updated_comm,
             alice_nullifiers[1],
             alice_nonce,
         );
-        alice_verifier_2.add_receive_affirmation(leg_enc_3.clone(), Some(asset_id_2));
-        alice_verifier_2.add_send_affirmation(leg_enc_4.clone(), None);
+        alice_verifier_2.add_receive_affirmation(
+            (
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            Some(asset_id_2),
+        );
+        alice_verifier_2.add_send_affirmation(
+            (
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ),
+            None,
+        );
 
         let mut alice_verifier_3 = AccountStateTransitionProofVerifier::init(
             alice_account_3_updated_comm,
             alice_nullifiers[2],
             alice_nonce,
         );
-        alice_verifier_3.add_receive_affirmation(leg_enc_5.clone(), None);
-        alice_verifier_3.add_receive_affirmation(leg_enc_6.clone(), None);
+        alice_verifier_3.add_receive_affirmation(
+            (
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
+        alice_verifier_3.add_receive_affirmation(
+            (
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ),
+            None,
+        );
 
         let start = Instant::now();
         let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));

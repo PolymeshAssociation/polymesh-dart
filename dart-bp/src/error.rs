@@ -68,6 +68,10 @@ pub enum Error {
     #[error("Asset ID is too large: {0}")]
     AssetIdTooLarge(AssetId),
 
+    /// Same sender and receiver not allowed
+    #[error("Same sender and receiver not allowed")]
+    SameSenderAndReceiverNotAllowed(),
+
     /// Couldn't solve discrete log for chunk
     #[error("Couldn't solve discrete log for chunk index {0}")]
     SolvingDiscreteLogFailed(usize),
