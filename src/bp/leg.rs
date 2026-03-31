@@ -1385,8 +1385,12 @@ impl LegEncrypted {
             LegRole {
                 kind: LegRoleKind::Auditor,
                 index: Some(idx),
+            } => {
+                let leg_enc = self.decode()?;
+                let is_public = false;
+                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, is_public, idx as usize, enc_gen)?
             }
-            | LegRole {
+            LegRole {
                 kind: LegRoleKind::Mediator,
                 index: Some(idx),
             } => {
