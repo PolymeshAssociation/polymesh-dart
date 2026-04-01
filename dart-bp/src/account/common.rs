@@ -1,5 +1,5 @@
 use crate::Balance;
-use crate::account::state::{BALANCE_GEN_INDEX, NUM_GENERATORS, SK_ENC_INV_GEN_INDEX};
+use crate::account::state::{BALANCE_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::{AmountCiphertext, LegEncryptionCore, PartyEphemeralPublicKey};
 use crate::util::generate_schnorr_responses_for_balance_change;
@@ -107,6 +107,9 @@ pub struct CommonStateChangeProver<
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
     pub sk_enc_inv_blinding: F0,
+    /// Blinding used for sk_enc_inv in the BP commitment (position 8 in t_bp_randomness_relations).
+    /// Must be passed to BalanceChangeProver so leg-amount t-values use the same blinding.
+    pub sk_enc_inv_bp_blinding: F0,
     pub old_balance_blinding: F0,
     pub new_balance_blinding: F0,
     pub is_asset_id_revealed: bool,
@@ -413,6 +416,7 @@ impl<
             t_null,
             t_leg_link,
             t_bp_randomness_relations,
+            sk_enc_inv_bp_blinding,
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             account.asset_id,
@@ -465,6 +469,7 @@ impl<
             t_bp_randomness_relations,
             comm_bp_blinding,
             sk_enc_inv_blinding,
+            sk_enc_inv_bp_blinding,
             old_balance_blinding,
             new_balance_blinding,
             is_asset_id_revealed,
@@ -796,9 +801,9 @@ impl<
             ));
         }
 
-        // If asset-id is revealed, there a different relation is used to prove the link between leg and account which requires
-        // proving knowledge of sk_enc in addition to sk_enc^{-1} and the inverse relation is enforced in BP.
-        let expected_num_resps = 1 + { asset_id.is_some() as usize };
+        // sk_enc and sk_enc^{-1} relation is always proved in BP (regardless of asset-id revealed or not).
+        // resp_bp_randomness_relations always has 2 responses: blinding for comm_bp and sk_enc_inv (positions 0 and 8).
+        let expected_num_resps = 2;
         if proof.resp_bp_randomness_relations.responses.len() != expected_num_resps {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 expected_num_resps,
@@ -923,7 +928,7 @@ impl<
         let pc_gens = account_tree_params.even_parameters.pc_gens();
         let bp_gens = account_tree_params.even_parameters.bp_gens();
 
-        let asset_id = verify_sigma_for_common_state_change(
+        let _asset_id = verify_sigma_for_common_state_change(
             &self.leg_cores,
             self.has_counter_decreased,
             balance_change_proof.is_some(),
@@ -982,15 +987,14 @@ impl<
                         ))
                     })?,
                 *common_state_change_proof
-                    .resp_leaf
-                    .0
-                    .get(SK_ENC_INV_GEN_INDEX - asset_id.is_some() as usize)
+                    .resp_bp_randomness_relations
+                    .responses
+                    .get(&8)
                     .ok_or_else(|| {
-                        Error::ProofVerificationError(format!(
-                            "Missing resp_leaf response for sk_enc_inv index {}",
-                            SK_ENC_INV_GEN_INDEX - asset_id.is_some() as usize
-                        ))
-                    })?, // adjust response index for sk_enc^{-1} if asset-id is revealed
+                        Error::ProofVerificationError(
+                            "Missing resp_bp response for sk_enc_inv (index 8)".to_string(),
+                        )
+                    })?, // sk_enc_inv from resp_bp position 8 (always present)
                 pc_gens,
                 bp_gens,
                 enc_gen,
@@ -1023,7 +1027,7 @@ pub fn ensure_same_accounts<G: AffineRepr>(
                 "Secret key mismatch between old and new account states".to_string(),
             ));
         }
-        if old_state.sk_enc_inv != new_state.sk_enc_inv {
+        if old_state.sk_enc != new_state.sk_enc {
             return Err(Error::ProofGenerationError(
                 "Secret key inverse mismatch between old and new account states".to_string(),
             ));
@@ -1185,7 +1189,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
             old_balance_blinding,
             new_balance_blinding,
             amount_blinding,
-            account.sk_enc_inv,
+            account.sk_enc.inverse().ok_or(Error::InvertingZero)?,
             sk_enc_inv_blinding,
             eph_pk_amounts,
             pc_gens,
@@ -1228,69 +1232,123 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 }
 
 /// For proving the leg-account linking relation:
-/// Depending on asset-id is revealed or not, there are 3 possible cases:
-/// AssetIdHidden - `ct_asset_id = eph_pk[3] * {sk_enc^{-1}} + enc_gen * at`
-/// Both responses (`sk_enc^{-1}` and asset_id) are shared with other sigma protocols.
+/// There are 3 cases depending on whether the asset-id is revealed in this leg or elsewhere:
 ///
-/// AssetIdRevealed - `ct_s = eph_pk[0] * {sk_enc^{-1}} + enc_key_gen * sk_enc` or `ct_r = eph_pk[1] * {sk_enc^{-1}} + enc_key_gen * sk_enc`
-/// Both responses (`sk_enc^{-1}` and `sk_enc`) are shared with other sigma protocols.
+/// All cases always prove the participant ciphertext relation:
+/// `ct_s = eph_pk[0] * {sk_enc^{-1}} + enc_key_gen * sk_enc` (sender)
+/// or `ct_r = eph_pk[1] * {sk_enc^{-1}} + enc_key_gen * sk_enc` (receiver)
+/// Both witnesses (`sk_enc^{-1}` and `sk_enc`) are shared with other sigma protocols.
 ///
-/// AssetIdRevealedElsewhere - `ct_asset_id - enc_gen * at = eph_pk[3] * {sk_enc^{-1}}`, only witness is `sk_enc^{-1}`
-/// This is the case where the leg itself doesn't reveal asset-id but some other leg reveals it thus the prover reveals
-/// asset-id here as well
+/// AssetIdHidden - additionally proves `ct_asset_id = eph_pk[3] * {sk_enc^{-1}} + enc_gen * at`
+/// Both responses (`sk_enc^{-1}` and `asset_id`) are shared with other sigma protocols.
+///
+/// AssetIdRevealed - asset-id is revealed in this leg, no additional ciphertext proof needed.
+///
+/// AssetIdRevealedElsewhere - additionally proves `ct_asset_id - enc_gen * at = eph_pk[3] * {sk_enc^{-1}}`,
+/// only witness is `sk_enc^{-1}`. This is the case where the leg itself doesn't reveal asset-id but some
+/// other leg reveals it thus the prover reveals asset-id here as well.
 #[derive(Clone, Debug)]
 pub enum LegAccountLink<G0: SWCurveConfig> {
-    AssetIdHidden(PartialPokPedersenCommitment<Affine<G0>>),
-    AssetIdRevealed(PartialPokPedersenCommitment<Affine<G0>>),
-    AssetIdRevealedElsewhere(PartialPokDiscreteLog<Affine<G0>>),
+    /// Participant ciphertext proof + asset-id ciphertext proof
+    AssetIdHidden {
+        resp_participant: PartialPokPedersenCommitment<Affine<G0>>,
+        resp_asset_id: PartialPokPedersenCommitment<Affine<G0>>,
+    },
+    /// Only participant ciphertext proof (asset-id is revealed, no need to prove knowledge)
+    AssetIdRevealed {
+        resp_participant: PartialPokPedersenCommitment<Affine<G0>>,
+    },
+    /// Participant ciphertext proof + discrete-log proof for the asset-id ciphertext
+    AssetIdRevealedElsewhere {
+        resp_participant: PartialPokPedersenCommitment<Affine<G0>>,
+        resp_asset_id: PartialPokDiscreteLog<Affine<G0>>,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub enum LegAccountLinkProtocol<G0: SWCurveConfig> {
-    AssetIdHidden(PokPedersenCommitmentProtocol<Affine<G0>>),
-    AssetIdRevealed(PokPedersenCommitmentProtocol<Affine<G0>>),
-    AssetIdRevealedElsewhere(PokDiscreteLogProtocol<Affine<G0>>),
+    AssetIdHidden {
+        t_participant: PokPedersenCommitmentProtocol<Affine<G0>>,
+        t_asset_id: PokPedersenCommitmentProtocol<Affine<G0>>,
+    },
+    AssetIdRevealed {
+        t_participant: PokPedersenCommitmentProtocol<Affine<G0>>,
+    },
+    AssetIdRevealedElsewhere {
+        t_participant: PokPedersenCommitmentProtocol<Affine<G0>>,
+        t_asset_id: PokDiscreteLogProtocol<Affine<G0>>,
+    },
 }
 
 impl<G0: SWCurveConfig> LegAccountLinkProtocol<G0> {
-    pub fn pc(&self) -> Option<&PokPedersenCommitmentProtocol<Affine<G0>>> {
+    pub fn t_participant(&self) -> &PokPedersenCommitmentProtocol<Affine<G0>> {
         match self {
-            Self::AssetIdHidden(p) => Some(p),
-            Self::AssetIdRevealed(p) => Some(p),
+            Self::AssetIdHidden { t_participant, .. } => t_participant,
+            Self::AssetIdRevealed { t_participant } => t_participant,
+            Self::AssetIdRevealedElsewhere { t_participant, .. } => t_participant,
+        }
+    }
+
+    pub fn t_asset_id_pc(&self) -> Option<&PokPedersenCommitmentProtocol<Affine<G0>>> {
+        match self {
+            Self::AssetIdHidden { t_asset_id, .. } => Some(t_asset_id),
             _ => None,
         }
     }
 
-    pub fn dl(&self) -> Option<&PokDiscreteLogProtocol<Affine<G0>>> {
+    pub fn t_asset_id_dl(&self) -> Option<&PokDiscreteLogProtocol<Affine<G0>>> {
         match self {
-            Self::AssetIdRevealedElsewhere(p) => Some(p),
+            Self::AssetIdRevealedElsewhere { t_asset_id, .. } => Some(t_asset_id),
             _ => None,
         }
     }
 
     pub fn gen_partial_proof(self) -> LegAccountLink<G0> {
         match self {
-            Self::AssetIdHidden(p) => LegAccountLink::AssetIdHidden(p.gen_partial_proof()),
-            Self::AssetIdRevealed(p) => LegAccountLink::AssetIdRevealed(p.gen_partial_proof()),
-            Self::AssetIdRevealedElsewhere(p) => {
-                LegAccountLink::AssetIdRevealedElsewhere(p.gen_partial_proof())
-            }
+            Self::AssetIdHidden {
+                t_participant,
+                t_asset_id,
+            } => LegAccountLink::AssetIdHidden {
+                resp_participant: t_participant.gen_partial_proof(),
+                resp_asset_id: t_asset_id.gen_partial_proof(),
+            },
+            Self::AssetIdRevealed { t_participant } => LegAccountLink::AssetIdRevealed {
+                resp_participant: t_participant.gen_partial_proof(),
+            },
+            Self::AssetIdRevealedElsewhere {
+                t_participant,
+                t_asset_id,
+            } => LegAccountLink::AssetIdRevealedElsewhere {
+                resp_participant: t_participant.gen_partial_proof(),
+                resp_asset_id: t_asset_id.gen_partial_proof(),
+            },
         }
     }
 }
 
 impl<G0: SWCurveConfig> LegAccountLink<G0> {
-    pub fn pc(&self) -> Option<&PartialPokPedersenCommitment<Affine<G0>>> {
+    pub fn resp_participant(&self) -> &PartialPokPedersenCommitment<Affine<G0>> {
         match self {
-            Self::AssetIdHidden(p) => Some(p),
-            Self::AssetIdRevealed(p) => Some(p),
+            Self::AssetIdHidden {
+                resp_participant, ..
+            } => resp_participant,
+            Self::AssetIdRevealed { resp_participant } => resp_participant,
+            Self::AssetIdRevealedElsewhere {
+                resp_participant, ..
+            } => resp_participant,
+        }
+    }
+
+    pub fn resp_asset_id_pc(&self) -> Option<&PartialPokPedersenCommitment<Affine<G0>>> {
+        match self {
+            Self::AssetIdHidden { resp_asset_id, .. } => Some(resp_asset_id),
             _ => None,
         }
     }
 
-    pub fn dl(&self) -> Option<&PartialPokDiscreteLog<Affine<G0>>> {
+    pub fn resp_asset_id_dl(&self) -> Option<&PartialPokDiscreteLog<Affine<G0>>> {
         match self {
-            Self::AssetIdRevealedElsewhere(p) => Some(p),
+            Self::AssetIdRevealedElsewhere { resp_asset_id, .. } => Some(resp_asset_id),
             _ => None,
         }
     }
@@ -1336,26 +1394,48 @@ mod serialization {
             compress: Compress,
         ) -> Result<(), SerializationError> {
             match self {
-                LegAccountLink::AssetIdHidden(resp) => {
+                LegAccountLink::AssetIdHidden {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
                     0u8.serialize_with_mode(&mut writer, compress)?;
-                    resp.serialize_with_mode(&mut writer, compress)
+                    resp_participant.serialize_with_mode(&mut writer, compress)?;
+                    resp_asset_id.serialize_with_mode(&mut writer, compress)
                 }
-                LegAccountLink::AssetIdRevealed(resp) => {
+                LegAccountLink::AssetIdRevealed { resp_participant } => {
                     1u8.serialize_with_mode(&mut writer, compress)?;
-                    resp.serialize_with_mode(&mut writer, compress)
+                    resp_participant.serialize_with_mode(&mut writer, compress)
                 }
-                LegAccountLink::AssetIdRevealedElsewhere(resp) => {
+                LegAccountLink::AssetIdRevealedElsewhere {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
                     2u8.serialize_with_mode(&mut writer, compress)?;
-                    resp.serialize_with_mode(&mut writer, compress)
+                    resp_participant.serialize_with_mode(&mut writer, compress)?;
+                    resp_asset_id.serialize_with_mode(&mut writer, compress)
                 }
             }
         }
 
         fn serialized_size(&self, compress: Compress) -> usize {
             1 + match self {
-                LegAccountLink::AssetIdHidden(resp) => resp.serialized_size(compress),
-                LegAccountLink::AssetIdRevealed(resp) => resp.serialized_size(compress),
-                LegAccountLink::AssetIdRevealedElsewhere(resp) => resp.serialized_size(compress),
+                LegAccountLink::AssetIdHidden {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
+                    resp_participant.serialized_size(compress)
+                        + resp_asset_id.serialized_size(compress)
+                }
+                LegAccountLink::AssetIdRevealed { resp_participant } => {
+                    resp_participant.serialized_size(compress)
+                }
+                LegAccountLink::AssetIdRevealedElsewhere {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
+                    resp_participant.serialized_size(compress)
+                        + resp_asset_id.serialized_size(compress)
+                }
             }
         }
     }
@@ -1368,23 +1448,37 @@ mod serialization {
         ) -> Result<Self, SerializationError> {
             let discriminant = u8::deserialize_with_mode(&mut reader, compress, validate)?;
             match discriminant {
-                0 => Ok(LegAccountLink::AssetIdHidden(
-                    PartialPokPedersenCommitment::deserialize_with_mode(
+                0 => Ok(LegAccountLink::AssetIdHidden {
+                    resp_participant: PartialPokPedersenCommitment::deserialize_with_mode(
                         &mut reader,
                         compress,
                         validate,
                     )?,
-                )),
-                1 => Ok(LegAccountLink::AssetIdRevealed(
-                    PartialPokPedersenCommitment::deserialize_with_mode(
+                    resp_asset_id: PartialPokPedersenCommitment::deserialize_with_mode(
                         &mut reader,
                         compress,
                         validate,
                     )?,
-                )),
-                2 => Ok(LegAccountLink::AssetIdRevealedElsewhere(
-                    PartialPokDiscreteLog::deserialize_with_mode(&mut reader, compress, validate)?,
-                )),
+                }),
+                1 => Ok(LegAccountLink::AssetIdRevealed {
+                    resp_participant: PartialPokPedersenCommitment::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                }),
+                2 => Ok(LegAccountLink::AssetIdRevealedElsewhere {
+                    resp_participant: PartialPokPedersenCommitment::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                    resp_asset_id: PartialPokDiscreteLog::deserialize_with_mode(
+                        &mut reader,
+                        compress,
+                        validate,
+                    )?,
+                }),
                 _ => Err(SerializationError::InvalidData),
             }
         }
@@ -1393,9 +1487,21 @@ mod serialization {
     impl<G0: SWCurveConfig> Valid for LegAccountLink<G0> {
         fn check(&self) -> Result<(), SerializationError> {
             match self {
-                LegAccountLink::AssetIdHidden(resp) => resp.check(),
-                LegAccountLink::AssetIdRevealed(resp) => resp.check(),
-                LegAccountLink::AssetIdRevealedElsewhere(resp) => resp.check(),
+                LegAccountLink::AssetIdHidden {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
+                    resp_participant.check()?;
+                    resp_asset_id.check()
+                }
+                LegAccountLink::AssetIdRevealed { resp_participant } => resp_participant.check(),
+                LegAccountLink::AssetIdRevealedElsewhere {
+                    resp_participant,
+                    resp_asset_id,
+                } => {
+                    resp_participant.check()?;
+                    resp_asset_id.check()
+                }
             }
         }
     }

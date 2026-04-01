@@ -440,7 +440,7 @@ impl<
                 &self.updated_account,
                 common_prover.old_balance_blinding,
                 common_prover.new_balance_blinding,
-                common_prover.sk_enc_inv_blinding,
+                common_prover.sk_enc_inv_bp_blinding,
                 even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),

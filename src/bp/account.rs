@@ -70,7 +70,7 @@ impl AccountState {
             current_rho: self.current_rho.decode()?,
             randomness: self.randomness.decode()?,
             current_randomness: self.current_randomness.decode()?,
-            sk_enc_inv,
+            sk_enc: sk_enc_inv,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
@@ -606,7 +606,7 @@ impl AccountAssetRegistrationProof {
         proof.verify(
             rng,
             id,
-            &self.account.acct.get_affine()?,
+            self.account.acct.get_affine()?,
             self.account.enc.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
@@ -641,7 +641,7 @@ impl AccountAssetRegistrationProof {
 
         let tuple = proof.verify_and_return_tuples(
             id,
-            &self.account.acct.get_affine()?,
+            self.account.acct.get_affine()?,
             self.account.enc.get_affine()?,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,

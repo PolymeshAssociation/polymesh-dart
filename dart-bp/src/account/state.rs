@@ -14,6 +14,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const NUM_GENERATORS: usize = 10;
 
+// TODO: Rewrite this and explain why optimization was dropped
 // The account commitment has g * {sk_{en}}^{-1}. This is safe as it's called Inverse Diffie Hellman assumption and [this paper](https://ink.library.smu.edu.sg/cgi/viewcontent.cgi?params=/context/sis_research/article/2082/&path_info=Bao2003_VariationsOfDiffie_HellmanProblem_pv.pdf)
 // shows DDH implies Inverse Diffie Hellman assumption. See section 3.1 and 3.2 where InvDDH ⇐ SDDH and SDDH ⇐ DDH, where SDDH is the square decisional Diffie-Hellman problem
 
@@ -304,7 +305,7 @@ pub struct AccountState<G: AffineRepr> {
     pub current_rho: G::ScalarField,
     pub randomness: G::ScalarField,
     pub current_randomness: G::ScalarField,
-    pub sk_enc_inv: G::ScalarField,
+    pub sk_enc: G::ScalarField,
 }
 
 // TODO: Add an account state batch abstraction that prevents manual update of field done in tests
@@ -355,7 +356,6 @@ where
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
-        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let combined = Self::concat_asset_id_counter(asset_id, counter);
         let rho =
             Poseidon_hash_2_simple::<G::ScalarField>(rho_randomness, combined, poseidon_config)?;
@@ -372,7 +372,7 @@ where
             current_rho,
             randomness,
             current_randomness,
-            sk_enc_inv,
+            sk_enc,
         })
     }
 
@@ -441,7 +441,7 @@ where
                 self.randomness,
                 self.current_randomness,
                 self.id,
-                self.sk_enc_inv,
+                self.sk_enc,
             ],
         )
         .map_err(Error::size_mismatch)?;

@@ -129,6 +129,10 @@ impl<G: AffineRepr> FeeAccountState<G> {
     }
 
     pub fn refresh_randomness_for_state_change(&mut self) {
+        // This isn't enforced in the verification and only here to let users have all randomness derived from a
+        // "seed" such that they can recover. The cost is 2 extra items in the commitment.
+        // An alternative could be a user held counter not part of state used to derive the randomness but above keeps
+        // it similar to main account commitment.
         self.rho *= self.initial_rho;
         self.randomness *= self.initial_randomness;
     }

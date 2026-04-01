@@ -711,6 +711,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     PokDiscreteLogProtocol<Affine<G0>>,
     Vec<LegAccountLinkProtocol<G0>>,
     SchnorrCommitment<Affine<G0>>,
+    F0, // sk_enc_inv_bp_blinding — needed by balance-change leg-amount proofs
 )> {
     if legs.len() == 0 {
         return Err(Error::ProofGenerationError(
@@ -722,14 +723,15 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
 
     let is_asset_id_revealed = asset_id_blinding.is_none();
 
-    let mut sk_enc_blinding = is_asset_id_revealed.then(|| F0::rand(rng));
-    let mut sk_enc = is_asset_id_revealed
-        .then(|| old_account.sk_enc_inv.inverse().ok_or(Error::InvertingZero))
-        .transpose()?;
+    // Always compute `sk_enc^{-1}` since we always prove the `sk_enc * sk_enc_inv = 1` relation in BP
+    // and always prove the participant ciphertext relation `ct = eph_pk * sk_enc_inv + enc_key_gen * sk_enc``
+    let mut sk_enc_inv = old_account.sk_enc.inverse().ok_or(Error::InvertingZero)?;
+    let sk_enc_inv_bp_blinding = F0::rand(rng);
 
     let h_at = is_asset_id_revealed.then(|| enc_gen * G0::ScalarField::from(asset_id));
 
     let comm_bp_blinding = F0::rand(rng);
+    // Always commit `sk_enc` and `sk_enc_inv` to BP for the inverse relation proof
     let mut wits = vec![
         old_account.rho,
         old_account.current_rho,
@@ -737,26 +739,21 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         old_account.randomness,
         old_account.current_randomness,
         updated_account.current_randomness,
+        old_account.sk_enc,
+        sk_enc_inv,
     ];
-
-    // If asset-id is revealed, then a different relation is used to prove leg was created for this account as a party
-    // and that involves using both `sk_enc^{-1}` and `sk_enc` so i need to prove that these are indeed inverses.
-    if is_asset_id_revealed {
-        wits.push(old_account.sk_enc_inv);
-        wits.push(sk_enc.unwrap());
-    }
 
     let (comm_bp_randomness_relations, mut vars) =
         prover.commit_vec(&wits, comm_bp_blinding, bp_gens);
 
     Zeroize::zeroize(&mut wits);
 
-    if is_asset_id_revealed {
-        enforce_constraints_for_sk_enc_relation(prover, &mut vars);
-    }
+    // Always enforce the sk_enc * sk_enc_inv = 1 constraint
+    enforce_constraints_for_sk_enc_relation(prover, &mut vars);
 
     enforce_constraints_for_randomness_relations(prover, &mut vars);
 
+    // Always use the bp_gens for sk_enc relation (sk_enc and sk_enc_inv always committed to BP)
     // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
     // This could be modified to subtract the nullifier as a public input but it doesn't change the
     // overall proof cost
@@ -765,8 +762,6 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             // asset-id is hidden from verifier so its knowledge is proved
 
             // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
-            // This could be modified to subtract the nullifier as a public input but it doesn't change the
-            // overall proof cost
             let t_r_leaf = SchnorrCommitment::new(
                 &account_comm_key.as_gens_with_blinding(pc_gens.B_blinding),
                 vec![
@@ -802,8 +797,9 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             );
 
             // Schnorr commitment for proving correctness of Bulletproof commitment
+            // Positions: [blinding_rand, rho, cur_rho, new_cur_rho, rand, cur_rand, new_cur_rand, sk_enc (shared with leaf), sk_enc_inv (fresh bp blinding)]
             let t_bp_randomness_relations = SchnorrCommitment::new(
-                &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
+                &bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens),
                 vec![
                     F0::rand(rng),
                     initial_rho_blinding,
@@ -812,6 +808,8 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     initial_randomness_blinding,
                     old_randomness_blinding,
                     new_randomness_blinding,
+                    sk_enc_inv_blinding,
+                    sk_enc_inv_bp_blinding,
                 ],
             );
 
@@ -821,8 +819,6 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             // asset-id is revealed to the verifier
 
             // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
-            // This could be modified to subtract the nullifier as a public input but it doesn't change the
-            // overall proof cost
             let t_r_leaf = SchnorrCommitment::new(
                 &account_comm_key.as_gens_with_blinding_without_asset_id(pc_gens.B_blinding),
                 vec![
@@ -856,6 +852,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
             );
 
             // Schnorr commitment for proving correctness of Bulletproof commitment
+            // Positions: [blinding_rand, rho, cur_rho, new_cur_rho, rand, cur_rand, new_cur_rand, sk_enc (shared with leaf), sk_enc_inv (fresh bp blinding)]
             let t_bp_randomness_relations = SchnorrCommitment::new(
                 &bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens),
                 vec![
@@ -867,7 +864,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     old_randomness_blinding,
                     new_randomness_blinding,
                     sk_enc_inv_blinding,
-                    sk_enc_blinding.unwrap(),
+                    sk_enc_inv_bp_blinding,
                 ],
             );
 
@@ -883,6 +880,18 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     let mut t_leg_link = Vec::with_capacity(legs.len());
 
     for (core, party_eph_pk) in legs.iter() {
+        // Always prove the participant ciphertext relation:
+        // ct_participant = eph_pk_participant * sk_enc_inv + enc_key_gen * sk_enc
+        let eph_pk_participant = party_eph_pk.eph_pk_participant();
+        let t_participant = PokPedersenCommitmentProtocol::init(
+            sk_enc_inv,
+            sk_enc_inv_bp_blinding, // sk_enc_inv response comes from BP position 8 (uses sk_enc_inv_bp_blinding)
+            &eph_pk_participant,
+            old_account.sk_enc,
+            sk_enc_inv_blinding, // sk_enc response comes from resp_leaf at SK_ENC_INV_GEN_INDEX (uses sk_enc_inv_blinding)
+            &enc_key_gen,
+        );
+
         match asset_id_blinding {
             Some(asset_id_blinding) => {
                 // Asset id is not revealed in any leg
@@ -891,17 +900,19 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                 let eph_pk_base = party_eph_pk.eph_pk_asset_id().unwrap();
 
                 // ct_asset_id = eph_pk_base * sk_enc_inv + enc_gen * asset_id
-                // Both witnesses, `sk_enc_inv` and `asset_id`, are shared with resp_leaf
-                t_leg_link.push(LegAccountLinkProtocol::AssetIdHidden(
-                    PokPedersenCommitmentProtocol::init(
-                        old_account.sk_enc_inv,
-                        sk_enc_inv_blinding,
-                        &eph_pk_base,
-                        F0::from(asset_id),
-                        asset_id_blinding,
-                        &enc_gen,
-                    ),
-                ));
+                // sk_enc_inv response comes from BP position 8; asset_id response comes from resp_leaf
+                let t_asset_id = PokPedersenCommitmentProtocol::init(
+                    sk_enc_inv,
+                    sk_enc_inv_bp_blinding, // sk_enc_inv response comes from BP position 8
+                    &eph_pk_base,
+                    F0::from(asset_id),
+                    asset_id_blinding,
+                    &enc_gen,
+                );
+                t_leg_link.push(LegAccountLinkProtocol::AssetIdHidden {
+                    t_participant,
+                    t_asset_id,
+                });
             }
             None => {
                 // Asset id is revealed in atleast one leg
@@ -913,31 +924,19 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
                     let eph_pk_base = party_eph_pk.eph_pk_asset_id().unwrap();
 
                     // ct_asset_id - enc_gen * asset_id = eph_pk_base * sk_enc_inv
-                    // Since asset-id is revealed eventually, only 1 witness `sk_enc_inv` and that is shared with resp_leaf
-                    t_leg_link.push(LegAccountLinkProtocol::AssetIdRevealedElsewhere(
-                        PokDiscreteLogProtocol::init(
-                            old_account.sk_enc_inv,
-                            sk_enc_inv_blinding,
-                            &eph_pk_base,
-                        ),
-                    ));
+                    // sk_enc_inv response comes from BP position 8
+                    let t_asset_id = PokDiscreteLogProtocol::init(
+                        sk_enc_inv,
+                        sk_enc_inv_bp_blinding, // sk_enc_inv response comes from BP position 8
+                        &eph_pk_base,
+                    );
+                    t_leg_link.push(LegAccountLinkProtocol::AssetIdRevealedElsewhere {
+                        t_participant,
+                        t_asset_id,
+                    });
                 } else {
-                    // Asset id revealed in this leg
-
-                    let eph_pk_base = party_eph_pk.eph_pk_participant();
-
-                    // `ct_s = eph_pk_base * sk_enc_inv + enc_key_gen * sk_enc` or `ct_r = eph_pk_base * sk_enc_inv + enc_key_gen * sk_enc`
-                    // Both witnesses, `sk_enc_inv` and `sk_enc`, are shared with resp_leaf and the bulletproof commitment
-                    t_leg_link.push(LegAccountLinkProtocol::AssetIdRevealed(
-                        PokPedersenCommitmentProtocol::init(
-                            old_account.sk_enc_inv,
-                            sk_enc_inv_blinding,
-                            &eph_pk_base,
-                            sk_enc.unwrap(),
-                            sk_enc_blinding.unwrap(),
-                            &enc_key_gen,
-                        ),
-                    ));
+                    // Asset id revealed in this leg — only participant ciphertext proof needed
+                    t_leg_link.push(LegAccountLinkProtocol::AssetIdRevealed { t_participant });
                 }
             }
         }
@@ -957,8 +956,8 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     Zeroize::zeroize(&mut initial_randomness_blinding);
     Zeroize::zeroize(&mut asset_id_blinding);
     Zeroize::zeroize(&mut sk_enc_inv_blinding);
-    Zeroize::zeroize(&mut sk_enc_blinding);
-    Zeroize::zeroize(&mut sk_enc);
+    // sk_enc_inv_bp_blinding is returned to the caller — it must NOT be zeroized here
+    Zeroize::zeroize(&mut sk_enc_inv);
 
     let mut transcript = prover.transcript();
 
@@ -971,36 +970,41 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
 
     for (i, (core, party_eph_pk)) in legs.into_iter().enumerate() {
         let is_sender = party_eph_pk.is_sender();
+        let eph_pk_participant = party_eph_pk.eph_pk_participant();
+        let ct_participant = core.ct_participant(is_sender);
+
+        // Always take challenge contribution for the participant ciphertext proof
+        t_leg_link[i].t_participant().challenge_contribution(
+            &eph_pk_participant,
+            &enc_key_gen,
+            &ct_participant,
+            &mut transcript,
+        )?;
+
         if is_asset_id_revealed {
             if core.is_asset_id_revealed() {
-                // Asset id revealed in this leg
-                let eph_pk_base = party_eph_pk.eph_pk_participant();
-                let y = core.ct_participant(is_sender);
-                t_leg_link[i].pc().unwrap().challenge_contribution(
-                    &eph_pk_base,
-                    &enc_key_gen,
-                    &y,
-                    &mut transcript,
-                )?;
+                // Asset id revealed in this leg — no extra asset-id ciphertext proof
             } else {
                 // Asset id not revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_asset_id().unwrap();
                 let y = core.asset_id_ciphertext().as_ref().unwrap().into_group() - h_at.unwrap();
-                t_leg_link[i].dl().unwrap().challenge_contribution(
-                    &eph_pk_base,
-                    &y.into_affine(),
-                    &mut transcript,
-                )?;
+                t_leg_link[i]
+                    .t_asset_id_dl()
+                    .unwrap()
+                    .challenge_contribution(&eph_pk_base, &y.into_affine(), &mut transcript)?;
             }
         } else {
             // Asset id is not revealed in any leg
             let eph_pk_base = party_eph_pk.eph_pk_asset_id().unwrap();
-            t_leg_link[i].pc().unwrap().challenge_contribution(
-                &eph_pk_base,
-                &enc_gen,
-                &core.asset_id_ciphertext().unwrap(),
-                &mut transcript,
-            )?;
+            t_leg_link[i]
+                .t_asset_id_pc()
+                .unwrap()
+                .challenge_contribution(
+                    &eph_pk_base,
+                    &enc_gen,
+                    &core.asset_id_ciphertext().unwrap(),
+                    &mut transcript,
+                )?;
         }
     }
 
@@ -1013,6 +1017,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         t_null,
         t_leg_link,
         t_bp_randomness_relations,
+        sk_enc_inv_bp_blinding,
     ))
 }
 
@@ -1147,7 +1152,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             account.randomness,
             account.current_randomness,
             account.id,
-            account.sk_enc_inv,
+            account.sk_enc,
             leaf_rerandomization,
         ];
         let resp_leaf = t_r_leaf.response(&wits, prover_challenge)?;
@@ -1177,7 +1182,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             account.randomness,
             account.current_randomness,
             account.id,
-            account.sk_enc_inv,
+            account.sk_enc,
             leaf_rerandomization,
         ];
         let resp_leaf = t_r_leaf.response(&wits, prover_challenge)?;
@@ -1199,15 +1204,13 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
     };
 
     // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
+    // Position 0: comm_bp_blinding (fresh)
+    // Position 7: sk_enc (shared with resp_leaf at SK_ENC_INV_GEN_INDEX, optionally adjusted for asset_id offset)
+    // Position 8: sk_enc_inv (fresh bp blinding, always present now)
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_blinding);
-    if is_asset_id_revealed {
-        // if asset-id is revealed, BP also proves the inverse relation between sk_enc_inv and sk_enc
-        wits.insert(
-            SK_ENC_INV_GEN_INDEX - 1,
-            account.sk_enc_inv.inverse().ok_or(Error::InvertingZero)?,
-        );
-    }
+    // sk_enc_inv is always in BP commitment at position 8 (wits index 7)
+    wits.insert(8, account.sk_enc.inverse().ok_or(Error::InvertingZero)?);
     let resp_bp = t_bp_randomness_relations.partial_response(wits, &prover_challenge)?;
 
     // Response for other witnesses will already be generated in sigma protocol for leaf
@@ -1253,14 +1256,10 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
 
     let is_asset_id_revealed = asset_id.is_some();
 
-    // If asset-id is revealed, then enforced inverse relation of sk_enc and sk_enc^{-1} in BP
-    let mut vars = verifier.commit_vec(
-        6 + if is_asset_id_revealed { 2 } else { 0 },
-        comm_bp_randomness_relations,
-    );
-    if is_asset_id_revealed {
-        enforce_constraints_for_sk_enc_relation(verifier, &mut vars);
-    }
+    // Always commit sk_enc and sk_enc_inv to BP (8 values: 6 for rho/rand + 2 for sk_enc/sk_enc_inv)
+    let mut vars = verifier.commit_vec(8, comm_bp_randomness_relations);
+    // Always enforce the sk_enc * sk_enc_inv = 1 constraint
+    enforce_constraints_for_sk_enc_relation(verifier, &mut vars);
     enforce_constraints_for_randomness_relations(verifier, &mut vars);
 
     let mut transcript = verifier.transcript();
@@ -1279,18 +1278,22 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
 
     for (i, (core, party_eph_pk)) in legs.iter().enumerate() {
         let is_sender = party_eph_pk.is_sender();
+        let eph_pk_participant = party_eph_pk.eph_pk_participant();
+        let ct_participant = core.ct_participant(is_sender);
+
+        // Always take challenge contribution for the participant ciphertext proof
+        let resp_participant = resp_leg_link[i].resp_participant();
+        resp_participant.challenge_contribution(
+            &eph_pk_participant,
+            &enc_key_gen,
+            &ct_participant,
+            &mut transcript,
+        )?;
+
         if is_asset_id_revealed {
             // Asset id is revealed in atleast one leg
             if core.is_asset_id_revealed() {
-                // Asset id revealed in this leg
-                let eph_pk_base = party_eph_pk.eph_pk_participant();
-                let y = core.ct_participant(is_sender);
-                let resp = resp_leg_link[i].pc().ok_or_else(|| {
-                    Error::ProofVerificationError(format!(
-                        "Asset id is revealed in leg {i} but response for leg-link is not provided"
-                    ))
-                })?;
-                resp.challenge_contribution(&eph_pk_base, &enc_key_gen, &y, &mut transcript)?;
+                // Asset id revealed in this leg — no extra asset-id ciphertext proof
             } else {
                 // Asset id not revealed in this leg
                 let eph_pk_base = party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
@@ -1310,8 +1313,8 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
                     )
                 })?;
                 let y = ct.into_group() - h_at;
-                let resp = resp_leg_link[i].dl().ok_or_else(|| Error::ProofVerificationError(
-                    format!("Asset id is not revealed in leg {i} but response for leg-link is not provided")
+                let resp = resp_leg_link[i].resp_asset_id_dl().ok_or_else(|| Error::ProofVerificationError(
+                    format!("Asset id is not revealed in leg {i} but expected resp_asset_id_dl for leg-link")
                 ))?;
                 resp.challenge_contribution(&eph_pk_base, &y.into_affine(), &mut transcript)?;
             }
@@ -1322,9 +1325,9 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
                     "Expected eph_pk_asset_id for leg {i} (asset-id hidden in all legs)"
                 ))
             })?;
-            let resp = resp_leg_link[i].pc().ok_or_else(|| {
+            let resp = resp_leg_link[i].resp_asset_id_pc().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
-                    "Asset id is not revealed in leg {i} but response for leg-link is not provided"
+                    "Asset id is not revealed in leg {i} but expected resp_asset_id_pc for leg-link"
                 ))
             })?;
             resp.challenge_contribution(
@@ -1502,7 +1505,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         y -= account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id);
         1
     };
-    // Since response for asset id is not present, adjust indices of remaining responses accordingly
+    // Since response for asset id is not present when revealed, adjust indices of remaining responses accordingly
     missing_resps.insert(
         RHO_GEN_INDEX - offset_when_asset_id_revealed,
         resp_leaf.0[RHO_GEN_INDEX - offset_when_asset_id_revealed],
@@ -1547,20 +1550,49 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         &resp_leaf.0[CURRENT_RHO_GEN_INDEX - offset_when_asset_id_revealed],
     );
 
+    // The response for sk_enc_inv (position 8 in BP) is always in resp_bp.responses
+    let resp_sk_enc_inv_bp = resp_bp
+        .responses
+        .get(&8)
+        .ok_or_else(|| {
+            Error::ProofVerificationError(
+                "Common state-change sigma verification: missing response for sk_enc_inv in resp_bp (index 8)"
+                    .to_string(),
+            )
+        })?;
+
     for i in 0..legs.len() {
         let (core, party_eph_pk) = &legs[i];
         let is_sender = party_eph_pk.is_sender();
-        if asset_id.is_none() {
-            // Asset id is not revealed in any leg
 
+        // Always verify the participant ciphertext proof:
+        // ct_participant = eph_pk_participant * sk_enc_inv + enc_key_gen * sk_enc
+        // sk_enc_inv response comes from resp_bp (position 8), sk_enc from resp_leaf
+        let eph_pk_participant = party_eph_pk.eph_pk_participant();
+        let ct_participant = core.ct_participant(is_sender);
+        let resp_participant = resp_leg_link[i].resp_participant();
+        verify_or_rmc_3!(
+            rmc,
+            resp_participant,
+            format!("Participant ciphertext verification failed for leg {i}"),
+            ct_participant,
+            eph_pk_participant,
+            enc_key_gen,
+            verifier_challenge,
+            resp_sk_enc_inv_bp, // sk_enc_inv (from resp_bp position 8)
+            &resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed], // sk_enc (from resp_leaf)
+        );
+
+        if asset_id.is_none() {
+            // Asset id is not revealed in any leg — prove asset-id ciphertext
             let eph_pk_base = party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Asset id is not revealed in any leg but leg {i} is missing eph_pk_asset_id"
                 ))
             })?;
-            let resp = resp_leg_link[i].pc().ok_or_else(|| {
+            let resp = resp_leg_link[i].resp_asset_id_pc().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
-                    "Asset id is not revealed in leg {i} but response for leg-link is not provided"
+                    "Asset id is not revealed in leg {i} but resp_asset_id_pc for leg-link is not provided"
                 ))
             })?;
             let ct_asset_id = core.asset_id_ciphertext().ok_or_else(|| {
@@ -1571,47 +1603,20 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             verify_or_rmc_3!(
                 rmc,
                 resp,
-                format!("Leg link verification failed for leg {i}"),
+                format!("Asset-id ciphertext verification failed for leg {i}"),
                 ct_asset_id,
                 eph_pk_base,
                 enc_gen,
                 verifier_challenge,
-                &resp_leaf.0[SK_ENC_INV_GEN_INDEX], // sk_enc^{-1}
-                &resp_leaf.0[ASSET_ID_GEN_INDEX],   // asset-id
+                resp_sk_enc_inv_bp,               // sk_enc_inv
+                &resp_leaf.0[ASSET_ID_GEN_INDEX], // asset-id
             );
         } else {
             // Asset id is revealed in atleast one leg
             if core.is_asset_id_revealed() {
-                // Asset id revealed in this leg
-                let eph_pk_base = party_eph_pk.eph_pk_participant();
-                let y = core.ct_participant(is_sender);
-                let resp = resp_leg_link[i].pc().ok_or_else(|| {
-                    Error::ProofVerificationError(format!(
-                        "Asset id is revealed in leg {i} but response for leg-link is not provided"
-                    ))
-                })?;
-                let resp_sk_enc = resp_bp
-                    .responses
-                    .get(&(SK_ENC_INV_GEN_INDEX - 1))
-                    .ok_or_else(|| {
-                        Error::ProofVerificationError(
-                            "Asset id is revealed but response for sk_enc is missing from resp_bp"
-                                .to_string(),
-                        )
-                    })?;
-                verify_or_rmc_3!(
-                    rmc,
-                    resp,
-                    format!("Leg link verification failed for leg {i}"),
-                    y,
-                    eph_pk_base,
-                    enc_key_gen,
-                    verifier_challenge,
-                    &resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed], // sk_enc^{-1} offset decreased since asset id is revealed
-                    resp_sk_enc,                                                        // sk_enc
-                );
+                // Asset id revealed in this leg — no extra asset-id ciphertext proof needed
             } else {
-                // Asset id not revealed in this leg
+                // Asset id not revealed in this leg — prove ct_asset_id - h_at = eph_pk_base * sk_enc_inv
                 let eph_pk_base = party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Asset id is not revealed in leg {i} but eph_pk_asset_id is missing"
@@ -1629,17 +1634,19 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
                     )
                 })?;
                 let y = ct_asset_id.into_group() - h_at;
-                let resp = resp_leg_link[i].dl().ok_or_else(|| Error::ProofVerificationError(
-                    format!("Asset id is not revealed in leg {i} but response for leg-link is not provided")
+                let resp = resp_leg_link[i].resp_asset_id_dl().ok_or_else(|| Error::ProofVerificationError(
+                    format!("Asset id is not revealed in leg {i} but resp_asset_id_dl for leg-link is not provided")
                 ))?;
                 verify_or_rmc_2!(
                     rmc,
                     resp,
-                    format!("Leg link verification failed for leg {i}"),
+                    format!(
+                        "Asset-id ciphertext (revealed elsewhere) verification failed for leg {i}"
+                    ),
                     y.into_affine(),
                     eph_pk_base,
                     verifier_challenge,
-                    &resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed], // sk_enc^{-1} offset decreased since asset id is revealed
+                    resp_sk_enc_inv_bp, // sk_enc_inv
                 );
             }
         }
@@ -1670,17 +1677,15 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             )
         })?;
     missing_resps.insert(6, *resp_acc_new_cur_rand);
+    // Position 7: sk_enc (shared with resp_leaf at SK_ENC_INV_GEN_INDEX, adjusted for asset_id offset)
+    missing_resps.insert(
+        7,
+        resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
+    );
+    // Position 8: sk_enc_inv — provided by resp_bp (not in missing_resps)
 
-    let bp_ver_gens = if asset_id.is_none() {
-        bp_gens_vec_for_randomness_relations(pc_gens, bp_gens).to_vec()
-    } else {
-        // Add response for sk_enc^{-1}
-        missing_resps.insert(
-            7,
-            resp_leaf.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
-        );
-        bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens).to_vec()
-    };
+    // Always use bp_gens for randomness and sk_enc relation (sk_enc and sk_enc_inv always committed)
+    let bp_ver_gens = bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens).to_vec();
     verify_partial_schnorr_resp_or_rmc!(
         rmc,
         resp_bp,
@@ -1793,22 +1798,6 @@ pub(crate) fn enforce_constraints_for_sk_enc_relation<F: Field, CS: ConstraintSy
     let sk_enc_var = committed_variables.pop().unwrap();
     let (_, _, one) = cs.multiply(sk_enc_inv_var.into(), sk_enc_var.into());
     cs.constrain(one - LinearCombination::from(Variable::One(PhantomData)));
-}
-
-fn bp_gens_vec_for_randomness_relations<G0: SWCurveConfig + Copy>(
-    pc_gens: &PedersenGens<Affine<G0>>,
-    bp_gens: &BulletproofGens<Affine<G0>>,
-) -> [Affine<G0>; 7] {
-    let mut gens = bp_gens_for_vec_commitment(6, bp_gens);
-    [
-        pc_gens.B_blinding,
-        gens.next().unwrap(),
-        gens.next().unwrap(),
-        gens.next().unwrap(),
-        gens.next().unwrap(),
-        gens.next().unwrap(),
-        gens.next().unwrap(),
-    ]
 }
 
 fn bp_gens_vec_for_randomness_and_sk_enc_relations<G0: SWCurveConfig + Copy>(

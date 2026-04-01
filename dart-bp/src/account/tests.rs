@@ -9534,7 +9534,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9551,8 +9551,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9574,7 +9573,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9591,8 +9590,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc,
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9670,7 +9668,7 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_receiver(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9687,8 +9685,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9768,7 +9765,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_receiver(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9785,8 +9782,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9808,7 +9804,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_receiver(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9825,8 +9821,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc,
-                    None,
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9904,7 +9899,7 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9921,8 +9916,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -9943,7 +9937,7 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -9960,8 +9954,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc,
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -10040,7 +10033,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -10057,8 +10050,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -10080,7 +10072,7 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             amount,
-            leg_enc.clone(),
+            leg_enc.core_and_eph_keys_for_sender(),
             &account,
             &updated_account,
             updated_account_comm,
@@ -10097,8 +10089,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc,
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &root,
                     updated_account_comm,
                     nullifier,
@@ -10191,7 +10182,7 @@ mod input_sanitation_disabled {
             IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 amount,
-                leg_enc.clone(),
+                leg_enc.core_and_eph_keys_for_sender(),
                 &sender_account,
                 &malicious_sender_account,
                 malicious_sender_comm,
@@ -10208,8 +10199,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &account_tree_root,
                     malicious_sender_comm,
                     nullifier,
@@ -10237,7 +10227,7 @@ mod input_sanitation_disabled {
             IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 amount,
-                leg_enc.clone(),
+                leg_enc.core_and_eph_keys_for_receiver(),
                 &receiver_account,
                 &malicious_receiver_account,
                 malicious_receiver_comm,
@@ -10254,8 +10244,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     &account_tree_root,
                     malicious_receiver_comm,
                     nullifier,
@@ -10282,7 +10271,7 @@ mod input_sanitation_disabled {
             IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 amount,
-                leg_enc.clone(),
+                leg_enc.core_and_eph_keys_for_sender(),
                 &sender_account,
                 &malicious_sender_account,
                 malicious_sender_comm,
@@ -10299,8 +10288,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc.clone(),
-                    None,
+                    leg_enc.core_and_eph_keys_for_sender(),
                     &account_tree_root,
                     malicious_sender_comm,
                     nullifier,
@@ -10327,7 +10315,7 @@ mod input_sanitation_disabled {
             IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 amount,
-                leg_enc.clone(),
+                leg_enc.core_and_eph_keys_for_receiver(),
                 &receiver_account,
                 &malicious_receiver_account,
                 malicious_receiver_comm,
@@ -10344,8 +10332,7 @@ mod input_sanitation_disabled {
             proof
                 .verify(
                     &mut rng,
-                    leg_enc,
-                    None,
+                    leg_enc.core_and_eph_keys_for_receiver(),
                     &account_tree_root,
                     malicious_receiver_comm,
                     nullifier,

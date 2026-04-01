@@ -49,6 +49,7 @@ pub const NONCE_LABEL: &'static [u8; 5] = b"nonce";
 pub const ASSET_ID_LABEL: &'static [u8; 8] = b"asset_id";
 pub const ACCOUNT_COMMITMENT_LABEL: &'static [u8; 18] = b"account_commitment";
 pub const PK_LABEL: &'static [u8; 2] = b"pk";
+pub const PK_ENC_LABEL: &'static [u8; 6] = b"pk_enc";
 pub const ID_LABEL: &'static [u8; 2] = b"id";
 pub const LEG_ENC_LABEL: &'static [u8; 7] = b"leg_enc";
 pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";

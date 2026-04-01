@@ -171,7 +171,7 @@ impl<
 
         debug_assert_eq!(
             ct_amount,
-            eph_pk_amount * account.sk_enc_inv + enc_gen * F0::from(amount)
+            eph_pk_amount * account.sk_enc.inverse().unwrap() + enc_gen * F0::from(amount)
         );
 
         let (leg_enc_core, eph_pk) = leg_enc;
@@ -209,7 +209,7 @@ impl<
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.sk_enc_inv_blinding,
+            common_prover.sk_enc_inv_bp_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
@@ -900,7 +900,7 @@ impl<
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.sk_enc_inv_blinding,
+            common_prover.sk_enc_inv_bp_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
@@ -1274,7 +1274,7 @@ impl<
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.sk_enc_inv_blinding,
+            common_prover.sk_enc_inv_bp_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
@@ -1631,7 +1631,7 @@ impl<
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.sk_enc_inv_blinding,
+            common_prover.sk_enc_inv_bp_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),
@@ -1988,7 +1988,7 @@ impl<
             updated_account,
             common_prover.old_balance_blinding,
             common_prover.new_balance_blinding,
-            common_prover.sk_enc_inv_blinding,
+            common_prover.sk_enc_inv_bp_blinding,
             even_prover,
             account_tree_params.even_parameters.pc_gens(),
             account_tree_params.even_parameters.bp_gens(),

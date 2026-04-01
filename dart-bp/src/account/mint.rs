@@ -280,7 +280,7 @@ impl<
             account.current_rho,
             account.randomness,
             account.current_randomness,
-            account.sk_enc_inv,
+            account.sk_enc,
             rerandomization,
         ];
         let resp_leaf = t_r_leaf.response(&wits, &prover_challenge)?;

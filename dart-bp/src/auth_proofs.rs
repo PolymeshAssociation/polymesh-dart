@@ -22,6 +22,7 @@ pub const AUTH_TXN_LABEL: &'static [u8; 8] = b"auth-txn";
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AuthProofRegOnlyAffSk<G: AffineRepr> {
     /// For Pedersen commitment to affirmation secret key and part of commitment randomness
+    /// TODO: Why not discrete log instead of pedersen commitment since pk is known?
     pub proof: PokPedersenCommitment<G>,
     pub partial_account_commitment: G,
 }
