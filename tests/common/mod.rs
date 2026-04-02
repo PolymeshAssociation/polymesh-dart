@@ -405,9 +405,7 @@ impl DartUserAccountInner {
     ) -> Result<()> {
         log::info!("Mediator decrypts the leg");
         let leg_data = chain.get_settlement_leg(leg_ref)?;
-        let leg = leg_data
-            .enc
-            .decrypt_with_keys(LegRole::mediator(0), &self.keys)?;
+        let leg = leg_data.enc.decrypt(LegRole::mediator(0), &self.keys)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
         // Create the mediator affirmation proof.
@@ -430,7 +428,7 @@ impl DartUserAccountInner {
     ) -> Result<Leg> {
         log::info!("Decrypting leg for role: {:?}", role);
         let leg_data = chain.get_settlement_leg(leg_ref)?;
-        let leg = leg_data.enc.decrypt_with_keys(role, &self.keys)?;
+        let leg = leg_data.enc.decrypt(role, &self.keys)?;
         log::info!("Decrypted leg: {:?}", leg);
         Ok(leg)
     }
