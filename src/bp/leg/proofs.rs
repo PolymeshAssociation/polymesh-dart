@@ -180,7 +180,7 @@ impl AuthorizedSenderAffirmationProof {
     }
 }
 
-#[cfg(feature = "full_api")]
+#[cfg(feature = "verify_api")]
 type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
     ACCOUNT_TREE_L,
     <C as CurveTreeConfig>::F0,
@@ -193,7 +193,7 @@ type BPAffirmAsSenderTxnProof<C> = bp_account::AffirmAsSenderTxnProof<
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "scale-info", derive(scale_info::TypeInfo))]
 #[cfg_attr(feature = "scale-info", scale_info(skip_type_params(C)))]
-#[cfg(feature = "full_api")]
+#[cfg(feature = "verify_api")]
 pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub leg_ref: LegRef,
     pub root_block: BlockNumber,
@@ -203,7 +203,7 @@ pub struct SenderAffirmationProof<C: CurveTreeConfig = AccountTreeConfig> {
     inner: WrappedCanonical<BPAffirmAsSenderTxnProof<C>>,
 }
 
-#[cfg(feature = "full_api")]
+#[cfg(feature = "verify_api")]
 impl<
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
@@ -310,7 +310,7 @@ impl<
     }
 }
 
-#[cfg(feature = "full_api")]
+#[cfg(feature = "verify_api")]
 impl<C: CurveTreeConfig> AccountStateUpdate for SenderAffirmationProof<C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
