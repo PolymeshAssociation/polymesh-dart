@@ -38,4 +38,7 @@ default = ["std", "asm", "parallel"]
 std = ["log/std", "hex/std", "polymesh-dart/std", "thiserror/std", "codec/std"]
 
 asm = ["polymesh-dart/asm"]
-parallel = ["polymesh-dart/parallel"]
+parallel = [
+	"polymesh-dart/parallel",
+	"polymesh-dart/verifier_parallel",
+]

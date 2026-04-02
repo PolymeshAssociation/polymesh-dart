@@ -769,6 +769,16 @@ impl DartTestingDb {
         self.asset_roots.add_root(block_number, &asset_root)?;
         self.account_roots.add_root(block_number, &account_root)?;
 
+        // Save the current roots to files for external verification if needed
+        std::fs::write(
+            format!("block_{}_current_asset_root.bin", block_number),
+            asset_root.encode(),
+        )?;
+        std::fs::write(
+            format!("block_{}_current_account_root.bin", block_number),
+            account_root.encode(),
+        )?;
+
         Ok(())
     }
 
@@ -864,7 +874,11 @@ impl DartTestingDb {
         }
 
         // Verify the proof
+        eprintln!("signer_name: {}", signer_name);
+        let now = std::time::Instant::now();
         proof.verify(signer_name.as_bytes(), params, rng)?;
+        let elapsed = now.elapsed();
+        eprintln!("Proof verification took {:.2?}", elapsed);
 
         if proof_action.is_dry_run() {
             // If dry run, just verify and return
@@ -1116,6 +1130,15 @@ impl DartTestingDb {
             )?;
         }
 
+        // Save encrypted legs to `settlement_{settlement_id}_leg_{leg_index}.bin` files for external verification if needed
+        for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
+            let encrypted_leg = leg_proof.leg_enc().encode();
+            std::fs::write(
+                format!("settlement_{}_leg_{}.bin", settlement_id, leg_index),
+                encrypted_leg,
+            )?;
+        }
+
         Ok(settlement_id)
     }
 
@@ -1175,6 +1198,7 @@ impl DartTestingDb {
                 )?)
             },
             |proof, leg_enc, roots, rng| {
+                eprintln!("===================== root_block: {}", proof.root_block);
                 // Verify the sender affirmation proof
                 proof.verify(&leg_enc, roots, rng)?;
                 Ok(())
@@ -1767,7 +1791,10 @@ impl DartTestingDb {
         self.ensure_nullifier_unique(&nullifier)?;
 
         // Verify the account state update proof.
+        let now = std::time::Instant::now();
         verify(&self.account_roots, rng)?;
+        let elapsed = now.elapsed();
+        eprintln!("Proof verification took {:.2?}", elapsed);
 
         if dry_run {
             // If dry run, just verify and return
@@ -1813,6 +1840,7 @@ impl DartTestingDb {
         verify_proof: impl FnOnce(&T, &LegEncrypted, &AccountRootHistory, &mut R) -> Result<()>,
         update_leg_status: impl FnOnce(&Connection, SettlementId, LegId) -> Result<()>,
     ) -> Result<()> {
+        let _params = get_account_curve_tree_parameters();
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let account_keys = account_info.account_keys()?;
 
