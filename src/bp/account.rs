@@ -53,13 +53,6 @@ impl AccountState {
         &self,
         keys: &AccountKeys,
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        let sk_enc_inv = keys
-            .enc
-            .secret
-            .0
-            .0
-            .inverse()
-            .ok_or(Error::CryptoError("Encryption key inversion failed".into()))?;
         let state = BPAccountState {
             sk: keys.acct.secret.0.0,
             id: self.identity.decode()?,
@@ -70,7 +63,7 @@ impl AccountState {
             current_rho: self.current_rho.decode()?,
             randomness: self.randomness.decode()?,
             current_randomness: self.current_randomness.decode()?,
-            sk_enc: sk_enc_inv,
+            sk_enc: keys.enc.secret.0.0,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
