@@ -8,7 +8,7 @@ license = "GPL-3.0"
 repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common"]
+members = ["dart-bp", "dart-testing-cli", "dart-common", "sandboxed", "dart-verifier"]
 
 [patch.crates-io]
 # Curve tree dependencies
@@ -41,17 +41,17 @@ schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = 
 #ark-curve25519 = { path = "../arkworks-algebra/curves/curve25519" }
 #ark-ed25519 = { path = "../arkworks-algebra/curves/ed25519" }
 
-ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-poly = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-helios = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-selene = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-wei25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-curve25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
-ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master-ledger" }
+ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-poly = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-helios = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-selene = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-wei25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-curve25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
@@ -169,8 +169,6 @@ curve_tree_relations = { workspace = true, default-features = false, optional = 
 ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 
-ledger_device_sdk = {version = "1.34.0", features = ["debug", "log_debug"], optional = true }
-
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 anyhow = { workspace = true }
@@ -206,7 +204,6 @@ default = [
     "scale-info",
     "large_baby_steps",
     "full_api",
-    "low_memory",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -223,9 +220,6 @@ decrypt_api = ["polymesh-dart-bp?/decrypt_api"]
 
 # Enable for low memory (SRAM) devices (hardware wallets)
 low_memory = [
-    "polymesh-dart-bp?/low_memory",
-    "bulletproofs?/low_memory",
-    "ark-ec?/low_memory",
 ]
 
 async_tree = []
@@ -251,10 +245,6 @@ large_baby_steps = [
 ]
 
 ledger_device_sdk = [
-	"dep:ledger_device_sdk",
-	"polymesh-dart-bp?/ledger_device_sdk",
-	"bulletproofs/ledger_device_sdk",
-	"ark-ec/ledger_device_sdk",
 ]
 
 no_std = ["alloc"]

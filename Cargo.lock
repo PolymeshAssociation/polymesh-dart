@@ -185,7 +185,7 @@ dependencies = [
 [[package]]
 name = "ark-curve25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -221,7 +221,7 @@ dependencies = [
 [[package]]
 name = "ark-ec"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ahash",
  "ark-ff",
@@ -230,10 +230,8 @@ dependencies = [
  "ark-std",
  "educe",
  "fnv",
- "hashbrown 0.15.5",
+ "hashbrown 0.16.1",
  "itertools 0.14.0",
- "ledger_device_sdk",
- "log",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -270,7 +268,7 @@ dependencies = [
 [[package]]
 name = "ark-ed25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -281,7 +279,7 @@ dependencies = [
 [[package]]
 name = "ark-ff"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-ff-asm",
  "ark-ff-macros",
@@ -298,7 +296,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-asm"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -307,7 +305,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-macros"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -319,7 +317,7 @@ dependencies = [
 [[package]]
 name = "ark-helios"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -331,7 +329,7 @@ dependencies = [
 [[package]]
 name = "ark-pallas"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -342,7 +340,7 @@ dependencies = [
 [[package]]
 name = "ark-poly"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ahash",
  "ark-ff",
@@ -350,7 +348,7 @@ dependencies = [
  "ark-std",
  "educe",
  "fnv",
- "hashbrown 0.15.5",
+ "hashbrown 0.16.1",
  "rayon",
 ]
 
@@ -368,7 +366,7 @@ dependencies = [
 [[package]]
 name = "ark-selene"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -380,7 +378,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-serialize-derive",
  "ark-std",
@@ -394,7 +392,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -427,7 +425,7 @@ dependencies = [
 [[package]]
 name = "ark-vesta"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -439,7 +437,7 @@ dependencies = [
 [[package]]
 name = "ark-wei25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master-ledger#f0b803be288b085dccf8f02f1d84410f073a9ca2"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -643,7 +641,6 @@ dependencies = [
  "dock_crypto_utils",
  "fnv",
  "hashbrown 0.15.5",
- "ledger_device_sdk",
  "log",
  "rand",
  "rand_core",
@@ -1065,7 +1062,7 @@ dependencies = [
  "blake2",
  "clap",
  "digest 0.10.7",
- "env_logger",
+ "env_logger 0.11.9",
  "hex",
  "lazy_static",
  "log",
@@ -1381,6 +1378,15 @@ checksum = "7a1c3cc8e57274ec99de65301228b537f1e4eedc1b8e0f9411c6caac8ae7308f"
 dependencies = [
  "log",
  "regex",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -1774,6 +1780,9 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+]
 
 [[package]]
 name = "hashlink"
@@ -2648,6 +2657,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "picoalloc"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e1912f9b1d3aea43590e3986afdcf4ed1d9662edae24744a095738157d65b6a"
+
+[[package]]
 name = "picosimd"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2734,6 +2749,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "polkavm"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe695ae43268c297264adda1c7b75ac5d2029a652c1420b85fe6db5c789ec535"
+dependencies = [
+ "libc",
+ "log",
+ "picosimd",
+ "polkavm-assembler",
+ "polkavm-common 0.32.0",
+ "polkavm-linux-raw",
+]
+
+[[package]]
+name = "polkavm-assembler"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48db9ab3568744d88514cfd8ca97f549913d17446e822fef20f9bd64598b8625"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "polkavm-common"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2743,12 +2781,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "polkavm-common"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7be32b303518704bb6deda7ce5a02feedbdadccccfd03da5bd3fe8eb1cd30694"
+dependencies = [
+ "log",
+ "picosimd",
+ "polkavm-assembler",
+]
+
+[[package]]
 name = "polkavm-derive"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acb4463fb0b9dbfafdc1d1a1183df4bf7afa3350d124f29d5700c6bee54556b5"
 dependencies = [
- "polkavm-derive-impl-macro",
+ "polkavm-derive-impl-macro 0.30.0",
+]
+
+[[package]]
+name = "polkavm-derive"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92147c429bebe93187a5c6963636a1efdfb69734e83b5d9d9aa751775c1dd62f"
+dependencies = [
+ "polkavm-derive-impl-macro 0.32.0",
 ]
 
 [[package]]
@@ -2757,7 +2815,19 @@ version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993ff45b972e09babe68adce7062c3c38a84b9f50f07b7caf393a023eaa6c74a"
 dependencies = [
- "polkavm-common",
+ "polkavm-common 0.30.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "polkavm-derive-impl"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a396e7939ae0a723cabf639c23f0704423c8e470d01f52ad0cecf2dc283387f0"
+dependencies = [
+ "polkavm-common 0.32.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2769,9 +2839,25 @@ version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a4f5352e13c1ca5f0e4d7b4a804fbb85b0e02c45cae435d101fe71081bc8ed8"
 dependencies = [
- "polkavm-derive-impl",
+ "polkavm-derive-impl 0.30.0",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "polkavm-derive-impl-macro"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19eb3426df09ad4820b9beecd5c6754c5249b8fc5c6e94f0f559fbf7ce082fc3"
+dependencies = [
+ "polkavm-derive-impl 0.32.0",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "polkavm-linux-raw"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8afb212d0effe4097b7243f0828feed74ca49105e3082e9b43dd5c2e89bc91c"
 
 [[package]]
 name = "polymesh-dart"
@@ -2794,7 +2880,6 @@ dependencies = [
  "dock_crypto_utils",
  "hex",
  "lazy_static",
- "ledger_device_sdk",
  "log",
  "parity-scale-codec",
  "polymesh-dart-bp",
@@ -2855,6 +2940,40 @@ dependencies = [
 [[package]]
 name = "polymesh-dart-common"
 version = "0.1.0"
+
+[[package]]
+name = "polymesh-dart-sandboxed"
+version = "0.1.0"
+dependencies = [
+ "ark-dlog-gadget",
+ "ark-ec",
+ "ark-ec-divisors",
+ "ark-ff",
+ "ark-pallas",
+ "ark-serialize",
+ "ark-std",
+ "ark-vesta",
+ "bulletproofs",
+ "dock_crypto_utils",
+ "parity-scale-codec",
+ "picoalloc",
+ "polkavm-derive 0.32.0",
+ "polymesh-dart",
+ "polymesh-dart-bp",
+ "polymesh-dart-common",
+ "rand_chacha",
+ "rand_core",
+ "relations",
+ "schnorr_pok",
+]
+
+[[package]]
+name = "polymesh-dart-verifier"
+version = "0.1.0"
+dependencies = [
+ "env_logger 0.10.2",
+ "polkavm",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -3601,7 +3720,7 @@ dependencies = [
  "libsecp256k1",
  "log",
  "parity-scale-codec",
- "polkavm-derive",
+ "polkavm-derive 0.30.0",
  "rustversion",
  "secp256k1",
  "sp-core",
@@ -3634,7 +3753,7 @@ dependencies = [
  "bytes",
  "impl-trait-for-tuples",
  "parity-scale-codec",
- "polkavm-derive",
+ "polkavm-derive 0.30.0",
  "sp-externalities",
  "sp-runtime-interface-proc-macro",
  "sp-std",
@@ -4037,7 +4156,7 @@ version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37d53ac171c92a39e4769491c4b4dde7022c60042254b5fc044ae409d34a24d4"
 dependencies = [
- "env_logger",
+ "env_logger 0.11.9",
  "test-log-macros",
  "tracing-subscriber",
 ]
