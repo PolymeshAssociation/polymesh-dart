@@ -7,7 +7,6 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
-use ark_ff::Field;
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
