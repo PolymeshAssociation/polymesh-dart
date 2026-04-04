@@ -15,6 +15,20 @@ mod sqlite_curve_tree;
 use sqlite_curve_tree::{AccountCurveTree, AccountRootHistory, AssetCurveTree, AssetRootHistory};
 
 pub type SettlementId = i64;
+pub type Did = [u8; 32];
+
+pub fn signer_to_did(signer_name: &str) -> Did {
+    let mut did = [0u8; 32];
+    let name_bytes = signer_name.as_bytes();
+    let len = name_bytes.len().min(32);
+    did[..len].copy_from_slice(&name_bytes[..len]);
+    let hex_did = hex::encode(did);
+    eprintln!(
+        "Converted signer name '{}' to DID: {}",
+        signer_name, hex_did
+    );
+    did
+}
 
 /// The affirmation status for each party in a DART settlement leg.
 #[derive(Copy, Clone, Encode, Decode, Debug, PartialEq, Eq)]
@@ -651,7 +665,8 @@ impl DartTestingDb {
         let account_info = self.get_dart_account(signer_name, account_name)?;
 
         let account_keys = account_info.account_keys()?;
-        let proof = AccountRegistrationProof::new(rng, &[account_keys], signer_name.as_bytes())?;
+        let did = signer_to_did(signer_name);
+        let proof = AccountRegistrationProof::new(rng, &[account_keys], &did)?;
 
         // If proof action is to generate only, save proof and return
         if !proof_action.apply_proof() {
@@ -660,7 +675,7 @@ impl DartTestingDb {
         }
 
         // Verify the proof
-        proof.verify(signer_name.as_bytes())?;
+        proof.verify(&did)?;
 
         if proof_action.is_dry_run() {
             // If dry run, just verify and return
@@ -827,6 +842,7 @@ impl DartTestingDb {
     ) -> Result<()> {
         let account_info = self.get_dart_account(signer_name, account_name)?;
         let asset_info = self.get_asset_by_id(asset_id)?;
+        let did = signer_to_did(signer_name);
 
         // Check if already registered
         let count: i64 = self.conn.query_row(
@@ -851,14 +867,8 @@ impl DartTestingDb {
             (proof, asset_state)
         } else {
             // Create registration proof and initial state.
-            let (proof, asset_state) = AccountAssetRegistrationProof::new(
-                rng,
-                &account_keys,
-                asset_id,
-                0,
-                signer_name.as_bytes(),
-                params,
-            )?;
+            let (proof, asset_state) =
+                AccountAssetRegistrationProof::new(rng, &account_keys, asset_id, 0, &did, params)?;
 
             // Update the account state with the pending state change.
             self.update_account_asset_state(&account_info, &asset_state)?;
@@ -876,7 +886,7 @@ impl DartTestingDb {
         // Verify the proof
         eprintln!("signer_name: {}", signer_name);
         let now = std::time::Instant::now();
-        proof.verify(signer_name.as_bytes(), params, rng)?;
+        proof.verify(&did, params, rng)?;
         let elapsed = now.elapsed();
         eprintln!("Proof verification took {:.2?}", elapsed);
 
@@ -912,6 +922,7 @@ impl DartTestingDb {
     ) -> Result<()> {
         let account_info = self.get_dart_account(issuer_signer_name, account_name)?;
         let mut asset_info = self.get_asset_by_id(asset_id)?;
+        let did = signer_to_did(issuer_signer_name);
 
         // Verify issuer owns the asset
         if asset_info.issuer_signer_id != account_info.signer_id {
@@ -959,7 +970,7 @@ impl DartTestingDb {
             rng,
             |roots, rng| {
                 // Verify the minting proof
-                proof.verify(issuer_signer_name.as_bytes(), roots, rng)?;
+                proof.verify(&did, roots, rng)?;
 
                 Ok(())
             },
