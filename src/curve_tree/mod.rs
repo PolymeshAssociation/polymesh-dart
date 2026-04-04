@@ -71,9 +71,21 @@ static mut ASSET_COMMITMENT_PARAMETERS: Option<AssetCommitmentParameters<AssetTr
 static mut ACCOUNT_CURVE_TREE_PARAMETERS: Option<CurveTreeParameters<AccountTreeConfig>> = None;
 
 #[cfg(feature = "std")]
+pub fn set_pallas_layer_parameters(
+    _parameters: SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+) {
+}
+
+#[cfg(feature = "std")]
 pub fn get_pallas_layer_parameters()
 -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     &CURVE_TREE_PARAMETERS_PALLAS
+}
+
+#[cfg(feature = "std")]
+pub fn set_vesta_layer_parameters(
+    _parameters: SingleLayerProofParametersNew<VestaParameters, PallasParams>,
+) {
 }
 
 #[cfg(feature = "std")]
@@ -93,8 +105,21 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
 }
 
 #[cfg(feature = "std")]
+pub fn set_asset_commitment_parameters(_parameters: AssetCommitmentParameters<AssetTreeConfig>) {}
+
+#[cfg(feature = "std")]
 pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<AccountTreeConfig> {
     &ACCOUNT_CURVE_TREE_PARAMETERS
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn set_pallas_layer_parameters(
+    parameters: SingleLayerProofParametersNew<PallasParameters, VestaParams>,
+) {
+    unsafe {
+        CURVE_TREE_PARAMETERS_PALLAS = Some(parameters);
+    }
 }
 
 #[allow(static_mut_refs)]
@@ -110,9 +135,19 @@ pub fn get_pallas_layer_parameters()
                 )
                 .expect("Failed to create SingleLayerParameters for Pallas"),
             );
-            CURVE_TREE_PARAMETERS_PALLAS = Some(parameters);
+            set_pallas_layer_parameters(parameters);
         }
         CURVE_TREE_PARAMETERS_PALLAS.as_ref().unwrap()
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn set_vesta_layer_parameters(
+    parameters: SingleLayerProofParametersNew<VestaParameters, PallasParams>,
+) {
+    unsafe {
+        CURVE_TREE_PARAMETERS_VESTA = Some(parameters);
     }
 }
 
@@ -129,7 +164,7 @@ pub fn get_vesta_layer_parameters()
                 )
                 .expect("Failed to create SingleLayerParameters for Vesta"),
             );
-            CURVE_TREE_PARAMETERS_VESTA = Some(parameters);
+            set_vesta_layer_parameters(parameters);
         }
         CURVE_TREE_PARAMETERS_VESTA.as_ref().unwrap()
     }
@@ -149,6 +184,14 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
+pub fn set_asset_commitment_parameters(parameters: AssetCommitmentParameters<AssetTreeConfig>) {
+    unsafe {
+        ASSET_COMMITMENT_PARAMETERS = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
 pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
     unsafe {
         if ASSET_COMMITMENT_PARAMETERS.is_none() {
@@ -158,7 +201,7 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
                 MAX_ASSET_KEYS,
                 &tree_parameters.even_parameters.bp_gens(),
             );
-            ASSET_COMMITMENT_PARAMETERS = Some(parameters);
+            set_asset_commitment_parameters(parameters);
         }
         ASSET_COMMITMENT_PARAMETERS.as_ref().unwrap()
     }

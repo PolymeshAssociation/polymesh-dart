@@ -5,7 +5,8 @@ use ark_ff::{
     PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
 };
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::vec::Vec;
 
 use blake2::Blake2b512;
 use bounded_collections::Get;
@@ -167,6 +168,9 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(feature = "std")]
+pub fn set_dart_gens(_gens: DartBPGenerators) {}
+
+#[cfg(feature = "std")]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
@@ -176,14 +180,25 @@ static mut DART_GENS: Option<DartBPGenerators> = None;
 
 #[cfg(not(feature = "std"))]
 #[allow(static_mut_refs)]
+pub fn set_dart_gens(gens: DartBPGenerators) {
+    unsafe {
+        DART_GENS = Some(gens);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
 pub fn dart_gens() -> &'static DartBPGenerators {
     unsafe {
         if DART_GENS.is_none() {
-            DART_GENS = Some(DartBPGenerators::new(DART_GEN_DOMAIN));
+            set_dart_gens(DartBPGenerators::new(DART_GEN_DOMAIN));
         }
         DART_GENS.as_ref().unwrap()
     }
 }
+
+#[cfg(feature = "std")]
+pub fn set_poseidon_params(_params: PoseidonParameters) {}
 
 #[cfg(feature = "std")]
 pub fn poseidon_params() -> &'static PoseidonParameters {
@@ -195,16 +210,26 @@ static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 
 #[cfg(not(feature = "std"))]
 #[allow(static_mut_refs)]
+pub fn set_poseidon_params(params: PoseidonParameters) {
+    unsafe {
+        POSEIDON_PARAMS = Some(params);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
 pub fn poseidon_params() -> &'static PoseidonParameters {
     unsafe {
         if POSEIDON_PARAMS.is_none() {
-            POSEIDON_PARAMS =
-                Some(PoseidonParameters::new().expect("Failed to create Poseidon parameters"));
+            set_poseidon_params(
+                PoseidonParameters::new().expect("Failed to create Poseidon parameters"),
+            );
         }
         POSEIDON_PARAMS.as_ref().unwrap()
     }
 }
 
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PoseidonParameters {
     pub params: Poseidon2Params<PallasScalar>,
 }

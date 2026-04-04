@@ -1,9 +1,10 @@
 use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use crate::{Error, error::Result};
 use ark_ff::PrimeField;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{vec, vec::Vec};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Poseidon2Params<F: PrimeField> {
     pub state_size: usize,
     /// sbox degree

@@ -104,6 +104,10 @@ pub enum Error {
     #[error("Hex decode error")]
     HexDecodeError,
 
+    /// Scale decode error.
+    #[error("Scale decode error")]
+    DecodeError,
+
     /// Too many keys in registration proof.
     #[error("Too many keys in registration proof")]
     TooManyKeysInRegProof,
