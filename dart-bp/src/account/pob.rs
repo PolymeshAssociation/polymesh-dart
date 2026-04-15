@@ -27,21 +27,28 @@ pub const TXN_POB_LABEL: &[u8; 20] = b"proof-of-balance-txn";
 pub const PENDING_SENT_AMOUNT_LABEL: &'static [u8; 19] = b"pending_sent_amount";
 pub const PENDING_RECV_AMOUNT_LABEL: &'static [u8; 19] = b"pending_recv_amount";
 
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct PobWithAuditorProofPartial<G: AffineRepr> {
+    pub t_acc: G,
+    pub resp_acc: SchnorrResponse<G>,
+    pub resp_null: PartialPokDiscreteLog<G>,
+    pub nullifier: G,
+}
+
 /// This is the proof for doing proof of balance with an auditor. This reveals the ID for proof efficiency as the public key is already revealed.
 /// Uses Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf)
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAuditorProof<G: AffineRepr> {
-    pub nullifier: G,
-    pub t_acc: G,
-    pub resp_acc: SchnorrResponse<G>,
-    pub resp_null: PartialPokDiscreteLog<G>,
+    pub partial: PobWithAuditorProofPartial<G>,
     pub resp_pk: PokDiscreteLog<G>,
+    pub resp_pk_enc: PokDiscreteLog<G>,
 }
 
 impl<G: AffineRepr> PobWithAuditorProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk: &G,
+        pk_aff: &G,
+        pk_enc: &G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
@@ -50,7 +57,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         Self::new_with_given_transcript(
             rng,
-            pk,
+            pk_aff,
+            pk_enc,
             account,
             account_commitment,
             nonce,
@@ -61,7 +69,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        pk: &G,
+        pk_aff: &G,
+        pk_enc: &G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
@@ -70,7 +79,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
     ) -> Result<Self> {
         // Need to prove that:
         // 1. sk used in commitment is for the revealed pk
-        // 2. nullifier is created from current_rho
+        // 2. sk_enc used in commitment is for the revealed pk_enc
+        // 3. nullifier is created from current_rho
         //
         // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare. If its not possible then do a membership proof
 
@@ -81,20 +91,22 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             ID_LABEL,
-            account.id,
+            account.id(),
             PK_LABEL,
-            pk
+            pk_aff,
+            PK_ENC_LABEL,
+            pk_enc
         );
 
         let null_gen = account_comm_key.current_rho_gen();
         let pk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
 
         let nullifier = account.nullifier(&account_comm_key);
 
-        let sk_blinding = G::ScalarField::rand(rng);
         let current_rho_blinding = G::ScalarField::rand(rng);
 
-        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness + g_k2 * current_randomness + g_l * sk_enc_inv = C - (pk + g_a * v + g_b * at + g_c * cnt + g_d * id)
+        // For proving relation g_i * rho + g_j * current_rho + g_k * randomness + g_k2 * current_randomness + g_l * sk_enc_inv = C - (pk + pk_enc + g_a * v + g_b * at + g_c * cnt + g_d * id)
         // where C is the account commitment and rho, current_rho, randomness, current_randomness, sk_enc_inv are the witness, rest are instance
         let t_acc = SchnorrCommitment::new(
             &[
@@ -102,45 +114,53 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 null_gen,
                 account_comm_key.randomness_gen(),
                 account_comm_key.current_randomness_gen(),
-                account_comm_key.sk_enc_gen(),
             ],
             vec![
                 G::ScalarField::rand(rng),
                 current_rho_blinding,
                 G::ScalarField::rand(rng),
                 G::ScalarField::rand(rng),
-                G::ScalarField::rand(rng),
             ],
         );
-        let t_null =
-            PokDiscreteLogProtocol::init(account.current_rho, current_rho_blinding, &null_gen);
+        let t_null = PokDiscreteLogProtocol::init(
+            account.without_sk.current_rho,
+            current_rho_blinding,
+            &null_gen,
+        );
 
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &pk_gen);
+        let t_pk = PokDiscreteLogProtocol::init(account.sk, G::ScalarField::rand(rng), &pk_gen);
+
+        let t_pk_enc =
+            PokDiscreteLogProtocol::init(account.sk_enc, G::ScalarField::rand(rng), &enc_key_gen);
 
         t_acc.challenge_contribution(&mut transcript)?;
         t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
-        t_pk.challenge_contribution(&pk_gen, &pk, &mut transcript)?;
+        t_pk.challenge_contribution(&pk_gen, &pk_aff, &mut transcript)?;
+        t_pk_enc.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript)?;
 
-        let prover_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let resp_acc = t_acc.response(
             &[
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
-                account.sk_enc,
+                account.without_sk.rho,
+                account.without_sk.current_rho,
+                account.without_sk.randomness,
+                account.without_sk.current_randomness,
             ],
-            &prover_challenge,
+            &challenge,
         )?;
         let resp_null = t_null.gen_partial_proof();
-        let resp_pk = t_pk.gen_proof(&prover_challenge);
+        let resp_pk = t_pk.gen_proof(&challenge);
+        let resp_pk_enc = t_pk_enc.gen_proof(&challenge);
         Ok(Self {
-            nullifier,
-            t_acc: t_acc.t,
-            resp_acc,
-            resp_null,
+            partial: PobWithAuditorProofPartial {
+                nullifier,
+                t_acc: t_acc.t,
+                resp_acc,
+                resp_null,
+            },
             resp_pk,
+            resp_pk_enc,
         })
     }
 
@@ -150,7 +170,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         balance: Balance,
         counter: PendingTxnCounter,
         id: G::ScalarField,
-        pk: &G,
+        pk_aff: &G,
+        pk_enc: &G,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -161,7 +182,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             balance,
             counter,
             id,
-            pk,
+            pk_aff,
+            pk_enc,
             account_commitment,
             nonce,
             account_comm_key,
@@ -175,7 +197,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         balance: Balance,
         counter: PendingTxnCounter,
         id: G::ScalarField,
-        pk: &G,
+        pk_aff: &G,
+        pk_enc: &G,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -190,55 +213,71 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             ID_LABEL,
             id,
             PK_LABEL,
-            pk
+            pk_aff,
+            PK_ENC_LABEL,
+            pk_enc
         );
 
         let null_gen = account_comm_key.current_rho_gen();
         let pk_gen = account_comm_key.sk_gen();
+        let pk_enc_gen = account_comm_key.sk_enc_gen();
 
-        self.t_acc.serialize_compressed(&mut transcript)?;
-        self.resp_null
-            .challenge_contribution(&null_gen, &self.nullifier, &mut transcript)?;
+        self.partial.t_acc.serialize_compressed(&mut transcript)?;
+        self.partial.resp_null.challenge_contribution(
+            &null_gen,
+            &self.partial.nullifier,
+            &mut transcript,
+        )?;
         self.resp_pk
-            .challenge_contribution(&pk_gen, &pk, &mut transcript)?;
+            .challenge_contribution(&pk_gen, &pk_aff, &mut transcript)?;
+        self.resp_pk_enc
+            .challenge_contribution(&pk_enc_gen, &pk_enc, &mut transcript)?;
 
-        let verifier_challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let y = account_commitment.0.into_group()
-            - (pk.into_group()
+            - (pk_aff.into_group()
+                + pk_enc.into_group()
                 + account_comm_key.balance_gen() * G::ScalarField::from(balance)
                 + account_comm_key.counter_gen() * G::ScalarField::from(counter)
                 + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
                 + account_comm_key.id_gen() * id);
-        self.resp_acc.is_valid(
+        self.partial.resp_acc.is_valid(
             &[
                 account_comm_key.rho_gen(),
                 account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
                 account_comm_key.current_randomness_gen(),
-                account_comm_key.sk_enc_gen(),
             ],
             &y.into_affine(),
-            &self.t_acc,
-            &verifier_challenge,
+            &self.partial.t_acc,
+            &challenge,
         )?;
 
         // rho in account matches the one in nullifier
-        if !self.resp_null.verify(
-            &self.nullifier,
-            &null_gen,
-            &verifier_challenge,
-            &self.resp_acc.0[1],
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Nullifier proof verification failed".to_string(),
-            ));
-        }
-        if !self.resp_pk.verify(&pk, &pk_gen, &verifier_challenge) {
-            return Err(Error::ProofVerificationError(
-                "Public key proof verification failed".to_string(),
-            ));
-        }
+        self.partial
+            .resp_null
+            .verify(
+                &self.partial.nullifier,
+                &null_gen,
+                &challenge,
+                &self.partial.resp_acc.0[1],
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("Nullifier proof verification failed".to_string())
+            })?;
+
+        self.resp_pk
+            .verify(&pk_aff, &pk_gen, &challenge)
+            .map_err(|_| {
+                Error::ProofVerificationError("Public key proof verification failed".to_string())
+            })?;
+
+        self.resp_pk_enc
+            .verify(&pk_enc, &pk_enc_gen, &challenge)
+            .map_err(|_| {
+                Error::ProofVerificationError("Public key proof verification failed".to_string())
+            })?;
         Ok(())
     }
 }
@@ -357,13 +396,13 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             PENDING_RECV_AMOUNT_LABEL,
             pending_recv_amount,
             ASSET_ID_LABEL,
-            account.asset_id,
+            account.asset_id(),
             BALANCE_LABEL,
-            account.balance,
+            account.balance(),
             COUNTER_LABEL,
-            account.counter,
+            account.counter(),
             ID_LABEL,
-            account.id,
+            account.id(),
             PK_LABEL,
             pk_aff,
             PK_ENC_LABEL,
@@ -397,7 +436,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ],
         );
         let t_null = PokDiscreteLogProtocol::init(
-            account.current_rho,
+            account.without_sk.current_rho,
             current_rho_blinding,
             &account_comm_key.current_rho_gen(),
         );
@@ -502,7 +541,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             &mut transcript,
         )?;
 
-        let minus_h_at = enc_gen.into_group().neg() * G::ScalarField::from(account.asset_id);
+        let minus_h_at =
+            enc_gen.into_group().neg() * G::ScalarField::from(account.without_sk.asset_id);
         let pk_enc_proj = pk_enc.into_group();
 
         for i in 0..num_pending_txns {
@@ -544,10 +584,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let resp_acc = t_acc.response(
             &[
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
+                account.without_sk.rho,
+                account.without_sk.current_rho,
+                account.without_sk.randomness,
+                account.without_sk.current_randomness,
             ],
             &challenge,
         )?;
@@ -862,68 +902,69 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         )?;
 
         // rho in account matches the one in nullifier
-        if !self.resp_null.verify(
-            &self.nullifier,
-            &account_comm_key.current_rho_gen(),
-            &challenge,
-            &self.resp_acc.0[1],
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Nullifier verification failed".to_string(),
-            ));
-        }
+        self.resp_null
+            .verify(
+                &self.nullifier,
+                &account_comm_key.current_rho_gen(),
+                &challenge,
+                &self.resp_acc.0[1],
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("Nullifier verification failed".to_string())
+            })?;
 
-        if !self
-            .resp_pk
+        self.resp_pk
             .verify(pk_aff, &account_comm_key.sk_gen(), &challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "Affirmation public key verification failed".to_string(),
-            ));
-        }
+            .map_err(|_| {
+                Error::ProofVerificationError(
+                    "Affirmation public key verification failed".to_string(),
+                )
+            })?;
 
-        if !self
-            .resp_pk_enc
+        self.resp_pk_enc
             .verify(pk_enc, &account_comm_key.sk_enc_gen(), &challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "Encryption public key verification failed".to_string(),
-            ));
-        }
+            .map_err(|_| {
+                Error::ProofVerificationError(
+                    "Encryption public key verification failed".to_string(),
+                )
+            })?;
 
-        if !self
-            .resp_enc_key_gen
+        self.resp_enc_key_gen
             .verify(&account_comm_key.sk_enc_gen(), pk_enc, &challenge)
-        {
-            return Err(Error::ProofVerificationError(
-                "Encryption secret key inverse verification failed".to_string(),
-            ));
-        }
+            .map_err(|_| {
+                Error::ProofVerificationError(
+                    "Encryption secret key inverse verification failed".to_string(),
+                )
+            })?;
 
         let resp_sk_enc_inv = &self.resp_enc_key_gen.response;
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
-                if !self.resp_participant[i].verify(
-                    &y_participant[i],
-                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r2,
-                    &challenge,
-                    &resp_sk_enc_inv,
-                ) {
-                    return Err(Error::ProofVerificationError(format!(
-                        "Receiver verification failed for leg {i}"
-                    )));
-                }
+                self.resp_participant[i]
+                    .verify(
+                        &y_participant[i],
+                        &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                        &challenge,
+                        &resp_sk_enc_inv,
+                    )
+                    .map_err(|_| {
+                        Error::ProofVerificationError(format!(
+                            "Receiver verification failed for leg {i}"
+                        ))
+                    })?;
             } else {
-                if !self.resp_participant[i].verify(
-                    &y_participant[i],
-                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                    &challenge,
-                    &resp_sk_enc_inv,
-                ) {
-                    return Err(Error::ProofVerificationError(format!(
-                        "Sender verification failed for leg {i}"
-                    )));
-                }
+                self.resp_participant[i]
+                    .verify(
+                        &y_participant[i],
+                        &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                        &challenge,
+                        &resp_sk_enc_inv,
+                    )
+                    .map_err(|_| {
+                        Error::ProofVerificationError(format!(
+                            "Sender verification failed for leg {i}"
+                        ))
+                    })?;
             }
 
             if !legs[i].is_asset_id_revealed() {
@@ -931,38 +972,37 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 let base = eph_pk_bases_for_asset_id[i].as_ref().unwrap();
                 let y = y_asset_id[i].as_ref().unwrap();
 
-                if !resp.verify(y, base, &challenge, resp_sk_enc_inv) {
-                    return Err(Error::ProofVerificationError(format!(
-                        "Asset-id verification failed for leg {i}"
-                    )));
-                }
+                resp.verify(y, base, &challenge, resp_sk_enc_inv)
+                    .map_err(|_| {
+                        Error::ProofVerificationError(format!(
+                            "Asset-id verification failed for leg {i}"
+                        ))
+                    })?;
             }
         }
 
         if let Some(resp) = &self.resp_sent_amount {
-            if !resp.verify(
+            resp.verify(
                 &y_total_send.unwrap(),
                 &eph_pk_amount_total_send.into_affine(),
                 &challenge,
                 resp_sk_enc_inv,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    "resp_sent_amount verification failed".to_string(),
-                ));
-            }
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("resp_sent_amount verification failed".to_string())
+            })?;
         }
 
         if let Some(resp) = &self.resp_recv_amount {
-            if !resp.verify(
+            resp.verify(
                 &y_total_recv.unwrap(),
                 &eph_pk_amount_total_recv.into_affine(),
                 &challenge,
                 resp_sk_enc_inv,
-            ) {
-                return Err(Error::ProofVerificationError(
-                    "resp_recv_amount verification failed".to_string(),
-                ));
-            }
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("resp_recv_amount verification failed".to_string())
+            })?;
         }
 
         Ok(())
@@ -991,12 +1031,12 @@ mod tests {
 
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let enc_key_gen = account_comm_key.sk_enc_gen();
-        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
-        account.balance = 1000;
-        account.counter = 7;
+        account.without_sk.balance = 1000;
+        account.without_sk.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce";
@@ -1004,6 +1044,7 @@ mod tests {
         let proof = PobWithAuditorProof::new(
             &mut rng,
             &pk.0,
+            &pk_enc.0,
             &account,
             account_comm.clone(),
             nonce,
@@ -1014,10 +1055,11 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.balance,
-                account.counter,
+                account.without_sk.balance,
+                account.without_sk.counter,
                 id,
                 &pk.0,
+                &pk_enc.0,
                 account_comm,
                 nonce,
                 account_comm_key,
@@ -1043,8 +1085,8 @@ mod tests {
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
-        account.balance = 1000000;
-        account.counter = num_pending_txns;
+        account.without_sk.balance = 1000000;
+        account.without_sk.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         // Create some legs as pending transfers
@@ -1123,8 +1165,8 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.balance,
-                account.counter,
+                account.without_sk.balance,
+                account.without_sk.counter,
                 id,
                 &pk.0,
                 &pk_e.0,
@@ -1168,8 +1210,8 @@ mod tests {
 
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
-        account.balance = 1000000;
-        account.counter = num_pending_txns;
+        account.without_sk.balance = 1000000;
+        account.without_sk.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1257,8 +1299,8 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.balance,
-                account.counter,
+                account.without_sk.balance,
+                account.without_sk.counter,
                 id,
                 &pk.0,
                 &pk_e.0,
@@ -1301,8 +1343,8 @@ mod tests {
 
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
-        account.balance = 1000000;
-        account.counter = num_pending_txns;
+        account.without_sk.balance = 1000000;
+        account.without_sk.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1376,9 +1418,9 @@ mod tests {
             proof
                 .verify(
                     asset_id,
-                    account.balance,
-                    account.counter,
-                    account.id,
+                    account.without_sk.balance,
+                    account.without_sk.counter,
+                    account.without_sk.id,
                     &pk.0,
                     &pk_e.0,
                     account_comm,
@@ -1412,8 +1454,8 @@ mod tests {
 
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
-        account.balance = 1000000;
-        account.counter = num_pending_txns;
+        account.without_sk.balance = 1000000;
+        account.without_sk.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1486,9 +1528,9 @@ mod tests {
             proof
                 .verify(
                     asset_id,
-                    account.balance,
-                    account.counter,
-                    account.id,
+                    account.without_sk.balance,
+                    account.without_sk.counter,
+                    account.without_sk.id,
                     &pk.0,
                     &pk_e.0,
                     account_comm,

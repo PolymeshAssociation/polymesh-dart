@@ -1,9 +1,11 @@
-use crate::account::common::{
-    CommonStateChangeProof, CommonStateChangeProver, StateChangeVerifier,
+use crate::account::common::balance::{
+    BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver,
 };
+use crate::account::common::leg_link::{LegProverConfig, LegVerifierConfig};
+use crate::account::common::verifier::StateChangeVerifier;
+use crate::account::common::{CommonStateChangeProof, CommonStateChangeProver};
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, BalanceChangeConfig,
-    BalanceChangeProof, BalanceChangeProver, LegProverConfig, LegVerifierConfig,
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AccountStateWithoutSk,
 };
 use crate::leg::AmountCiphertext;
 use crate::leg::PartyEphemeralPublicKey;
@@ -20,6 +22,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::marker::PhantomData;
 use ark_std::{format, string::ToString, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+use core::ops::{Deref, DerefMut};
 use curve_tree_relations::curve_tree::Root;
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
@@ -41,18 +44,20 @@ pub struct AccountStateTransitionProof<
     pub balance_proof: Option<BalanceChangeProof<F0, G0>>,
 }
 
-pub struct AccountStateTransitionProofBuilder<
+/// Shared builder holding all fields that don't require the secret key.
+/// Both `AccountStateTransitionProofBuilder` and `AccountStateTransitionSplitProofBuilder` embed this.
+pub struct AccountStateTransitionHostProofBuilder<
     const L: usize,
     F0: PrimeField,
     F1: PrimeField,
     G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub(crate) legs: Vec<LegProverConfig<G0>>,
+    pub(crate) legs: Vec<LegProverConfig<Affine<G0>>>,
     pub(crate) balance_changes: Vec<BalanceChangeConfig<G0>>,
     pub(crate) net_counter_change: i32,
-    pub(crate) account: AccountState<Affine<G0>>,
-    pub(crate) updated_account: AccountState<Affine<G0>>,
+    pub(crate) account: AccountStateWithoutSk<Affine<G0>>,
+    pub(crate) updated_account: AccountStateWithoutSk<Affine<G0>>,
     pub(crate) updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub(crate) nonce: Vec<u8>,
     marker: PhantomData<G1>,
@@ -64,11 +69,11 @@ impl<
     F1: PrimeField,
     G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
-> AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
+> AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>
 {
-    pub fn init(
-        account: AccountState<Affine<G0>>,
-        updated_account: AccountState<Affine<G0>>,
+    pub fn new(
+        account: AccountStateWithoutSk<Affine<G0>>,
+        updated_account: AccountStateWithoutSk<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nonce: &[u8],
     ) -> Self {
@@ -279,6 +284,73 @@ impl<
         });
     }
 
+    pub(crate) fn pre_finalize_checks(&self) -> Result<()> {
+        #[cfg(feature = "ignore_prover_input_sanitation")]
+        {
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if self.legs.is_empty() {
+                return Err(Error::ProofGenerationError(
+                    "No legs added to the builder".to_string(),
+                ));
+            }
+
+            let expected_counter =
+                (self.account.counter as i64 + self.net_counter_change as i64) as u64;
+            if self.updated_account.counter != expected_counter {
+                return Err(Error::ProofGenerationError(format!(
+                    "Counter mismatch: expected {}, got {}",
+                    expected_counter, self.updated_account.counter
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+pub struct AccountStateTransitionProofBuilder<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> {
+    pub(crate) host: AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>,
+    // TODO: I could just keep secret keys here than duplicating (from host) this info but would need changes. Maybe later
+    pub(crate) account: AccountState<Affine<G0>>,
+    pub(crate) updated_account: AccountState<Affine<G0>>,
+}
+
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
+{
+    pub fn init(
+        account: AccountState<Affine<G0>>,
+        updated_account: AccountState<Affine<G0>>,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nonce: &[u8],
+    ) -> Self {
+        let host = AccountStateTransitionHostProofBuilder::new(
+            account.without_sk.clone(),
+            updated_account.without_sk.clone(),
+            updated_account_commitment,
+            nonce,
+        );
+        Self {
+            host,
+            account,
+            updated_account,
+        }
+    }
+
     pub fn finalize<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
@@ -323,7 +395,7 @@ impl<
             rng,
         )?;
 
-        proof.common_proof.r1cs_proof = Some(BPProof {
+        proof.common_proof.partial.r1cs_proof = Some(BPProof {
             even_proof,
             odd_proof,
         });
@@ -347,18 +419,18 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        self.pre_finalize_checks()?;
+        self.host.pre_finalize_checks()?;
 
         let common_prover =
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
-                self.legs.clone(),
+                self.host.legs.clone(),
                 &self.account,
                 &self.updated_account,
-                self.updated_account_commitment,
+                self.host.updated_account_commitment,
                 leaf_path,
                 root,
-                &self.nonce,
+                &self.host.nonce,
                 account_tree_params,
                 account_comm_key,
                 enc_gen,
@@ -391,16 +463,16 @@ impl<
         enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
-        self.pre_finalize_checks()?;
+        self.host.pre_finalize_checks()?;
 
         let common_prover = CommonStateChangeProver::init_with_given_prover_with_rerandomized_leaf(
             rng,
-            self.legs.clone(),
+            self.host.legs.clone(),
             &self.account,
             &self.updated_account,
-            self.updated_account_commitment,
+            self.host.updated_account_commitment,
             leaf_rerandomization,
-            &self.nonce,
+            &self.host.nonce,
             account_tree_params,
             account_comm_key,
             enc_gen,
@@ -430,17 +502,17 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
         let nullifier = common_prover.nullifier;
-        let has_balance_changed = !self.balance_changes.is_empty();
+        let has_balance_changed = !self.host.balance_changes.is_empty();
 
         let balance_prover = if has_balance_changed {
             Some(BalanceChangeProver::init(
                 rng,
-                self.balance_changes,
+                self.host.balance_changes,
                 &self.account,
                 &self.updated_account,
                 common_prover.old_balance_blinding,
                 common_prover.new_balance_blinding,
-                common_prover.sk_enc_inv_bp_blinding,
+                common_prover.sk_enc_inv_blinding,
                 even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
@@ -471,31 +543,32 @@ impl<
             nullifier,
         ))
     }
+}
 
-    pub(crate) fn pre_finalize_checks(&self) -> Result<()> {
-        #[cfg(feature = "ignore_prover_input_sanitation")]
-        {
-            return Ok(());
-        }
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> Deref for AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
+{
+    type Target = AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>;
+    fn deref(&self) -> &Self::Target {
+        &self.host
+    }
+}
 
-        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        {
-            if self.legs.is_empty() {
-                return Err(Error::ProofGenerationError(
-                    "No legs added to the builder".to_string(),
-                ));
-            }
-
-            let expected_counter =
-                (self.account.counter as i64 + self.net_counter_change as i64) as u64;
-            if self.updated_account.counter != expected_counter {
-                return Err(Error::ProofGenerationError(format!(
-                    "Counter mismatch: expected {}, got {}",
-                    expected_counter, self.updated_account.counter
-                )));
-            }
-            Ok(())
-        }
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> DerefMut for AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.host
     }
 }
 
@@ -506,7 +579,7 @@ pub struct AccountStateTransitionProofVerifier<
     G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
     G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
-    pub(crate) legs: Vec<LegVerifierConfig<G0>>,
+    pub(crate) legs: Vec<LegVerifierConfig<Affine<G0>>>,
     pub(crate) net_counter_change: i32,
     pub(crate) updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub(crate) nullifier: Affine<G0>,
@@ -767,10 +840,12 @@ impl<
             rmc,
         )?;
 
-        let r1cs_proof =
-            proof.common_proof.r1cs_proof.as_ref().ok_or_else(|| {
-                Error::ProofVerificationError("R1CS proof is missing".to_string())
-            })?;
+        let r1cs_proof = proof
+            .common_proof
+            .partial
+            .r1cs_proof
+            .as_ref()
+            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
 
         get_verification_tuples_with_rng(
             even_verifier,
@@ -877,15 +952,12 @@ impl<
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         if let Some(balance_proof) = &proof.balance_proof {
-            // Filter legs and corresponding prover_is_sender entries together
+            // Filter legs with balance changes
             let ct_amounts: Vec<AmountCiphertext<Affine<G0>>> = self
                 .legs
                 .iter()
-                .zip(verifier.prover_is_sender.iter())
-                .filter(|(l, _)| l.has_balance_decreased.is_some())
-                .map(|(l, _)| {
-                    AmountCiphertext(l.encryption.ct_amount, l.party_eph_pk.eph_pk_amount())
-                })
+                .filter(|l| l.has_balance_decreased.is_some())
+                .map(|l| AmountCiphertext(l.encryption.ct_amount, l.party_eph_pk.eph_pk_amount()))
                 .collect();
 
             verifier.init_balance_change_verification_with_given_verifier(
@@ -1044,7 +1116,7 @@ mod tests {
                 sk_carol_e.clone(),
                 carol_id,
             );
-            carol_account.balance = 500;
+            carol_account.without_sk.balance = 500;
 
             let account_tree = get_tree_with_account_comm::<L, _>(
                 &carol_account,
@@ -1120,9 +1192,32 @@ mod tests {
                 .unwrap();
             let verification_time_1 = start.elapsed();
             let proof_size_1 = carol_proof_1.compressed_size();
+            let mut carol_verifier_1 = AccountStateTransitionProofVerifier::init(
+                carol_receives_comm,
+                carol_nullifier_1,
+                nonce_1,
+            );
+            carol_verifier_1.add_receive_affirmation(leg_enc_1.core_and_eph_keys_for_receiver());
+            carol_verifier_1.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let start = Instant::now();
+            carol_verifier_1
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &carol_proof_1,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let verification_time_1_rmc = start.elapsed();
             println!(
-                "Carol proof 1 (2 receive affirmations): proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-                proving_time_1, verification_time_1, proof_size_1
+                "Carol proof 1 (2 receive affirmations): proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                proving_time_1, verification_time_1, verification_time_1_rmc, proof_size_1
             );
 
             // Now Carol claims from both
@@ -1203,9 +1298,32 @@ mod tests {
                 .unwrap();
             let verification_time_2 = start.elapsed();
             let proof_size_2 = carol_proof_2.compressed_size();
+            let mut carol_verifier_2 = AccountStateTransitionProofVerifier::init(
+                carol_final_comm,
+                carol_nullifier_2,
+                nonce_2,
+            );
+            carol_verifier_2.add_claim_received(leg_enc_1.core_and_eph_keys_for_receiver());
+            carol_verifier_2.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let start = Instant::now();
+            carol_verifier_2
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &carol_proof_2,
+                    &account_tree_root_2,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let verification_time_2_rmc = start.elapsed();
             println!(
-                "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-                proving_time_2, verification_time_2, proof_size_2
+                "Carol proof 2 (2 claims): proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                proving_time_2, verification_time_2, verification_time_2_rmc, proof_size_2
             );
         };
 
@@ -1237,176 +1355,254 @@ mod tests {
         let alice_to_bob_amount = 100u64;
         let carol_to_alice_amount = 150u64;
 
-        // Create legs
-        let leg_1 = Leg::new(
-            pk_alice_e.0,
-            pk_bob_e.0,
-            alice_to_bob_amount,
-            asset_id,
-            vec![pk_auditor_e.0],
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let (leg_enc_1, _) = leg_1
-            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+        let mut test_with_config = |reveal_asset_id: bool| {
+            let conf = LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id,
+            };
+
+            // Create legs
+            let leg_1 = Leg::new(
+                pk_alice_e.0,
+                pk_bob_e.0,
+                alice_to_bob_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+            )
             .unwrap();
+            let (leg_enc_1, _) = leg_1
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
 
-        let leg_2 = Leg::new(
-            pk_carol_e.0,
-            pk_alice_e.0,
-            carol_to_alice_amount,
-            asset_id,
-            vec![pk_auditor_e.0],
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let (leg_enc_2, _) = leg_2
-            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            let leg_2 = Leg::new(
+                pk_carol_e.0,
+                pk_alice_e.0,
+                carol_to_alice_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+            )
             .unwrap();
+            let (leg_enc_2, _) = leg_2
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
 
-        // Create Alice's account
-        let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.balance = 1000;
+            // Create Alice's account
+            let alice_id = PallasFr::rand(&mut rng);
+            let (mut alice_account, _, _, _) = new_account(
+                &mut rng,
+                asset_id,
+                sk_alice.clone(),
+                sk_alice_e.clone(),
+                alice_id,
+            );
+            alice_account.without_sk.balance = 1000;
 
-        // Alice sends and receives
-        let mut builder = AccountStateBuilder::init(alice_account.clone());
-        builder.update_for_send(alice_to_bob_amount).unwrap();
-        builder.update_for_receive();
-        let alice_updated = builder.finalize();
-        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+            // Alice sends and receives
+            let mut builder = AccountStateBuilder::init(alice_account.clone());
+            builder.update_for_send(alice_to_bob_amount).unwrap();
+            builder.update_for_receive();
+            let alice_updated = builder.finalize();
+            let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
 
-        // Create account tree with both alice_account and alice_updated commitments.
-        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
-        let account_comms = vec![alice_account_comm.0, alice_updated_comm.0];
-        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &account_comms,
-            &account_tree_params,
-            Some(6),
-        );
-        let account_tree_root = account_tree.root_node();
+            // Create account tree with both alice_account and alice_updated commitments.
+            let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+            let account_comms = vec![alice_account_comm.0, alice_updated_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &account_comms,
+                &account_tree_params,
+                Some(6),
+            );
+            let account_tree_root = account_tree.root_node();
 
-        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-        let nonce = b"alice_nonce";
+            let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let nonce = b"alice_nonce";
 
-        // Alice creates multi-leg proof 1
-        let mut alice_builder =
-            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+            // Alice creates multi-leg proof 1
+            let mut alice_builder = AccountStateTransitionProofBuilder::<
+                L,
+                _,
+                _,
+                PallasParameters,
+                VestaParameters,
+            >::init(
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_send_affirmation(
-            alice_to_bob_amount,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_builder.add_send_affirmation(
+                alice_to_bob_amount,
+                leg_enc_1.core_and_eph_keys_for_sender(),
+            );
+            alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
 
-        let start = Instant::now();
-        let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasParams, VestaParams>(
-                &mut rng,
-                alice_leaf_path.clone(),
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-            )
-            .unwrap();
-        let proving_time_1 = start.elapsed();
+            let start = Instant::now();
+            let (alice_proof, alice_nullifier) = alice_builder
+                .finalize::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    alice_leaf_path.clone(),
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .unwrap();
+            let proving_time_1 = start.elapsed();
 
-        // Verify Alice's proof 1
-        let mut alice_verifier =
-            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
-        alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            // Verify Alice's proof 1
+            let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                alice_updated_comm,
+                alice_nullifier,
+                nonce,
+            );
+            alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
 
-        let start = Instant::now();
-        alice_verifier
-            .verify::<_, PallasParams, VestaParams>(
-                &mut rng,
-                &alice_proof,
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verification_time_1 = start.elapsed();
-        let proof_size_1 = alice_proof.compressed_size();
-        println!(
-            "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time_1, verification_time_1, proof_size_1
-        );
+            let start = Instant::now();
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verification_time_1 = start.elapsed();
+            let proof_size_1 = alice_proof.compressed_size();
+            let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                alice_updated_comm,
+                alice_nullifier,
+                nonce,
+            );
+            alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let start = Instant::now();
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let verification_time_1_rmc = start.elapsed();
+            println!(
+                "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                proving_time_1, verification_time_1, verification_time_1_rmc, proof_size_1
+            );
 
-        // Get path for alice_updated (at index 1 in the tree)
-        let alice_leaf_path_2 = account_tree.get_path_to_leaf_for_proof(1, 0).unwrap();
-        let nonce_2 = b"alice_nonce_2";
+            // Get path for alice_updated (at index 1 in the tree)
+            let alice_leaf_path_2 = account_tree.get_path_to_leaf_for_proof(1, 0).unwrap();
+            let nonce_2 = b"alice_nonce_2";
 
-        // Alice does proof 2: claim received amount and update sender counter
-        let mut builder = AccountStateBuilder::init(alice_updated.clone());
-        builder
-            .update_for_claiming_received(carol_to_alice_amount)
-            .unwrap();
-        builder.update_for_decreasing_counter(None).unwrap();
-        let alice_final = builder.finalize();
-        let alice_final_comm = alice_final.commit(account_comm_key.clone()).unwrap();
+            // Alice does proof 2: claim received amount and update sender counter
+            let mut builder = AccountStateBuilder::init(alice_updated.clone());
+            builder
+                .update_for_claiming_received(carol_to_alice_amount)
+                .unwrap();
+            builder.update_for_decreasing_counter(None).unwrap();
+            let alice_final = builder.finalize();
+            let alice_final_comm = alice_final.commit(account_comm_key.clone()).unwrap();
 
-        let mut alice_builder_2 =
-            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+            let mut alice_builder_2 = AccountStateTransitionProofBuilder::<
+                L,
+                _,
+                _,
+                PallasParameters,
+                VestaParameters,
+            >::init(
                 alice_updated.clone(),
                 alice_final.clone(),
                 alice_final_comm,
                 nonce_2,
             );
-        alice_builder_2.add_claim_received(
-            carol_to_alice_amount,
-            leg_enc_2.core_and_eph_keys_for_receiver(),
-        );
-        alice_builder_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_builder_2.add_claim_received(
+                carol_to_alice_amount,
+                leg_enc_2.core_and_eph_keys_for_receiver(),
+            );
+            alice_builder_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
 
-        let start = Instant::now();
-        let (alice_proof_2, alice_nullifier_2) = alice_builder_2
-            .finalize::<_, PallasParams, VestaParams>(
-                &mut rng,
-                alice_leaf_path_2.clone(),
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-            )
-            .unwrap();
-        let proving_time_2 = start.elapsed();
+            let start = Instant::now();
+            let (alice_proof_2, alice_nullifier_2) = alice_builder_2
+                .finalize::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    alice_leaf_path_2.clone(),
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .unwrap();
+            let proving_time_2 = start.elapsed();
 
-        // Verify Alice's proof 2
-        let mut alice_verifier_2 =
-            AccountStateTransitionProofVerifier::init(alice_final_comm, alice_nullifier_2, nonce_2);
-        alice_verifier_2.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
-        alice_verifier_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
+            // Verify Alice's proof 2
+            let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+                alice_final_comm,
+                alice_nullifier_2,
+                nonce_2,
+            );
+            alice_verifier_2.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_verifier_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
 
-        let start = Instant::now();
-        alice_verifier_2
-            .verify::<_, PallasParams, VestaParams>(
-                &mut rng,
-                &alice_proof_2,
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verification_time_2 = start.elapsed();
-        let proof_size_2 = alice_proof_2.compressed_size();
-        println!(
-            "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time_2, verification_time_2, proof_size_2
-        );
+            let start = Instant::now();
+            alice_verifier_2
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof_2,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verification_time_2 = start.elapsed();
+            let proof_size_2 = alice_proof_2.compressed_size();
+            let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+                alice_final_comm,
+                alice_nullifier_2,
+                nonce_2,
+            );
+            alice_verifier_2.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_verifier_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let start = Instant::now();
+            alice_verifier_2
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof_2,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let verification_time_2_rmc = start.elapsed();
+            println!(
+                "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                proving_time_2, verification_time_2, verification_time_2_rmc, proof_size_2
+            );
+        };
+
+        test_with_config(false);
+
+        test_with_config(true);
     }
 
     #[test]
@@ -1493,7 +1689,7 @@ mod tests {
         let alice_id = PallasFr::rand(&mut rng);
         let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.balance = 1000;
+        alice_account.without_sk.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &alice_account,
@@ -1571,9 +1767,31 @@ mod tests {
             .unwrap();
         let verification_time = start.elapsed();
         let proof_size = alice_proof.compressed_size();
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
+        alice_verifier.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+        alice_verifier.add_sender_reverse(leg_enc_3.core_and_eph_keys_for_sender());
+        alice_verifier.add_receiver_reverse(leg_enc_4.core_and_eph_keys_for_receiver());
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+        let start = Instant::now();
+        alice_verifier
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                &alice_proof,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                Some((&mut rmc_1, &mut rmc_0)),
+            )
+            .unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
+        let verification_time_rmc = start.elapsed();
         println!(
-            "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time, verification_time, proof_size
+            "Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+            proving_time, verification_time, verification_time_rmc, proof_size
         );
     }
 
@@ -1597,117 +1815,164 @@ mod tests {
         let alice_to_bob_amount = 200u64;
         let carol_to_alice_amount = 300u64;
 
-        // Create legs
-        let leg_1 = Leg::new(
-            pk_alice_e.0,
-            pk_bob_e.0,
-            alice_to_bob_amount,
-            asset_id,
-            vec![pk_auditor_e.0],
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let (leg_enc_1, _) = leg_1
-            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+        let mut test_with_config = |reveal_asset_id: bool| {
+            let conf = LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id,
+            };
+
+            // Create legs
+            let leg_1 = Leg::new(
+                pk_alice_e.0,
+                pk_bob_e.0,
+                alice_to_bob_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc_1, _) = leg_1
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
+
+            let leg_2 = Leg::new(
+                pk_carol_e.0,
+                pk_alice_e.0,
+                carol_to_alice_amount,
+                asset_id,
+                vec![pk_auditor_e.0],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc_2, _) = leg_2
+                .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                .unwrap();
+
+            // Create Alice's account
+            let alice_id = PallasFr::rand(&mut rng);
+            let (mut alice_account, _, _, _) = new_account(
+                &mut rng,
+                asset_id,
+                sk_alice.clone(),
+                sk_alice_e.clone(),
+                alice_id,
+            );
+            alice_account.without_sk.balance = 1000;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &alice_account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
             .unwrap();
 
-        let leg_2 = Leg::new(
-            pk_carol_e.0,
-            pk_alice_e.0,
-            carol_to_alice_amount,
-            asset_id,
-            vec![pk_auditor_e.0],
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let (leg_enc_2, _) = leg_2
-            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
-            .unwrap();
+            let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let account_tree_root = account_tree.root_node();
+            let nonce = b"alice_nonce_irreversible";
 
-        // Create Alice's account
-        let alice_id = PallasFr::rand(&mut rng);
-        let (mut alice_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.balance = 1000;
+            // Alice does 2 irreversible operations in one proof
+            let mut builder = AccountStateBuilder::init(alice_account.clone());
+            builder
+                .update_for_irreversible_send(alice_to_bob_amount)
+                .unwrap();
+            builder
+                .update_for_irreversible_receive(carol_to_alice_amount)
+                .unwrap();
+            let alice_updated = builder.finalize();
+            let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
 
-        let account_tree = get_tree_with_account_comm::<L, _>(
-            &alice_account,
-            account_comm_key.clone(),
-            &account_tree_params,
-            6,
-        )
-        .unwrap();
-
-        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-        let account_tree_root = account_tree.root_node();
-        let nonce = b"alice_nonce_irreversible";
-
-        // Alice does 2 irreversible operations in one proof
-        let mut builder = AccountStateBuilder::init(alice_account.clone());
-        builder
-            .update_for_irreversible_send(alice_to_bob_amount)
-            .unwrap();
-        builder
-            .update_for_irreversible_receive(carol_to_alice_amount)
-            .unwrap();
-        let alice_updated = builder.finalize();
-        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
-
-        let mut alice_builder =
-            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+            let mut alice_builder = AccountStateTransitionProofBuilder::<
+                L,
+                _,
+                _,
+                PallasParameters,
+                VestaParameters,
+            >::init(
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,
                 nonce,
             );
-        alice_builder.add_irreversible_send(
-            alice_to_bob_amount,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_irreversible_receive(
-            carol_to_alice_amount,
-            leg_enc_2.core_and_eph_keys_for_receiver(),
-        );
+            alice_builder.add_irreversible_send(
+                alice_to_bob_amount,
+                leg_enc_1.core_and_eph_keys_for_sender(),
+            );
+            alice_builder.add_irreversible_receive(
+                carol_to_alice_amount,
+                leg_enc_2.core_and_eph_keys_for_receiver(),
+            );
 
-        let start = Instant::now();
-        let (alice_proof, alice_nullifier) = alice_builder
-            .finalize::<_, PallasParams, VestaParams>(
-                &mut rng,
-                alice_leaf_path.clone(),
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-            )
-            .unwrap();
-        let proving_time = start.elapsed();
+            let start = Instant::now();
+            let (alice_proof, alice_nullifier) = alice_builder
+                .finalize::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    alice_leaf_path.clone(),
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .unwrap();
+            let proving_time = start.elapsed();
 
-        // Verify Alice's proof
-        let mut alice_verifier =
-            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
-        alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
-        alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
+            // Verify Alice's proof
+            let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                alice_updated_comm,
+                alice_nullifier,
+                nonce,
+            );
+            alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
 
-        let start = Instant::now();
-        alice_verifier
-            .verify::<_, PallasParams, VestaParams>(
-                &mut rng,
-                &alice_proof,
-                &account_tree_root,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verification_time = start.elapsed();
-        let proof_size = alice_proof.compressed_size();
-        println!(
-            "Proving time = {:?}, verification time = {:?}, proof size = {} bytes",
-            proving_time, verification_time, proof_size
-        );
+            let start = Instant::now();
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verification_time = start.elapsed();
+            let proof_size = alice_proof.compressed_size();
+            let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                alice_updated_comm,
+                alice_nullifier,
+                nonce,
+            );
+            alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
+            let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let start = Instant::now();
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    Some((&mut rmc_1, &mut rmc_0)),
+                )
+                .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let verification_time_rmc = start.elapsed();
+            println!(
+                "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                proving_time, verification_time, verification_time_rmc, proof_size
+            );
+        };
+
+        test_with_config(false);
+
+        test_with_config(true);
     }
 
     #[test]
@@ -1800,11 +2065,11 @@ mod tests {
             sk_alice_e.clone(),
             alice_id,
         );
-        alice_account_asset1.balance = 1000;
+        alice_account_asset1.without_sk.balance = 1000;
 
         let (mut alice_account_asset2, _, _, _) =
             new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id);
-        alice_account_asset2.balance = 2000;
+        alice_account_asset2.without_sk.balance = 2000;
 
         // Commit both Alice accounts and create a single account tree with both
         let alice_comm_asset1 = alice_account_asset1
@@ -2000,14 +2265,80 @@ mod tests {
 
         let verification_time = start.elapsed();
 
+        // RMC verification
+        let transcript_even = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let transcript_odd = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut even_verifier = Verifier::new(transcript_even);
+        let mut odd_verifier = Verifier::new(transcript_odd);
+        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+        let start = Instant::now();
+        let mut alice_verifier_1 = AccountStateTransitionProofVerifier::init(
+            alice_updated_comm_asset1,
+            alice_nullifier_1,
+            nonce_alice_1,
+        );
+        alice_verifier_1.add_send_affirmation(leg_enc_1_asset1.core_and_eph_keys_for_sender());
+        alice_verifier_1.add_receive_affirmation(leg_enc_2_asset1.core_and_eph_keys_for_receiver());
+        alice_verifier_1
+            .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
+                &alice_proof_asset1,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &mut even_verifier,
+                &mut odd_verifier,
+                Some(&mut rmc_1),
+            )
+            .unwrap();
+        let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
+            alice_updated_comm_asset2,
+            alice_nullifier_2,
+            nonce_alice_2,
+        );
+        alice_verifier_2.add_send_affirmation((
+            leg_enc_1_asset2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_1_asset2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+        ));
+        alice_verifier_2.add_receive_affirmation((
+            leg_enc_2_asset2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_2_asset2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+        ));
+        alice_verifier_2
+            .enforce_constraints_and_verify_only_sigma_protocols::<PallasParams, VestaParams>(
+                &alice_proof_asset2,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &mut even_verifier,
+                &mut odd_verifier,
+                Some(&mut rmc_1),
+            )
+            .unwrap();
+        verify_with_rng(
+            even_verifier,
+            odd_verifier,
+            &even_bp,
+            &odd_bp,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.odd_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+            &mut rng,
+        )
+        .unwrap();
+        rmc_1.verify().unwrap();
+        let verification_time_rmc = start.elapsed();
+
         let total_proof_size = alice_proof_asset1.compressed_size()
             + alice_proof_asset2.compressed_size()
             + even_bp.compressed_size()
             + odd_bp.compressed_size();
 
         println!(
-            "Proving time = {:?}, verification time = {:?}, total size = {} bytes",
-            proving_time, verification_time, total_proof_size
+            "Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, total size = {} bytes",
+            proving_time, verification_time, verification_time_rmc, total_proof_size
         );
     }
 
@@ -2154,7 +2485,7 @@ mod tests {
         let alice_id = PallasFr::rand(&mut rng);
         let (mut alice_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.balance = 1000;
+        alice_account.without_sk.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &alice_account,
@@ -2259,7 +2590,7 @@ mod tests {
                 Some((&mut rmc_1, &mut rmc_0)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let verification_time_rmc = start.elapsed();
 
         let proof_size = alice_proof.compressed_size();

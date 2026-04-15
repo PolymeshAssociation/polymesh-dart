@@ -365,7 +365,7 @@ fn leg_verification() {
             )
             .unwrap();
 
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let verifier_time_rmc = clock.elapsed();
 
         let (p1, p2, a, b) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
@@ -668,7 +668,7 @@ fn batch_leg_verification() {
             &mut rmc_1,
         )
         .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let batch_verifier_rmc_time = clock.elapsed();
 
         println!(
@@ -930,7 +930,7 @@ fn combined_leg_verification() {
             &mut rmc_1,
         )
         .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let rmc_verification_time = clock.elapsed();
 
         println!(
@@ -1158,7 +1158,7 @@ fn settlement_verification() {
                 Some((&mut rmc_1, &mut rmc_0)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let verifying_time_rmc = clock.elapsed();
 
         println!(
@@ -1323,7 +1323,7 @@ fn settlement_verification() {
                 Some((&mut rmc_1, &mut rmc_0)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let verifying_time_rmc = clock.elapsed();
 
         println!(
@@ -1478,7 +1478,7 @@ fn settlement_verification() {
                 Some((&mut rmc_1, &mut rmc_0)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
         let verifying_time_rmc = clock.elapsed();
 
         println!(
@@ -1726,7 +1726,7 @@ fn batch_settlement_verification() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let rmc_time = clock.elapsed();
 
     println!(
@@ -1872,7 +1872,7 @@ fn large_settlement_verification() {
         )
         .unwrap();
 
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let verifying_time = clock.elapsed();
 
     println!(
@@ -2126,7 +2126,7 @@ fn combined_settlement_verification() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let rmc_verification_time = rmc_clock.elapsed();
 
     println!(

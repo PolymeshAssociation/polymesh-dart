@@ -25,8 +25,8 @@ ark-dlog-gadget = { package = "ark-dlog-gadget", git = "https://github.com/Polym
 
 #dock_crypto_utils = { path = "../crypto/utils" }
 #schnorr_pok = { path = "../crypto/schnorr_pok" }
-dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto", branch = "main" }
-schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = "main" }
+dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto", branch = "patch29" }
+schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = "patch29" }
 
 # Polymesh changes.
 #ark-serialize = { path = "../arkworks-algebra/serialize" }

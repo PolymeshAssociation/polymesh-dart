@@ -268,7 +268,7 @@ mod tests {
                 )
                 .unwrap();
 
-            assert!(rmc.verify());
+            rmc.verify().unwrap();
             let verifier_time_rmc = clock.elapsed();
 
             log::info!("proof size = {}", proof.compressed_size());

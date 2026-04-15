@@ -3,7 +3,7 @@ use scale_info::TypeInfo;
 
 use super::{
     AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
-    dart_gens,
+    dart_gens, process_result_and_rmc,
 };
 use crate::{PallasA, PallasScalar, WrappedCanonical};
 use ark_ec::AffineRepr;
@@ -83,8 +83,7 @@ impl KeyDistributionProof {
         let gens = dart_gens();
 
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-
-        proof.verify(
+        let result = proof.verify(
             rng,
             &pk,
             &rec_pks,
@@ -94,8 +93,9 @@ impl KeyDistributionProof {
             tree_params.even_parameters.pc_gens(),
             tree_params.even_parameters.bp_gens(),
             Some(&mut rmc),
-        )?;
-        Ok(())
+        );
+
+        process_result_and_rmc(result, rmc)
     }
 
     /// Decrypt the distributed secret key as the recipient at `recipient_index`.

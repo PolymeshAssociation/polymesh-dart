@@ -22,7 +22,7 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use super::WrappedCanonical;
+use super::{WrappedCanonical, process_result_and_rmc};
 use crate::curve_tree::*;
 use crate::*;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -937,24 +937,29 @@ impl<
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        proof.verify(
-            rng,
-            leg_enc.clone(),
-            &root,
-            public_enc_keys,
-            ctx,
-            C::parameters(),
-            asset_comm_params,
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-            rmc,
-        )?;
-        if !even_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        if !odd_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
+        proof
+            .verify(
+                rng,
+                leg_enc.clone(),
+                &root,
+                public_enc_keys,
+                ctx,
+                C::parameters(),
+                asset_comm_params,
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+                rmc,
+            )
+            .map_err(|e| {
+                even_rmc.cancel();
+                odd_rmc.cancel();
+                e
+            })?;
+        even_rmc.verify().map_err(|_| {
+            odd_rmc.cancel();
+            Error::RMCVerifyError
+        })?;
+        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
         Ok(())
     }
 
@@ -1088,7 +1093,7 @@ impl SettlementLegProofRevealedAssetId {
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
 
-        proof.verify(
+        let result = proof.verify(
             rng,
             leg_enc,
             enc_keys,
@@ -1100,11 +1105,9 @@ impl SettlementLegProofRevealedAssetId {
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             Some(&mut rmc),
-        )?;
-        if !rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        Ok(())
+        );
+
+        process_result_and_rmc(result, rmc)
     }
 
     pub(crate) fn batched_verify<R: RngCore + CryptoRng>(

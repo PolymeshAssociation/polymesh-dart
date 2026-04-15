@@ -497,7 +497,7 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
             )
             .unwrap();
 
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }
@@ -603,7 +603,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             _sk_alice_e.clone(),
             alice_id,
         );
-        account.balance = 500;
+        account.without_sk.balance = 500;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         alice_account_comms.push(comm.0);
         alice_accounts.push(account);
@@ -622,7 +622,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             _sk_bob_e.clone(),
             bob_id,
         );
-        account.balance = 300;
+        account.without_sk.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         bob_account_comms.push(comm.0);
         bob_accounts.push(account);
@@ -1036,7 +1036,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             )
             .unwrap();
 
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }

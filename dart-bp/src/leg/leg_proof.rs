@@ -2036,13 +2036,3 @@ pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
     }
     Ok(())
 }
-
-/// Proof of knowledge of `pk` and `r_i` in `(pk * r_1, pk * r_2, pk * r_3, pk * r_4)` without revealing `pk`
-/// and ensuring `pk` is the correct public key for the asset auditor/mediator
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RespEphemeralPublicKey<G: SWCurveConfig> {
-    pub r_1: Partial2PokPedersenCommitment<Affine<G>>,
-    pub r_2: PartialPokDiscreteLog<Affine<G>>,
-    pub r_3: PartialPokDiscreteLog<Affine<G>>,
-    pub r_4: PartialPokDiscreteLog<Affine<G>>,
-}
