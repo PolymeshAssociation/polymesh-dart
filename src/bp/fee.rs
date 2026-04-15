@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use ark_ec::short_weierstrass::Affine;
 use ark_std::vec::Vec;
-use bulletproofs::r1cs::VerificationTuple;
+use bulletproofs::r1cs::{ConstraintSystem, VerificationTuple};
 use curve_tree_relations::curve_tree::Root;
 
 use bounded_collections::BoundedVec;
@@ -19,10 +19,15 @@ use super::*;
 use crate::*;
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use polymesh_dart_bp::fee_account as bp_fee_account;
-use polymesh_dart_bp::util::batch_verify_bp_with_rng;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_bp::fee_account::FEE_REG_TXN_LABEL;
+use polymesh_dart_bp::util::{
+    batch_verify_bp_with_rng, get_verification_tuples_with_rng, handle_verification_tuples,
+};
+use polymesh_dart_bp::{TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
 
 type BPFeeAccountState = bp_fee_account::FeeAccountState<PallasA>;
+type BPFeeAccountStateWithoutSk = bp_fee_account::FeeAccountStateWithoutSk<PallasA>;
 type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
 
 pub trait FeeAccountStateUpdate {
@@ -50,7 +55,7 @@ impl FeeAccountState {
         asset_id: AssetId,
         balance: Balance,
     ) -> Result<Self, Error> {
-        let bp_state = BPFeeAccountState::new(rng, account.secret.0.0, balance, asset_id)?;
+        let bp_state = BPFeeAccountState::new(rng, account.secret.0.0, balance, asset_id);
         bp_state.try_into()
     }
 
@@ -60,12 +65,14 @@ impl FeeAccountState {
     ) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
         let state = BPFeeAccountState {
             sk: account.secret.0.0,
-            balance: self.balance,
-            asset_id: self.asset_id,
-            initial_rho: self.initial_rho.decode()?,
-            initial_randomness: self.initial_randomness.decode()?,
-            rho: self.rho.decode()?,
-            randomness: self.randomness.decode()?,
+            without_sk: BPFeeAccountStateWithoutSk {
+                balance: self.balance,
+                asset_id: self.asset_id,
+                initial_rho: self.initial_rho.decode()?,
+                initial_randomness: self.initial_randomness.decode()?,
+                rho: self.rho.decode()?,
+                randomness: self.randomness.decode()?,
+            },
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
@@ -82,12 +89,44 @@ impl FeeAccountState {
         let nullifier = (account_comm_key.rho_gen() * rho).into();
         FeeAccountStateNullifier::from_affine(nullifier)
     }
+
+    pub fn bp_state_without_sk(&self) -> Result<BPFeeAccountStateWithoutSk, Error> {
+        Ok(BPFeeAccountStateWithoutSk {
+            balance: self.balance,
+            asset_id: self.asset_id,
+            initial_rho: self.initial_rho.decode()?,
+            initial_randomness: self.initial_randomness.decode()?,
+            rho: self.rho.decode()?,
+            randomness: self.randomness.decode()?,
+        })
+    }
+
+    pub fn commitment_without_sk(&self) -> Result<PallasA, Error> {
+        let without_sk = self.bp_state_without_sk()?;
+        let comm = without_sk.comm(dart_gens().account_comm_key())?;
+        Ok(comm.into_affine())
+    }
 }
 
 impl TryFrom<BPFeeAccountState> for FeeAccountState {
     type Error = Error;
 
     fn try_from(state: BPFeeAccountState) -> Result<Self, Self::Error> {
+        Ok(Self {
+            balance: state.without_sk.balance,
+            asset_id: state.without_sk.asset_id,
+            initial_rho: WrappedCanonical::wrap(&state.without_sk.initial_rho)?,
+            initial_randomness: WrappedCanonical::wrap(&state.without_sk.initial_randomness)?,
+            rho: WrappedCanonical::wrap(&state.without_sk.rho)?,
+            randomness: WrappedCanonical::wrap(&state.without_sk.randomness)?,
+        })
+    }
+}
+
+impl TryFrom<BPFeeAccountStateWithoutSk> for FeeAccountState {
+    type Error = Error;
+
+    fn try_from(state: BPFeeAccountStateWithoutSk) -> Result<Self, Self::Error> {
         Ok(Self {
             balance: state.balance,
             asset_id: state.asset_id,
@@ -305,7 +344,7 @@ pub struct FeeAccountRegistrationProof {
     pub amount: Balance,
     pub account_state_commitment: FeeAccountStateCommitment,
 
-    inner: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
+    pub(crate) inner: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
 }
 
 impl FeeAccountRegistrationProof {
@@ -352,6 +391,45 @@ impl FeeAccountRegistrationProof {
             &self.account_state_commitment.as_commitment()?,
             identity,
             dart_gens().account_comm_key(),
+            None,
+        )?;
+        Ok(())
+    }
+
+    pub fn verify_split(&self, identity: &[u8]) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        let pk = self.account.get_affine()?;
+        let commitment = self.account_state_commitment.as_commitment()?;
+        let gens = dart_gens();
+        let comm_key = gens.account_comm_key();
+        let sk_gen = comm_key.sk_gen();
+
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        let reduced_acc_comm = proof.partial.challenge_contribution(
+            &pk,
+            self.amount,
+            self.asset_id,
+            &commitment,
+            identity,
+            comm_key.clone(),
+            &mut transcript,
+        )?;
+        let challenge_h_v = transcript.challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
+
+        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, identity)?;
+
+        proof
+            .auth_proof
+            .verify(pk, &ledger_nonce_v, &sk_gen, None)?;
+
+        let challenge_h_final_v =
+            append_auth_proof_and_get_challenge(&proof.auth_proof, &mut transcript)?;
+
+        proof.partial.verify_with_given_transcript(
+            reduced_acc_comm,
+            comm_key,
+            &challenge_h_final_v,
+            None,
         )?;
         Ok(())
     }
@@ -481,7 +559,7 @@ pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    inner: WrappedCanonical<BPFeeAccountTopupTxnProof<C>>,
+    pub(crate) inner: WrappedCanonical<BPFeeAccountTopupTxnProof<C>>,
 }
 
 impl<
@@ -525,7 +603,7 @@ impl<
         )?;
         Ok(Self {
             account: pk,
-            asset_id: state_change.new_state.asset_id,
+            asset_id: state_change.new_state.without_sk.asset_id,
             amount,
             updated_account_state_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
@@ -558,13 +636,87 @@ impl<
             rng,
             rmc,
         )?;
-        if !even_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        if !odd_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
+        even_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
+        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
         Ok(())
+    }
+
+    pub fn verify_split<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
+    ) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        let pk = self.account.get_affine()?;
+        let updated_comm = self.updated_account_state_commitment.as_commitment()?;
+        let nullifier = self.nullifier.get_affine()?;
+        let gens = dart_gens();
+        let comm_key = gens.account_comm_key();
+        let sk_gen = comm_key.sk_gen();
+
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let result = (|| -> Result<(), Error> {
+            let (mut even_verifier, odd_verifier) = proof
+                .partial
+                .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                    pk,
+                    self.asset_id,
+                    self.amount,
+                    updated_comm,
+                    nullifier,
+                    root,
+                    ctx,
+                    C::parameters(),
+                    comm_key.clone(),
+                )?;
+
+            let challenge_h_v = even_verifier
+                .transcript()
+                .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
+
+            let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx)?;
+
+            proof
+                .auth_proof
+                .verify(pk, &ledger_nonce_v, &sk_gen, None)?;
+
+            let challenge_h_final_v: C::F0 =
+                append_auth_proof_and_get_challenge(&proof.auth_proof, even_verifier.transcript())?;
+
+            proof
+                .partial
+                .verify_with_challenge::<C::DLogParams0, C::DLogParams1>(
+                    pk,
+                    self.asset_id,
+                    self.amount,
+                    updated_comm,
+                    nullifier,
+                    C::parameters(),
+                    comm_key,
+                    &challenge_h_final_v,
+                    Some(&mut even_rmc),
+                )?;
+
+            let r1cs = proof
+                .partial
+                .r1cs_proof
+                .as_ref()
+                .ok_or(Error::RMCVerifyError)?;
+            let (even_tuple, odd_tuple) = get_verification_tuples_with_rng(
+                even_verifier,
+                odd_verifier,
+                &r1cs.even_proof,
+                &r1cs.odd_proof,
+                rng,
+            )?;
+            let rmc = Some((&mut even_rmc, &mut odd_rmc));
+            handle_verification_tuples(even_tuple, odd_tuple, C::parameters(), rmc)?;
+            Ok(())
+        })();
+
+        process_result_and_rmcs(result, even_rmc, odd_rmc)
     }
 
     /// Verify this fee account topup proof inside a batch of proofs.
@@ -837,6 +989,51 @@ impl<
         Ok(())
     }
 
+    /// Verify the batched fee account topup split proofs.
+    #[cfg(feature = "parallel")]
+    pub fn verify_split<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        tree_roots: &(
+             impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C> + Send + Sync
+         ),
+    ) -> Result<(), Error> {
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup split proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+        self.proofs.par_iter().try_for_each_init(
+            || rng.clone(),
+            |rng, proof| proof.verify_split(rng, ctx, &root),
+        )?;
+        Ok(())
+    }
+
+    /// Verify the batched fee account topup split proofs.
+    #[cfg(not(feature = "parallel"))]
+    pub fn verify_split<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        ctx: &[u8],
+        tree_roots: &impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
+    ) -> Result<(), Error> {
+        let root = tree_roots
+            .get_block_root(self.root_block.into())
+            .ok_or_else(|| {
+                log::error!("Invalid root for fee account topup split proof");
+                Error::CurveTreeRootNotFound
+            })?;
+        let root = root.root_node()?;
+        for proof in &self.proofs {
+            proof.verify_split(rng, ctx, &root)?;
+        }
+        Ok(())
+    }
+
     /// Get the number of proofs in the batch.
     pub fn len(&self) -> usize {
         self.proofs.len()
@@ -914,7 +1111,7 @@ impl<
             dart_gens().account_comm_key(),
         )?;
         Ok(Self {
-            asset_id: state_change.new_state.asset_id,
+            asset_id: state_change.new_state.without_sk.asset_id,
             amount,
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment,
@@ -954,12 +1151,8 @@ impl<
             rng,
             rmc,
         )?;
-        if !even_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        if !odd_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
+        even_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
+        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
         Ok(())
     }
 }

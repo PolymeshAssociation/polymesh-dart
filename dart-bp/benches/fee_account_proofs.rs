@@ -35,7 +35,7 @@ fn new_fee_account<R: CryptoRngCore>(
     sk: SigKey<PallasA>,
     balance: u64,
 ) -> FeeAccountState<PallasA> {
-    FeeAccountState::new(rng, sk.0, balance, asset_id).unwrap()
+    FeeAccountState::new(rng, sk.0, balance, asset_id)
 }
 
 fn create_shared_setup() -> (
@@ -215,7 +215,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
                     Some((&mut rmc_0, &mut rmc_1)),
                 )
                 .unwrap();
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }
@@ -345,7 +345,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
                     Some((&mut rmc_0, &mut rmc_1)),
                 )
                 .unwrap();
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }

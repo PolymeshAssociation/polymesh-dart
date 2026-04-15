@@ -1,7 +1,8 @@
 use crate::TXN_CHALLENGE_LABEL;
 use crate::account::state::AccountStateCommitment;
-use crate::account::{AccountCommitmentKeyTrait, AccountState};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateWithoutSk};
 use crate::add_to_transcript;
+use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
@@ -47,6 +48,15 @@ pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
 pub const ENC_PK_LABEL: &'static [u8; 6] = b"pk_enc";
 
+// A non-split (single prover) proof proves that the account commitment is correctly formed and that prover knows the
+// affirmation and encryption secret keys, nullifier secret key, rho, commitment randomness, i.e. knowledge of opening
+// of a commitment of the form `C = G_{aff} * sk + G_{enc} * sk_enc + G_i * rho + G_j * s + ....`
+//
+// A split proof is created by 2 provers, one prover (more secure device like ledger) knows the secret keys (might know other witnesses)
+// and second prover does not know secret keys but knows other witnesses. The split proof is then combination of 2 proofs, first prover's
+// proof of knowledge of secret keys in the public keys and the second prover's proof of knowledge of other witnesses in `C' = G_i * rho + G_j * s + ....`
+// Now the verifier can check that `C = C' + pk_aff + pk_enc` as `pk_aff(=G_{aff} * sk)` and `pk_enc(=G_{enc} * sk_enc)` are public
+
 /// Proof of encrypted randomness. The randomness is broken into `NUM_CHUNKS` chunks of `CHUNK_BITS` bits each
 // TODO: Check if i can use Batch Schnorr protocol from Fig. 2 of [this paper](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf).
 // The problem is that response of all chunks is aggregated in one value so tying it with BP is not straightforward. So need to check if aggregating
@@ -80,10 +90,12 @@ pub struct EncryptionForRegistration<
     pub encrypted_rho: EncryptedScalar<G, CHUNK_BITS, NUM_CHUNKS>,
 }
 
-/// This is the proof for user registering its (signing) public key for an asset. Report section 5.1.3, called "Account Registration"
-/// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+pub struct RegTxnWithoutSkProof<
+    G: AffineRepr,
+    const CHUNK_BITS: usize = 48,
+    const NUM_CHUNKS: usize = 6,
+> {
     pub t_comm: G,
     pub resp_comm: SchnorrResponse<G>,
     /// `N = current_rho_gen * rho`, called the "initial nullifier".
@@ -94,19 +106,65 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
     pub comm_rho_bp: G,
     pub t_comm_rho_bp: G,
     pub resp_comm_rho_bp: PartialSchnorrResponse<G>,
-    pub resp_pk_aff: PokDiscreteLog<G>,
-    pub resp_pk_enc: PokDiscreteLog<G>,
     pub proof: Option<R1CSProof<G>>,
     /// Present only when `T` (trusted party for force transfer) is provided for the registration
     pub encryption_for_T: Option<EncryptionForRegistration<G, CHUNK_BITS, NUM_CHUNKS>>,
 }
 
-const REG_TXN_LABEL: &'static [u8; 12] = b"registration";
+/// This is the proof for user registering its (signing) public key for an asset. Report section 5.1.3, called "Account Registration"
+/// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+    pub partial: RegTxnWithoutSkProof<G, { CHUNK_BITS }, { NUM_CHUNKS }>,
+    pub auth_proof: AuthProofOnlySks<G>,
+}
+
+/// Prover-side protocol state for the partial (non-auth) portion of RegTxnProof.
+/// Holds Schnorr commitments, protocol objects, and witnesses needed for `gen_proof`.
+pub struct RegTxnWithoutSkProtocol<
+    G: AffineRepr,
+    const CHUNK_BITS: usize = 48,
+    const NUM_CHUNKS: usize = 6,
+> {
+    comm_protocol: SchnorrCommitment<G>,
+    init_null_protocol: PokDiscreteLogProtocol<G>,
+    t_comm_rho_bp: SchnorrCommitment<G>,
+    initial_nullifier: G,
+    comm_rho_bp: G,
+    rho: G::ScalarField,
+    current_rho: G::ScalarField,
+    randomness: G::ScalarField,
+    current_randomness: G::ScalarField,
+    com_rho_bp_blinding: G::ScalarField,
+    rho_randomness: G::ScalarField,
+    // Encryption state (present only when T is provided)
+    enc_state: Option<RegTxnEncryptionProtocolState<G, CHUNK_BITS, NUM_CHUNKS>>,
+}
+
+/// Holds the encryption-related protocol state for registration when T is provided.
+struct RegTxnEncryptionProtocolState<
+    G: AffineRepr,
+    const CHUNK_BITS: usize,
+    const NUM_CHUNKS: usize,
+> {
+    s_eph_proto: Vec<PokDiscreteLogProtocol<G>>,
+    s_enc_proto: Vec<PokPedersenCommitmentProtocol<G>>,
+    s_ciphertexts: Vec<Ciphertext<G>>,
+    s_chunks: [G::ScalarField; NUM_CHUNKS],
+    rho_eph_proto: Vec<PokDiscreteLogProtocol<G>>,
+    rho_enc_proto: Vec<PokPedersenCommitmentProtocol<G>>,
+    rho_ciphertexts: Vec<Ciphertext<G>>,
+    rho_chunks: [G::ScalarField; NUM_CHUNKS],
+    t_comm_s_rho_chunks_bp: SchnorrCommitment<G>,
+    combined_s_proto: PokPedersenCommitmentProtocol<G>,
+    combined_rho_proto: PokPedersenCommitmentProtocol<G>,
+    comm_s_rho_chunks_bp: G,
+    com_s_rho_bp_blinding: G::ScalarField,
+}
 
 impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
-    RegTxnProof<G, CHUNK_BITS, NUM_CHUNKS>
+    RegTxnWithoutSkProtocol<G, CHUNK_BITS, NUM_CHUNKS>
 {
-    // ceil(MODULUS_BIT_SIZE/CHUNK_BITS) == NUM_CHUNKS
     const CHECK_CHUNK_BITS: () = assert!(
         CHUNK_BITS <= 48
             && ((<G::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize + CHUNK_BITS - 1)
@@ -114,6 +172,1013 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 == NUM_CHUNKS)
     );
 
+    /// Initialise the partial protocol. Takes `AccountStateWithoutSk` (no secret keys).
+    /// After calling this, the caller should add auth challenge contribution to the transcript
+    /// before deriving the challenge.
+    pub fn init_with_given_prover<R: CryptoRngCore>(
+        rng: &mut R,
+        pk_aff: G,
+        pk_enc: G,
+        account: &AccountStateWithoutSk<G>,
+        account_commitment: AccountStateCommitment<G>,
+        rho_randomness: G::ScalarField,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+        prover: &mut Prover<MerlinTranscript, G>,
+    ) -> Result<Self> {
+        let _ = Self::CHECK_CHUNK_BITS;
+
+        ensure_correct_registration_state_without_sk(account)?;
+        let mut transcript_ref = prover.transcript();
+        add_to_transcript!(
+            transcript_ref,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            account.asset_id,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk_aff,
+            ENC_PK_LABEL,
+            pk_enc,
+            ID_LABEL,
+            account.id
+        );
+
+        // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
+        let D = pk_aff.into_group()
+            + pk_enc.into_group()
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
+            + (account_comm_key.id_gen() * account.id);
+
+        let mut rho_blinding = G::ScalarField::rand(rng);
+        let mut rho_sq_blinding = G::ScalarField::rand(rng);
+        let mut s_blinding = G::ScalarField::rand(rng);
+        let mut s_sq_blinding = G::ScalarField::rand(rng);
+
+        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        let comm_protocol = SchnorrCommitment::new(
+            &[
+                account_comm_key.rho_gen(),
+                account_comm_key.current_rho_gen(),
+                account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
+            ],
+            vec![rho_blinding, rho_sq_blinding, s_blinding, s_sq_blinding],
+        );
+        comm_protocol.challenge_contribution(&mut transcript_ref)?;
+        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+
+        // N = current_rho_gen * rho (initial nullifier)
+        let initial_nullifier = (account_comm_key.current_rho_gen() * account.rho).into_affine();
+        let init_null_protocol = PokDiscreteLogProtocol::init(
+            account.rho,
+            rho_blinding,
+            &account_comm_key.current_rho_gen(),
+        );
+        init_null_protocol.challenge_contribution(
+            &account_comm_key.current_rho_gen(),
+            &initial_nullifier,
+            &mut transcript_ref,
+        )?;
+
+        // Encryption protocols (if T is provided)
+        let mut enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
+            let (s_chunks, s_chunks_as_u64) =
+                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
+            let encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
+                enc_gen.into_group(),
+                &s_chunks,
+            ));
+            let enc_rands = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let s_chunks_blindings = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let enc_rands_blindings = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let ciphertexts = (0..NUM_CHUNKS)
+                .map(|i| {
+                    Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen)
+                })
+                .collect::<Vec<_>>();
+
+            let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
+            let mut enc_proto = Vec::with_capacity(NUM_CHUNKS);
+            for i in 0..NUM_CHUNKS {
+                eph_proto.push(PokDiscreteLogProtocol::init(
+                    enc_rands[i],
+                    enc_rands_blindings[i],
+                    enc_key_gen,
+                ));
+                eph_proto[i].challenge_contribution(
+                    &enc_key_gen,
+                    &ciphertexts[i].eph_pk,
+                    &mut transcript_ref,
+                )?;
+                enc_proto.push(PokPedersenCommitmentProtocol::init(
+                    enc_rands[i],
+                    enc_rands_blindings[i],
+                    pk_T,
+                    s_chunks[i],
+                    s_chunks_blindings[i],
+                    enc_gen,
+                ));
+                enc_proto[i].challenge_contribution(
+                    pk_T,
+                    enc_gen,
+                    &ciphertexts[i].encrypted,
+                    &mut transcript_ref,
+                )?;
+            }
+
+            let (rho_chunks, rho_chunks_as_u64) =
+                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.rho);
+            let rho_encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
+                enc_gen.into_group(),
+                &rho_chunks,
+            ));
+            let rho_enc_rands = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let rho_chunks_blindings = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let rho_enc_rands_blindings = (0..NUM_CHUNKS)
+                .map(|_| G::ScalarField::rand(rng))
+                .collect::<Vec<_>>();
+            let rho_ciphertexts = (0..NUM_CHUNKS)
+                .map(|i| {
+                    Ciphertext::new_given_randomness(
+                        &rho_encs[i],
+                        &rho_enc_rands[i],
+                        pk_T,
+                        enc_key_gen,
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let mut rho_eph_proto = Vec::with_capacity(NUM_CHUNKS);
+            let mut rho_enc_proto = Vec::with_capacity(NUM_CHUNKS);
+            for i in 0..NUM_CHUNKS {
+                rho_eph_proto.push(PokDiscreteLogProtocol::init(
+                    rho_enc_rands[i],
+                    rho_enc_rands_blindings[i],
+                    enc_key_gen,
+                ));
+                rho_eph_proto[i].challenge_contribution(
+                    &enc_key_gen,
+                    &rho_ciphertexts[i].eph_pk,
+                    &mut transcript_ref,
+                )?;
+                rho_enc_proto.push(PokPedersenCommitmentProtocol::init(
+                    rho_enc_rands[i],
+                    rho_enc_rands_blindings[i],
+                    pk_T,
+                    rho_chunks[i],
+                    rho_chunks_blindings[i],
+                    enc_gen,
+                ));
+                rho_enc_proto[i].challenge_contribution(
+                    pk_T,
+                    enc_gen,
+                    &rho_ciphertexts[i].encrypted,
+                    &mut transcript_ref,
+                )?;
+            }
+
+            Some((
+                s_chunks,
+                s_chunks_as_u64,
+                enc_rands,
+                ciphertexts,
+                s_chunks_blindings,
+                eph_proto,
+                enc_proto,
+                rho_chunks,
+                rho_chunks_as_u64,
+                rho_enc_rands,
+                rho_ciphertexts,
+                rho_chunks_blindings,
+                rho_eph_proto,
+                rho_enc_proto,
+            ))
+        } else {
+            None
+        };
+
+        // BP commitment for rho stuff
+        let com_rho_bp_blinding = G::ScalarField::rand(rng);
+        let (comm_rho_bp, vars) = prover.commit_vec(
+            &[
+                rho_randomness,
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.current_randomness,
+            ],
+            com_rho_bp_blinding,
+            &leaf_level_bp_gens,
+        );
+        RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::enforce_constraints(
+            prover,
+            account.asset_id,
+            counter,
+            vars,
+            poseidon_config,
+        )?;
+
+        let rho_randomness_blinding = G::ScalarField::rand(rng);
+        let t_comm_rho_bp = SchnorrCommitment::new(
+            &RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::bp_gens_for_comm_rho(
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+            ),
+            vec![
+                G::ScalarField::rand(rng),
+                rho_randomness_blinding,
+                rho_blinding,
+                rho_sq_blinding,
+                s_blinding,
+                s_sq_blinding,
+            ],
+        );
+
+        // Commit to all chunks of s and rho in a single vector commitment
+        let (comm_s_rho_chunks_bp, com_s_rho_bp_blinding) = if let Some((
+            s_chunks,
+            s_chunks_as_u64,
+            _,
+            _,
+            _,
+            _,
+            _,
+            rho_chunks,
+            rho_chunks_as_u64,
+            _,
+            _,
+            _,
+            _,
+            _,
+        )) = &mut enc_prep
+        {
+            let com_s_rho_bp_blinding = G::ScalarField::rand(rng);
+            let combined_chunks: Vec<G::ScalarField> =
+                s_chunks.iter().chain(rho_chunks.iter()).copied().collect();
+            let (comm_s_rho_bp, vars) =
+                prover.commit_vec(&combined_chunks, com_s_rho_bp_blinding, &leaf_level_bp_gens);
+            for (i, var) in vars.into_iter().enumerate() {
+                if i < NUM_CHUNKS {
+                    let chunk = mem::take(&mut s_chunks_as_u64[i]);
+                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
+                } else {
+                    let chunk = mem::take(&mut rho_chunks_as_u64[i - NUM_CHUNKS]);
+                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
+                }
+            }
+            (Some(comm_s_rho_bp), Some(com_s_rho_bp_blinding))
+        } else {
+            (None, None)
+        };
+
+        let mut transcript_ref = prover.transcript();
+        t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
+
+        // Chunks commitment t-values and combined protos
+        let combined_enc_data = if let Some((
+            _,
+            _,
+            enc_rands,
+            _,
+            s_chunks_blindings,
+            _,
+            _,
+            _,
+            _,
+            rho_enc_rands,
+            _,
+            rho_chunks_blindings,
+            _,
+            _,
+        )) = &mut enc_prep
+        {
+            let mut blindings = vec![G::ScalarField::rand(rng)];
+            for i in 0..NUM_CHUNKS {
+                let b = mem::take(&mut s_chunks_blindings[i]);
+                blindings.push(b);
+            }
+            for i in 0..NUM_CHUNKS {
+                let b = mem::take(&mut rho_chunks_blindings[i]);
+                blindings.push(b);
+            }
+            let t_comm_s_rho_chunks_bp = SchnorrCommitment::new(
+                &RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::bp_gens_for_comm_s_rho_chunks(
+                    leaf_level_pc_gens,
+                    leaf_level_bp_gens,
+                ),
+                blindings,
+            );
+            t_comm_s_rho_chunks_bp.challenge_contribution(&mut transcript_ref)?;
+
+            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+            let mut combined_enc_rand =
+                inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
+            let pk_T = T.as_ref().unwrap().0;
+            let h = T.as_ref().unwrap().2;
+            let combined_s_commitment =
+                (pk_T * combined_enc_rand + h * account.randomness).into_affine();
+
+            for i in 0..NUM_CHUNKS {
+                let mut e = mem::take(&mut enc_rands[i]);
+                Zeroize::zeroize(&mut e);
+            }
+
+            let combined_s_proto = PokPedersenCommitmentProtocol::init(
+                combined_enc_rand,
+                G::ScalarField::rand(rng),
+                &pk_T,
+                account.randomness,
+                s_blinding,
+                &h,
+            );
+
+            s_blinding.zeroize();
+            s_sq_blinding.zeroize();
+            combined_enc_rand.zeroize();
+
+            combined_s_proto.challenge_contribution(
+                &pk_T,
+                &h,
+                &combined_s_commitment,
+                &mut transcript_ref,
+            )?;
+
+            let rho_powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+            let mut combined_rho_enc_rand =
+                inner_product::<G::ScalarField>(rho_enc_rands.as_slice(), &rho_powers);
+            let combined_rho_commitment =
+                (pk_T * combined_rho_enc_rand + h * account.rho).into_affine();
+
+            for i in 0..NUM_CHUNKS {
+                let mut e = mem::take(&mut rho_enc_rands[i]);
+                Zeroize::zeroize(&mut e);
+            }
+
+            let combined_rho_proto = PokPedersenCommitmentProtocol::init(
+                combined_rho_enc_rand,
+                G::ScalarField::rand(rng),
+                &pk_T,
+                account.rho,
+                rho_blinding,
+                &h,
+            );
+
+            rho_blinding.zeroize();
+            rho_sq_blinding.zeroize();
+            combined_rho_enc_rand.zeroize();
+
+            combined_rho_proto.challenge_contribution(
+                &pk_T,
+                &h,
+                &combined_rho_commitment,
+                &mut transcript_ref,
+            )?;
+
+            Some((t_comm_s_rho_chunks_bp, combined_s_proto, combined_rho_proto))
+        } else {
+            None
+        };
+
+        // Now consume enc_prep to build the encryption state
+        let enc_state = match (enc_prep, combined_enc_data) {
+            (
+                Some((
+                    s_chunks,
+                    _,
+                    _,
+                    s_ciphertexts,
+                    _,
+                    s_eph_proto,
+                    s_enc_proto,
+                    rho_chunks,
+                    _,
+                    _,
+                    rho_ciphertexts,
+                    _,
+                    rho_eph_proto,
+                    rho_enc_proto,
+                )),
+                Some((t_comm_s_rho_chunks_bp, combined_s_proto, combined_rho_proto)),
+            ) => Some(RegTxnEncryptionProtocolState {
+                s_eph_proto,
+                s_enc_proto,
+                s_ciphertexts,
+                s_chunks,
+                rho_eph_proto,
+                rho_enc_proto,
+                rho_ciphertexts,
+                rho_chunks,
+                t_comm_s_rho_chunks_bp,
+                combined_s_proto,
+                combined_rho_proto,
+                comm_s_rho_chunks_bp: comm_s_rho_chunks_bp.unwrap(),
+                com_s_rho_bp_blinding: com_s_rho_bp_blinding.unwrap(),
+            }),
+            _ => None,
+        };
+
+        Ok(Self {
+            comm_protocol,
+            init_null_protocol,
+            t_comm_rho_bp,
+            initial_nullifier,
+            comm_rho_bp,
+            rho: account.rho,
+            current_rho: account.current_rho,
+            randomness: account.randomness,
+            current_randomness: account.current_randomness,
+            com_rho_bp_blinding,
+            rho_randomness,
+            enc_state,
+        })
+    }
+
+    /// Generate the partial proof given a challenge. Consumes the protocol state.
+    pub fn gen_proof(
+        self,
+        challenge: &G::ScalarField,
+    ) -> Result<RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>> {
+        let resp_comm = self.comm_protocol.response(
+            &[
+                self.rho,
+                self.current_rho,
+                self.randomness,
+                self.current_randomness,
+            ],
+            challenge,
+        )?;
+
+        let resp_initial_nullifier = self.init_null_protocol.gen_partial_proof();
+
+        let mut wits = BTreeMap::new();
+        wits.insert(0, self.com_rho_bp_blinding);
+        wits.insert(1, self.rho_randomness);
+        let resp_comm_rho_bp = self.t_comm_rho_bp.partial_response(wits, challenge)?;
+
+        let encryption_for_T = if let Some(enc) = self.enc_state {
+            let mut resp_eph_pk = Vec::with_capacity(NUM_CHUNKS);
+            let mut resp_encrypted = Vec::with_capacity(NUM_CHUNKS);
+            for (eph, enc_p) in enc.s_eph_proto.into_iter().zip(enc.s_enc_proto.into_iter()) {
+                resp_eph_pk.push(eph.gen_proof(challenge));
+                resp_encrypted.push(enc_p.gen_partial_proof());
+            }
+            let resp_combined_s = enc.combined_s_proto.gen_partial1_proof(challenge);
+
+            let enc_rand = EncryptedScalar::<G, CHUNK_BITS, NUM_CHUNKS> {
+                ciphertexts: enc.s_ciphertexts.try_into().unwrap(),
+                resp_eph_pk: resp_eph_pk.try_into().unwrap(),
+                resp_encrypted: resp_encrypted.try_into().unwrap(),
+                resp_combined_s,
+            };
+
+            let mut rho_resp_eph_pk = Vec::with_capacity(NUM_CHUNKS);
+            let mut rho_resp_encrypted = Vec::with_capacity(NUM_CHUNKS);
+            for (eph, enc_p) in enc
+                .rho_eph_proto
+                .into_iter()
+                .zip(enc.rho_enc_proto.into_iter())
+            {
+                rho_resp_eph_pk.push(eph.gen_proof(challenge));
+                rho_resp_encrypted.push(enc_p.gen_partial_proof());
+            }
+            let resp_combined_rho = enc.combined_rho_proto.gen_partial1_proof(challenge);
+
+            let enc_rho = EncryptedScalar::<G, CHUNK_BITS, NUM_CHUNKS> {
+                ciphertexts: enc.rho_ciphertexts.try_into().unwrap(),
+                resp_eph_pk: rho_resp_eph_pk.try_into().unwrap(),
+                resp_encrypted: rho_resp_encrypted.try_into().unwrap(),
+                resp_combined_s: resp_combined_rho,
+            };
+
+            let t_comm = enc.t_comm_s_rho_chunks_bp;
+            let mut all_wits: Vec<G::ScalarField> = vec![enc.com_s_rho_bp_blinding];
+            all_wits.extend_from_slice(&enc.s_chunks);
+            all_wits.extend_from_slice(&enc.rho_chunks);
+            let resp_s_rho_chunks = t_comm.response(&all_wits, challenge)?;
+            Zeroize::zeroize(&mut all_wits);
+
+            Some(EncryptionForRegistration {
+                comm_s_rho_chunks_bp: enc.comm_s_rho_chunks_bp,
+                t_comm_s_rho_chunks_bp: t_comm.t,
+                resp_comm_s_rho_chunks_bp: resp_s_rho_chunks,
+                encrypted_randomness: enc_rand,
+                encrypted_rho: enc_rho,
+            })
+        } else {
+            None
+        };
+
+        Ok(RegTxnWithoutSkProof {
+            t_comm: self.comm_protocol.t,
+            resp_comm,
+            initial_nullifier: self.initial_nullifier,
+            resp_initial_nullifier,
+            comm_rho_bp: self.comm_rho_bp,
+            t_comm_rho_bp: self.t_comm_rho_bp.t,
+            resp_comm_rho_bp,
+            encryption_for_T,
+            proof: None,
+        })
+    }
+
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        pk_aff: G,
+        pk_enc: G,
+        account: &AccountStateWithoutSk<G>,
+        account_commitment: AccountStateCommitment<G>,
+        rho_randomness: G::ScalarField,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+    ) -> Result<RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>> {
+        let (proto, mut prover) = Self::init(
+            rng,
+            pk_aff,
+            pk_enc,
+            account,
+            account_commitment,
+            rho_randomness,
+            counter,
+            nonce,
+            account_comm_key,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            poseidon_config,
+            T,
+        )?;
+
+        let challenge_h = prover
+            .transcript()
+            .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+        let mut partial = proto.gen_proof(&challenge_h)?;
+
+        let r1cs_proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
+        partial.proof = Some(r1cs_proof);
+
+        Ok(partial)
+    }
+
+    pub fn init<'a, R: CryptoRngCore>(
+        rng: &mut R,
+        pk_aff: G,
+        pk_enc: G,
+        account: &AccountStateWithoutSk<G>,
+        account_commitment: AccountStateCommitment<G>,
+        rho_randomness: G::ScalarField,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &'a PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+    ) -> Result<(Self, Prover<'a, MerlinTranscript, G>)> {
+        let transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        let mut prover = Prover::new(leaf_level_pc_gens, transcript);
+
+        let proto = Self::init_with_given_prover(
+            rng,
+            pk_aff,
+            pk_enc,
+            account,
+            account_commitment,
+            rho_randomness,
+            counter,
+            nonce,
+            account_comm_key,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            poseidon_config,
+            T,
+            &mut prover,
+        )?;
+
+        Ok((proto, prover))
+    }
+}
+
+impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
+    RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>
+{
+    /// Add the partial proof's challenge contribution to the verifier transcript.
+    /// This must be called BEFORE auth challenge contribution and challenge derivation.
+    pub fn challenge_contribution_with_verifier(
+        &self,
+        id: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+        verifier: &mut Verifier<MerlinTranscript, G>,
+    ) -> Result<()> {
+        if T.is_none() ^ self.encryption_for_T.is_none() {
+            return Err(Error::PkTAndEncryptedRandomnessInconsistent);
+        }
+        if self.resp_comm_rho_bp.responses.len() != 2 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                2,
+                self.resp_comm_rho_bp.responses.len(),
+            ));
+        }
+        if let Some(ref enc_for_T) = self.encryption_for_T {
+            if enc_for_T.resp_comm_s_rho_chunks_bp.len() != (2 * NUM_CHUNKS + 1) {
+                return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                    2 * NUM_CHUNKS + 1,
+                    enc_for_T.resp_comm_s_rho_chunks_bp.len(),
+                ));
+            }
+        }
+
+        let mut transcript_ref = verifier.transcript();
+        add_to_transcript!(
+            transcript_ref,
+            NONCE_LABEL,
+            nonce,
+            ASSET_ID_LABEL,
+            asset_id,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment,
+            PK_LABEL,
+            pk_aff,
+            ENC_PK_LABEL,
+            pk_enc,
+            ID_LABEL,
+            id
+        );
+
+        // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
+        let D = pk_aff.into_group()
+            + pk_enc.into_group()
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
+            + (account_comm_key.id_gen() * id);
+        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+
+        self.t_comm.serialize_compressed(&mut transcript_ref)?;
+        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+
+        // N = current_rho_gen * rho
+        self.resp_initial_nullifier.challenge_contribution(
+            &account_comm_key.current_rho_gen(),
+            &self.initial_nullifier,
+            &mut transcript_ref,
+        )?;
+
+        // Encryption challenge contributions
+        if let Some((pk_T, enc_key_gen_T, enc_gen)) = &T {
+            let enc_for_T = self.encryption_for_T.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("Missing encryption data for T".to_string())
+            })?;
+            let enc_rand = &enc_for_T.encrypted_randomness;
+            for i in 0..NUM_CHUNKS {
+                enc_rand.resp_eph_pk[i].challenge_contribution(
+                    enc_key_gen_T,
+                    &enc_rand.ciphertexts[i].eph_pk,
+                    &mut transcript_ref,
+                )?;
+                enc_rand.resp_encrypted[i].challenge_contribution(
+                    pk_T,
+                    enc_gen,
+                    &enc_rand.ciphertexts[i].encrypted,
+                    &mut transcript_ref,
+                )?;
+            }
+            let enc_rho = &enc_for_T.encrypted_rho;
+            for i in 0..NUM_CHUNKS {
+                enc_rho.resp_eph_pk[i].challenge_contribution(
+                    enc_key_gen_T,
+                    &enc_rho.ciphertexts[i].eph_pk,
+                    &mut transcript_ref,
+                )?;
+                enc_rho.resp_encrypted[i].challenge_contribution(
+                    pk_T,
+                    enc_gen,
+                    &enc_rho.ciphertexts[i].encrypted,
+                    &mut transcript_ref,
+                )?;
+            }
+        }
+
+        // BP commitment + constraints
+        let vars = verifier.commit_vec(5, self.comm_rho_bp);
+        RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::enforce_constraints(
+            verifier,
+            asset_id,
+            counter,
+            vars,
+            poseidon_config,
+        )?;
+
+        // Chunks range proofs
+        if let Some(ref enc_for_T) = self.encryption_for_T {
+            let vars = verifier.commit_vec(2 * NUM_CHUNKS, enc_for_T.comm_s_rho_chunks_bp);
+            debug_assert_eq!(vars.len(), 2 * NUM_CHUNKS);
+            for var in vars {
+                range_proof(verifier, var.into(), None, CHUNK_BITS)?;
+            }
+        }
+
+        let mut transcript_ref = verifier.transcript();
+        self.t_comm_rho_bp
+            .serialize_compressed(&mut transcript_ref)?;
+
+        // Chunks combined protos
+        if let Some(ref enc_for_T) = self.encryption_for_T {
+            let enc_rand = &enc_for_T.encrypted_randomness;
+            enc_for_T
+                .t_comm_s_rho_chunks_bp
+                .serialize_compressed(&mut transcript_ref)?;
+
+            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+            let encs = enc_rand
+                .ciphertexts
+                .iter()
+                .map(|c| c.encrypted)
+                .collect::<Vec<_>>();
+            let combined_s_commitment = G::Group::msm(&encs, &powers)
+                .map_err(Error::size_mismatch)?
+                .into_affine();
+
+            let pk_T = T.as_ref().unwrap().0;
+            let h = T.as_ref().unwrap().2;
+            enc_rand.resp_combined_s.challenge_contribution(
+                &pk_T,
+                &h,
+                &combined_s_commitment,
+                &mut transcript_ref,
+            )?;
+
+            let enc_rho = &enc_for_T.encrypted_rho;
+            let rho_encs = enc_rho
+                .ciphertexts
+                .iter()
+                .map(|c| c.encrypted)
+                .collect::<Vec<_>>();
+            let combined_rho_commitment = G::Group::msm(&rho_encs, &powers)
+                .map_err(Error::size_mismatch)?
+                .into_affine();
+
+            enc_rho.resp_combined_s.challenge_contribution(
+                &pk_T,
+                &h,
+                &combined_rho_commitment,
+                &mut transcript_ref,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn challenge_contribution(
+        &self,
+        id: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+    ) -> Result<Verifier<MerlinTranscript, G>> {
+        let verifier_transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        let mut verifier = Verifier::new(verifier_transcript);
+        self.challenge_contribution_with_verifier(
+            id,
+            pk_aff,
+            pk_enc,
+            asset_id,
+            account_commitment,
+            counter,
+            nonce,
+            account_comm_key,
+            poseidon_config,
+            T,
+            &mut verifier,
+        )?;
+        Ok(verifier)
+    }
+
+    /// Verify the partial proof responses given a challenge.
+    /// Auth proof verification is NOT done here.
+    pub fn verify_with_challenge(
+        &self,
+        challenge: &G::ScalarField,
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        pk_aff: G,
+        pk_enc: G,
+        id: G::ScalarField,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        T: Option<(G, G, G)>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        if self.resp_comm.len() != 4 {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                4,
+                self.resp_comm.len(),
+            ));
+        }
+
+        // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
+        let D = pk_aff.into_group()
+            + pk_enc.into_group()
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
+            + (account_comm_key.id_gen() * id);
+        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+
+        // Verify account commitment Schnorr
+        let bases = vec![
+            account_comm_key.rho_gen(),
+            account_comm_key.current_rho_gen(),
+            account_comm_key.randomness_gen(),
+            account_comm_key.current_randomness_gen(),
+        ];
+        verify_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_comm,
+            bases,
+            reduced_acc_comm,
+            self.t_comm,
+            challenge,
+        );
+
+        // Verify BP commitment Schnorr
+        let mut missing_resps = BTreeMap::new();
+        missing_resps.insert(2, self.resp_comm.0[0]);
+        missing_resps.insert(3, self.resp_comm.0[1]);
+        missing_resps.insert(4, self.resp_comm.0[2]);
+        missing_resps.insert(5, self.resp_comm.0[3]);
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_comm_rho_bp,
+            RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::bp_gens_for_comm_rho(
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+            )
+            .to_vec(),
+            self.comm_rho_bp,
+            self.t_comm_rho_bp,
+            challenge,
+            missing_resps,
+        );
+
+        // Verify initial nullifier
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_initial_nullifier,
+            "Initial nullifier verification failed",
+            self.initial_nullifier,
+            account_comm_key.current_rho_gen(),
+            challenge,
+            &self.resp_comm.0[0]
+        );
+
+        // Verify encryption proofs
+        if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
+            let enc_for_T = self.encryption_for_T.as_ref().unwrap();
+            let enc_rand = &enc_for_T.encrypted_randomness;
+            let resp_s_rho = &enc_for_T.resp_comm_s_rho_chunks_bp;
+            for i in 0..NUM_CHUNKS {
+                verify_or_rmc_2!(
+                    rmc,
+                    enc_rand.resp_eph_pk[i],
+                    "Encrypted randomness verification failed",
+                    enc_rand.ciphertexts[i].eph_pk,
+                    *enc_key_gen,
+                    challenge,
+                );
+                verify_or_rmc_3!(
+                    rmc,
+                    enc_rand.resp_encrypted[i],
+                    "Encrypted randomness verification failed",
+                    enc_rand.ciphertexts[i].encrypted,
+                    *pk_T,
+                    *enc_gen,
+                    challenge,
+                    &enc_rand.resp_eph_pk[i].response,
+                    &resp_s_rho.0[i + 1],
+                );
+            }
+
+            // Compute combined_s_commitment for verification
+            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+            let encs = enc_rand
+                .ciphertexts
+                .iter()
+                .map(|c| c.encrypted)
+                .collect::<Vec<_>>();
+            let combined_s_commitment = G::Group::msm(&encs, &powers)
+                .map_err(Error::size_mismatch)?
+                .into_affine();
+            verify_or_rmc_3!(
+                rmc,
+                enc_rand.resp_combined_s,
+                "Combined randomness verification failed",
+                combined_s_commitment,
+                *pk_T,
+                *enc_gen,
+                challenge,
+                &self.resp_comm.0[2],
+            );
+
+            // Verify rho encryption
+            let enc_rho = &enc_for_T.encrypted_rho;
+            for i in 0..NUM_CHUNKS {
+                verify_or_rmc_2!(
+                    rmc,
+                    enc_rho.resp_eph_pk[i],
+                    "Encrypted rho verification failed",
+                    enc_rho.ciphertexts[i].eph_pk,
+                    *enc_key_gen,
+                    challenge,
+                );
+                verify_or_rmc_3!(
+                    rmc,
+                    enc_rho.resp_encrypted[i],
+                    "Encrypted rho verification failed",
+                    enc_rho.ciphertexts[i].encrypted,
+                    *pk_T,
+                    *enc_gen,
+                    challenge,
+                    &enc_rho.resp_eph_pk[i].response,
+                    &resp_s_rho.0[NUM_CHUNKS + i + 1],
+                );
+            }
+
+            // Single verify for the merged chunk commitment
+            verify_schnorr_resp_or_rmc!(
+                rmc,
+                *resp_s_rho,
+                RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::bp_gens_for_comm_s_rho_chunks(
+                    leaf_level_pc_gens,
+                    leaf_level_bp_gens,
+                ),
+                enc_for_T.comm_s_rho_chunks_bp,
+                enc_for_T.t_comm_s_rho_chunks_bp,
+                challenge,
+            );
+
+            // Compute combined_rho_commitment for verification
+            let rho_encs = enc_rho
+                .ciphertexts
+                .iter()
+                .map(|c| c.encrypted)
+                .collect::<Vec<_>>();
+            let combined_rho_commitment = G::Group::msm(&rho_encs, &powers)
+                .map_err(Error::size_mismatch)?
+                .into_affine();
+            verify_or_rmc_3!(
+                rmc,
+                enc_rho.resp_combined_s,
+                "Combined rho verification failed",
+                combined_rho_commitment,
+                *pk_T,
+                *enc_gen,
+                challenge,
+                &self.resp_comm.0[0],
+            );
+        }
+
+        Ok(())
+    }
+}
+
+pub const REG_TXN_LABEL: &'static [u8; 12] = b"registration";
+
+impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
+    RegTxnProof<G, CHUNK_BITS, NUM_CHUNKS>
+{
     /// `pk_aff` is the affirmation public key
     /// `pk_enc` is the encryption public key
     /// `rho_randomness` is the random value used to derive `rho`
@@ -155,7 +1220,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         )?;
 
         let r1cs_proof = prover.prove_with_rng(leaf_level_bp_gens, rng)?;
-        proof.proof = Some(r1cs_proof);
+        proof.partial.proof = Some(r1cs_proof);
 
         Ok(proof)
     }
@@ -176,523 +1241,50 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         T: Option<(G, G, G)>,
         prover: &mut Prover<MerlinTranscript, G>,
     ) -> Result<Self> {
-        let _ = Self::CHECK_CHUNK_BITS;
         let enc_key_gen = account_comm_key.sk_enc_gen();
         let aff_key_gen = account_comm_key.sk_gen();
-        ensure_correct_registration_state(account, pk_aff, pk_enc, aff_key_gen, enc_key_gen)?;
+        ensure_correct_sk(account, pk_aff, pk_enc, aff_key_gen, enc_key_gen)?;
 
-        // Need to prove that:
-        // 1. rho is generated correctly
-        // 2. balance is 0
-        // 3. counter is 0
-        // 4. Knowledge of randomness
-        // 5. pk_aff = pk_gen * sk_aff
-        // 6. pk_enc = enc_key_gen * sk_enc
-        // 7. if T is provided, prove that randomness is encrypted correctly for pk_T
-
-        let mut transcript_ref = prover.transcript();
-        add_to_transcript!(
-            transcript_ref,
-            NONCE_LABEL,
-            nonce,
-            ASSET_ID_LABEL,
-            account.asset_id,
-            ACCOUNT_COMMITMENT_LABEL,
-            account_commitment,
-            PK_LABEL,
+        let partial_proto = RegTxnWithoutSkProtocol::init_with_given_prover(
+            rng,
             pk_aff,
-            ENC_PK_LABEL,
             pk_enc,
-            ID_LABEL,
-            account.id
-        );
-
-        // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
-        let D = pk_aff.into_group()
-            + pk_enc.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
-            + (account_comm_key.id_gen() * account.id);
-
-        let mut rho_blinding = G::ScalarField::rand(rng);
-        let mut rho_sq_blinding = G::ScalarField::rand(rng);
-        let mut s_blinding = G::ScalarField::rand(rng);
-        let mut s_sq_blinding = G::ScalarField::rand(rng);
-        let mut sk_enc_blinding = G::ScalarField::rand(rng);
-
-        // For proving Comm - D= rho_gen * rho + current_rho_gen * rho^2 + randomness_gen * s + current_randomness_gen * s^2
-        // Since current_rho_gen * rho (initial_nullifier) is revealed, we can reduce it from the commitment.
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
-        let comm_protocol = SchnorrCommitment::new(
-            &[
-                account_comm_key.rho_gen(),
-                account_comm_key.current_rho_gen(),
-                account_comm_key.randomness_gen(),
-                account_comm_key.current_randomness_gen(),
-            ],
-            vec![rho_blinding, rho_sq_blinding, s_blinding, s_sq_blinding],
-        );
-        comm_protocol.challenge_contribution(&mut transcript_ref)?;
-        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
-
-        // N = current_rho_gen * rho (initial nullifier). Proves knowledge of rho in N, sharing rho_blinding
-        // with comm_protocol so the same rho is used in both.
-        let initial_nullifier = (account_comm_key.current_rho_gen() * account.rho).into_affine();
-        let init_null_protocol = PokDiscreteLogProtocol::init(
-            account.rho,
-            rho_blinding,
-            &account_comm_key.current_rho_gen(),
-        );
-        init_null_protocol.challenge_contribution(
-            &account_comm_key.current_rho_gen(),
-            &initial_nullifier,
-            &mut transcript_ref,
+            account.as_ref_without_sk(),
+            account_commitment,
+            rho_randomness,
+            counter,
+            nonce,
+            &account_comm_key,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            poseidon_config,
+            T,
+            prover,
         )?;
 
-        // Prove pk_enc = enc_key_gen * sk_enc
-        let pk_enc_protocol =
-            PokDiscreteLogProtocol::init(account.sk_enc, sk_enc_blinding, &enc_key_gen);
-        pk_enc_protocol.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
-
-        // TODO: Try combining all these into 1 eq by RLC. Bases need to be adapted accordingly so it might not lead to that performant solution
-        // Break randomness `s` and `rho` each into `NUM_CHUNKS` chunks, encrypt every chunk using
-        // exponent Elgamal for `pk_T`, and initialise sigma protocols proving ciphertext correctness.
-        let mut enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
-            //  decompose s (randomness) into chunks and encrypt each
-            let (s_chunks, s_chunks_as_u64) =
-                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
-
-            // encs[i] = h * s_chunks[i]
-            let encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
-                enc_gen.into_group(),
-                &s_chunks,
-            ));
-
-            let enc_rands = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-
-            let s_chunks_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let enc_rands_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-
-            let ciphertexts = (0..NUM_CHUNKS)
-                .map(|i| {
-                    Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen)
-                })
-                .collect::<Vec<_>>();
-
-            // For proving r_i in g * r_i = ct_i.0
-            let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
-            // For proving r_i, s_i in pk_T * r_i + h * s_i = ct_i.1
-            let mut enc_proto = Vec::with_capacity(NUM_CHUNKS);
-
-            for i in 0..NUM_CHUNKS {
-                eph_proto.push(PokDiscreteLogProtocol::init(
-                    enc_rands[i],
-                    enc_rands_blindings[i],
-                    enc_key_gen,
-                ));
-                eph_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-
-                enc_proto.push(PokPedersenCommitmentProtocol::init(
-                    enc_rands[i],
-                    enc_rands_blindings[i],
-                    pk_T,
-                    s_chunks[i],
-                    s_chunks_blindings[i],
-                    enc_gen,
-                ));
-                enc_proto[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-
-            // decompose rho into chunks and encrypt each
-            let (rho_chunks, rho_chunks_as_u64) =
-                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.rho);
-
-            let rho_encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
-                enc_gen.into_group(),
-                &rho_chunks,
-            ));
-
-            let rho_enc_rands = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-
-            let rho_chunks_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let rho_enc_rands_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-
-            let rho_ciphertexts = (0..NUM_CHUNKS)
-                .map(|i| {
-                    Ciphertext::new_given_randomness(
-                        &rho_encs[i],
-                        &rho_enc_rands[i],
-                        pk_T,
-                        enc_key_gen,
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let mut rho_eph_proto = Vec::with_capacity(NUM_CHUNKS);
-            let mut rho_enc_proto = Vec::with_capacity(NUM_CHUNKS);
-
-            for i in 0..NUM_CHUNKS {
-                rho_eph_proto.push(PokDiscreteLogProtocol::init(
-                    rho_enc_rands[i],
-                    rho_enc_rands_blindings[i],
-                    enc_key_gen,
-                ));
-                rho_eph_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &rho_ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-
-                rho_enc_proto.push(PokPedersenCommitmentProtocol::init(
-                    rho_enc_rands[i],
-                    rho_enc_rands_blindings[i],
-                    pk_T,
-                    rho_chunks[i],
-                    rho_chunks_blindings[i],
-                    enc_gen,
-                ));
-                rho_enc_proto[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &rho_ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-
-            Some((
-                s_chunks,
-                s_chunks_as_u64,
-                enc_rands,
-                ciphertexts,
-                s_chunks_blindings,
-                eph_proto,
-                enc_proto,
-                rho_chunks,
-                rho_chunks_as_u64,
-                rho_enc_rands,
-                rho_ciphertexts,
-                rho_chunks_blindings,
-                rho_eph_proto,
-                rho_enc_proto,
-            ))
-        } else {
-            None
-        };
-
-        // NOTE: We can save 2 group elements in total by committing all variables (including chunks) in
-        // a single commitment. It complicates the implementation a bit
-
-        let com_rho_bp_blinding = G::ScalarField::rand(rng);
-        let (comm_rho_bp, vars) = prover.commit_vec(
-            &[
-                rho_randomness,
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
-            ],
-            com_rho_bp_blinding,
-            &leaf_level_bp_gens,
-        );
-        Self::enforce_constraints(prover, account.asset_id, counter, vars, poseidon_config)?;
-
-        let mut sk_blinding = G::ScalarField::rand(rng);
-        let rho_randomness_blinding = G::ScalarField::rand(rng);
-
-        let t_comm_rho_bp = SchnorrCommitment::new(
-            &Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens),
-            vec![
-                G::ScalarField::rand(rng),
-                rho_randomness_blinding,
-                rho_blinding,
-                rho_sq_blinding,
-                s_blinding,
-                s_sq_blinding,
-            ],
-        );
-
-        let t_pk_aff = PokDiscreteLogProtocol::init(account.sk, sk_blinding, &aff_key_gen);
-
-        sk_blinding.zeroize();
-        sk_enc_blinding.zeroize();
-
-        // Commit to all chunks of s and rho in a single vector commitment and prove each chunk is in range
-        let (comm_s_rho_chunks_bp, com_s_rho_bp_blinding) = if let Some((
-            s_chunks,
-            s_chunks_as_u64,
-            _,
-            _,
-            _,
-            _,
-            _,
-            rho_chunks,
-            rho_chunks_as_u64,
-            _,
-            _,
-            _,
-            _,
-            _,
-        )) = &mut enc_prep
-        {
-            let com_s_rho_bp_blinding = G::ScalarField::rand(rng);
-            let combined_chunks: Vec<G::ScalarField> =
-                s_chunks.iter().chain(rho_chunks.iter()).copied().collect();
-            let (comm_s_rho_bp, vars) =
-                prover.commit_vec(&combined_chunks, com_s_rho_bp_blinding, &leaf_level_bp_gens);
-            for (i, var) in vars.into_iter().enumerate() {
-                if i < NUM_CHUNKS {
-                    let chunk = mem::take(&mut s_chunks_as_u64[i]);
-                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
-                } else {
-                    let chunk = mem::take(&mut rho_chunks_as_u64[i - NUM_CHUNKS]);
-                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
-                }
-            }
-            (Some(comm_s_rho_bp), Some(com_s_rho_bp_blinding))
-        } else {
-            (None, None)
-        };
-
+        // Auth comes after all partial challenge contributions
         let mut transcript_ref = prover.transcript();
-
-        t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
-        t_pk_aff.challenge_contribution(&aff_key_gen, &pk_aff, &mut transcript_ref)?;
-
-        // TODO: Dedup logic between rho and s. Also, i make it twisted elgamal, can share logic between key dist proof and this
-
-        // Take challenge contribution of ciphertext of each chunk (s and rho) using a single commitment
-        let (t_comm_s_rho_chunks_bp, combined_s_proto, combined_rho_proto) = if let Some((
-            _,
-            _,
-            enc_rands,
-            _,
-            s_chunks_blindings,
-            _,
-            _,
-            _,
-            _,
-            rho_enc_rands,
-            _,
-            rho_chunks_blindings,
-            _,
-            _,
-        )) = &mut enc_prep
-        {
-            // Single commitment for [blinding, s_chunks..., rho_chunks...]
-            let mut blindings = vec![G::ScalarField::rand(rng)];
-            for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut s_chunks_blindings[i]);
-                blindings.push(b);
-            }
-            for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut rho_chunks_blindings[i]);
-                blindings.push(b);
-            }
-            let t_comm_s_rho_chunks_bp = SchnorrCommitment::new(
-                &Self::bp_gens_for_comm_s_rho_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
-                blindings,
-            );
-            t_comm_s_rho_chunks_bp.challenge_contribution(&mut transcript_ref)?;
-
-            // s combined commitment
-            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let mut combined_enc_rand =
-                inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
-            let pk_T = T.as_ref().unwrap().0;
-            let h = T.as_ref().unwrap().2;
-            let combined_s_commitment =
-                (pk_T * combined_enc_rand + h * account.randomness).into_affine();
-
-            for i in 0..NUM_CHUNKS {
-                let mut e = mem::take(&mut enc_rands[i]);
-                Zeroize::zeroize(&mut e);
-            }
-
-            let combined_s_proto = PokPedersenCommitmentProtocol::init(
-                combined_enc_rand,
-                G::ScalarField::rand(rng),
-                &pk_T,
-                account.randomness,
-                s_blinding,
-                &h,
-            );
-
-            s_blinding.zeroize();
-            s_sq_blinding.zeroize();
-            combined_enc_rand.zeroize();
-
-            combined_s_proto.challenge_contribution(
-                &pk_T,
-                &h,
-                &combined_s_commitment,
-                &mut transcript_ref,
-            )?;
-
-            // rho combined commitment
-            let rho_powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let mut combined_rho_enc_rand =
-                inner_product::<G::ScalarField>(rho_enc_rands.as_slice(), &rho_powers);
-            let combined_rho_commitment =
-                (pk_T * combined_rho_enc_rand + h * account.rho).into_affine();
-
-            for i in 0..NUM_CHUNKS {
-                let mut e = mem::take(&mut rho_enc_rands[i]);
-                Zeroize::zeroize(&mut e);
-            }
-
-            let combined_rho_proto = PokPedersenCommitmentProtocol::init(
-                combined_rho_enc_rand,
-                G::ScalarField::rand(rng),
-                &pk_T,
-                account.rho,
-                rho_blinding,
-                &h,
-            );
-
-            rho_blinding.zeroize();
-            rho_sq_blinding.zeroize();
-            combined_rho_enc_rand.zeroize();
-
-            combined_rho_proto.challenge_contribution(
-                &pk_T,
-                &h,
-                &combined_rho_commitment,
-                &mut transcript_ref,
-            )?;
-
-            (
-                Some(t_comm_s_rho_chunks_bp),
-                Some(combined_s_proto),
-                Some(combined_rho_proto),
-            )
-        } else {
-            (None, None, None)
-        };
+        let auth_protocol = AuthProofOnlySksProtocol::init(
+            rng,
+            account.sk_aff(),
+            account.sk_enc(),
+            &pk_aff,
+            &pk_enc,
+            &aff_key_gen,
+            &enc_key_gen,
+            &mut transcript_ref,
+        )?;
 
         let challenge = prover
             .transcript()
             .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        let resp_comm = comm_protocol.response(
-            &[
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
-            ],
-            &challenge,
-        )?;
-        let resp_pk_enc = pk_enc_protocol.gen_proof(&challenge);
-        let resp_initial_nullifier = init_null_protocol.gen_partial_proof();
-
-        let mut wits = BTreeMap::new();
-        wits.insert(0, com_rho_bp_blinding);
-        wits.insert(1, rho_randomness);
-        let resp_comm_rho_bp = t_comm_rho_bp.partial_response(wits, &challenge)?;
-
-        let resp_pk_aff = t_pk_aff.gen_proof(&challenge);
-
-        let encryption_for_T = if let Some((
-            s_chunks,
-            _,
-            _,
-            s_ciphertexts,
-            _,
-            s_eph_proto,
-            s_enc_proto,
-            rho_chunks,
-            _,
-            _,
-            rho_ciphertexts,
-            _,
-            rho_eph_proto,
-            rho_enc_proto,
-        )) = enc_prep
-        {
-            // s (randomness)
-            let mut resp_eph_pk = Vec::with_capacity(NUM_CHUNKS);
-            let mut resp_encrypted = Vec::with_capacity(NUM_CHUNKS);
-            for (eph, enc) in s_eph_proto.into_iter().zip(s_enc_proto.into_iter()) {
-                resp_eph_pk.push(eph.gen_proof(&challenge));
-                resp_encrypted.push(enc.gen_partial_proof());
-            }
-
-            let resp_combined_s = combined_s_proto.unwrap().gen_partial1_proof(&challenge);
-
-            let enc_rand = Some(EncryptedScalar::<G, CHUNK_BITS, NUM_CHUNKS> {
-                ciphertexts: s_ciphertexts.try_into().unwrap(),
-                resp_eph_pk: resp_eph_pk.try_into().unwrap(),
-                resp_encrypted: resp_encrypted.try_into().unwrap(),
-                resp_combined_s,
-            });
-
-            // rho
-            let mut rho_resp_eph_pk = Vec::with_capacity(NUM_CHUNKS);
-            let mut rho_resp_encrypted = Vec::with_capacity(NUM_CHUNKS);
-            for (eph, enc) in rho_eph_proto.into_iter().zip(rho_enc_proto.into_iter()) {
-                rho_resp_eph_pk.push(eph.gen_proof(&challenge));
-                rho_resp_encrypted.push(enc.gen_partial_proof());
-            }
-
-            let resp_combined_rho = combined_rho_proto.unwrap().gen_partial1_proof(&challenge);
-
-            let enc_rho = Some(EncryptedScalar::<G, CHUNK_BITS, NUM_CHUNKS> {
-                ciphertexts: rho_ciphertexts.try_into().unwrap(),
-                resp_eph_pk: rho_resp_eph_pk.try_into().unwrap(),
-                resp_encrypted: rho_resp_encrypted.try_into().unwrap(),
-                resp_combined_s: resp_combined_rho,
-            });
-
-            let t_comm = t_comm_s_rho_chunks_bp.unwrap();
-            let mut all_wits: Vec<G::ScalarField> = vec![com_s_rho_bp_blinding.unwrap()];
-            all_wits.extend_from_slice(&s_chunks);
-            all_wits.extend_from_slice(&rho_chunks);
-            let resp_s_rho_chunks = t_comm.response(&all_wits, &challenge)?;
-            Zeroize::zeroize(&mut all_wits);
-
-            Some(EncryptionForRegistration {
-                comm_s_rho_chunks_bp: comm_s_rho_chunks_bp.unwrap(),
-                t_comm_s_rho_chunks_bp: t_comm.t,
-                resp_comm_s_rho_chunks_bp: resp_s_rho_chunks,
-                encrypted_randomness: enc_rand.unwrap(),
-                encrypted_rho: enc_rho.unwrap(),
-            })
-        } else {
-            None
-        };
+        let partial = partial_proto.gen_proof(&challenge)?;
+        let auth_proof = auth_protocol.gen_proof(&challenge);
 
         Ok(Self {
-            t_comm: comm_protocol.t,
-            resp_comm,
-            initial_nullifier,
-            resp_initial_nullifier,
-            comm_rho_bp,
-            t_comm_rho_bp: t_comm_rho_bp.t,
-            resp_comm_rho_bp,
-            resp_pk_aff,
-            resp_pk_enc,
-            encryption_for_T,
-            proof: None,
+            auth_proof,
+            partial,
         })
     }
 
@@ -779,10 +1371,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             rmc,
         )?;
 
-        let proof = self
-            .proof
-            .as_ref()
-            .ok_or_else(|| Error::ProofVerificationError("R1CS proof is missing".to_string()))?;
+        let proof =
+            self.partial.proof.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("R1CS proof is missing".to_string())
+            })?;
         let tuple = verifier.verification_scalars_and_points_with_rng(proof, rng)?;
         Ok(tuple)
     }
@@ -804,317 +1396,67 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         verifier: &mut Verifier<MerlinTranscript, G>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        let _ = Self::CHECK_CHUNK_BITS;
-        if T.is_none() ^ self.encryption_for_T.is_none() {
-            return Err(Error::PkTAndEncryptedRandomnessInconsistent);
-        }
-        if self.resp_comm_rho_bp.responses.len() != 2 {
-            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                2,
-                self.resp_comm_rho_bp.responses.len(),
-            ));
-        }
-        if let Some(ref enc_for_T) = self.encryption_for_T {
-            if enc_for_T.resp_comm_s_rho_chunks_bp.len() != (2 * NUM_CHUNKS + 1) {
-                return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                    2 * NUM_CHUNKS + 1,
-                    enc_for_T.resp_comm_s_rho_chunks_bp.len(),
-                ));
-            }
-        }
-
-        let mut transcript_ref = verifier.transcript();
-        add_to_transcript!(
-            transcript_ref,
-            NONCE_LABEL,
-            nonce,
-            ASSET_ID_LABEL,
-            asset_id,
-            ACCOUNT_COMMITMENT_LABEL,
-            account_commitment,
-            PK_LABEL,
+        // Partial challenge contribution (transcript)
+        self.partial.challenge_contribution_with_verifier(
+            id,
             pk_aff,
-            ENC_PK_LABEL,
             pk_enc,
-            ID_LABEL,
-            id
-        );
+            asset_id,
+            account_commitment,
+            counter,
+            nonce,
+            &account_comm_key,
+            poseidon_config,
+            T,
+            verifier,
+        )?;
 
+        // Auth challenge contribution (after all partial contributions)
         let enc_key_gen = account_comm_key.sk_enc_gen();
-
-        // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
-        let D = pk_aff.into_group()
-            + pk_enc.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
-            + (account_comm_key.id_gen() * id);
-
-        // Reduce D from commitment since it's revealed
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
-        self.t_comm.serialize_compressed(&mut transcript_ref)?;
-        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
-
-        // N = current_rho_gen * rho — challenge contribution for initial nullifier sigma
-        self.resp_initial_nullifier.challenge_contribution(
-            &account_comm_key.current_rho_gen(),
-            &self.initial_nullifier,
-            &mut transcript_ref,
-        )?;
-
-        self.resp_pk_enc
-            .challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript_ref)?;
-
-        // Take challenge contribution of ciphertext of each chunk (s and rho)
-        if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
-            let enc_for_T = self.encryption_for_T.as_ref().unwrap();
-            let enc_rand = &enc_for_T.encrypted_randomness;
-            for i in 0..NUM_CHUNKS {
-                enc_rand.resp_eph_pk[i].challenge_contribution(
-                    enc_key_gen,
-                    &enc_rand.ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-                enc_rand.resp_encrypted[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &enc_rand.ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-            let enc_rho = &enc_for_T.encrypted_rho;
-            for i in 0..NUM_CHUNKS {
-                enc_rho.resp_eph_pk[i].challenge_contribution(
-                    enc_key_gen,
-                    &enc_rho.ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-                enc_rho.resp_encrypted[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &enc_rho.ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-        }
-
-        let vars = verifier.commit_vec(5, self.comm_rho_bp);
-        Self::enforce_constraints(verifier, asset_id, counter, vars, poseidon_config)?;
-
-        // Check if each s and rho chunk is in range using the merged commitment
-        if let Some(ref enc_for_T) = self.encryption_for_T {
-            let vars = verifier.commit_vec(2 * NUM_CHUNKS, enc_for_T.comm_s_rho_chunks_bp);
-            debug_assert_eq!(vars.len(), 2 * NUM_CHUNKS);
-            for var in vars {
-                range_proof(verifier, var.into(), None, CHUNK_BITS)?;
-            }
-        }
-
+        let sk_gen = account_comm_key.sk_gen();
         let mut transcript_ref = verifier.transcript();
-
-        self.t_comm_rho_bp
-            .serialize_compressed(&mut transcript_ref)?;
-
-        self.resp_pk_aff.challenge_contribution(
-            &account_comm_key.sk_gen(),
+        self.auth_proof.challenge_contribution(
             &pk_aff,
+            &pk_enc,
+            &sk_gen,
+            &enc_key_gen,
             &mut transcript_ref,
         )?;
-
-        let (combined_s_commitment, combined_rho_commitment) =
-            if let Some(ref enc_for_T) = self.encryption_for_T {
-                let enc_rand = &enc_for_T.encrypted_randomness;
-                enc_for_T
-                    .t_comm_s_rho_chunks_bp
-                    .serialize_compressed(&mut transcript_ref)?;
-
-                let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-                let encs = enc_rand
-                    .ciphertexts
-                    .iter()
-                    .map(|c| c.encrypted)
-                    .collect::<Vec<_>>();
-                let combined_s_commitment = G::Group::msm(&encs, &powers)
-                    .map_err(Error::size_mismatch)?
-                    .into_affine();
-
-                let pk_T = T.as_ref().unwrap().0;
-                let h = T.as_ref().unwrap().2;
-                enc_rand.resp_combined_s.challenge_contribution(
-                    &pk_T,
-                    &h,
-                    &combined_s_commitment,
-                    &mut transcript_ref,
-                )?;
-
-                // rho combined commitment
-                let enc_rho = &enc_for_T.encrypted_rho;
-                let rho_encs = enc_rho
-                    .ciphertexts
-                    .iter()
-                    .map(|c| c.encrypted)
-                    .collect::<Vec<_>>();
-                let combined_rho_commitment = G::Group::msm(&rho_encs, &powers)
-                    .map_err(Error::size_mismatch)?
-                    .into_affine();
-
-                enc_rho.resp_combined_s.challenge_contribution(
-                    &pk_T,
-                    &h,
-                    &combined_rho_commitment,
-                    &mut transcript_ref,
-                )?;
-
-                (Some(combined_s_commitment), Some(combined_rho_commitment))
-            } else {
-                (None, None)
-            };
 
         let challenge = transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
-        // Perform all the verifications except bulletproof verification
-        let bases = vec![
-            account_comm_key.rho_gen(),
-            account_comm_key.current_rho_gen(),
-            account_comm_key.randomness_gen(),
-            account_comm_key.current_randomness_gen(),
-        ];
-        verify_schnorr_resp_or_rmc!(
-            rmc,
-            self.resp_comm,
-            bases,
-            reduced_acc_comm,
-            self.t_comm,
+        // Verify partial
+        self.partial.verify_with_challenge(
             &challenge,
-        );
-
-        verify_or_rmc_2!(
-            rmc,
-            self.resp_pk_enc,
-            "Encryption public key verification failed",
-            pk_enc,
-            enc_key_gen,
-            &challenge,
-        );
-
-        let mut missing_resps = BTreeMap::new();
-        missing_resps.insert(2, self.resp_comm.0[0]);
-        missing_resps.insert(3, self.resp_comm.0[1]);
-        missing_resps.insert(4, self.resp_comm.0[2]);
-        missing_resps.insert(5, self.resp_comm.0[3]);
-
-        verify_partial_schnorr_resp_or_rmc!(
-            rmc,
-            self.resp_comm_rho_bp,
-            Self::bp_gens_for_comm_rho(leaf_level_pc_gens, leaf_level_bp_gens).to_vec(),
-            self.comm_rho_bp,
-            self.t_comm_rho_bp,
-            &challenge,
-            missing_resps,
-        );
-        verify_or_rmc_2!(
-            rmc,
-            self.resp_initial_nullifier,
-            "Initial nullifier verification failed",
-            self.initial_nullifier,
-            account_comm_key.current_rho_gen(),
-            &challenge,
-            &self.resp_comm.0[0]
-        );
-        verify_or_rmc_2!(
-            rmc,
-            self.resp_pk_aff,
-            "Public key verification failed",
+            &account_comm_key,
             pk_aff,
-            account_comm_key.sk_gen(),
+            pk_enc,
+            id,
+            asset_id,
+            account_commitment,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            T,
+            rmc.as_deref_mut(),
+        )?;
+
+        // Verify auth
+        self.auth_proof.verify_given_challenge(
+            &pk_aff,
+            &pk_enc,
+            &sk_gen,
+            &enc_key_gen,
             &challenge,
-        );
-
-        if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
-            // unwrap is fine as its already checked in the beginning
-            let enc_for_T = self.encryption_for_T.as_ref().unwrap();
-            let enc_rand = &enc_for_T.encrypted_randomness;
-            let resp_s_rho = &enc_for_T.resp_comm_s_rho_chunks_bp;
-            for i in 0..NUM_CHUNKS {
-                verify_or_rmc_2!(
-                    rmc,
-                    enc_rand.resp_eph_pk[i],
-                    "Encrypted randomness verification failed",
-                    enc_rand.ciphertexts[i].eph_pk,
-                    *enc_key_gen,
-                    &challenge,
-                );
-                verify_or_rmc_3!(
-                    rmc,
-                    enc_rand.resp_encrypted[i],
-                    "Encrypted randomness verification failed",
-                    enc_rand.ciphertexts[i].encrypted,
-                    *pk_T,
-                    *enc_gen,
-                    &challenge,
-                    &enc_rand.resp_eph_pk[i].response,
-                    &resp_s_rho.0[i + 1],
-                );
-            }
-
-            verify_or_rmc_3!(
-                rmc,
-                enc_rand.resp_combined_s,
-                "Combined randomness verification failed",
-                combined_s_commitment.unwrap(),
-                *pk_T,
-                *enc_gen,
-                &challenge,
-                &self.resp_comm.0[2],
-            );
-
-            // Verify rho encryption
-            let enc_rho = &enc_for_T.encrypted_rho;
-            for i in 0..NUM_CHUNKS {
-                verify_or_rmc_2!(
-                    rmc,
-                    enc_rho.resp_eph_pk[i],
-                    "Encrypted rho verification failed",
-                    enc_rho.ciphertexts[i].eph_pk,
-                    *enc_key_gen,
-                    &challenge,
-                );
-                verify_or_rmc_3!(
-                    rmc,
-                    enc_rho.resp_encrypted[i],
-                    "Encrypted rho verification failed",
-                    enc_rho.ciphertexts[i].encrypted,
-                    *pk_T,
-                    *enc_gen,
-                    &challenge,
-                    &enc_rho.resp_eph_pk[i].response,
-                    &resp_s_rho.0[NUM_CHUNKS + i + 1],
-                );
-            }
-
-            // Single verify for the merged chunk commitment
-            verify_schnorr_resp_or_rmc!(
-                rmc,
-                *resp_s_rho,
-                Self::bp_gens_for_comm_s_rho_chunks(leaf_level_pc_gens, leaf_level_bp_gens),
-                enc_for_T.comm_s_rho_chunks_bp,
-                enc_for_T.t_comm_s_rho_chunks_bp,
-                &challenge,
-            );
-
-            verify_or_rmc_3!(
-                rmc,
-                enc_rho.resp_combined_s,
-                "Combined rho verification failed",
-                combined_rho_commitment.unwrap(),
-                *pk_T,
-                *enc_gen,
-                &challenge,
-                &self.resp_comm.0[0],
-            );
-        }
+            None,
+        )?;
 
         Ok(())
     }
+}
 
+impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
+    RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>
+{
     fn enforce_constraints<CS: ConstraintSystem<G::ScalarField>>(
         cs: &mut CS,
         asset_id: AssetId,
@@ -1130,7 +1472,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let lc_rho: LinearCombination<G::ScalarField> = var_rho.into();
         let lc_randomness: LinearCombination<G::ScalarField> = var_randomness.into();
-        let combined = AccountState::<G>::concat_asset_id_counter(asset_id, counter);
+        let combined = AccountStateWithoutSk::<G>::concat_asset_id_counter(asset_id, counter);
         let c = LinearCombination::from(combined);
         let lc_rho_1 =
             Poseidon_hash_2_constraints_simple(cs, var_rho_randomness.into(), c, poseidon_config)?;
@@ -1472,26 +1814,26 @@ impl<
         let verifier_challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         let verifier_challenge_g1 = transcript.challenge_scalar::<F1>(TXN_CHALLENGE_LABEL);
 
-        if !self.resp_comm.verify(
-            &reduced_acc_comm,
-            &account_comm_key.current_rho_gen(),
-            &account_comm_key.randomness_gen(),
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Account commitment verification failed".to_string(),
-            ));
-        }
+        self.resp_comm
+            .verify(
+                &reduced_acc_comm,
+                &account_comm_key.current_rho_gen(),
+                &account_comm_key.randomness_gen(),
+                &verifier_challenge,
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("Account commitment verification failed".to_string())
+            })?;
 
-        if !self.resp_initial_nullifier.verify(
-            &initial_nullifier,
-            &account_comm_key.rho_gen(),
-            &verifier_challenge,
-        ) {
-            return Err(Error::ProofVerificationError(
-                "Initial nullifier verification failed".to_string(),
-            ));
-        }
+        self.resp_initial_nullifier
+            .verify(
+                &initial_nullifier,
+                &account_comm_key.rho_gen(),
+                &verifier_challenge,
+            )
+            .map_err(|_| {
+                Error::ProofVerificationError("Initial nullifier verification failed".to_string())
+            })?;
 
         let mut gens = bp_gens_for_vec_commitment(5, &leaf_level_bp_gens);
 
@@ -1592,7 +1934,7 @@ impl<
 }
 */
 
-fn ensure_correct_registration_state<G: AffineRepr>(
+fn ensure_correct_sk<G: AffineRepr>(
     account: &AccountState<G>,
     pk: G,
     pk_enc: G,
@@ -1606,26 +1948,6 @@ fn ensure_correct_registration_state<G: AffineRepr>(
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        if account.balance != 0 {
-            return Err(Error::RegistrationError(
-                "Balance must be 0 for registration".to_string(),
-            ));
-        }
-        if account.counter != 0 {
-            return Err(Error::RegistrationError(
-                "Counter must be 0 for registration".to_string(),
-            ));
-        }
-        if account.rho.square() != account.current_rho {
-            return Err(Error::RegistrationError(
-                "Rho relation not satisfied".to_string(),
-            ));
-        }
-        if account.randomness.square() != account.current_randomness {
-            return Err(Error::RegistrationError(
-                "Randomness relation not satisfied".to_string(),
-            ));
-        }
         if (aff_key_gen * account.sk).into_affine() != pk {
             return Err(Error::RegistrationError(
                 "Incorrect affirmation secret key".to_string(),
@@ -1634,6 +1956,30 @@ fn ensure_correct_registration_state<G: AffineRepr>(
         if (enc_key_gen * account.sk_enc).into_affine() != pk_enc {
             return Err(Error::RegistrationError(
                 "Incorrect encryption secret key".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn ensure_correct_registration_state_without_sk<G: AffineRepr>(
+    account: &AccountStateWithoutSk<G>,
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if account.rho.square() != account.current_rho {
+            return Err(Error::RegistrationError(
+                "Rho relation not satisfied".to_string(),
+            ));
+        }
+        if account.randomness.square() != account.current_randomness {
+            return Err(Error::RegistrationError(
+                "Randomness relation not satisfied".to_string(),
             ));
         }
         Ok(())
@@ -1882,6 +2228,23 @@ pub mod tests {
         (account, rho_randomness, counter, params)
     }
 
+    pub fn new_account_without_sk<R: CryptoRngCore>(
+        rng: &mut R,
+        asset_id: AssetId,
+        id: Fr,
+    ) -> (
+        AccountStateWithoutSk<PallasA>,
+        Fr,
+        NullifierSkGenCounter,
+        Poseidon2Params<Fr>,
+    ) {
+        let params = test_params_for_poseidon2();
+        let counter = 1;
+        let (account, rho_randomness) =
+            AccountStateWithoutSk::new(rng, id, asset_id, counter, params.clone()).unwrap();
+        (account, rho_randomness, counter, params)
+    }
+
     #[test]
     fn account_init() {
         let mut rng = rand::thread_rng();
@@ -1899,22 +2262,28 @@ pub mod tests {
 
         let (mut account, rho_randomness, c, poseidon_config) =
             new_account(&mut rng, asset_id, sk_i, sk_enc.clone(), id);
-        assert_eq!(account.id, id);
-        assert_eq!(account.asset_id, asset_id);
-        assert_eq!(account.balance, 0);
-        assert_eq!(account.counter, 0);
+        assert_eq!(account.without_sk.id, id);
+        assert_eq!(account.without_sk.asset_id, asset_id);
+        assert_eq!(account.without_sk.balance, 0);
+        assert_eq!(account.without_sk.counter, 0);
 
-        let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, c);
+        let combined = AccountStateWithoutSk::<PallasA>::concat_asset_id_counter(asset_id, c);
         let expected_rho =
             Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_config).unwrap();
-        assert_eq!(account.rho, expected_rho);
-        assert_eq!(account.current_rho, account.rho.square());
+        assert_eq!(account.without_sk.rho, expected_rho);
+        assert_eq!(
+            account.without_sk.current_rho,
+            account.without_sk.rho.square()
+        );
 
         account.commit(account_comm_key).unwrap();
 
-        let initial_rho = account.rho;
-        let initial_randomness = account.randomness;
-        assert_eq!(account.current_randomness, initial_randomness.square());
+        let initial_rho = account.without_sk.rho;
+        let initial_randomness = account.without_sk.randomness;
+        assert_eq!(
+            account.without_sk.current_randomness,
+            initial_randomness.square()
+        );
 
         // Test current_rho and current_randomness change correctly
         // After i iterations: current_rho = rho^{2+i} and current_randomness = initial_randomness^{2+i}
@@ -1927,9 +2296,12 @@ pub mod tests {
 
             let expected_current_randomness = initial_randomness.pow([2 + i as u64]);
 
-            assert_eq!(account.current_rho, expected_current_rho);
-            assert_eq!(account.randomness, initial_randomness); // base s stays constant
-            assert_eq!(account.current_randomness, expected_current_randomness);
+            assert_eq!(account.without_sk.current_rho, expected_current_rho);
+            assert_eq!(account.without_sk.randomness, initial_randomness); // base s stays constant
+            assert_eq!(
+                account.without_sk.current_randomness,
+                expected_current_randomness
+            );
         }
     }
 
@@ -2149,7 +2521,7 @@ pub mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_rmc = clock.elapsed();
 
         println!("For reg. txn");
@@ -2197,9 +2569,10 @@ pub mod tests {
         let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
             new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
         // Make randomness small to run test faster
-        account.randomness = Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
+        account.without_sk.randomness =
+            Fr::from(u16::rand(&mut rng) as u64 + u8::rand(&mut rng) as u64);
         // current_randomness = randomness^2 (same relation as current_rho = rho^2)
-        account.current_randomness = account.randomness.square();
+        account.without_sk.current_randomness = account.without_sk.randomness.square();
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce-0";
@@ -2267,7 +2640,7 @@ pub mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_rmc = clock.elapsed();
 
         println!("For reg. txn with {NUM_CHUNKS} chunks each of {CHUNK_BITS} bits");
@@ -2275,6 +2648,7 @@ pub mod tests {
         println!(
             "ciphertext and its proof size = {}",
             reg_proof
+                .partial
                 .encryption_for_T
                 .as_ref()
                 .unwrap()
@@ -2290,8 +2664,9 @@ pub mod tests {
         // This will take a long time to decrypt
         let clock = Instant::now();
         assert_eq!(
-            account.randomness,
+            account.without_sk.randomness,
             reg_proof
+                .partial
                 .encryption_for_T
                 .unwrap()
                 .encrypted_randomness
@@ -2299,6 +2674,311 @@ pub mod tests {
                 .unwrap()
         );
         println!("decryption time = {:?}", clock.elapsed());
+    }
+
+    #[test]
+    fn registration_parallel_workflow() {
+        // W2 (Parallel): Host and Ledger each build their own independent transcript.
+        // Host derives challenge_h from REG_TXN_LABEL transcript + partial T-values (no auth).
+        // Ledger derives challenge_l from its own AUTH_TXN_LABEL transcript with nonce only.
+        // Verifier replicates each side's transcript independently.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
+        let account_comm_key = setup_comm_key(b"testing");
+        let asset_id = 1;
+        let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+        let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+            new_account_without_sk(&mut rng, asset_id, id.clone());
+        let account_comm = AccountStateCommitment::from_without_sk(
+            account.commit(account_comm_key.clone()).unwrap(),
+            pk_aff.0,
+            pk_enc.0,
+        );
+        let nonce = b"test-nonce-0";
+
+        let leaf_level_pc_gens = account_tree_params.even_parameters.pc_gens();
+        let leaf_level_bp_gens = account_tree_params.even_parameters.bp_gens();
+
+        let aff_key_gen = account_comm_key.sk_gen();
+
+        //  Host side: own REG_TXN_LABEL transcript, public inputs + partial T-values
+        let partial = RegTxnWithoutSkProtocol::<_, 48, 6>::new(
+            &mut rng,
+            pk_aff.0,
+            pk_enc.0,
+            &account,
+            account_comm.clone(),
+            rho_randomness,
+            nullifier_gen_counter,
+            nonce,
+            &account_comm_key,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            &poseidon_params,
+            None,
+        )
+        .unwrap();
+
+        //  Ledger side: own AUTH_TXN_LABEL transcript, independently
+        let auth_proof = AuthProofOnlySks::new(
+            &mut rng,
+            sk_aff.0,
+            sk_enc.0,
+            pk_aff.0,
+            pk_enc.0,
+            nonce,
+            &aff_key_gen,
+            &enc_key_gen,
+        )
+        .unwrap();
+
+        let reg_proof = RegTxnProof::<_, 48, 6> {
+            auth_proof,
+            partial,
+        };
+
+        //  verify each side with its own independent challenge
+        let mut verifier = reg_proof
+            .partial
+            .challenge_contribution(
+                id,
+                pk_aff.0,
+                pk_enc.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nonce,
+                &account_comm_key,
+                &poseidon_params,
+                None,
+            )
+            .unwrap();
+
+        // Verifier derives partial challenge from its own transcript (no auth T-values)
+        let challenge_h_v = verifier
+            .transcript()
+            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+        reg_proof
+            .partial
+            .verify_with_challenge(
+                &challenge_h_v,
+                &account_comm_key,
+                pk_aff.0,
+                pk_enc.0,
+                id,
+                asset_id,
+                &account_comm,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Verify auth proof using its own AUTH_TXN_LABEL transcript
+        reg_proof
+            .auth_proof
+            .verify(pk_aff.0, pk_enc.0, nonce, &aff_key_gen, &enc_key_gen, None)
+            .unwrap();
+
+        let proof = reg_proof.partial.proof.as_ref().unwrap();
+        let tuple = verifier
+            .verification_scalars_and_points_with_rng(proof, &mut rng)
+            .unwrap();
+        verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens).unwrap();
+    }
+
+    #[test]
+    fn registration_sequential_workflow() {
+        // W3 (Sequential): Host derives partial challenge first, sends it to Ledger.
+        // Ledger uses ledger_nonce = [challenge_h_bytes || original_nonce] for its own AUTH_TXN_LABEL transcript.
+        // Verifier replicates: derive partial challenge, verify partial, recompute ledger nonce, verify auth.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
+        let account_comm_key = setup_comm_key(b"testing");
+        let asset_id = 1;
+        let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+        let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+            new_account_without_sk(&mut rng, asset_id, id.clone());
+        let account_comm = AccountStateCommitment::from_without_sk(
+            account.commit(account_comm_key.clone()).unwrap(),
+            pk_aff.0,
+            pk_enc.0,
+        );
+        let nonce = b"test-nonce-0";
+
+        let leaf_level_pc_gens = account_tree_params.even_parameters.pc_gens();
+        let leaf_level_bp_gens = account_tree_params.even_parameters.bp_gens();
+
+        let aff_key_gen = account_comm_key.sk_gen();
+
+        //  Host pre-challenge phase
+        let (protocol, mut prover) = RegTxnWithoutSkProtocol::<_, 48, 6>::init(
+            &mut rng,
+            pk_aff.0,
+            pk_enc.0,
+            &account,
+            account_comm.clone(),
+            rho_randomness,
+            nullifier_gen_counter,
+            nonce,
+            &account_comm_key,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            &poseidon_params,
+            None,
+        )
+        .unwrap();
+
+        let challenge_h = prover
+            .transcript()
+            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+        //  Host sends challenge_h bytes to Ledger
+        let mut challenge_h_bytes = Vec::new();
+        challenge_h
+            .serialize_compressed(&mut challenge_h_bytes)
+            .unwrap();
+        let ledger_nonce: Vec<u8> = challenge_h_bytes
+            .iter()
+            .chain(nonce.iter())
+            .copied()
+            .collect();
+        let auth_proof = AuthProofOnlySks::new(
+            &mut rng,
+            sk_aff.0,
+            sk_enc.0,
+            pk_aff.0,
+            pk_enc.0,
+            &ledger_nonce,
+            &aff_key_gen,
+            &enc_key_gen,
+        )
+        .unwrap();
+
+        //  Host hashes auth_proof into the transcript to derive an updated challenge
+        let mut auth_proof_bytes = Vec::new();
+        auth_proof
+            .serialize_compressed(&mut auth_proof_bytes)
+            .unwrap();
+        prover
+            .transcript()
+            .append_message(b"auth-proof", &auth_proof_bytes);
+        let challenge_h_final = prover
+            .transcript()
+            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+        //  Host post-challenge phase, host could create a new challenge by hashing the ledger proof into challenge_h
+        let mut partial = protocol.gen_proof(&challenge_h_final).unwrap();
+        let r1cs_proof = prover
+            .prove_with_rng(&leaf_level_bp_gens, &mut rng)
+            .unwrap();
+        partial.proof = Some(r1cs_proof);
+
+        let reg_proof = RegTxnProof::<_, 48, 6> {
+            auth_proof,
+            partial,
+        };
+
+        //  derive partial challenge, verify partial, recompute ledger nonce, verify auth
+        let mut verifier = reg_proof
+            .partial
+            .challenge_contribution(
+                id,
+                pk_aff.0,
+                pk_enc.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nonce,
+                &account_comm_key,
+                &poseidon_params,
+                None,
+            )
+            .unwrap();
+
+        let challenge_h_v = verifier
+            .transcript()
+            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+        // Verifier recomputes ledger nonce from the partial challenge
+        let mut challenge_h_v_bytes = Vec::new();
+        challenge_h_v
+            .serialize_compressed(&mut challenge_h_v_bytes)
+            .unwrap();
+        let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+            .iter()
+            .chain(nonce.iter())
+            .copied()
+            .collect();
+        reg_proof
+            .auth_proof
+            .verify(
+                pk_aff.0,
+                pk_enc.0,
+                &ledger_nonce_v,
+                &aff_key_gen,
+                &enc_key_gen,
+                None,
+            )
+            .unwrap();
+
+        // Verifier hashes auth_proof into the transcript to derive the updated challenge
+        let mut auth_proof_bytes_v = Vec::new();
+        reg_proof
+            .auth_proof
+            .serialize_compressed(&mut auth_proof_bytes_v)
+            .unwrap();
+        verifier
+            .transcript()
+            .append_message(b"auth-proof", &auth_proof_bytes_v);
+        let challenge_h_final_v = verifier
+            .transcript()
+            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+        reg_proof
+            .partial
+            .verify_with_challenge(
+                &challenge_h_final_v,
+                &account_comm_key,
+                pk_aff.0,
+                pk_enc.0,
+                id,
+                asset_id,
+                &account_comm,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let proof = reg_proof.partial.proof.as_ref().unwrap();
+        let tuple = verifier
+            .verification_scalars_and_points_with_rng(proof, &mut rng)
+            .unwrap();
+        verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens).unwrap();
     }
 
     /*
@@ -2454,7 +3134,7 @@ pub mod tests {
         let mut prover = Prover::new(pc_gens, prover_transcript);
         let (comm, vars) = prover.commit_vec(&values, Fr::from(200u64), bp_gens);
 
-        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(
+        if RegTxnWithoutSkProof::<PallasA, 48, 6>::enforce_constraints(
             &mut prover,
             asset_id,
             counter,
@@ -2475,7 +3155,7 @@ pub mod tests {
         let mut verifier = Verifier::new(verifier_transcript);
         let vars = verifier.commit_vec(5, comm);
 
-        if RegTxnProof::<PallasA, 48, 6>::enforce_constraints(
+        if RegTxnWithoutSkProof::<PallasA, 48, 6>::enforce_constraints(
             &mut verifier,
             asset_id,
             counter,
@@ -2501,7 +3181,7 @@ pub mod tests {
         let counter = 1;
 
         let poseidon_params = test_params_for_poseidon2();
-        let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, counter);
+        let combined = AccountStateWithoutSk::<PallasA>::concat_asset_id_counter(asset_id, counter);
         let rho = Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_params.clone())
             .unwrap();
 
@@ -2840,7 +3520,7 @@ pub mod tests {
             &mut rmc,
         )
         .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let rmc_verifier_time = clock.elapsed();
 
         // Test batch verification with RandomizedMultChecker for proofs with pk_T
@@ -2880,7 +3560,7 @@ pub mod tests {
             &mut rmc_with_pk_T,
         )
         .unwrap();
-        assert!(rmc_with_pk_T.verify());
+        rmc_with_pk_T.verify().unwrap();
         let rmc_verifier_time_with_pk_T = clock.elapsed();
 
         println!(
@@ -3067,7 +3747,7 @@ pub mod tests {
             &mut rmc_without_pk_T,
         )
         .unwrap();
-        assert!(rmc_without_pk_T.verify());
+        rmc_without_pk_T.verify().unwrap();
         let rmc_verification_time_without_pk_T = clock.elapsed();
 
         // Now create proofs with pk_T
@@ -3184,7 +3864,7 @@ pub mod tests {
             &mut rmc_with_pk_T,
         )
         .unwrap();
-        assert!(rmc_with_pk_T.verify());
+        rmc_with_pk_T.verify().unwrap();
         let rmc_verification_time_with_pk_T = clock.elapsed();
 
         println!(
@@ -3257,7 +3937,7 @@ pub mod tests {
                 new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
 
             // Set non-zero balance - this should cause proof verification to fail
-            account.balance = 100;
+            account.without_sk.balance = 100;
 
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 

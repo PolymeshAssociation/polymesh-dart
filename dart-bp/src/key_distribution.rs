@@ -527,7 +527,7 @@ mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_2_rmc = clock.elapsed();
 
         for (i, recipient_sk) in recipient_sks_2.iter().enumerate() {
@@ -600,7 +600,7 @@ mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_3_rmc = clock.elapsed();
 
         for (i, recipient_sk) in recipient_sks_3.iter().enumerate() {

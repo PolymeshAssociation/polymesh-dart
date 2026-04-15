@@ -17,6 +17,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
+use super::account_reg_split::AccountAssetStateWithPk;
 use super::encode::*;
 use super::*;
 use crate::*;
@@ -146,7 +147,7 @@ impl EncryptionKeyPair {
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-pub struct AccountPublicKey(CompressedAffine);
+pub struct AccountPublicKey(pub(crate) CompressedAffine);
 
 /// FromStr for AccountPublicKey
 impl core::str::FromStr for AccountPublicKey {
@@ -361,6 +362,20 @@ impl AccountKeys {
         identity: &[u8],
     ) -> Result<(AccountAssetState, PallasScalar), Error> {
         AccountAssetState::new(self, asset_id, counter, identity)
+    }
+
+    /// Initializes a new asset state containing only the public key (no secret key).
+    pub fn init_asset_state_with_pk(
+        &self,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+    ) -> Result<(AccountAssetStateWithPk, PallasScalar), Error> {
+        let (asset_state, rho_randomness) =
+            AccountAssetState::new(self, asset_id, counter, identity)?;
+        let pk = self.public_keys();
+        let state_with_pk = AccountAssetStateWithPk::from_asset_state(&asset_state, &pk)?;
+        Ok((state_with_pk, rho_randomness))
     }
 
     /// Creates an account state for the given asset, counter, and identity.

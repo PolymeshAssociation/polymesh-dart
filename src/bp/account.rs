@@ -11,17 +11,22 @@ use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
 use bounded_collections::BoundedVec;
+use bulletproofs::r1cs::{ConstraintSystem, VerificationTuple};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::Transcript;
 use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
-use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
+use polymesh_dart_bp::{
+    TXN_CHALLENGE_LABEL, account as bp_account, account_registration, leg as bp_leg,
+};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::*;
 use crate::*;
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
+pub(crate) type BPAccountStateWithoutSk = bp_account::AccountStateWithoutSk<PallasA>;
 pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
 
 pub type AssetCommitmentData =
@@ -54,15 +59,17 @@ impl AccountState {
     ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         let state = BPAccountState {
             sk: keys.acct.secret.0.0,
-            id: self.identity.decode()?,
-            balance: self.balance,
-            counter: self.counter,
-            asset_id: self.asset_id,
-            rho: self.rho.decode()?,
-            current_rho: self.current_rho.decode()?,
-            randomness: self.randomness.decode()?,
-            current_randomness: self.current_randomness.decode()?,
             sk_enc: keys.enc.secret.0.0,
+            without_sk: BPAccountStateWithoutSk {
+                id: self.identity.decode()?,
+                balance: self.balance,
+                counter: self.counter,
+                asset_id: self.asset_id,
+                rho: self.rho.decode()?,
+                current_rho: self.current_rho.decode()?,
+                randomness: self.randomness.decode()?,
+                current_randomness: self.current_randomness.decode()?,
+            },
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
@@ -86,14 +93,14 @@ impl TryFrom<BPAccountState> for AccountState {
 
     fn try_from(state: BPAccountState) -> Result<Self, Self::Error> {
         Ok(Self {
-            balance: state.balance,
-            counter: state.counter,
-            asset_id: state.asset_id,
-            identity: WrappedCanonical::wrap(&state.id)?,
-            rho: WrappedCanonical::wrap(&state.rho)?,
-            current_rho: WrappedCanonical::wrap(&state.current_rho)?,
-            randomness: WrappedCanonical::wrap(&state.randomness)?,
-            current_randomness: WrappedCanonical::wrap(&state.current_randomness)?,
+            balance: state.without_sk.balance,
+            counter: state.without_sk.counter,
+            asset_id: state.without_sk.asset_id,
+            identity: WrappedCanonical::wrap(&state.without_sk.id)?,
+            rho: WrappedCanonical::wrap(&state.without_sk.rho)?,
+            current_rho: WrappedCanonical::wrap(&state.without_sk.current_rho)?,
+            randomness: WrappedCanonical::wrap(&state.without_sk.randomness)?,
+            current_randomness: WrappedCanonical::wrap(&state.without_sk.current_randomness)?,
         })
     }
 }
@@ -527,6 +534,39 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     pub fn len(&self) -> usize {
         self.proofs.len()
     }
+
+    #[cfg(feature = "parallel")]
+    pub fn verify_split<R: RngCore + CryptoRng + Sync + Send + Clone>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        if self.proofs.len() == 0 {
+            return Ok(());
+        }
+        self.proofs
+            .par_iter()
+            .map_init(
+                || rng.clone(),
+                |rng, proof| proof.verify_split(identity, tree_params, rng),
+            )
+            .collect::<Result<(), Error>>()?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn verify_split<R: RngCore + CryptoRng>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        for proof in &self.proofs {
+            proof.verify_split(identity, tree_params, rng)?;
+        }
+        Ok(())
+    }
 }
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
@@ -537,7 +577,7 @@ pub struct AccountAssetRegistrationProof {
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
 
-    inner: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
+    pub(crate) inner: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
 }
 
 impl AccountAssetRegistrationProof {
@@ -595,7 +635,7 @@ impl AccountAssetRegistrationProof {
 
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
 
-        proof.verify(
+        let result = proof.verify(
             rng,
             id,
             self.account.acct.get_affine()?,
@@ -610,11 +650,93 @@ impl AccountAssetRegistrationProof {
             &params.params,
             None,
             Some(&mut rmc),
-        )?;
-        if !rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        Ok(())
+        );
+
+        process_result_and_rmc(result, rmc)
+    }
+
+    pub fn verify_split<R: RngCore + CryptoRng>(
+        &self,
+        identity: &[u8],
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        let params = poseidon_params();
+        let id = hash_identity::<PallasScalar>(identity);
+        let pk_aff = self.account.acct.get_affine()?;
+        let pk_enc = self.account.enc.get_affine()?;
+        let commitment = self.account_state_commitment.as_commitment()?;
+        let gens = dart_gens();
+        let comm_key = gens.account_comm_key();
+        let sk_gen = comm_key.sk_gen();
+        let sk_enc_gen = comm_key.sk_enc_gen();
+        let pc_gens = tree_params.even_parameters.pc_gens();
+        let bp_gens = tree_params.even_parameters.bp_gens();
+
+        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+        let result = (|| -> Result<(), Error> {
+            let mut verifier = proof.partial.challenge_contribution(
+                id,
+                pk_aff,
+                pk_enc,
+                self.asset_id,
+                &commitment,
+                self.counter,
+                identity,
+                &comm_key,
+                &params.params,
+                None,
+            )?;
+
+            let challenge_h_v = verifier
+                .transcript()
+                .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
+
+            let mut challenge_h_v_bytes = Vec::new();
+            challenge_h_v.serialize_compressed(&mut challenge_h_v_bytes)?;
+            let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+                .iter()
+                .chain(identity.iter())
+                .copied()
+                .collect();
+
+            proof
+                .auth_proof
+                .verify(pk_aff, pk_enc, &ledger_nonce_v, &sk_gen, &sk_enc_gen, None)?;
+
+            let mut auth_proof_bytes = Vec::new();
+            proof
+                .auth_proof
+                .serialize_compressed(&mut auth_proof_bytes)?;
+            verifier
+                .transcript()
+                .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+            let challenge_h_final_v = verifier
+                .transcript()
+                .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
+
+            proof.partial.verify_with_challenge(
+                &challenge_h_final_v,
+                &comm_key,
+                pk_aff,
+                pk_enc,
+                id,
+                self.asset_id,
+                &commitment,
+                pc_gens,
+                bp_gens,
+                None,
+                Some(&mut rmc),
+            )?;
+
+            let bp_proof = proof.partial.proof.as_ref().ok_or(Error::RMCVerifyError)?;
+            let tuple = verifier.verification_scalars_and_points_with_rng(bp_proof, rng)?;
+            bulletproofs::r1cs::verify_given_verification_tuple(tuple, pc_gens, bp_gens)?;
+            Ok(())
+        })();
+
+        process_result_and_rmc(result, rmc)
     }
 
     /// Verify this registration proof inside a batch of proofs.
@@ -623,7 +745,7 @@ impl AccountAssetRegistrationProof {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-    ) -> Result<bulletproofs::r1cs::VerificationTuple<PallasA>, Error> {
+    ) -> Result<VerificationTuple<PallasA>, Error> {
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
@@ -631,7 +753,7 @@ impl AccountAssetRegistrationProof {
         // A better approach is to not create RandomizedMultChecker here but outside and pass in
         let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
 
-        let tuple = proof.verify_and_return_tuples(
+        let result = proof.verify_and_return_tuples(
             id,
             self.account.acct.get_affine()?,
             self.account.enc.get_affine()?,
@@ -646,11 +768,8 @@ impl AccountAssetRegistrationProof {
             None,
             rng,
             Some(&mut rmc),
-        )?;
+        );
 
-        if !rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        Ok(tuple)
+        process_result_and_rmc(result, rmc)
     }
 }

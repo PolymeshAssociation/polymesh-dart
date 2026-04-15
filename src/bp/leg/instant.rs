@@ -227,27 +227,34 @@ impl<
         let ctx = self.leg_ref.context();
         let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
+        let acc_cm = self.updated_account_state_commitment.as_commitment()?;
+        let nullifier = self.nullifier.get_affine()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
-        proof.verify(
-            rng,
-            leg_enc.core_and_eph_keys_for_sender(),
-            &root,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
-            ctx.as_bytes(),
-            tree_roots.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().leg_asset_value_gen(),
-            rmc,
-        )?;
-        if !even_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        if !odd_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
+        proof
+            .verify(
+                rng,
+                leg_enc.core_and_eph_keys_for_sender(),
+                &root,
+                acc_cm,
+                nullifier,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().leg_asset_value_gen(),
+                rmc,
+            )
+            .map_err(|e| {
+                even_rmc.cancel();
+                odd_rmc.cancel();
+                e
+            })?;
+        even_rmc.verify().map_err(|_| {
+            odd_rmc.cancel();
+            Error::RMCVerifyError
+        })?;
+        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
         Ok(())
     }
 }
@@ -358,27 +365,34 @@ impl<
         let ctx = self.leg_ref.context();
         let leg_enc = leg_enc.decode()?;
         let proof = self.inner.decode()?;
+        let acc_cm = self.updated_account_state_commitment.as_commitment()?;
+        let nullifier = self.nullifier.get_affine()?;
         let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
-        proof.verify(
-            rng,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            &root,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
-            ctx.as_bytes(),
-            tree_roots.params(),
-            dart_gens().account_comm_key(),
-            dart_gens().leg_asset_value_gen(),
-            rmc,
-        )?;
-        if !even_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
-        if !odd_rmc.verify() {
-            return Err(Error::RMCVerifyError);
-        }
+        proof
+            .verify(
+                rng,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                &root,
+                acc_cm,
+                nullifier,
+                ctx.as_bytes(),
+                tree_roots.params(),
+                dart_gens().account_comm_key(),
+                dart_gens().leg_asset_value_gen(),
+                rmc,
+            )
+            .map_err(|e| {
+                even_rmc.cancel();
+                odd_rmc.cancel();
+                e
+            })?;
+        even_rmc.verify().map_err(|_| {
+            odd_rmc.cancel();
+            Error::RMCVerifyError
+        })?;
+        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
         Ok(())
     }
 }

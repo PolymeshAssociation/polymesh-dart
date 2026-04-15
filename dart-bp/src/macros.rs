@@ -14,9 +14,9 @@ macro_rules! verify_or_rmc_2 {
                 $proof.verify_using_randomized_mult_checker($o1, $o2, $($ref_arg,)* __rmc);
             }
             None => {
-                if !$proof.verify(&$o1, &$o2, $($ref_arg,)*) {
-                    return Err($crate::Error::ProofVerificationError($err.into()));
-                }
+                $proof
+                    .verify(&$o1, &$o2, $($ref_arg,)*)
+                    .map_err(|_| $crate::Error::ProofVerificationError($err.into()))?;
             }
         }
     }};
@@ -31,9 +31,9 @@ macro_rules! verify_or_rmc_3 {
                 $proof.verify_using_randomized_mult_checker($o1, $o2, $o3, $($ref_arg,)* __rmc);
             }
             None => {
-                if !$proof.verify(&$o1, &$o2, &$o3, $($ref_arg,)*) {
-                    return Err($crate::Error::ProofVerificationError($err.into()));
-                }
+                $proof
+                    .verify(&$o1, &$o2, &$o3, $($ref_arg,)*)
+                    .map_err(|_| $crate::Error::ProofVerificationError($err.into()))?;
             }
         }
     }};

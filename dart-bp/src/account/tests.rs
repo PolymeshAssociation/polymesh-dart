@@ -2,15 +2,24 @@ use crate::account::state_transition::{
     AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
 };
 use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
-use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::account::{
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AffirmAsReceiverSplitProof,
+    AffirmAsReceiverSplitProtocol, AffirmAsSenderSplitProof, AffirmAsSenderSplitProtocol,
+    ClaimReceivedSplitProof, ClaimReceivedSplitProtocol, IrreversibleAffirmAsReceiverSplitProof,
+    IrreversibleAffirmAsReceiverSplitProtocol, IrreversibleAffirmAsSenderSplitProof,
+    IrreversibleAffirmAsSenderSplitProtocol, LegProverConfig, LegVerifierConfig,
+    ReceiverCounterUpdateSplitProof, ReceiverCounterUpdateSplitProtocol,
+    SenderCounterUpdateSplitProof, SenderCounterUpdateSplitProtocol, SenderReverseSplitProof,
+    SenderReverseSplitProtocol,
+};
 use crate::account::{
     AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
     IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
     ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof, SenderReverseTxnProof,
 };
-use crate::account_registration::tests::{new_account, setup_comm_key};
+use crate::account_registration::tests::{new_account, new_account_without_sk, setup_comm_key};
+use crate::auth_proofs::account::AuthProofAffirmation;
 use crate::keys::keygen_sig;
-use crate::leg::Leg;
 use crate::leg::leg_proof::LegCreationProof;
 use crate::leg::mediator::MEDIATOR_TXN_LABEL;
 use crate::leg::public_asset_leg_proof::{
@@ -22,11 +31,12 @@ use crate::leg::{
     AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LegEncryption, LegEncryptionRandomness,
 };
 use crate::leg::{LEG_TXN_ODD_LABEL, LegEncConfig, MediatorTxnProof};
+use crate::leg::{Leg, PartyEphemeralPublicKey};
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
-    prove_with_rng, verify_rmc, verify_with_rng,
+    prove_with_rng, verify_given_verification_tuples, verify_rmc, verify_with_rng,
 };
-use crate::{TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
+use crate::{TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
 use ark_ec::CurveGroup;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
@@ -35,14 +45,14 @@ use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
 use ark_vesta::{Fr as VestaFr, VestaConfig as VestaParameters};
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-use bulletproofs::r1cs::{Prover, Verifier, verify_given_verification_tuple};
+use bulletproofs::r1cs::{ConstraintSystem, Prover, Verifier, verify_given_verification_tuple};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::{CurveTree, Root};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::transcript::MerlinTranscript;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use std::time::Instant;
@@ -70,7 +80,7 @@ fn send_txn() {
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
-    account.balance = 200;
+    account.without_sk.balance = 200;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -168,7 +178,7 @@ fn send_txn() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -215,7 +225,7 @@ fn receive_txn() {
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
-    account.balance = 200;
+    account.without_sk.balance = 200;
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
         account_comm_key.clone(),
@@ -311,7 +321,7 @@ fn receive_txn() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -358,8 +368,8 @@ fn claim_received_funds() {
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
     // Assume that account had some balance and it had sent the receive transaction to increase its counter
-    account.balance = 200;
-    account.counter += 1;
+    account.without_sk.balance = 200;
+    account.without_sk.counter += 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -457,7 +467,7 @@ fn claim_received_funds() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -501,8 +511,8 @@ fn counter_update_txn_by_sender() {
     // Sender account with non-zero counter
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-    account.balance = 50;
-    account.counter = 1;
+    account.without_sk.balance = 50;
+    account.without_sk.counter = 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -598,7 +608,7 @@ fn counter_update_txn_by_sender() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -641,8 +651,8 @@ fn reverse_send_txn() {
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
     // Assume that account had some balance and it had sent the send transaction to increase its counter
-    account.balance = 200;
-    account.counter += 1;
+    account.without_sk.balance = 200;
+    account.without_sk.counter += 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -740,7 +750,7 @@ fn reverse_send_txn() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -784,8 +794,8 @@ fn reverse_receive_txn() {
     // Receiver account with non-zero counter
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
-    account.balance = 50;
-    account.counter = 1;
+    account.without_sk.balance = 50;
+    account.without_sk.counter = 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -882,7 +892,7 @@ fn reverse_receive_txn() {
                 Some((&mut rmc_0, &mut rmc_1)),
             )
             .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verifier_time_rmc = clock.elapsed();
 
@@ -1136,7 +1146,7 @@ fn single_shot_settlement() {
         &mut rmc_0,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let verifier_rmc_time = start.elapsed();
 
     let settlement_proof_size = settlement_proof.compressed_size() + leg_enc.compressed_size();
@@ -1423,7 +1433,7 @@ fn single_shot_combined_create_and_send() {
     )
     .unwrap();
 
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let rmc_verification_time = start.elapsed();
 
@@ -1729,7 +1739,7 @@ fn single_shot_combined_create_and_recv() {
     )
     .unwrap();
 
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let rmc_verification_time = start.elapsed();
 
@@ -1851,24 +1861,24 @@ fn single_shot_swap() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 200;
+    alice_account_1.without_sk.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
+    alice_account_2.without_sk.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 50;
+    bob_account_1.without_sk.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.balance = 300;
+    bob_account_2.without_sk.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -2285,7 +2295,7 @@ fn single_shot_swap() {
     )
     .unwrap();
 
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let verification_time = start.elapsed();
     println!("Total verification time: {:?}", verification_time);
@@ -2977,24 +2987,24 @@ fn single_shot_swap_asset_id_revealed() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 200;
+    alice_account_1.without_sk.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
+    alice_account_2.without_sk.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 50;
+    bob_account_1.without_sk.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.balance = 300;
+    bob_account_2.without_sk.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -3456,23 +3466,23 @@ fn swap_settlement_asset_id_revealed() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 200;
+    alice_account_1.without_sk.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
+    alice_account_2.without_sk.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 50;
+    bob_account_1.without_sk.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
-    bob_account_2.balance = 300;
+    bob_account_2.without_sk.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -3927,28 +3937,28 @@ fn reverse_settlement_asset_id_revealed() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 500;
-    alice_account_1.counter = 1;
+    alice_account_1.without_sk.balance = 500;
+    alice_account_1.without_sk.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
-    alice_account_2.counter = 1;
+    alice_account_2.without_sk.balance = 50;
+    alice_account_2.without_sk.counter = 1;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 500;
-    bob_account_1.counter = 1;
+    bob_account_1.without_sk.balance = 500;
+    bob_account_1.without_sk.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.balance = 50;
-    bob_account_2.counter = 1;
+    bob_account_2.without_sk.balance = 50;
+    bob_account_2.without_sk.counter = 1;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -4313,7 +4323,7 @@ fn batch_send_txn_proofs() {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
-        account.balance = 200; // Ensure sufficient balance
+        account.without_sk.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -4480,7 +4490,7 @@ fn batch_send_txn_proofs() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let batch_verifier_rmc_time = clock.elapsed();
 
     println!(
@@ -4545,7 +4555,7 @@ fn combined_send_txn_proofs() {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
-        account.balance = 200; // Ensure sufficient balance
+        account.without_sk.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -4702,7 +4712,7 @@ fn combined_send_txn_proofs() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let rmc_verification_time = clock.elapsed();
 
     println!("Combined send proving time = {:?}", proving_time);
@@ -4776,7 +4786,7 @@ fn combined_create_and_send() {
 
     let id = PallasFr::rand(&mut rng);
     let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-    account.balance = 200;
+    account.without_sk.balance = 200;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -4961,7 +4971,7 @@ fn combined_create_and_send() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let rmc_verification_time = clock.elapsed();
 
@@ -5035,7 +5045,7 @@ fn batch_receive_txn_proofs() {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
-        account.balance = 200; // Ensure some initial balance
+        account.without_sk.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -5189,7 +5199,7 @@ fn batch_receive_txn_proofs() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let batch_verifier_rmc_time = clock.elapsed();
 
     println!(
@@ -5254,7 +5264,7 @@ fn combined_receive_txn_proofs() {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
-        account.balance = 200; // Ensure some initial balance
+        account.without_sk.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -5401,7 +5411,7 @@ fn combined_receive_txn_proofs() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
     let rmc_verification_time = clock.elapsed();
 
     println!("Combined receive proving time = {:?}", proving_time);
@@ -5511,23 +5521,23 @@ fn swap_settlement() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 200;
+    alice_account_1.without_sk.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
+    alice_account_2.without_sk.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 50;
+    bob_account_1.without_sk.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
-    bob_account_2.balance = 300;
+    bob_account_2.without_sk.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -5747,7 +5757,7 @@ fn swap_settlement() {
         &mut rmc_0,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let settlement_verification_time_rmc = clock.elapsed();
 
@@ -5842,7 +5852,7 @@ fn swap_settlement() {
         )
         .unwrap();
 
-    assert!(rmc_med.verify());
+    rmc_med.verify().unwrap();
 
     let mediator_verification_time_rmc = clock.elapsed();
 
@@ -6145,7 +6155,7 @@ fn swap_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let alice_verification_time_rmc = clock.elapsed();
 
@@ -6215,7 +6225,7 @@ fn swap_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let bob_verification_time_rmc = clock.elapsed();
 
@@ -6585,7 +6595,7 @@ fn swap_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let alice_counter_update_verification_time_rmc = clock.elapsed();
 
@@ -6656,7 +6666,7 @@ fn swap_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let bob_counter_update_verification_time_rmc = clock.elapsed();
 
@@ -6781,28 +6791,28 @@ fn reverse_settlement() {
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.balance = 500;
-    alice_account_1.counter = 1;
+    alice_account_1.without_sk.balance = 500;
+    alice_account_1.without_sk.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.balance = 50;
-    alice_account_2.counter = 1;
+    alice_account_2.without_sk.balance = 50;
+    alice_account_2.without_sk.counter = 1;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
         new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.balance = 500;
-    bob_account_1.counter = 1;
+    bob_account_1.without_sk.balance = 500;
+    bob_account_1.without_sk.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
         new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.balance = 50;
-    bob_account_2.counter = 1;
+    bob_account_2.without_sk.balance = 50;
+    bob_account_2.without_sk.counter = 1;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -7153,7 +7163,7 @@ fn reverse_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let alice_verification_time_rmc = clock.elapsed();
 
@@ -7223,7 +7233,7 @@ fn reverse_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let bob_verification_time_rmc = clock.elapsed();
 
@@ -7610,7 +7620,7 @@ fn multi_asset_settlement() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let verify_rmc_time = start.elapsed();
 
@@ -7992,7 +8002,7 @@ fn multi_asset_combined_create_and_send() {
         &mut rmc_1,
     )
     .unwrap();
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let rmc_verification_time = start.elapsed();
 
@@ -8394,7 +8404,7 @@ fn multi_asset_combined_create_and_recv() {
     )
     .unwrap();
 
-    verify_rmc(&rmc_0, &rmc_1).unwrap();
+    verify_rmc(rmc_0, rmc_1).unwrap();
 
     let rmc_verification_time = start.elapsed();
 
@@ -8483,7 +8493,7 @@ fn multi_asset_state_transition_different_confs() {
                 sk_alice_e.clone(),
                 alice_id,
             );
-            account.balance = 500;
+            account.without_sk.balance = 500;
             let comm = account.commit(account_comm_key.clone()).unwrap();
             alice_account_comms.push(comm.0);
             alice_accounts.push(account);
@@ -8497,7 +8507,7 @@ fn multi_asset_state_transition_different_confs() {
         for asset_id in 1..=num_legs as u32 {
             let (mut account, _, _, _) =
                 new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
-            account.balance = 300;
+            account.without_sk.balance = 300;
             let comm = account.commit(account_comm_key.clone()).unwrap();
             bob_account_comms.push(comm.0);
             bob_accounts.push(account);
@@ -8667,7 +8677,7 @@ fn multi_asset_state_transition_different_confs() {
             &mut rmc_1,
         )
         .unwrap();
-        verify_rmc(&rmc_0, &rmc_1).unwrap();
+        verify_rmc(rmc_0, rmc_1).unwrap();
 
         let verify_rmc_time = start.elapsed();
 
@@ -8780,14 +8790,27 @@ pub fn get_tree_with_account_comm<
 ) -> Result<CurveTree<L, 1, PallasParameters, VestaParameters>> {
     let account_comm = account.commit(account_comm_key)?;
 
-    // Add account commitment in curve tree
+    Ok(get_tree_with_commitment(
+        account_comm,
+        account_tree_params,
+        tree_height,
+    ))
+}
+
+/// Create a new tree and add the given account commitment to the tree and return the tree
+pub fn get_tree_with_commitment<
+    const L: usize,
+    P: SelRerandParametersRef<PallasParameters, VestaParameters>,
+>(
+    account_comm: AccountStateCommitment<PallasA>,
+    account_tree_params: &P,
+    tree_height: usize,
+) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
     let set = vec![account_comm.0];
-    Ok(
-        CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
-            &set,
-            account_tree_params,
-            Some(tree_height),
-        ),
+    CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &set,
+        account_tree_params,
+        Some(tree_height),
     )
 }
 
@@ -8987,14 +9010,14 @@ pub fn setup_single_leg_settlement_common<
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
     let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
-    sender_account.balance = 200; // Ensure sufficient balance
+    sender_account.without_sk.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
     let (mut receiver_account, _, _, _) =
         new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-    receiver_account.balance = 150; // Some initial balance
+    receiver_account.without_sk.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
     // Create the account tree with both accounts
@@ -9213,7 +9236,7 @@ pub fn setup_multi_asset_settlement<
             sk_alice_e.clone(),
             alice_id,
         );
-        account.balance = 500;
+        account.without_sk.balance = 500;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         alice_account_comms.push(comm.0);
         alice_accounts.push(account);
@@ -9226,7 +9249,7 @@ pub fn setup_multi_asset_settlement<
     for asset_id in 1..=num_legs as u32 {
         let (mut account, _, _, _) =
             new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
-        account.balance = 300;
+        account.without_sk.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         bob_account_comms.push(comm.0);
         bob_accounts.push(account);
@@ -9366,14 +9389,14 @@ pub fn setup_single_leg_settlement_public_asset_common<
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
     let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
-    sender_account.balance = 200; // Ensure sufficient balance
+    sender_account.without_sk.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
     let (mut receiver_account, _, _, _) =
         new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-    receiver_account.balance = 150; // Some initial balance
+    receiver_account.without_sk.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
     // Create the account tree with both accounts
@@ -9452,6 +9475,2609 @@ pub fn setup_single_leg_settlement_public_asset<const NUM_GENS: usize, const L: 
     )
 }
 
+fn setup_single_leg_test<const L: usize, R: CryptoRngCore>(
+    rng: &mut R,
+    reveal_asset_id: bool,
+    pk_a_e: PallasA,
+    pk_s_e: PallasA,
+    pk_r_e: PallasA,
+    amount: Balance,
+    asset_id: AssetId,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    enc_gen: PallasA,
+    updated_account_comm: AccountStateCommitment<PallasA>,
+    account_tree: &CurveTree<L, 1, PallasParameters, VestaParameters>,
+) -> (
+    LegEncryption<PallasA>,
+    AccountStateCommitment<PallasA>,
+    CurveTreeWitnessPath<L, PallasParameters, VestaParameters>,
+    Root<L, 1, PallasParameters, VestaParameters>,
+) {
+    let conf = LegEncConfig {
+        parties_see_each_other: true,
+        reveal_asset_id,
+    };
+    let (_, leg_enc, _) = setup_leg_with_conf(
+        rng,
+        conf,
+        pk_a_e,
+        None,
+        amount,
+        asset_id,
+        pk_s_e,
+        pk_r_e,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+    (leg_enc, updated_account_comm, path, root)
+}
+
+/// Extracts the Fiat-Shamir challenge and protocol data from the prover state.
+/// Returns `(challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm)`.
+macro_rules! extract_prover_challenge_and_data {
+    ($even_prover:expr, $protocol:expr) => {{
+        let challenge_h = $even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let re_randomized_leaf = $protocol.rerandomized_leaf();
+        let auth_rerandomization = $protocol.auth_rerandomization();
+        let auth_rand_new_comm = $protocol.auth_rand_new_comm();
+        (
+            challenge_h,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+        )
+    }};
+}
+
+/// Runs the verifier side of a split proof (challenge contribution, auth-proof
+/// verification, and `verify_and_return_tuples`) and returns the
+/// `(even_tuple, odd_tuple)` pair for the caller to verify or batch.
+///
+/// Call-site example:
+/// ```ignore
+/// let (even_tuple, odd_tuple) = check_split_proof!(
+///     proof: split_proof,
+///     party: Sender,
+///     has_balance_decreased: Some(true),
+///     updated_account_comm: updated_account_comm,
+///     nullifier: nullifier,
+///     root: &root,
+///     nonce: nonce,
+///     account_tree_params: &account_tree_params,
+///     account_comm_key: &account_comm_key,
+///     enc_gen: enc_gen,
+///     leg_enc_core: &leg_enc_core,
+///     eph_pk: &eph_pk,
+///     b_blinding: b_blinding,
+///     rng: &mut rng,
+/// );
+/// ```
+/// Handles the prover side of a split proof: generates random blinding scalars,
+/// calls `init`, extracts the Fiat-Shamir challenge via
+/// `extract_prover_challenge_and_data!`, builds the `AuthProofAffirmation`,
+/// calls `gen_proof`, and assembles the final proof.
+///
+/// Two arms:
+/// - `with_amount;` — for protocols whose `init` takes `amount` and `k_1`
+///   (`gen_proof` returns `(host_data, balance)`; assemble takes all three).
+/// - `no_amount;`  — for protocols whose `init` takes only `k_asset_id`
+///   (`gen_proof` returns `host_data`; assemble takes two args).
+///
+/// Returns `(split_proof, nullifier, host_proof_time)`.
+macro_rules! gen_split_proof {
+    (
+        with_amount;
+        Protocol: $proto_ty:ty,
+        Proof: $proof_ty:ident,
+        party: $party:ident,
+        has_balance_changed: $hbc:expr,
+        rng: $rng:expr,
+        amount: $amount:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        old_account: $old:expr,
+        updated_account: $new:expr,
+        updated_account_comm: $uac:expr,
+        path: $path:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        sk_scalar: $sk:expr,
+        sk_e_scalar: $ske:expr,
+        b_blinding: $bb:expr,
+        reveal_asset_id: $rai:expr $(,)?
+    ) => {{
+        let k_1 = PallasFr::rand($rng);
+        let k_asset_id = if !$rai {
+            Some(PallasFr::rand($rng))
+        } else {
+            None
+        };
+        let clock = Instant::now();
+        let (protocol, mut even_prover, odd_prover, nullifier) =
+            <$proto_ty>::init::<_, PallasParams, VestaParams>(
+                $rng,
+                $amount,
+                ($lec.clone(), $eph_pk.clone()),
+                &$old,
+                &$new,
+                $uac,
+                $path,
+                $root,
+                $nonce,
+                $atp,
+                $ack.clone(),
+                $eg,
+                k_1,
+                k_asset_id,
+            )
+            .unwrap();
+        let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+            extract_prover_challenge_and_data!(even_prover, protocol);
+        let auth_proof = AuthProofAffirmation::new(
+            $rng,
+            $sk,
+            $ske,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_1],
+            if !$rai {
+                vec![k_asset_id.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: $lec.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                has_balance_changed: $hbc,
+            }],
+            &re_randomized_leaf,
+            &$uac.0,
+            nullifier,
+            $nonce,
+            $ack.sk_gen(),
+            $ack.sk_enc_gen(),
+            $bb,
+            $eg,
+        )
+        .unwrap();
+        let (host, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h,
+                even_prover,
+                odd_prover,
+                $atp,
+                $rng,
+            )
+            .unwrap();
+        let host_proof_time = clock.elapsed();
+        let split_proof = $proof_ty::assemble(host, balance, auth_proof);
+        (split_proof, nullifier, host_proof_time)
+    }};
+    (
+        no_amount;
+        Protocol: $proto_ty:ty,
+        Proof: $proof_ty:ident,
+        party: $party:ident,
+        has_balance_changed: $hbc:expr,
+        rng: $rng:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        old_account: $old:expr,
+        updated_account: $new:expr,
+        updated_account_comm: $uac:expr,
+        path: $path:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        sk_scalar: $sk:expr,
+        sk_e_scalar: $ske:expr,
+        b_blinding: $bb:expr,
+        reveal_asset_id: $rai:expr $(,)?
+    ) => {{
+        let k_asset_id = if !$rai {
+            Some(PallasFr::rand($rng))
+        } else {
+            None
+        };
+        let clock = Instant::now();
+        let (protocol, mut even_prover, odd_prover, nullifier) =
+            <$proto_ty>::init::<_, PallasParams, VestaParams>(
+                $rng,
+                ($lec.clone(), $eph_pk.clone()),
+                &$old,
+                &$new,
+                $uac,
+                $path,
+                $root,
+                $nonce,
+                $atp,
+                $ack.clone(),
+                $eg,
+                k_asset_id,
+            )
+            .unwrap();
+        let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+            extract_prover_challenge_and_data!(even_prover, protocol);
+        let auth_proof = AuthProofAffirmation::new(
+            $rng,
+            $sk,
+            $ske,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![],
+            if !$rai {
+                vec![k_asset_id.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: $lec.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                has_balance_changed: $hbc,
+            }],
+            &re_randomized_leaf,
+            &$uac.0,
+            nullifier,
+            $nonce,
+            $ack.sk_gen(),
+            $ack.sk_enc_gen(),
+            $bb,
+            $eg,
+        )
+        .unwrap();
+        let host_data = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h,
+                even_prover,
+                odd_prover,
+                $atp,
+                $rng,
+            )
+            .unwrap();
+        let host_proof_time = clock.elapsed();
+        let split_proof = $proof_ty::assemble(host_data, auth_proof);
+        (split_proof, nullifier, host_proof_time)
+    }};
+    // Sequential flow (with_amount): ledger_nonce = challenge_h || nonce; auth_proof hashed into transcript
+    (
+        sequential; with_amount;
+        Protocol: $proto_ty:ty,
+        Proof: $proof_ty:ident,
+        party: $party:ident,
+        has_balance_changed: $hbc:expr,
+        rng: $rng:expr,
+        amount: $amount:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        old_account: $old:expr,
+        updated_account: $new:expr,
+        updated_account_comm: $uac:expr,
+        path: $path:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        sk_scalar: $sk:expr,
+        sk_e_scalar: $ske:expr,
+        b_blinding: $bb:expr,
+        reveal_asset_id: $rai:expr $(,)?
+    ) => {{
+        let k_1 = PallasFr::rand($rng);
+        let k_asset_id = if !$rai {
+            Some(PallasFr::rand($rng))
+        } else {
+            None
+        };
+        let clock = Instant::now();
+        let (protocol, mut even_prover, odd_prover, nullifier) =
+            <$proto_ty>::init::<_, PallasParams, VestaParams>(
+                $rng,
+                $amount,
+                ($lec.clone(), $eph_pk.clone()),
+                &$old,
+                &$new,
+                $uac,
+                $path,
+                $root,
+                $nonce,
+                $atp,
+                $ack.clone(),
+                $eg,
+                k_1,
+                k_asset_id,
+            )
+            .unwrap();
+        let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+            extract_prover_challenge_and_data!(even_prover, protocol);
+        // Sequential: ledger_nonce = challenge_h_bytes || nonce
+        let mut challenge_h_bytes = Vec::new();
+        challenge_h
+            .serialize_compressed(&mut challenge_h_bytes)
+            .unwrap();
+        let ledger_nonce: Vec<u8> = challenge_h_bytes
+            .iter()
+            .chain($nonce.iter())
+            .copied()
+            .collect();
+        let auth_proof = AuthProofAffirmation::new(
+            $rng,
+            $sk,
+            $ske,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_1],
+            if !$rai {
+                vec![k_asset_id.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: $lec.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                has_balance_changed: $hbc,
+            }],
+            &re_randomized_leaf,
+            &$uac.0,
+            nullifier,
+            &ledger_nonce,
+            $ack.sk_gen(),
+            $ack.sk_enc_gen(),
+            $bb,
+            $eg,
+        )
+        .unwrap();
+        // Hash auth_proof into transcript to derive updated challenge
+        let mut auth_proof_bytes = Vec::new();
+        auth_proof
+            .serialize_compressed(&mut auth_proof_bytes)
+            .unwrap();
+        even_prover
+            .transcript()
+            .append_message(b"auth-proof", &auth_proof_bytes);
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let (host_data, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                $atp,
+                $rng,
+            )
+            .unwrap();
+        let host_proof_time = clock.elapsed();
+        let split_proof = $proof_ty::assemble(host_data, balance, auth_proof);
+        (split_proof, nullifier, host_proof_time)
+    }};
+    // Sequential flow (no_amount): ledger_nonce = challenge_h || nonce; auth_proof hashed into transcript
+    (
+        sequential; no_amount;
+        Protocol: $proto_ty:ty,
+        Proof: $proof_ty:ident,
+        party: $party:ident,
+        has_balance_changed: $hbc:expr,
+        rng: $rng:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        old_account: $old:expr,
+        updated_account: $new:expr,
+        updated_account_comm: $uac:expr,
+        path: $path:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        sk_scalar: $sk:expr,
+        sk_e_scalar: $ske:expr,
+        b_blinding: $bb:expr,
+        reveal_asset_id: $rai:expr $(,)?
+    ) => {{
+        let k_asset_id = if !$rai {
+            Some(PallasFr::rand($rng))
+        } else {
+            None
+        };
+        let clock = Instant::now();
+        let (protocol, mut even_prover, odd_prover, nullifier) =
+            <$proto_ty>::init::<_, PallasParams, VestaParams>(
+                $rng,
+                ($lec.clone(), $eph_pk.clone()),
+                &$old,
+                &$new,
+                $uac,
+                $path,
+                $root,
+                $nonce,
+                $atp,
+                $ack.clone(),
+                $eg,
+                k_asset_id,
+            )
+            .unwrap();
+        let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+            extract_prover_challenge_and_data!(even_prover, protocol);
+        // Sequential: ledger_nonce = challenge_h_bytes || nonce
+        let mut challenge_h_bytes = Vec::new();
+        challenge_h
+            .serialize_compressed(&mut challenge_h_bytes)
+            .unwrap();
+        let ledger_nonce: Vec<u8> = challenge_h_bytes
+            .iter()
+            .chain($nonce.iter())
+            .copied()
+            .collect();
+        let auth_proof = AuthProofAffirmation::new(
+            $rng,
+            $sk,
+            $ske,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![],
+            if !$rai {
+                vec![k_asset_id.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: $lec.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                has_balance_changed: $hbc,
+            }],
+            &re_randomized_leaf,
+            &$uac.0,
+            nullifier,
+            &ledger_nonce,
+            $ack.sk_gen(),
+            $ack.sk_enc_gen(),
+            $bb,
+            $eg,
+        )
+        .unwrap();
+        // Hash auth_proof into transcript to derive updated challenge
+        let mut auth_proof_bytes = Vec::new();
+        auth_proof
+            .serialize_compressed(&mut auth_proof_bytes)
+            .unwrap();
+        even_prover
+            .transcript()
+            .append_message(b"auth-proof", &auth_proof_bytes);
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let host_data = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                $atp,
+                $rng,
+            )
+            .unwrap();
+        let host_proof_time = clock.elapsed();
+        let split_proof = $proof_ty::assemble(host_data, auth_proof);
+        (split_proof, nullifier, host_proof_time)
+    }};
+}
+
+macro_rules! verify_split_proof {
+    (
+        proof: $proof:expr,
+        party: $party:ident,
+        has_balance_decreased: $hbd:expr,
+        updated_account_comm: $uac:expr,
+        nullifier: $nullifier:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        b_blinding: $bb:expr,
+        rng: $rng:expr $(,)?
+    ) => {{
+        let mut verifier = $proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                $uac, $nullifier, $root, $nonce, $atp, $ack, $eg, $lec, $eph_pk,
+            )
+            .unwrap();
+        let challenge_h_v = verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let re_randomized_leaf_v = $proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        $proof
+            .common
+            .auth_proof
+            .verify(
+                vec![LegVerifierConfig {
+                    encryption: $lec.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                    has_balance_decreased: $hbd,
+                    has_counter_decreased: None,
+                }],
+                &re_randomized_leaf_v,
+                &$uac.0,
+                $nullifier,
+                $nonce,
+                $ack.sk_gen(),
+                $ack.sk_enc_gen(),
+                $bb,
+                $eg,
+                None,
+            )
+            .unwrap();
+        $proof
+            .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+                verifier,
+                &challenge_h_v,
+                $uac,
+                $nullifier,
+                $atp,
+                $ack,
+                $eg,
+                $rng,
+                None,
+            )
+            .unwrap()
+    }};
+    // Sequential flow: ledger_nonce_v = challenge_h_v || nonce; auth_proof hashed into transcript
+    (
+        sequential;
+        proof: $proof:expr,
+        party: $party:ident,
+        has_balance_decreased: $hbd:expr,
+        updated_account_comm: $uac:expr,
+        nullifier: $nullifier:expr,
+        root: $root:expr,
+        nonce: $nonce:expr,
+        account_tree_params: $atp:expr,
+        account_comm_key: $ack:expr,
+        enc_gen: $eg:expr,
+        leg_enc_core: $lec:expr,
+        eph_pk: $eph_pk:expr,
+        b_blinding: $bb:expr,
+        rng: $rng:expr $(,)?
+    ) => {{
+        let mut verifier = $proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                $uac, $nullifier, $root, $nonce, $atp, $ack, $eg, $lec, $eph_pk,
+            )
+            .unwrap();
+        let challenge_h_v = verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        // Sequential: reconstruct ledger_nonce_v = challenge_h_v_bytes || nonce
+        let mut challenge_h_v_bytes = Vec::new();
+        challenge_h_v
+            .serialize_compressed(&mut challenge_h_v_bytes)
+            .unwrap();
+        let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+            .iter()
+            .chain($nonce.iter())
+            .copied()
+            .collect();
+        let re_randomized_leaf_v = $proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        $proof
+            .common
+            .auth_proof
+            .verify(
+                vec![LegVerifierConfig {
+                    encryption: $lec.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                    has_balance_decreased: $hbd,
+                    has_counter_decreased: None,
+                }],
+                &re_randomized_leaf_v,
+                &$uac.0,
+                $nullifier,
+                &ledger_nonce_v,
+                $ack.sk_gen(),
+                $ack.sk_enc_gen(),
+                $bb,
+                $eg,
+                None,
+            )
+            .unwrap();
+        // Hash auth_proof into verifier transcript to derive updated challenge
+        let mut auth_proof_bytes_v = Vec::new();
+        $proof
+            .common
+            .auth_proof
+            .serialize_compressed(&mut auth_proof_bytes_v)
+            .unwrap();
+        verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .append_message(b"auth-proof", &auth_proof_bytes_v);
+        let challenge_h_final_v = verifier
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        $proof
+            .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+                verifier,
+                &challenge_h_final_v,
+                $uac,
+                $nullifier,
+                $atp,
+                $ack,
+                $eg,
+                $rng,
+                None,
+            )
+            .unwrap()
+    }};
+}
+
+#[test]
+fn send_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_send(amount).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_s.0,
+            pk_s_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+        let (split_proof, nullifier, host_proof_time) = gen_split_proof!(
+            with_amount;
+            Protocol: AffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsSenderSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        println!(
+            "reveal_asset_id={}, host proof generation time = {:?}",
+            reveal_asset_id, host_proof_time
+        );
+        println!("split proof size = {}", split_proof.compressed_size());
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        println!(
+            "reveal_asset_id={}, full verification passed!",
+            reveal_asset_id
+        );
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: AffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsSenderSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    // asset-id hidden
+    test_with_config(false);
+
+    // asset-id revealed
+    test_with_config(true);
+}
+
+#[test]
+fn receive_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_receive();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_r.0,
+            pk_r_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+        let (split_proof, nullifier, host_proof_time) = gen_split_proof!(
+            no_amount;
+            Protocol: AffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsReceiverSplitProof,
+            party: Receiver,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        println!(
+            "reveal_asset_id={}, host proof generation time = {:?}",
+            reveal_asset_id, host_proof_time
+        );
+        println!("split proof size = {}", split_proof.compressed_size());
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Receiver,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        println!(
+            "reveal_asset_id={}, full verification passed!",
+            reveal_asset_id
+        );
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; no_amount;
+            Protocol: AffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsReceiverSplitProof,
+            party: Receiver,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Receiver,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    // asset-id hidden
+    test_with_config(false);
+
+    // asset-id revealed
+    test_with_config(true);
+}
+
+#[test]
+fn claim_received_funds_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    account.counter += 1;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_claiming_received(amount).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_r.0,
+            pk_r_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            with_amount;
+            Protocol: ClaimReceivedSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: ClaimReceivedSplitProof,
+            party: Receiver,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Receiver,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: ClaimReceivedSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: ClaimReceivedSplitProof,
+            party: Receiver,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Receiver,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn counter_update_txn_by_sender_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 50;
+    account.counter = 1;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_decreasing_counter(None).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_s.0,
+            pk_s_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            no_amount;
+            Protocol: SenderCounterUpdateSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: SenderCounterUpdateSplitProof,
+            party: Sender,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Sender,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; no_amount;
+            Protocol: SenderCounterUpdateSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: SenderCounterUpdateSplitProof,
+            party: Sender,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Sender,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn reverse_send_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    account.counter += 1;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_reversing_send(amount).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_s.0,
+            pk_s_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            with_amount;
+            Protocol: SenderReverseSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: SenderReverseSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Sender,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: SenderReverseSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: SenderReverseSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Sender,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn reverse_receive_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 50;
+    account.counter = 1;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_decreasing_counter(None).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_r.0,
+            pk_r_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            no_amount;
+            Protocol: ReceiverCounterUpdateSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: ReceiverCounterUpdateSplitProof,
+            party: Receiver,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Receiver,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; no_amount;
+            Protocol: ReceiverCounterUpdateSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: ReceiverCounterUpdateSplitProof,
+            party: Receiver,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Receiver,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn irreversible_send_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_irreversible_send(amount).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_s.0,
+            pk_s_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            with_amount;
+            Protocol: IrreversibleAffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: IrreversibleAffirmAsSenderSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: IrreversibleAffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: IrreversibleAffirmAsSenderSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s_scalar,
+            sk_e_scalar: sk_s_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn irreversible_receive_txn_split_proof() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    account.balance = 200;
+    let account_comm = AccountStateCommitment::from_without_sk(
+        account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let nonce = b"test-nonce";
+        let updated_account = account.get_state_for_irreversible_receive(amount).unwrap();
+        let updated_account_comm = AccountStateCommitment::from_without_sk(
+            updated_account.commit(account_comm_key.clone()).unwrap(),
+            pk_r.0,
+            pk_r_e.0,
+        );
+        let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+            &mut rng,
+            reveal_asset_id,
+            pk_a_e.0,
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            account_comm_key.clone(),
+            enc_gen,
+            updated_account_comm,
+            &account_tree,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+        let (split_proof, nullifier, _host_proof_time) = gen_split_proof!(
+            with_amount;
+            Protocol: IrreversibleAffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: IrreversibleAffirmAsReceiverSplitProof,
+            party: Receiver,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path.clone(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+
+        let (even_tuple, odd_tuple) = verify_split_proof!(
+            proof: split_proof,
+            party: Receiver,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Sequential flow
+        let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: IrreversibleAffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: IrreversibleAffirmAsReceiverSplitProof,
+            party: Receiver,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r_scalar,
+            sk_e_scalar: sk_r_e_scalar,
+            b_blinding: b_blinding,
+            reveal_asset_id: reveal_asset_id,
+        );
+        let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
+            sequential;
+            proof: split_proof_seq,
+            party: Receiver,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier_seq,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
+            .unwrap();
+    };
+
+    test_with_config(false);
+    test_with_config(true);
+}
+
+#[test]
+fn single_shot_settlement_split_proof() {
+    const NUM_GENS: usize = 1 << 13;
+    const L: usize = 64;
+    let asset_tree_height = 4;
+    let account_tree_height = 6;
+
+    let mut rng = rand::thread_rng();
+    let (account_tree_params, account_comm_key, enc_gen) =
+        setup_gens_new::<NUM_GENS>(b"test_settlement");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    // Asset tree uses the swapped (Vesta/Pallas) curve pair.
+    let asset_tree_params = SelRerandProofParametersNew::<
+        VestaParameters,
+        PallasParameters,
+        VestaParams,
+        PallasParams,
+    >::new(NUM_GENS as u32, NUM_GENS as u32)
+    .unwrap();
+
+    let asset_comm_params = AssetCommitmentParams::new(
+        b"asset-comm-params",
+        1,
+        &account_tree_params.odd_parameters.bp_gens(),
+    );
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
+        setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 50;
+
+    // Build a deterministic asset tree (commitment does not depend on reveal_asset_id).
+    let asset_tree_delta = asset_tree_params.odd_parameters.sl_params.delta;
+    let asset_data_for_tree = AssetData::new(
+        asset_id,
+        vec![pk_a_e.0],
+        vec![],
+        &asset_comm_params,
+        asset_tree_delta,
+    )
+    .unwrap();
+    let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+        &vec![asset_data_for_tree.commitment],
+        &asset_tree_params,
+        Some(asset_tree_height),
+    );
+    let asset_tree_root = asset_tree.root_node();
+
+    // Create sender and receiver accounts.
+    let sender_id = PallasFr::rand(&mut rng);
+    let (mut sender_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, sender_id);
+    sender_account.balance = 200;
+
+    let receiver_id = PallasFr::rand(&mut rng);
+    let (mut receiver_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, receiver_id);
+    receiver_account.balance = 150;
+
+    // Two-account tree (sender at index 0, receiver at index 1).
+    let sender_account_comm = AccountStateCommitment::from_without_sk(
+        sender_account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let receiver_account_comm = AccountStateCommitment::from_without_sk(
+        receiver_account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &vec![sender_account_comm.0, receiver_account_comm.0],
+        &account_tree_params,
+        Some(account_tree_height),
+    );
+    let account_tree_root = account_tree.root_node();
+
+    let updated_sender_account = sender_account
+        .get_state_for_irreversible_send(amount)
+        .unwrap();
+    let updated_sender_account_comm = AccountStateCommitment::from_without_sk(
+        updated_sender_account
+            .commit(account_comm_key.clone())
+            .unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+
+    let updated_receiver_account = receiver_account
+        .get_state_for_irreversible_receive(amount)
+        .unwrap();
+    let updated_receiver_account_comm = AccountStateCommitment::from_without_sk(
+        updated_receiver_account
+            .commit(account_comm_key.clone())
+            .unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+
+    println!(
+        "For L={L}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height}"
+    );
+
+    let mut test_with_config = |reveal_asset_id: bool| {
+        let conf = LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id,
+        };
+
+        let (leg, leg_enc, leg_enc_rand) = setup_leg_with_conf(
+            &mut rng,
+            conf,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+
+        let nonce = b"single_shot_settlement_split_proof_nonce";
+
+        // asset_path is consumed by LegCreationProof::new; obtain fresh each time.
+        let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        // Clone the asset_data deterministically (same inputs → same commitment).
+        let asset_data = AssetData::new(
+            asset_id,
+            vec![pk_a_e.0],
+            vec![],
+            &asset_comm_params,
+            asset_tree_delta,
+        )
+        .unwrap();
+
+        let start = Instant::now();
+        let settlement_proof =
+            LegCreationProof::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                asset_path,
+                asset_data,
+                &asset_tree_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            )
+            .unwrap();
+        println!("Settlement creation time: {:?}", start.elapsed());
+
+        // Sender split proof
+        let (leg_enc_core_s, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+        let k_1_s = PallasFr::rand(&mut rng);
+        let k_asset_id_s = if !reveal_asset_id {
+            Some(PallasFr::rand(&mut rng))
+        } else {
+            None
+        };
+
+        let start = Instant::now();
+        let (protocol_s, mut even_prover_s, odd_prover_s, sender_nullifier) =
+            IrreversibleAffirmAsSenderSplitProtocol::<
+                L,
+                PallasFr,
+                VestaFr,
+                PallasParameters,
+                VestaParameters,
+            >::init::<_, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                (leg_enc_core_s.clone(), eph_pk_s.clone()),
+                &sender_account,
+                &updated_sender_account,
+                updated_sender_account_comm,
+                account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                k_1_s,
+                k_asset_id_s,
+            )
+            .unwrap();
+
+        let (challenge_h_s, re_randomized_leaf_s, auth_rerandomization_s, auth_rand_new_comm_s) =
+            extract_prover_challenge_and_data!(even_prover_s, protocol_s);
+
+        let auth_proof_s = AuthProofAffirmation::new(
+            &mut rng,
+            sk_s_scalar,
+            sk_s_e_scalar,
+            auth_rerandomization_s,
+            auth_rand_new_comm_s,
+            vec![k_1_s],
+            if !reveal_asset_id {
+                vec![k_asset_id_s.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: leg_enc_core_s.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                has_balance_changed: true,
+            }],
+            &re_randomized_leaf_s,
+            &updated_sender_account_comm.0,
+            sender_nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let (host_s, balance_s) = protocol_s
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_s,
+                even_prover_s,
+                odd_prover_s,
+                &account_tree_params,
+                &mut rng,
+            )
+            .unwrap();
+        let sender_split_proof =
+            IrreversibleAffirmAsSenderSplitProof::assemble(host_s, balance_s, auth_proof_s);
+        println!("Sender split proof creation time: {:?}", start.elapsed());
+
+        // Receiver split proof
+        let (leg_enc_core_r, eph_pk_r) = leg_enc.core_and_eph_keys_for_receiver();
+        let k_1_r = PallasFr::rand(&mut rng);
+        let k_asset_id_r = if !reveal_asset_id {
+            Some(PallasFr::rand(&mut rng))
+        } else {
+            None
+        };
+
+        let start = Instant::now();
+        let (protocol_r, mut even_prover_r, odd_prover_r, receiver_nullifier) =
+            IrreversibleAffirmAsReceiverSplitProtocol::<
+                L,
+                PallasFr,
+                VestaFr,
+                PallasParameters,
+                VestaParameters,
+            >::init::<_, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                (leg_enc_core_r.clone(), eph_pk_r.clone()),
+                &receiver_account,
+                &updated_receiver_account,
+                updated_receiver_account_comm,
+                account_tree.get_path_to_leaf_for_proof(1, 0).unwrap(),
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                k_1_r,
+                k_asset_id_r,
+            )
+            .unwrap();
+
+        let (challenge_h_r, re_randomized_leaf_r, auth_rerandomization_r, auth_rand_new_comm_r) =
+            extract_prover_challenge_and_data!(even_prover_r, protocol_r);
+
+        let auth_proof_r = AuthProofAffirmation::new(
+            &mut rng,
+            sk_r_scalar,
+            sk_r_e_scalar,
+            auth_rerandomization_r,
+            auth_rand_new_comm_r,
+            vec![k_1_r],
+            if !reveal_asset_id {
+                vec![k_asset_id_r.unwrap()]
+            } else {
+                vec![]
+            },
+            vec![LegProverConfig {
+                encryption: leg_enc_core_r.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
+                has_balance_changed: true,
+            }],
+            &re_randomized_leaf_r,
+            &updated_receiver_account_comm.0,
+            receiver_nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let (host_data_r, balance_r) = protocol_r
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_r,
+                even_prover_r,
+                odd_prover_r,
+                &account_tree_params,
+                &mut rng,
+            )
+            .unwrap();
+        let receiver_split_proof =
+            IrreversibleAffirmAsReceiverSplitProof::assemble(host_data_r, balance_r, auth_proof_r);
+        println!("Receiver split proof creation time: {:?}", start.elapsed());
+
+        // Verify all three proofs and batch-verify the BP tuples --------------
+        let start = Instant::now();
+
+        // Settlement proof uses the asset tree (Vesta=G0/even, Pallas=G1/odd).
+        // Account proofs use the account tree (Pallas=G0/even, Vesta=G1/odd).
+        // So settlement_even ↔ Vesta, but account even ↔ Pallas; swap when batching.
+        let (settlement_even, settlement_odd) = settlement_proof
+            .verify_and_return_tuples(
+                leg_enc.clone(),
+                &asset_tree_root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+                &mut rng,
+                None,
+            )
+            .unwrap();
+
+        let (sender_even, sender_odd) = verify_split_proof!(
+            proof: sender_split_proof,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_sender_account_comm,
+            nullifier: sender_nullifier,
+            root: &account_tree_root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core_s,
+            eph_pk: &eph_pk_s,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+
+        let (receiver_even, receiver_odd) = verify_split_proof!(
+            proof: receiver_split_proof,
+            party: Receiver,
+            has_balance_decreased: Some(false),
+            updated_account_comm: updated_receiver_account_comm,
+            nullifier: receiver_nullifier,
+            root: &account_tree_root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core_r,
+            eph_pk: &eph_pk_r,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+
+        println!("tuples time: {:?}", start.elapsed());
+
+        // settlement_odd  = Pallas tuple → goes with Pallas-even account tuples
+        // settlement_even = Vesta  tuple → goes with Vesta-odd  account tuples
+        let even_tuples = vec![settlement_odd, sender_even, receiver_even];
+        let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
+
+        batch_verify_bp(
+            even_tuples,
+            odd_tuples,
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.odd_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+        )
+        .unwrap();
+
+        let verifier_time = start.elapsed();
+
+        let settlement_proof_size = settlement_proof.compressed_size() + leg_enc.compressed_size();
+        let sender_proof_size = sender_split_proof.compressed_size();
+        let receiver_proof_size = receiver_split_proof.compressed_size();
+
+        println!(
+            "settlement={settlement_proof_size}B, sender={sender_proof_size}B, receiver={receiver_proof_size}B"
+        );
+        println!("verifier time = {verifier_time:?}");
+    };
+
+    // LegCreationProof requires a hidden asset-id; the reveal_asset_id=true
+    // variant would use PublicAssetLegCreationProof and is a separate test.
+    test_with_config(false);
+}
+
+#[test]
+fn single_shot_settlement_asset_id_revealed_split_proof() {
+    const NUM_GENS: usize = 1 << 13;
+    const L: usize = 64;
+    let account_tree_height = 6;
+
+    let mut rng = rand::thread_rng();
+    let (account_tree_params, account_comm_key, enc_gen) =
+        setup_gens_new::<NUM_GENS>(b"test_public_asset_settlement");
+
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let leaf_level_pc_gens = PedersenGens::<Affine<PallasParameters>>::default();
+    let leaf_level_bp_gens = BulletproofGens::<Affine<PallasParameters>>::new(NUM_GENS as u32, 1);
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
+        setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+    let sk_s_scalar = sk_s.0;
+    let sk_s_e_scalar = sk_s_e.0;
+    let sk_r_scalar = sk_r.0;
+    let sk_r_e_scalar = sk_r_e.0;
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 50;
+
+    let (leg, leg_enc, leg_enc_rand) = setup_public_asset_leg(
+        &mut rng,
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+
+    let sender_id = PallasFr::rand(&mut rng);
+    let (mut sender_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, sender_id);
+    sender_account.balance = 200;
+
+    let receiver_id = PallasFr::rand(&mut rng);
+    let (mut receiver_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, receiver_id);
+    receiver_account.balance = 150;
+
+    let sender_account_comm = AccountStateCommitment::from_without_sk(
+        sender_account.commit(account_comm_key.clone()).unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+    let receiver_account_comm = AccountStateCommitment::from_without_sk(
+        receiver_account.commit(account_comm_key.clone()).unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+    let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &vec![sender_account_comm.0, receiver_account_comm.0],
+        &account_tree_params,
+        Some(account_tree_height),
+    );
+    let account_tree_root = account_tree.root_node();
+
+    let updated_sender_account = sender_account
+        .get_state_for_irreversible_send(amount)
+        .unwrap();
+    let updated_sender_account_comm = AccountStateCommitment::from_without_sk(
+        updated_sender_account
+            .commit(account_comm_key.clone())
+            .unwrap(),
+        pk_s.0,
+        pk_s_e.0,
+    );
+
+    let updated_receiver_account = receiver_account
+        .get_state_for_irreversible_receive(amount)
+        .unwrap();
+    let updated_receiver_account_comm = AccountStateCommitment::from_without_sk(
+        updated_receiver_account
+            .commit(account_comm_key.clone())
+            .unwrap(),
+        pk_r.0,
+        pk_r_e.0,
+    );
+
+    let nonce = b"single_shot_settlement_asset_id_revealed_split_proof_nonce";
+
+    println!("For L={L}, account tree height = {account_tree_height}, asset_id revealed");
+
+    let start = Instant::now();
+    let settlement_proof = PublicAssetLegCreationProof::<PallasParameters>::new(
+        &mut rng,
+        leg.clone(),
+        leg_enc.clone(),
+        leg_enc_rand.clone(),
+        nonce,
+        &leaf_level_pc_gens,
+        &leaf_level_bp_gens,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    )
+    .unwrap();
+    println!("Settlement creation time: {:?}", start.elapsed());
+
+    let (leg_enc_core_s, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+    let k_1_s = PallasFr::rand(&mut rng);
+
+    let start = Instant::now();
+    let (protocol_s, mut even_prover_s, odd_prover_s, sender_nullifier) =
+        IrreversibleAffirmAsSenderSplitProtocol::<
+            L,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            (leg_enc_core_s.clone(), eph_pk_s.clone()),
+            &sender_account,
+            &updated_sender_account,
+            updated_sender_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1_s,
+            None,
+        )
+        .unwrap();
+
+    let (challenge_h_s, re_randomized_leaf_s, auth_rerandomization_s, auth_rand_new_comm_s) =
+        extract_prover_challenge_and_data!(even_prover_s, protocol_s);
+
+    let auth_proof_s = AuthProofAffirmation::new(
+        &mut rng,
+        sk_s_scalar,
+        sk_s_e_scalar,
+        auth_rerandomization_s,
+        auth_rand_new_comm_s,
+        vec![k_1_s],
+        vec![],
+        vec![LegProverConfig {
+            encryption: leg_enc_core_s.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+            has_balance_changed: true,
+        }],
+        &re_randomized_leaf_s,
+        &updated_sender_account_comm.0,
+        sender_nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+    )
+    .unwrap();
+
+    let (host_s, balance_s) = protocol_s
+        .gen_proof::<_, PallasParams, VestaParams>(
+            &challenge_h_s,
+            even_prover_s,
+            odd_prover_s,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+    let sender_split_proof =
+        IrreversibleAffirmAsSenderSplitProof::assemble(host_s, balance_s, auth_proof_s);
+    println!("Sender split proof creation time: {:?}", start.elapsed());
+
+    let (leg_enc_core_r, eph_pk_r) = leg_enc.core_and_eph_keys_for_receiver();
+    let k_1_r = PallasFr::rand(&mut rng);
+
+    let start = Instant::now();
+    let (protocol_r, mut even_prover_r, odd_prover_r, receiver_nullifier) =
+        IrreversibleAffirmAsReceiverSplitProtocol::<
+            L,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            (leg_enc_core_r.clone(), eph_pk_r.clone()),
+            &receiver_account,
+            &updated_receiver_account,
+            updated_receiver_account_comm,
+            account_tree.get_path_to_leaf_for_proof(1, 0).unwrap(),
+            &account_tree_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1_r,
+            None,
+        )
+        .unwrap();
+
+    let (challenge_h_r, re_randomized_leaf_r, auth_rerandomization_r, auth_rand_new_comm_r) =
+        extract_prover_challenge_and_data!(even_prover_r, protocol_r);
+
+    let auth_proof_r = AuthProofAffirmation::new(
+        &mut rng,
+        sk_r_scalar,
+        sk_r_e_scalar,
+        auth_rerandomization_r,
+        auth_rand_new_comm_r,
+        vec![k_1_r],
+        vec![],
+        vec![LegProverConfig {
+            encryption: leg_enc_core_r.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
+            has_balance_changed: true,
+        }],
+        &re_randomized_leaf_r,
+        &updated_receiver_account_comm.0,
+        receiver_nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+    )
+    .unwrap();
+
+    let (host_data_r, balance_r) = protocol_r
+        .gen_proof::<_, PallasParams, VestaParams>(
+            &challenge_h_r,
+            even_prover_r,
+            odd_prover_r,
+            &account_tree_params,
+            &mut rng,
+        )
+        .unwrap();
+    let receiver_split_proof =
+        IrreversibleAffirmAsReceiverSplitProof::assemble(host_data_r, balance_r, auth_proof_r);
+    println!("Receiver split proof creation time: {:?}", start.elapsed());
+
+    let start = Instant::now();
+
+    settlement_proof
+        .verify(
+            &mut rng,
+            leg_enc.clone(),
+            vec![leg.enc_keys[0]],
+            vec![],
+            vec![],
+            nonce,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+            None,
+        )
+        .unwrap();
+
+    let (sender_even, sender_odd) = verify_split_proof!(
+        proof: sender_split_proof,
+        party: Sender,
+        has_balance_decreased: Some(true),
+        updated_account_comm: updated_sender_account_comm,
+        nullifier: sender_nullifier,
+        root: &account_tree_root,
+        nonce: nonce,
+        account_tree_params: &account_tree_params,
+        account_comm_key: &account_comm_key,
+        enc_gen: enc_gen,
+        leg_enc_core: &leg_enc_core_s,
+        eph_pk: &eph_pk_s,
+        b_blinding: b_blinding,
+        rng: &mut rng,
+    );
+
+    let (receiver_even, receiver_odd) = verify_split_proof!(
+        proof: receiver_split_proof,
+        party: Receiver,
+        has_balance_decreased: Some(false),
+        updated_account_comm: updated_receiver_account_comm,
+        nullifier: receiver_nullifier,
+        root: &account_tree_root,
+        nonce: nonce,
+        account_tree_params: &account_tree_params,
+        account_comm_key: &account_comm_key,
+        enc_gen: enc_gen,
+        leg_enc_core: &leg_enc_core_r,
+        eph_pk: &eph_pk_r,
+        b_blinding: b_blinding,
+        rng: &mut rng,
+    );
+
+    println!("tuples time: {:?}", start.elapsed());
+
+    let even_tuples = vec![sender_even, receiver_even];
+    let odd_tuples = vec![sender_odd, receiver_odd];
+
+    batch_verify_bp(
+        even_tuples,
+        odd_tuples,
+        account_tree_params.even_parameters.pc_gens(),
+        account_tree_params.odd_parameters.pc_gens(),
+        account_tree_params.even_parameters.bp_gens(),
+        account_tree_params.odd_parameters.bp_gens(),
+    )
+    .unwrap();
+
+    let verifier_time = start.elapsed();
+
+    let settlement_proof_size = settlement_proof.compressed_size() + leg_enc.compressed_size();
+    let sender_proof_size = sender_split_proof.compressed_size();
+    let receiver_proof_size = receiver_split_proof.compressed_size();
+
+    println!(
+        "settlement={settlement_proof_size}B, sender={sender_proof_size}B, receiver={receiver_proof_size}B"
+    );
+    println!("verifier time = {verifier_time:?}");
+}
+
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
 
 #[cfg(feature = "ignore_prover_input_sanitation")]
@@ -9510,7 +12136,7 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
-        account.balance = 200;
+        account.without_sk.balance = 200;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -9527,7 +12153,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that doesn't decrease the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.balance = account.balance; // Keep same balance
+        updated_account.without_sk.balance = account.without_sk.balance; // Keep same balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9566,7 +12192,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that instead increases the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.balance = account.balance + amount; // Increase balance
+        updated_account.without_sk.balance = account.without_sk.balance + amount; // Increase balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9645,7 +12271,7 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
-        account.balance = 200;
+        account.without_sk.balance = 200;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -9662,7 +12288,7 @@ mod input_sanitation_disabled {
 
         // Create a malicious updated account that increases balance
         let mut updated_account = account.get_state_for_receive();
-        updated_account.balance = account.balance + amount;
+        updated_account.without_sk.balance = account.without_sk.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9740,8 +12366,8 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
-        account.balance = 200;
-        account.counter += 2;
+        account.without_sk.balance = 200;
+        account.without_sk.counter += 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -9758,7 +12384,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than the actual claim amount
         let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        updated_account.balance = account.balance + 75; // Add extra on top of the actual amount
+        updated_account.without_sk.balance = account.without_sk.balance + 75; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9797,7 +12423,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        updated_account.counter -= 1;
+        updated_account.without_sk.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9875,8 +12501,8 @@ mod input_sanitation_disabled {
         // Sender account with non-zero counter
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-        account.balance = 50;
-        account.counter = 2;
+        account.without_sk.balance = 50;
+        account.without_sk.counter = 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -9893,7 +12519,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance when it should remain the same
         let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        updated_account.balance = account.balance + amount;
+        updated_account.without_sk.balance = account.without_sk.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -9931,7 +12557,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        updated_account.counter -= 1;
+        updated_account.without_sk.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -10008,8 +12634,8 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
-        account.balance = 200;
-        account.counter += 2;
+        account.without_sk.balance = 200;
+        account.without_sk.counter += 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -10026,7 +12652,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than required
         let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        updated_account.balance = account.balance + 50; // Add extra on top of the actual amount
+        updated_account.without_sk.balance = account.without_sk.balance + 50; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -10065,7 +12691,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        updated_account.counter -= 1;
+        updated_account.without_sk.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -10141,16 +12767,16 @@ mod input_sanitation_disabled {
         let sender_id = PallasFr::rand(&mut rng);
         let (mut sender_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), sender_id);
-        sender_account.balance = 200; // Ensure sufficient balance
-        sender_account.counter = 5; // Set non-zero counter for testing
+        sender_account.without_sk.balance = 200; // Ensure sufficient balance
+        sender_account.without_sk.counter = 5; // Set non-zero counter for testing
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
         // Create receiver account
         let receiver_id = PallasFr::rand(&mut rng);
         let (mut receiver_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-        receiver_account.balance = 150; // Some initial balance
-        receiver_account.counter = 3; // Set non-zero counter for testing
+        receiver_account.without_sk.balance = 150; // Some initial balance
+        receiver_account.without_sk.counter = 3; // Set non-zero counter for testing
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
         // Create the account tree with both accounts
@@ -10172,7 +12798,7 @@ mod input_sanitation_disabled {
         let mut malicious_sender_account = sender_account
             .get_state_for_irreversible_send(amount)
             .unwrap();
-        malicious_sender_account.balance += 50;
+        malicious_sender_account.without_sk.balance += 50;
 
         let malicious_sender_comm = malicious_sender_account
             .commit(account_comm_key.clone())
@@ -10217,7 +12843,7 @@ mod input_sanitation_disabled {
         let mut malicious_receiver_account = receiver_account
             .get_state_for_irreversible_receive(amount)
             .unwrap();
-        malicious_receiver_account.balance += 50;
+        malicious_receiver_account.without_sk.balance += 50;
 
         let malicious_receiver_comm = malicious_receiver_account
             .commit(account_comm_key.clone())
@@ -10261,7 +12887,7 @@ mod input_sanitation_disabled {
         let mut malicious_sender_account = sender_account
             .get_state_for_irreversible_send(amount)
             .unwrap();
-        malicious_sender_account.counter -= 1;
+        malicious_sender_account.without_sk.counter -= 1;
 
         let malicious_sender_comm = malicious_sender_account
             .commit(account_comm_key.clone())
@@ -10305,7 +12931,7 @@ mod input_sanitation_disabled {
         let mut malicious_receiver_account = receiver_account
             .get_state_for_irreversible_receive(amount)
             .unwrap();
-        malicious_receiver_account.counter -= 1;
+        malicious_receiver_account.without_sk.counter -= 1;
 
         let malicious_receiver_comm = malicious_receiver_account
             .commit(account_comm_key.clone())

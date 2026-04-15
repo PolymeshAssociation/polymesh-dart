@@ -1391,7 +1391,7 @@ mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_rmc = clock.elapsed();
 
         println!("For public asset leg proof (parties_see_each_other = true)");
@@ -1467,7 +1467,7 @@ mod tests {
                 Some(&mut rmc),
             )
             .unwrap();
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let verifier_time_rmc = clock.elapsed();
 
         println!("For public asset leg proof (parties_see_each_other = false)");
@@ -1629,7 +1629,7 @@ mod tests {
             .unwrap();
         }
 
-        assert!(rmc.verify());
+        rmc.verify().unwrap();
         let rmc_verify_time = rmc_verify_clock.elapsed();
 
         println!(

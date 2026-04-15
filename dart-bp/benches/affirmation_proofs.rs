@@ -143,7 +143,7 @@ fn create_account_and_tree<
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
     let (mut account, _) =
         AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap();
-    account.balance = 200;
+    account.without_sk.balance = 200;
 
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let set = vec![account_comm.0];
@@ -366,7 +366,7 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
                     Some((&mut rmc_0, &mut rmc_1)),
                 )
                 .unwrap();
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }
@@ -439,7 +439,7 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
                     Some((&mut rmc_0, &mut rmc_1)),
                 )
                 .unwrap();
-            verify_rmc(&rmc_0, &rmc_1).unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
         });
     });
 }
