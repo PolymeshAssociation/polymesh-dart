@@ -3,20 +3,21 @@
 ## R1CS Constraints
 
 ### For refreshing $\rho$ and $s$
-Once $\rho, \rho_i, \rho_{i+1}, s_i, s_{i+1}$ are committed in Bulletproof, we get circuit variables for each one of them. Then we enforce multiplication relations among these variables.
+Once $\rho, \rho_i, \rho_{i+1}, s, s_i, s_{i+1}$ are committed in Bulletproof, we get circuit variables for each one of them. Then we enforce multiplication relations among these variables.
 ```text
 These variables are guaranteed to have these values
 var_rho = \rho
 var_rho_i = \rho_i
 var_rho_i_plus_1 = \rho_{i+1}
+var_s = s
 var_s_i = s_i
 var_s_i_plus_1 = s_{i+1}
 
 // Assign circuit variable var_rho_i_plus_1_ to the product of var_rho and var_rho_i
 var_rho_i_plus_1_ <- var_rho * var_rho_i
 
-// Assign circuit variable var_s_i_plus_1_ to the product of var_s_i and var_s_i
-var_s_i_plus_1_ <- var_s_i * var_s_i
+// Assign circuit variable var_s_i_plus_1_ to the product of var_s and var_s_i
+var_s_i_plus_1_ <- var_s * var_s_i
 
 // Enforce that values of var_rho_i_plus_1 and var_rho_i_plus_1_ are same
 var_rho_i_plus_1 == var_rho_i_plus_1_
