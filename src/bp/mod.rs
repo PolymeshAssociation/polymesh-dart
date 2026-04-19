@@ -1,5 +1,3 @@
-use codec::{Decode, Encode};
-
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::{
     PrimeField,
@@ -242,27 +240,17 @@ impl PoseidonParameters {
     }
 }
 
-#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq, CanonicalSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentKey {
-    #[codec(encoded_as = "CompressedAffine")]
     pub sk_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub balance_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub counter_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub asset_id_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub rho_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub current_rho_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub randomness_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub current_randomness_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub identity_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     pub sk_enc_gen: PallasA,
 }
 
@@ -338,14 +326,11 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
 }
 
 /// The generators for the Dart BP protocol.
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
 pub struct DartBPGenerators {
-    #[codec(encoded_as = "CompressedAffine")]
     sig_key_gen: PallasA,
-    #[codec(encoded_as = "CompressedAffine")]
     enc_key_gen: PallasA,
     account_comm_key: AccountCommitmentKey,
-    #[codec(encoded_as = "CompressedAffine")]
     leg_asset_value_gen: PallasA,
 }
 
@@ -403,8 +388,10 @@ mod tests {
     fn test_dart_bp_generators_encode_decode() {
         let gens = dart_gens().clone();
 
-        let encoded = gens.encode();
-        let decoded: DartBPGenerators = Decode::decode(&mut &encoded[..]).unwrap();
+        let mut encoded = Vec::new();
+        gens.serialize_uncompressed(&mut encoded).unwrap();
+        let decoded: DartBPGenerators =
+            CanonicalDeserialize::deserialize_uncompressed(&encoded[..]).unwrap();
         assert_eq!(gens, decoded);
     }
 }
