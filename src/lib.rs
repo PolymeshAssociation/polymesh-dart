@@ -50,23 +50,12 @@ pub mod init {
 
     pub fn init_params() -> Result<usize, Error> {
         let mut total_size = 0;
+
         // Generate the curve tree parameters.
-        #[cfg(feature = "parallel")]
-        {
-            let (pallas_params, vesta_params) = rayon::join(
-                || get_pallas_layer_parameters(),
-                || get_vesta_layer_parameters(),
-            );
-            total_size += pallas_params.uncompressed_size();
-            total_size += vesta_params.uncompressed_size();
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            let pallas_params = get_pallas_layer_parameters();
-            total_size += pallas_params.uncompressed_size();
-            let vesta_params = get_vesta_layer_parameters();
-            total_size += vesta_params.uncompressed_size();
-        }
+        let pallas_params = get_pallas_layer_parameters();
+        total_size += pallas_params.uncompressed_size();
+        let vesta_params = get_vesta_layer_parameters();
+        total_size += vesta_params.uncompressed_size();
 
         // Generate the asset commitment parameters.
         let asset_commitment_params = get_asset_commitment_parameters();
