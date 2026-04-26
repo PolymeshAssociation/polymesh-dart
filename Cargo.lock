@@ -179,7 +179,7 @@ dependencies = [
 [[package]]
 name = "ark-curve25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3d7e95d68c29af86f9af9321260090c6c91ddc23"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#6a895e033757b9abd1f075c3c128a19253a76b6d"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -215,10 +215,11 @@ dependencies = [
 [[package]]
 name = "ark-ec"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ahash",
  "ark-ff",
+ "ark-host-msm",
  "ark-poly 0.5.0 (git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master)",
  "ark-serialize",
  "ark-std",
@@ -236,7 +237,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3d7e95d68c29af86f9af9321260090c6c91ddc23"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#6a895e033757b9abd1f075c3c128a19253a76b6d"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -262,7 +263,7 @@ dependencies = [
 [[package]]
 name = "ark-ed25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -273,7 +274,7 @@ dependencies = [
 [[package]]
 name = "ark-ff"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-ff-asm",
  "ark-ff-macros",
@@ -290,7 +291,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-asm"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -299,7 +300,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-macros"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -311,7 +312,7 @@ dependencies = [
 [[package]]
 name = "ark-helios"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -321,9 +322,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-host-msm"
+version = "0.5.0"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
+dependencies = [
+ "ark-serialize",
+ "ark-std",
+]
+
+[[package]]
 name = "ark-pallas"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -350,7 +360,7 @@ dependencies = [
 [[package]]
 name = "ark-poly"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ahash",
  "ark-ff",
@@ -375,7 +385,7 @@ dependencies = [
 [[package]]
 name = "ark-selene"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -387,7 +397,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-serialize-derive",
  "ark-std",
@@ -401,7 +411,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -434,7 +444,7 @@ dependencies = [
 [[package]]
 name = "ark-vesta"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -446,7 +456,7 @@ dependencies = [
 [[package]]
 name = "ark-wei25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#803ce96604d1ac35ad33572bf82dda52d013f663"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -613,12 +623,13 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3d7e95d68c29af86f9af9321260090c6c91ddc23"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#6a895e033757b9abd1f075c3c128a19253a76b6d"
 dependencies = [
  "ahash",
  "ark-ec",
  "ark-ff",
  "ark-helios",
+ "ark-host-msm",
  "ark-pallas",
  "ark-selene",
  "ark-serialize",
@@ -628,7 +639,9 @@ dependencies = [
  "byteorder",
  "digest 0.9.0",
  "dock_crypto_utils",
- "hashbrown 0.16.1",
+ "fnv",
+ "hashbrown 0.15.5",
+ "lazy_static",
  "log",
  "rand",
  "rand_core",
@@ -1132,10 +1145,9 @@ dependencies = [
 [[package]]
 name = "dock_crypto_utils"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch29#4a6ae1e50deefc1ba00c87cb20da6c1aa806d722"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#bd49f0c69e80d8c8ba080c0b240936f8838ab548"
 dependencies = [
  "aead",
- "ahash",
  "ark-ec",
  "ark-ff",
  "ark-poly 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1144,7 +1156,7 @@ dependencies = [
  "cfg_eval",
  "digest 0.10.7",
  "dock_merlin",
- "hashbrown 0.16.1",
+ "hashbrown 0.15.5",
  "hkdf",
  "integer-sqrt",
  "itertools 0.14.0",
@@ -1158,7 +1170,7 @@ dependencies = [
 [[package]]
 name = "dock_merlin"
 version = "3.0.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch29#4a6ae1e50deefc1ba00c87cb20da6c1aa806d722"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#bd49f0c69e80d8c8ba080c0b240936f8838ab548"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -1657,7 +1669,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
  "allocator-api2",
- "rustc-std-workspace-alloc",
 ]
 
 [[package]]
@@ -2839,7 +2850,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3d7e95d68c29af86f9af9321260090c6c91ddc23"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#6a895e033757b9abd1f075c3c128a19253a76b6d"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
@@ -2909,12 +2920,6 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
 ]
-
-[[package]]
-name = "rustc-std-workspace-alloc"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9d441c3b2ebf55cebf796bfdc265d67fa09db17b7bb6bd4be75c509e1e8fec3"
 
 [[package]]
 name = "rustc_version"
@@ -2998,7 +3003,7 @@ dependencies = [
 [[package]]
 name = "schnorr_pok"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch29#4a6ae1e50deefc1ba00c87cb20da6c1aa806d722"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#bd49f0c69e80d8c8ba080c0b240936f8838ab548"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -4579,3 +4584,8 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "ark-host-msm-impl"
+version = "0.5.0"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#8d51050e7bc04319360acb237679dcd9e36838c4"
