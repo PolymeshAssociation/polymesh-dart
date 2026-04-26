@@ -1,9 +1,8 @@
 use crate::account::common::leg_link::{LegAccountLink, LegAccountLinkProtocol};
 use crate::account::state::{
-    ASSET_ID_GEN_INDEX, AccountCommitmentKeyTrait, AccountState, AccountStateWithoutSk,
-    BALANCE_GEN_INDEX, COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX,
-    ID_GEN_INDEX, NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX, SK_ENC_INV_GEN_INDEX,
-    SK_GEN_INDEX,
+    ASSET_ID_GEN_INDEX, AccountCommitmentKeyTrait, AccountState, BALANCE_GEN_INDEX,
+    COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX,
+    NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX, SK_ENC_INV_GEN_INDEX, SK_GEN_INDEX,
 };
 use crate::error::*;
 use crate::leg::{AmountCiphertext, LegEncryptionCore, PartyEphemeralPublicKey};
@@ -1077,6 +1076,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         LegEncryptionCore<Affine<G0>>,
         PartyEphemeralPublicKey<Affine<G0>>,
     )>,
+    sk_enc: G0::ScalarField,
     old_account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     mut id_blinding: F0,
@@ -1117,7 +1117,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
 
     let is_asset_id_revealed = asset_id_blinding.is_none();
 
-    let mut sk_enc_inv = old_account.sk_enc.inverse().ok_or(Error::InvertingZero)?;
+    let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
 
     let h_at = is_asset_id_revealed
         .then(|| (enc_gen * G0::ScalarField::from(old_account.asset_id())).into_affine());
@@ -1154,19 +1154,19 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     ) = create_bp_and_null_t_values(
         rng,
         true, // include_sk
-        old_account.without_sk.rho,
-        old_account.without_sk.current_rho,
-        updated_account.without_sk.current_rho,
-        old_account.without_sk.randomness,
-        old_account.without_sk.current_randomness,
-        updated_account.without_sk.current_randomness,
+        old_account.rho,
+        old_account.current_rho,
+        updated_account.current_rho,
+        old_account.randomness,
+        old_account.current_randomness,
+        updated_account.current_randomness,
         initial_rho_blinding,
         old_rho_blinding,
         new_rho_blinding,
         initial_randomness_blinding,
         old_randomness_blinding,
         new_randomness_blinding,
-        Some(old_account.sk_enc),
+        Some(sk_enc),
         Some(sk_enc_blinding),
         Some(sk_enc_inv_blinding),
         prover,
@@ -1179,7 +1179,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     let t_leg_link = create_leg_link_t_values(
         &legs,
         sk_enc_inv,
-        old_account.sk_enc,
+        sk_enc,
         sk_enc_inv_blinding,
         sk_enc_blinding,
         old_account.asset_id(),
@@ -1427,8 +1427,8 @@ pub(crate) fn generate_account_commitment_responses<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
-    account: &AccountStateWithoutSk<Affine<G0>>,
-    updated_account: &AccountStateWithoutSk<Affine<G0>>,
+    account: &AccountState<Affine<G0>>,
+    updated_account: &AccountState<Affine<G0>>,
     t_acc_old: &SchnorrCommitment<Affine<G0>>,
     t_acc_new: &SchnorrCommitment<Affine<G0>>,
     is_asset_id_revealed: bool,
@@ -1538,6 +1538,8 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
+    sk_aff: G0::ScalarField,
+    sk_enc: G0::ScalarField,
     account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     leaf_rerandomization: F0,
@@ -1555,14 +1557,14 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
     PartialSchnorrResponse<Affine<G0>>,
 )> {
     let (resp_acc_old, resp_acc_new) = generate_account_commitment_responses(
-        &account.without_sk,
-        &updated_account.without_sk,
+        &account,
+        &updated_account,
         t_acc_old,
         t_acc_new,
         is_asset_id_revealed,
         true, // include_sk
-        Some(account.sk),
-        Some(account.sk_enc),
+        Some(sk_aff),
+        Some(sk_enc),
         Some(leaf_rerandomization),
         None,
         None,
@@ -1573,7 +1575,7 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
         comm_bp_blinding,
         t_null,
         t_bp_randomness_relations,
-        Some(account.sk_enc),
+        Some(sk_enc),
         prover_challenge,
     )?;
 
@@ -1596,6 +1598,8 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
 >(
+    sk_aff: G0::ScalarField,
+    sk_enc: G0::ScalarField,
     account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     leaf_rerandomization: F0,
@@ -1615,6 +1619,8 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
     PartialSchnorrResponse<Affine<G0>>,
 )> {
     let (resp_leaf, resp_acc_new, resp_null, resp_bp) = generate_sigma_responses_without_leg_link(
+        sk_aff,
+        sk_enc,
         account,
         updated_account,
         leaf_rerandomization,

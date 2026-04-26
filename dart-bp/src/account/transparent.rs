@@ -1,9 +1,7 @@
 use crate::account::common::balance::ensure_correct_balance_change;
-use crate::account::common::{ensure_same_accounts, ensure_same_accounts_without_sk};
+use crate::account::common::ensure_same_accounts;
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AccountStateWithoutSk,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::transparent::AuthProofTransparent;
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -265,6 +263,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -291,6 +291,8 @@ impl<
         let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
             amount,
+            sk_aff,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -330,6 +332,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -345,16 +349,8 @@ impl<
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account, true)?;
-        ensure_correct_balance_change(
-            account.as_ref_without_sk(),
-            updated_account.as_ref_without_sk(),
-            amount,
-            has_balance_decreased,
-        )?;
-        ensure_counter_unchanged(
-            account.as_ref_without_sk(),
-            updated_account.as_ref_without_sk(),
-        )?;
+        ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
+        ensure_counter_unchanged(account, updated_account)?;
 
         let b_blinding = account_tree_params
             .even_parameters
@@ -371,7 +367,7 @@ impl<
             let sk_gen = account_comm_key.sk_gen();
             init_pk_enc_protocol(
                 rng,
-                account.sk,
+                sk_aff,
                 acc_proto.sk_blinding,
                 auditor_keys.clone(),
                 sk_gen,
@@ -388,8 +384,8 @@ impl<
             >(
                 rng,
                 amount,
-                &account.as_without_sk(),
-                &updated_account.as_without_sk(),
+                &account,
+                &updated_account,
                 updated_account_commitment,
                 leaf_path,
                 has_balance_decreased,
@@ -415,18 +411,18 @@ impl<
 
         let (resp_acc_old, resp_acc_new, t_acc_old_t, t_acc_new_t) = acc_proto.gen_proof(
             &challenge,
-            account.sk,
-            updated_account.without_sk.balance.into(),
-            account.without_sk.counter.into(),
-            account.without_sk.rho,
-            account.without_sk.current_rho,
-            account.without_sk.randomness,
-            account.without_sk.current_randomness,
-            account.without_sk.id,
-            account.sk_enc,
+            sk_aff,
+            updated_account.balance.into(),
+            account.counter.into(),
+            account.rho,
+            account.current_rho,
+            account.randomness,
+            account.current_randomness,
+            account.id,
+            sk_enc,
             partial_proto.rerandomization,
-            updated_account.without_sk.current_rho,
-            updated_account.without_sk.current_randomness,
+            updated_account.current_rho,
+            updated_account.current_randomness,
         )?;
 
         let (resp_eph_pk, resp_enc) = reps_pk_enc(t_eph_pk, t_enc, &challenge);
@@ -1010,8 +1006,8 @@ pub struct CommonTransparentWithoutCommitmentsProtocol<
     pub comm_bp: Affine<G0>,
     pub comm_bp_blinding: F0,
     pub has_balance_decreased: bool,
-    pub old_account: AccountStateWithoutSk<Affine<G0>>,
-    pub updated_account: AccountStateWithoutSk<Affine<G0>>,
+    pub old_account: AccountState<Affine<G0>>,
+    pub updated_account: AccountState<Affine<G0>>,
 }
 
 impl<
@@ -1032,8 +1028,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         has_balance_decreased: bool,
@@ -1052,7 +1048,7 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
-        ensure_same_accounts_without_sk(account, updated_account, true)?;
+        ensure_same_accounts(account, updated_account, true)?;
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
         ensure_counter_unchanged(account, updated_account)?;
 
@@ -1253,8 +1249,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         has_balance_decreased: bool,
@@ -1849,8 +1845,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -1923,8 +1919,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -2012,8 +2008,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -2086,8 +2082,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -2165,6 +2161,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2179,6 +2177,8 @@ impl<
         let (common, nullifier) = CommonTransparentProof::new::<_, Parameters0, Parameters1>(
             rng,
             amount,
+            sk_aff,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -2203,6 +2203,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2220,6 +2222,8 @@ impl<
             CommonTransparentProof::new_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 amount,
+                sk_aff,
+                sk_enc,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -2381,6 +2385,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2395,6 +2401,8 @@ impl<
         let (common, nullifier) = CommonTransparentProof::new::<_, Parameters0, Parameters1>(
             rng,
             amount,
+            sk_aff,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -2419,6 +2427,8 @@ impl<
     >(
         rng: &mut R,
         amount: Balance,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -2436,6 +2446,8 @@ impl<
             CommonTransparentProof::new_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 amount,
+                sk_aff,
+                sk_enc,
                 account,
                 updated_account,
                 updated_account_commitment,
@@ -2572,8 +2584,8 @@ impl<
 }
 
 pub fn ensure_counter_unchanged<G>(
-    old_state: &AccountStateWithoutSk<G>,
-    new_state: &AccountStateWithoutSk<G>,
+    old_state: &AccountState<G>,
+    new_state: &AccountState<G>,
 ) -> Result<()>
 where
     G: AffineRepr,
@@ -3084,7 +3096,7 @@ mod tests {
     use crate::account::tests::{
         get_tree_with_account_comm, get_tree_with_commitment, setup_gens_new,
     };
-    use crate::account_registration::tests::{new_account, new_account_without_sk};
+    use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
         add_verification_tuples_batches_to_rmc, batch_verify_bp, handle_verification_tuples,
@@ -3118,10 +3130,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
-        account.without_sk.balance = 100;
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, account_pk, pk_enc, id.clone());
+        account.balance = 100;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -3145,6 +3158,8 @@ mod tests {
         let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             withdraw_amount,
+            sk.0,
+            sk_enc.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -3213,10 +3228,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
-        account.without_sk.balance = 50;
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, account_pk, pk_enc, id.clone());
+        account.balance = 50;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -3240,6 +3256,8 @@ mod tests {
         let (proof, nullifier) = DepositProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             deposit_amount,
+            sk.0,
+            sk_enc.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -3313,14 +3331,18 @@ mod tests {
         let mut paths = Vec::with_capacity(batch_size);
 
         let mut account_comms = Vec::with_capacity(batch_size);
+        let mut sks = Vec::with_capacity(batch_size);
+        let mut sk_encs = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
-            account.without_sk.balance = 100;
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+            account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
+            sks.push(sk);
+            sk_encs.push(sk_enc);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -3355,6 +3377,8 @@ mod tests {
             let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 withdraw_amount,
+                sks[i].0,
+                sk_encs[i].0,
                 &accounts[i],
                 &updated_accounts[i],
                 updated_account_comms[i],
@@ -3513,14 +3537,18 @@ mod tests {
         let mut paths = Vec::with_capacity(batch_size);
 
         let mut account_comms = Vec::with_capacity(batch_size);
+        let mut sks = Vec::with_capacity(batch_size);
+        let mut sk_encs = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
-            account.without_sk.balance = 100;
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+            account.balance = 100;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
+            sks.push(sk);
+            sk_encs.push(sk_enc);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -3567,6 +3595,8 @@ mod tests {
                 WithdrawProof::new_with_given_prover::<_, PallasParams, VestaParams>(
                     &mut rng,
                     withdraw_amount,
+                    sks[i].0,
+                    sk_encs[i].0,
                     &accounts[i],
                     &updated_accounts[i],
                     updated_account_comms[i],
@@ -3721,6 +3751,8 @@ mod tests {
             .collect::<Vec<_>>();
         let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
 
+        let mut sks = Vec::with_capacity(batch_size);
+        let mut sk_encs = Vec::with_capacity(batch_size);
         let mut accounts = Vec::with_capacity(batch_size);
         let mut updated_accounts = Vec::with_capacity(batch_size);
         let mut updated_account_comms = Vec::with_capacity(batch_size);
@@ -3728,13 +3760,15 @@ mod tests {
 
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
-            account.without_sk.balance = 50;
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+            account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
+            sks.push(sk);
+            sk_encs.push(sk_enc);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -3769,6 +3803,8 @@ mod tests {
             let (proof, nullifier) = DepositProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 deposit_amount,
+                sks[i].0,
+                sk_encs[i].0,
                 &accounts[i],
                 &updated_accounts[i],
                 updated_account_comms[i],
@@ -3921,6 +3957,8 @@ mod tests {
             .collect::<Vec<_>>();
         let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
 
+        let mut sks = Vec::with_capacity(batch_size);
+        let mut sk_encs = Vec::with_capacity(batch_size);
         let mut accounts = Vec::with_capacity(batch_size);
         let mut updated_accounts = Vec::with_capacity(batch_size);
         let mut updated_account_comms = Vec::with_capacity(batch_size);
@@ -3928,13 +3966,15 @@ mod tests {
 
         let mut account_comms = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id);
-            account.without_sk.balance = 50;
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+            account.balance = 50;
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
+            sks.push(sk);
+            sk_encs.push(sk_enc);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -3981,6 +4021,8 @@ mod tests {
                 DepositProof::new_with_given_prover::<_, PallasParams, VestaParams>(
                     &mut rng,
                     deposit_amount,
+                    sks[i].0,
+                    sk_encs[i].0,
                     &accounts[i],
                     &updated_accounts[i],
                     updated_account_comms[i],
@@ -4138,14 +4180,10 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
         account.balance = 100;
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -4154,11 +4192,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
@@ -4290,14 +4324,10 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
         account.balance = 100;
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -4306,11 +4336,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
@@ -4521,14 +4547,10 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
         account.balance = 50;
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -4537,11 +4559,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_deposit(deposit_amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
@@ -4672,14 +4690,10 @@ mod tests {
         let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
         account.balance = 50;
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -4688,11 +4702,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_deposit(deposit_amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            account_pk.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();

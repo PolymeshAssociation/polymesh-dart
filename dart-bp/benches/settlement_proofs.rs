@@ -40,12 +40,12 @@ fn setup_comm_key(label: &[u8]) -> [PallasA; NUM_GENERATORS] {
 fn new_account<R: CryptoRngCore>(
     rng: &mut R,
     asset_id: u32,
-    sk: SigKey<PallasA>,
-    sk_enc: DecKey<PallasA>,
+    pk: VerKey<PallasA>,
+    pk_enc: EncKey<PallasA>,
     id: PallasFr,
 ) -> AccountState<PallasA> {
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
-    AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config)
+    AccountState::new(rng, id, pk.0, pk_enc.0, asset_id, 0, poseidon_config)
         .unwrap()
         .0
 }
@@ -522,10 +522,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
     // Setup keys for Alice (sender), Bob (receiver), and auditor
     let (
-        (sk_alice, _pk_alice),
-        (_sk_alice_e, pk_alice_e),
-        (sk_bob, _pk_bob),
-        (_sk_bob_e, pk_bob_e),
+        (sk_alice, pk_alice),
+        (sk_alice_e, pk_alice_e),
+        (sk_bob, pk_bob),
+        (sk_bob_e, pk_bob_e),
         (_sk_auditor_e, pk_auditor_e),
     ) = create_keys(&mut rng, &account_comm_key, enc_key_gen);
 
@@ -596,14 +596,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let mut alice_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let mut account = new_account(
-            &mut rng,
-            asset_id,
-            sk_alice.clone(),
-            _sk_alice_e.clone(),
-            alice_id,
-        );
-        account.without_sk.balance = 500;
+        let mut account = new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        account.balance = 500;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         alice_account_comms.push(comm.0);
         alice_accounts.push(account);
@@ -615,14 +609,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let mut bob_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let mut account = new_account(
-            &mut rng,
-            asset_id,
-            sk_bob.clone(),
-            _sk_bob_e.clone(),
-            bob_id,
-        );
-        account.without_sk.balance = 300;
+        let mut account = new_account(&mut rng, asset_id, pk_bob, pk_bob_e, bob_id);
+        account.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         bob_account_comms.push(comm.0);
         bob_accounts.push(account);
@@ -750,6 +738,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -802,6 +792,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_accounts[i].clone(),
                 updated_account,
                 updated_comm,

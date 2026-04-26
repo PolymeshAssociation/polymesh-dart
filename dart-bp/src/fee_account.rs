@@ -58,7 +58,8 @@ pub const FEE_REG_TXN_LABEL: &'static [u8; 24] = b"fee_account_registration";
 #[derive(
     Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
 )]
-pub struct FeeAccountStateWithoutSk<G: AffineRepr> {
+pub struct FeeAccountState<G: AffineRepr> {
+    pub pk: G,
     pub balance: Balance,
     /// This is 0 for PolyX is always revealed when paying fee
     /// Including the asset-id as we might need to support multiple fee currencies in future.
@@ -71,90 +72,16 @@ pub struct FeeAccountStateWithoutSk<G: AffineRepr> {
     pub randomness: G::ScalarField,
 }
 
-/// To commit, use the same commitment key as non-fee asset account commitment.
-#[derive(
-    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
-)]
-pub struct FeeAccountState<G: AffineRepr> {
-    pub sk: G::ScalarField,
-    pub without_sk: FeeAccountStateWithoutSk<G>,
-}
-
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
 
-impl<G: AffineRepr> FeeAccountStateCommitment<G> {
-    pub fn from_without_sk(comm: FeeAccountStateWithoutSkCommitment<G>, pk: G) -> Self {
-        FeeAccountStateCommitment((comm.0.into_group() + pk).into_affine())
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct FeeAccountStateWithoutSkCommitment<G: AffineRepr>(pub G);
-
 impl<G: AffineRepr> FeeAccountState<G> {
-    pub fn new<R: CryptoRngCore>(
-        rng: &mut R,
-        sk: G::ScalarField,
-        balance: Balance,
-        asset_id: AssetId,
-    ) -> Self {
-        Self {
-            sk,
-            without_sk: FeeAccountStateWithoutSk::new(rng, balance, asset_id),
-        }
-    }
-
-    pub fn commit(
-        &self,
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<FeeAccountStateCommitment<G>> {
-        let pk = account_comm_key.sk_gen() * self.sk;
-        let comm = self.without_sk.comm(account_comm_key)?;
-        Ok(FeeAccountStateCommitment((comm + pk).into_affine()))
-    }
-
-    pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
-        Ok(Self {
-            sk: self.sk,
-            without_sk: self.as_without_sk().get_state_for_topup(amount)?,
-        })
-    }
-
-    pub fn get_state_for_payment(&self, fee_amount: u64) -> Result<Self> {
-        Ok(Self {
-            sk: self.sk,
-            without_sk: self.as_without_sk().get_state_for_payment(fee_amount)?,
-        })
-    }
-
-    pub fn refresh_randomness_for_state_change(&mut self) {
-        self.without_sk.refresh_randomness_for_state_change();
-    }
-
-    pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
-        self.without_sk.nullifier(comm_key)
-    }
-
-    pub fn asset_id(&self) -> AssetId {
-        self.without_sk.asset_id
-    }
-
-    pub fn as_ref_without_sk(&self) -> &FeeAccountStateWithoutSk<G> {
-        &self.without_sk
-    }
-
-    pub fn as_without_sk(&self) -> FeeAccountStateWithoutSk<G> {
-        self.without_sk.clone()
-    }
-}
-
-impl<G: AffineRepr> FeeAccountStateWithoutSk<G> {
-    pub fn new<R: CryptoRngCore>(rng: &mut R, balance: Balance, asset_id: AssetId) -> Self {
+    pub fn new<R: CryptoRngCore>(rng: &mut R, pk: G, balance: Balance, asset_id: AssetId) -> Self {
         let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
 
         Self {
+            pk,
             balance,
             asset_id,
             initial_rho: rho,
@@ -164,13 +91,12 @@ impl<G: AffineRepr> FeeAccountStateWithoutSk<G> {
         }
     }
 
-    /// Commits to everything except the secret key. The final commitment can be obtained by adding the public key to this.
     pub fn commit(
         &self,
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<FeeAccountStateWithoutSkCommitment<G>> {
+    ) -> Result<FeeAccountStateCommitment<G>> {
         let comm = self.comm(account_comm_key)?;
-        Ok(FeeAccountStateWithoutSkCommitment(comm.into_affine()))
+        Ok(FeeAccountStateCommitment((comm + self.pk).into_affine()))
     }
 
     pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
@@ -260,7 +186,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
-        account: &FeeAccountStateWithoutSk<G>,
+        account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -281,7 +207,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     pub fn init_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
-        account: &FeeAccountStateWithoutSk<G>,
+        account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -339,7 +265,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         pk: G,
-        account: &FeeAccountStateWithoutSk<G>,
+        account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
@@ -422,7 +348,7 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
 impl<G: AffineRepr> RegTxnProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
+        sk: G::ScalarField,
         account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
@@ -431,7 +357,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         Self::new_with_given_transcript(
             rng,
-            pk,
+            sk,
             account,
             account_commitment,
             nonce,
@@ -442,26 +368,26 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
+        sk: G::ScalarField,
         account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
+        let pk = account.pk;
         let sk_gen = account_comm_key.sk_gen();
         let partial = RegTxnProofWithoutSkProtocol::init_with_given_transcript(
             rng,
             pk,
-            account.as_ref_without_sk(),
+            account,
             account_commitment,
             nonce,
             account_comm_key,
             &mut transcript,
         )?;
 
-        let auth_protocol =
-            AuthProofOnlySkProtocol::init(rng, account.sk, &pk, &sk_gen, &mut transcript)?;
+        let auth_protocol = AuthProofOnlySkProtocol::init(rng, sk, &pk, &sk_gen, &mut transcript)?;
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         let auth_proof = auth_protocol.gen_proof(&challenge);
@@ -573,8 +499,8 @@ pub struct FeeAccountTopupTxnWithoutSkProtocol<
     re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     comm_new_bal: Affine<G0>,
     rerandomization: F0,
-    old_account_state: FeeAccountStateWithoutSk<Affine<G0>>,
-    new_account_state: FeeAccountStateWithoutSk<Affine<G0>>,
+    old_account_state: FeeAccountState<Affine<G0>>,
+    new_account_state: FeeAccountState<Affine<G0>>,
 }
 
 impl<
@@ -594,8 +520,8 @@ impl<
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
-        account: FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: FeeAccountStateWithoutSk<Affine<G0>>,
+        account: FeeAccountState<Affine<G0>>,
+        updated_account: FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -650,8 +576,8 @@ impl<
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
-        account: FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: FeeAccountStateWithoutSk<Affine<G0>>,
+        account: FeeAccountState<Affine<G0>>,
+        updated_account: FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -702,8 +628,8 @@ impl<
         rng: &mut R,
         pk: &Affine<G0>,
         increase_bal_by: Balance,
-        account: FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: FeeAccountStateWithoutSk<Affine<G0>>,
+        account: FeeAccountState<Affine<G0>>,
+        updated_account: FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -1275,7 +1201,7 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         rng: &mut R,
-        pk: &Affine<G0>,
+        sk: G0::ScalarField,
         increase_bal_by: Balance,
         account: &FeeAccountState<Affine<G0>>,
         updated_account: &FeeAccountState<Affine<G0>>,
@@ -1299,7 +1225,7 @@ impl<
 
         let (mut proof, nullifier) = Self::new_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
-            pk,
+            sk,
             increase_bal_by,
             account,
             updated_account,
@@ -1335,7 +1261,7 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         rng: &mut R,
-        pk: &Affine<G0>,
+        sk: G0::ScalarField,
         increase_bal_by: Balance,
         account: &FeeAccountState<Affine<G0>>,
         updated_account: &FeeAccountState<Affine<G0>>,
@@ -1360,10 +1286,10 @@ impl<
                 Parameters1,
             >(
                 rng,
-                pk,
+                &account.pk,
                 increase_bal_by,
-                account.as_without_sk(),
-                updated_account.as_without_sk(),
+                account.clone(),
+                updated_account.clone(),
                 updated_account_commitment,
                 leaf_path,
                 root,
@@ -1377,7 +1303,7 @@ impl<
         // Initialize proving for secret key
         let mut transcript = even_prover.transcript();
         let auth_protocol =
-            AuthProofOnlySkProtocol::init(rng, account.sk, pk, &pk_gen, &mut transcript)?;
+            AuthProofOnlySkProtocol::init(rng, sk, &account.pk, &pk_gen, &mut transcript)?;
 
         let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
@@ -1862,8 +1788,8 @@ pub struct FeePaymentWithoutCommitmentsProtocol<
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     pub rerandomization: F0,
     pub comm_new_bal: Affine<G0>,
-    pub old_account_state: FeeAccountStateWithoutSk<Affine<G0>>,
-    pub new_account_state: FeeAccountStateWithoutSk<Affine<G0>>,
+    pub old_account_state: FeeAccountState<Affine<G0>>,
+    pub new_account_state: FeeAccountState<Affine<G0>>,
 }
 
 impl<
@@ -1883,8 +1809,8 @@ impl<
     >(
         rng: &mut R,
         fee_amount: Balance,
-        account: FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: FeeAccountStateWithoutSk<Affine<G0>>,
+        account: FeeAccountState<Affine<G0>>,
+        updated_account: FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -1959,8 +1885,8 @@ impl<
     >(
         rng: &mut R,
         fee_amount: Balance,
-        account: FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: FeeAccountStateWithoutSk<Affine<G0>>,
+        account: FeeAccountState<Affine<G0>>,
+        updated_account: FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -2277,6 +2203,7 @@ impl<
     >(
         rng: &mut R,
         fee_amount: Balance,
+        sk: G0::ScalarField,
         account: &FeeAccountState<Affine<G0>>,
         updated_account: &FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
@@ -2324,8 +2251,8 @@ impl<
             >(
                 rng,
                 fee_amount,
-                account.as_without_sk(),
-                updated_account.as_without_sk(),
+                account.clone(),
+                updated_account.clone(),
                 updated_account_commitment,
                 leaf_path,
                 root,
@@ -2344,7 +2271,7 @@ impl<
         // Generate proofs
         let commitment_proof = acc_proto.gen_proof(
             &challenge,
-            account.sk,
+            sk,
             F0::from(partial_proto.new_account_state.balance),
             partial_proto.old_account_state.rho,
             partial_proto.old_account_state.randomness,
@@ -2585,8 +2512,8 @@ impl<
     >(
         rng: &mut R,
         fee_amount: Balance,
-        account: &FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: &FeeAccountStateWithoutSk<Affine<G0>>,
+        account: &FeeAccountState<Affine<G0>>,
+        updated_account: &FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -2774,8 +2701,8 @@ impl<
     >(
         rng: &mut R,
         fee_amount: Balance,
-        account: &FeeAccountStateWithoutSk<Affine<G0>>,
-        updated_account: &FeeAccountStateWithoutSk<Affine<G0>>,
+        account: &FeeAccountState<Affine<G0>>,
+        updated_account: &FeeAccountState<Affine<G0>>,
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -3390,8 +3317,8 @@ fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
 }
 
 pub fn ensure_same_accounts_without_sk<G: AffineRepr>(
-    old_state: &FeeAccountStateWithoutSk<G>,
-    new_state: &FeeAccountStateWithoutSk<G>,
+    old_state: &FeeAccountState<G>,
+    new_state: &FeeAccountState<G>,
     has_balance_changed: bool,
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
@@ -3455,9 +3382,9 @@ pub fn ensure_same_sk<G: AffineRepr>(
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        if old_state.sk != new_state.sk {
+        if old_state.pk != new_state.pk {
             return Err(Error::ProofGenerationError(
-                "Secret key mismatch between old and new account states".to_string(),
+                "Public key mismatch between old and new account states".to_string(),
             ));
         }
         Ok(())
@@ -3477,40 +3404,32 @@ pub fn ensure_correct_account_state<G: AffineRepr>(
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        // Ensure accounts are consistent (same sk, asset_id)
-        if old_state.sk != new_state.sk {
+        // Ensure accounts are consistent (same pk, asset_id)
+        if old_state.pk != new_state.pk {
             return Err(Error::ProofGenerationError(
-                "Secret key mismatch between old and new account states".to_string(),
+                "Public key mismatch between old and new account states".to_string(),
             ));
         }
-        if old_state.without_sk.asset_id != new_state.without_sk.asset_id {
+        if old_state.asset_id != new_state.asset_id {
             return Err(Error::ProofGenerationError(format!(
                 "Asset ID mismatch between old and new account states: old = {}, new = {}",
-                old_state.without_sk.asset_id, new_state.without_sk.asset_id
+                old_state.asset_id, new_state.asset_id
             )));
         }
         if has_balance_decreased {
-            let expected_balance = old_state
-                .without_sk
-                .balance
-                .checked_sub(amount)
-                .ok_or_else(|| {
-                    Error::ProofGenerationError("Balance decrease underflow".to_string())
-                })?;
-            if new_state.without_sk.balance != expected_balance {
+            let expected_balance = old_state.balance.checked_sub(amount).ok_or_else(|| {
+                Error::ProofGenerationError("Balance decrease underflow".to_string())
+            })?;
+            if new_state.balance != expected_balance {
                 return Err(Error::ProofGenerationError(
                     "Balance decrease incorrect".to_string(),
                 ));
             }
         } else {
-            let expected_balance = old_state
-                .without_sk
-                .balance
-                .checked_add(amount)
-                .ok_or_else(|| {
-                    Error::ProofGenerationError("Balance increase overflow".to_string())
-                })?;
-            if new_state.without_sk.balance != expected_balance {
+            let expected_balance = old_state.balance.checked_add(amount).ok_or_else(|| {
+                Error::ProofGenerationError("Balance increase overflow".to_string())
+            })?;
+            if new_state.balance != expected_balance {
                 return Err(Error::ProofGenerationError(
                     "Balance increase incorrect".to_string(),
                 ));
@@ -3525,7 +3444,7 @@ pub mod tests {
     use super::*;
     use crate::account::tests::setup_gens_new;
     use crate::account_registration::tests::setup_comm_key;
-    use crate::keys::SigKey;
+    use crate::keys::VerKey;
     use crate::keys::keygen_sig;
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
@@ -3541,18 +3460,10 @@ pub mod tests {
     pub fn new_fee_account<R: CryptoRngCore, G: AffineRepr>(
         rng: &mut R,
         asset_id: AssetId,
-        sk: SigKey<G>,
+        pk: VerKey<G>,
         balance: Balance,
     ) -> FeeAccountState<G> {
-        FeeAccountState::new(rng, sk.0, balance, asset_id)
-    }
-
-    pub fn new_fee_account_without_sk<R: CryptoRngCore, G: AffineRepr>(
-        rng: &mut R,
-        asset_id: AssetId,
-        balance: Balance,
-    ) -> FeeAccountStateWithoutSk<G> {
-        FeeAccountStateWithoutSk::new(rng, balance, asset_id)
+        FeeAccountState::new(rng, pk.0, balance, asset_id)
     }
 
     #[test]
@@ -3564,12 +3475,12 @@ pub mod tests {
         let asset_id = 1;
         let balance = 1000;
 
-        let (sk_i, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (_sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i.clone(), balance);
-        assert_eq!(fee_account.without_sk.asset_id, asset_id);
-        assert_eq!(fee_account.without_sk.balance, balance);
-        assert_eq!(fee_account.sk, sk_i.0);
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i.clone(), balance);
+        assert_eq!(fee_account.asset_id, asset_id);
+        assert_eq!(fee_account.balance, balance);
+        assert_eq!(fee_account.pk, pk_i.0);
 
         fee_account.commit(account_comm_key).unwrap();
     }
@@ -3585,14 +3496,14 @@ pub mod tests {
 
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
         let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce";
 
         let reg_proof = RegTxnProof::new(
             &mut rng,
-            pk_i.0,
+            sk_i.0,
             &fee_account,
             fee_account_comm.clone(),
             nonce,
@@ -3625,11 +3536,8 @@ pub mod tests {
         let asset_id = 1;
         let balance = 1000;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        let fee_account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let fee_account_comm = FeeAccountStateCommitment::from_without_sk(
-            fee_account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
         let nonce = b"test-nonce";
 
         //  Host side: own transcript, public inputs + partial T-values
@@ -3698,11 +3606,8 @@ pub mod tests {
         let asset_id = 1;
         let balance = 1000;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-        let fee_account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let fee_account_comm = FeeAccountStateCommitment::from_without_sk(
-            fee_account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
         let nonce = b"test-nonce";
 
         //  Host builds its partial partial protocol, derives partial challenge
@@ -3815,7 +3720,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         let balance = 1000;
-        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         // Add fee account commitment in curve tree
@@ -3834,10 +3739,7 @@ pub mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-        assert_eq!(
-            updated_account.without_sk.balance,
-            account.without_sk.balance + increase_bal_by
-        );
+        assert_eq!(updated_account.balance, account.balance + increase_bal_by);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
@@ -3846,7 +3748,7 @@ pub mod tests {
 
         let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            &pk_i.0,
+            sk_i.0,
             increase_bal_by,
             &account,
             &updated_account,
@@ -3963,11 +3865,8 @@ pub mod tests {
         let asset_id = 1;
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
-        let account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let account_comm = FeeAccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk_i.0,
-        );
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -3980,10 +3879,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-        let updated_account_comm = FeeAccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_i.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4061,11 +3957,8 @@ pub mod tests {
         let asset_id = 1;
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
-        let account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let account_comm = FeeAccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk_i.0,
-        );
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4078,10 +3971,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-        let updated_account_comm = FeeAccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_i.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4239,9 +4129,9 @@ pub mod tests {
         let asset_id = 1;
 
         // Investor has fee payment account with some balance
-        let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
-        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk, balance);
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
@@ -4260,10 +4150,7 @@ pub mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-        assert_eq!(
-            updated_account.without_sk.balance,
-            account.without_sk.balance - fee_amount
-        );
+        assert_eq!(updated_account.balance, account.balance - fee_amount);
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
@@ -4273,6 +4160,7 @@ pub mod tests {
         let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             fee_amount,
+            sk.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -4399,15 +4287,17 @@ pub mod tests {
         let batch_size = 5;
 
         let mut accounts = Vec::with_capacity(batch_size);
+        let mut sks = Vec::with_capacity(batch_size);
         let mut account_comms = Vec::with_capacity(batch_size);
         let mut updated_accounts = Vec::with_capacity(batch_size);
         let mut updated_account_comms = Vec::with_capacity(batch_size);
         let mut paths = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let balance = 1000;
-            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk, balance);
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            sks.push(sk);
             accounts.push(account);
             account_comms.push(account_comm);
         }
@@ -4423,10 +4313,7 @@ pub mod tests {
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_payment(fee_amount).unwrap();
-            assert_eq!(
-                updated_account.without_sk.balance,
-                accounts[i].without_sk.balance - fee_amount
-            );
+            assert_eq!(updated_account.balance, accounts[i].balance - fee_amount);
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
             let path = account_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
             updated_accounts.push(updated_account);
@@ -4448,6 +4335,7 @@ pub mod tests {
             let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 fee_amount,
+                sks[i].0,
                 &accounts[i],
                 &updated_accounts[i],
                 updated_account_comms[i],
@@ -4591,11 +4479,8 @@ pub mod tests {
         let asset_id = 1;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
-        let account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let account_comm = FeeAccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4608,10 +4493,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-        let updated_account_comm = FeeAccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4714,11 +4596,8 @@ pub mod tests {
         let asset_id = 1;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
-        let account = new_fee_account_without_sk::<_, PallasA>(&mut rng, asset_id, balance);
-        let account_comm = FeeAccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4731,10 +4610,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-        let updated_account_comm = FeeAccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4935,7 +4811,7 @@ pub mod tests {
 
             // Create updated account but increase balance more than expected
             let mut updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-            updated_account.without_sk.balance = account.without_sk.balance + 50; // Add extra on top of the actual increase amount
+            updated_account.balance = account.balance + 50; // Add extra on top of the actual increase amount
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -5006,7 +4882,7 @@ pub mod tests {
 
             // Create updated account but decrease balance less than expected
             let mut updated_account = account.get_state_for_payment(fee_amount).unwrap();
-            updated_account.without_sk.balance = account.without_sk.balance + 5; // Decrease by 5 less than the actual fee amount
+            updated_account.balance = account.balance + 5; // Decrease by 5 less than the actual fee amount
 
             let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 

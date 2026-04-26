@@ -2,7 +2,7 @@ pub mod balance;
 pub mod leg_link;
 pub mod verifier;
 
-use crate::account::state::{AccountStateWithoutSk, NUM_GENERATORS};
+use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::account::AuthProofAffirmation;
 use crate::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
@@ -159,6 +159,7 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -183,6 +184,7 @@ impl<
         let mut prover = Self::init_with_given_prover::<_, Parameters0, Parameters1>(
             rng,
             legs_with_conf,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -207,6 +209,7 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -238,6 +241,7 @@ impl<
         Self::init_with_given_prover_inner(
             rng,
             legs_with_conf,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -261,6 +265,7 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -276,6 +281,7 @@ impl<
         Self::init_with_given_prover_inner(
             rng,
             legs_with_conf,
+            sk_enc,
             account,
             updated_account,
             updated_account_commitment,
@@ -297,6 +303,7 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -369,6 +376,7 @@ impl<
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             legs,
+            sk_enc,
             account,
             updated_account,
             id_blinding,
@@ -433,6 +441,8 @@ impl<
     >(
         mut self,
         rng: &mut R,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
@@ -451,7 +461,8 @@ impl<
             )
         })?;
 
-        let mut proof = self.generate_sigma_responses(account, updated_account, challenge)?;
+        let mut proof =
+            self.generate_sigma_responses(sk_aff, sk_enc, account, updated_account, challenge)?;
 
         let bp_gens = account_tree_params.bp_gens();
         let (even_proof, odd_proof) =
@@ -466,12 +477,16 @@ impl<
 
     pub fn generate_sigma_responses(
         mut self,
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
         let (resp_leaf, resp_acc_new, resp_null, resp_leg_link, resp_bp_randomness_relations) =
             generate_sigma_responses_for_common_state_change(
+                sk_aff,
+                sk_enc,
                 account,
                 updated_account,
                 self.leaf_rerandomization,
@@ -630,8 +645,8 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
     pub fn gen_proof(
         self,
         challenge: &G::ScalarField,
-        account: &AccountStateWithoutSk<Affine<G>>,
-        updated_account: &AccountStateWithoutSk<Affine<G>>,
+        account: &AccountState<Affine<G>>,
+        updated_account: &AccountState<Affine<G>>,
         host_rerandomization: G::ScalarField,
     ) -> Result<AccountCommitmentsHostProof<G>> {
         let (resp_acc_old, resp_acc_new) = generate_account_commitment_responses(
@@ -695,8 +710,8 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         account_tree_root: &Root<L, 1, G0, G1>,
@@ -760,8 +775,8 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_rerandomization: F0,
         nonce: &[u8],
@@ -899,8 +914,8 @@ pub struct CommonAffirmationSplitProtocol<
     re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G0, G1>>,
     comm_bp: Affine<G0>,
     comm_bp_blinding: F0,
-    old_account: AccountStateWithoutSk<Affine<G0>>,
-    updated_account: AccountStateWithoutSk<Affine<G0>>,
+    old_account: AccountState<Affine<G0>>,
+    updated_account: AccountState<Affine<G0>>,
     ct_asset_id: Vec<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)>,
     host_rerandomization: F0,
     /// Auth's share of the leaf rerandomization scalar
@@ -926,8 +941,8 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         account_tree_root: &Root<L, 1, G0, G1>,
@@ -1016,8 +1031,8 @@ impl<
     >(
         rng: &mut R,
         legs_with_conf: Vec<LegProverConfig<Affine<G0>>>,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_rerandomization: F0,
         nonce: &[u8],
@@ -1118,8 +1133,8 @@ impl<
     /// challenge contributions, ct_asset_id, split secrets.
     fn init_inner<'a, R: CryptoRngCore>(
         rng: &mut R,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         acc_host_proto: AccountCommitmentsHostProtocol<G0>,
         asset_id_blinding: Option<F0>,
         partial_proto: CommonStateChangePartialProtocol<L, F0, F1, G0, G1>,
@@ -1441,36 +1456,16 @@ pub fn ensure_same_accounts<G: AffineRepr>(
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        if old_state.sk != new_state.sk {
+        if old_state.pk_aff() != new_state.pk_aff() {
             return Err(Error::ProofGenerationError(
                 "Secret key mismatch between old and new account states".to_string(),
             ));
         }
-        if old_state.sk_enc != new_state.sk_enc {
+        if old_state.pk_enc() != new_state.pk_enc() {
             return Err(Error::ProofGenerationError(
                 "Secret key inverse mismatch between old and new account states".to_string(),
             ));
         }
-        ensure_same_accounts_without_sk(
-            old_state.as_ref_without_sk(),
-            new_state.as_ref_without_sk(),
-            has_balance_changed,
-        )
-    }
-}
-
-pub fn ensure_same_accounts_without_sk<G: AffineRepr>(
-    old_state: &AccountStateWithoutSk<G>,
-    new_state: &AccountStateWithoutSk<G>,
-    has_balance_changed: bool,
-) -> Result<()> {
-    #[cfg(feature = "ignore_prover_input_sanitation")]
-    {
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-    {
         if old_state.id != new_state.id {
             return Err(Error::ProofGenerationError(
                 "Identity mismatch between old and new account states".to_string(),

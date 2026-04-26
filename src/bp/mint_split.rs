@@ -6,7 +6,6 @@ use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account::mint::{MintTxnProof, MintTxnProofPartialProtocol};
 use polymesh_dart_bp::util::{BPProof, prove_with_rng};
 
-use super::account_reg_split::AccountAssetStateWithPk;
 use super::encode::*;
 use super::split_types::*;
 use super::*;
@@ -27,122 +26,6 @@ type BPMintTxnProofPartialProtocol = MintTxnProofPartialProtocol<
     VestaParameters,
     ACCOUNT_TREE_L,
 >;
-
-// AccountAssetStateChangeWithoutSk
-
-#[derive(Clone, Debug)]
-pub struct AccountAssetStateChangeWithoutSk {
-    pub current_state: BPAccountStateWithoutSk,
-    pub current_commitment: BPAccountStateCommitment,
-    pub new_state: BPAccountStateWithoutSk,
-    pub new_commitment: BPAccountStateCommitment,
-}
-
-impl AccountAssetStateChangeWithoutSk {
-    pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
-        AccountStateCommitment::from_affine(self.new_commitment.0)
-    }
-
-    pub fn get_path<
-        C: CurveTreeConfig<
-                F0 = <PallasParameters as CurveConfig>::ScalarField,
-                F1 = <VestaParameters as CurveConfig>::ScalarField,
-                P0 = PallasParameters,
-                P1 = VestaParameters,
-            >,
-    >(
-        &self,
-        tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
-    ) -> Result<CurveTreePath<ACCOUNT_TREE_L, C>, Error> {
-        tree_lookup.get_path_to_leaf(CompressedLeafValue::from_affine(self.current_commitment.0)?)
-    }
-}
-
-impl AccountAssetStateWithPk {
-    /// Compute the current and updated state commitments using a closure, exactly
-    /// like `AccountAssetState::state_change` but without needing sk.
-    fn state_change(
-        &mut self,
-        update: impl FnOnce(&BPAccountStateWithoutSk) -> Result<BPAccountStateWithoutSk, Error>,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        let current = self.bp_current_state_without_sk()?;
-        let current_without_sk_comm = current.commit(dart_gens().account_comm_key())?;
-        let current_commitment = self.full_commitment_from_without_sk(current_without_sk_comm.0)?;
-
-        let new = update(&current)?;
-        let new_without_sk_comm = new.commit(dart_gens().account_comm_key())?;
-        let new_commitment = self.full_commitment_from_without_sk(new_without_sk_comm.0)?;
-
-        self.pending_state = Some(new.clone().try_into()?);
-
-        Ok(AccountAssetStateChangeWithoutSk {
-            current_state: current,
-            current_commitment,
-            new_state: new,
-            new_commitment,
-        })
-    }
-
-    pub fn mint(&mut self, amount: Balance) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_mint(amount)?))
-    }
-
-    pub fn get_sender_affirm_state(
-        &mut self,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_send(amount)?))
-    }
-
-    pub fn get_receiver_affirm_state(&mut self) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_receive()))
-    }
-
-    pub fn get_instant_sender_affirm_state(
-        &mut self,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_irreversible_send(amount)?))
-    }
-
-    pub fn get_instant_receiver_affirm_state(
-        &mut self,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_irreversible_receive(amount)?))
-    }
-
-    pub fn get_state_for_claiming_received(
-        &mut self,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_claiming_received(amount)?))
-    }
-
-    pub fn get_state_for_reversing_send(
-        &mut self,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_reversing_send(amount)?))
-    }
-
-    pub fn get_state_for_decreasing_counter(
-        &mut self,
-        amount_to_decrease: Option<Balance>,
-    ) -> Result<AccountAssetStateChangeWithoutSk, Error> {
-        self.state_change(|state| Ok(state.get_state_for_decreasing_counter(amount_to_decrease)?))
-    }
-
-    pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
-        match self.pending_state.take() {
-            Some(pending_state) => {
-                self.current_state = pending_state;
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-}
 
 // Mint — W3 split
 
@@ -171,7 +54,7 @@ impl<
     pub fn init<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: &AccountPublicKeys,
-        account_state: &mut AccountAssetStateWithPk,
+        account_state: &mut AccountAssetState,
         amount: Balance,
         nonce: &[u8],
         tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,

@@ -8,7 +8,7 @@ use crate::account::state_transition::{
     AccountStateTransitionHostProofBuilder, AccountStateTransitionProofVerifier,
 };
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountStateCommitment, AccountStateWithoutSk, LegProverConfig,
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, LegProverConfig,
     LegVerifierConfig,
 };
 use crate::auth_proofs::account::AuthProofAffirmation;
@@ -189,8 +189,8 @@ impl<
 > AccountStateTransitionSplitProofBuilder<L, F0, F1, G0, G1>
 {
     pub fn new(
-        account: AccountStateWithoutSk<Affine<G0>>,
-        updated_account: AccountStateWithoutSk<Affine<G0>>,
+        account: AccountState<Affine<G0>>,
+        updated_account: AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nonce: &[u8],
     ) -> Self {
@@ -1363,11 +1363,10 @@ mod tests {
     use super::*;
     use crate::TXN_CHALLENGE_LABEL;
     use crate::account::common::leg_link::{LegProverConfig, LegVerifierConfig};
-    use crate::account::state::AccountStateCommitment;
     use crate::account::state_transition::AccountStateTransitionProofVerifier;
     use crate::account::tests::{get_tree_with_commitment, setup_gens_new, setup_leg_with_conf};
     use crate::account::{AccountCommitmentKeyTrait, PartyEphemeralPublicKey};
-    use crate::account_registration::tests::new_account_without_sk;
+    use crate::account_registration::tests::new_account;
     use crate::auth_proofs::AUTH_TXN_LABEL;
     use crate::auth_proofs::account::AuthProofAffirmation;
     use crate::leg::tests::setup_keys;
@@ -1450,14 +1449,11 @@ mod tests {
         let carol_id = PallasFr::rand(&mut rng);
         let sk_carol_scalar = sk_carol.0;
         let sk_carol_e_scalar = sk_carol_e.0;
-        let (mut carol_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, carol_id);
+        let (mut carol_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_carol, pk_carol_e, carol_id);
         carol_account.balance = 500;
 
-        let carol_account_comm = AccountStateCommitment::from_without_sk(
-            carol_account.commit(account_comm_key.clone()).unwrap(),
-            pk_carol.0,
-            pk_carol_e.0,
-        );
+        let carol_account_comm = carol_account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree = get_tree_with_commitment::<L, _>(
             carol_account_comm.clone(),
@@ -1473,11 +1469,7 @@ mod tests {
         let mut carol_receives = carol_account.clone();
         carol_receives.counter += 2;
         carol_receives.refresh_randomness_for_state_change();
-        let carol_receives_comm = AccountStateCommitment::from_without_sk(
-            carol_receives.commit(account_comm_key.clone()).unwrap(),
-            pk_carol.0,
-            pk_carol_e.0,
-        );
+        let carol_receives_comm = carol_receives.commit(account_comm_key.clone()).unwrap();
 
         // Split proof: Carol creates multi-leg receive proof
 
@@ -1691,7 +1683,8 @@ mod tests {
         let alice_id = PallasFr::rand(&mut rng);
         let sk_alice_scalar = sk_alice.0;
         let sk_alice_e_scalar = sk_alice_e.0;
-        let (mut alice_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, alice_id);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
         alice_account.balance = 1000;
 
         // Alice sends and receives (one balance decrement, two counter changes, one randomness refresh — matching builder behavior)
@@ -1699,16 +1692,8 @@ mod tests {
         alice_updated.balance -= alice_to_bob_amount;
         alice_updated.counter += 2;
         alice_updated.refresh_randomness_for_state_change();
-        let alice_account_comm = AccountStateCommitment::from_without_sk(
-            alice_account.commit(account_comm_key.clone()).unwrap(),
-            pk_alice.0,
-            pk_alice_e.0,
-        );
-        let alice_updated_comm = AccountStateCommitment::from_without_sk(
-            alice_updated.commit(account_comm_key.clone()).unwrap(),
-            pk_alice.0,
-            pk_alice_e.0,
-        );
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
@@ -1939,24 +1924,16 @@ mod tests {
             // Alice's accounts
             let alice_id_1 = PallasFr::rand(&mut rng);
             let (mut alice_account_1, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_1, alice_id_1);
+                new_account(&mut rng, asset_id_1, pk_alice, pk_alice_e, alice_id_1);
             alice_account_1.balance = 500;
 
             let alice_id_2 = PallasFr::rand(&mut rng);
             let (mut alice_account_2, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_2, alice_id_2);
+                new_account(&mut rng, asset_id_2, pk_alice, pk_alice_e, alice_id_2);
             alice_account_2.balance = 300;
 
-            let alice_account_1_comm = AccountStateCommitment::from_without_sk(
-                alice_account_1.commit(account_comm_key.clone()).unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
-            let alice_account_2_comm = AccountStateCommitment::from_without_sk(
-                alice_account_2.commit(account_comm_key.clone()).unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
+            let alice_account_1_comm = alice_account_1.commit(account_comm_key.clone()).unwrap();
+            let alice_account_2_comm = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
             let account_tree = CurveTree::<L, M, PallasParameters, VestaParameters>::from_leaves(
                 &[alice_account_1_comm.0, alice_account_2_comm.0],
@@ -1973,22 +1950,14 @@ mod tests {
             let alice_account_1_updated = alice_account_1
                 .get_state_for_send(alice_send_amount)
                 .unwrap();
-            let alice_account_1_updated_comm = AccountStateCommitment::from_without_sk(
-                alice_account_1_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
+            let alice_account_1_updated_comm = alice_account_1_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             let alice_account_2_updated = alice_account_2.get_state_for_receive();
-            let alice_account_2_updated_comm = AccountStateCommitment::from_without_sk(
-                alice_account_2_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
+            let alice_account_2_updated_comm = alice_account_2_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             // Auth random keys
             let k_amount_1 = PallasFr::rand(&mut rng);
@@ -2375,46 +2344,30 @@ mod tests {
             // Alice's accounts
             let alice_id_1 = PallasFr::rand(&mut rng);
             let (mut alice_account_1, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_1, alice_id_1);
+                new_account(&mut rng, asset_id_1, pk_alice, pk_alice_e, alice_id_1);
             alice_account_1.balance = 500;
 
             let alice_id_2 = PallasFr::rand(&mut rng);
             let (mut alice_account_2, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_2, alice_id_2);
+                new_account(&mut rng, asset_id_2, pk_alice, pk_alice_e, alice_id_2);
             alice_account_2.balance = 300;
 
             // Bob's accounts
             let bob_id_1 = PallasFr::rand(&mut rng);
             let (mut bob_account_1, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_1, bob_id_1);
+                new_account(&mut rng, asset_id_1, pk_bob, pk_bob_e, bob_id_1);
             bob_account_1.balance = 400;
 
             let bob_id_2 = PallasFr::rand(&mut rng);
             let (mut bob_account_2, _, _, _) =
-                new_account_without_sk(&mut rng, asset_id_2, bob_id_2);
+                new_account(&mut rng, asset_id_2, pk_bob, pk_bob_e, bob_id_2);
             bob_account_2.balance = 800;
 
             // Commitments
-            let alice_account_1_comm = AccountStateCommitment::from_without_sk(
-                alice_account_1.commit(account_comm_key.clone()).unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
-            let alice_account_2_comm = AccountStateCommitment::from_without_sk(
-                alice_account_2.commit(account_comm_key.clone()).unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
-            let bob_account_1_comm = AccountStateCommitment::from_without_sk(
-                bob_account_1.commit(account_comm_key.clone()).unwrap(),
-                pk_bob.0,
-                pk_bob_e.0,
-            );
-            let bob_account_2_comm = AccountStateCommitment::from_without_sk(
-                bob_account_2.commit(account_comm_key.clone()).unwrap(),
-                pk_bob.0,
-                pk_bob_e.0,
-            );
+            let alice_account_1_comm = alice_account_1.commit(account_comm_key.clone()).unwrap();
+            let alice_account_2_comm = alice_account_2.commit(account_comm_key.clone()).unwrap();
+            let bob_account_1_comm = bob_account_1.commit(account_comm_key.clone()).unwrap();
+            let bob_account_2_comm = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
             // Shared tree with all 4 accounts
             let account_tree = CurveTree::<L, M, PallasParameters, VestaParameters>::from_leaves(
@@ -2440,40 +2393,24 @@ mod tests {
             let alice_account_1_updated = alice_account_1
                 .get_state_for_send(alice_send_amount)
                 .unwrap();
-            let alice_account_1_updated_comm = AccountStateCommitment::from_without_sk(
-                alice_account_1_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
+            let alice_account_1_updated_comm = alice_account_1_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             let alice_account_2_updated = alice_account_2.get_state_for_receive();
-            let alice_account_2_updated_comm = AccountStateCommitment::from_without_sk(
-                alice_account_2_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_alice.0,
-                pk_alice_e.0,
-            );
+            let alice_account_2_updated_comm = alice_account_2_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             let bob_account_1_updated = bob_account_1.get_state_for_receive();
-            let bob_account_1_updated_comm = AccountStateCommitment::from_without_sk(
-                bob_account_1_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_bob.0,
-                pk_bob_e.0,
-            );
+            let bob_account_1_updated_comm = bob_account_1_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             let bob_account_2_updated = bob_account_2.get_state_for_send(bob_send_amount).unwrap();
-            let bob_account_2_updated_comm = AccountStateCommitment::from_without_sk(
-                bob_account_2_updated
-                    .commit(account_comm_key.clone())
-                    .unwrap(),
-                pk_bob.0,
-                pk_bob_e.0,
-            );
+            let bob_account_2_updated_comm = bob_account_2_updated
+                .commit(account_comm_key.clone())
+                .unwrap();
 
             // Auth random keys
             let k_amount_alice = PallasFr::rand(&mut rng);

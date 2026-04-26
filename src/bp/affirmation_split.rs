@@ -16,7 +16,6 @@ use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account as bp_account;
 use polymesh_dart_bp::util::handle_verification_tuples;
 
-use super::account_reg_split::AccountAssetStateWithPk;
 use super::split_types::*;
 use super::*;
 use crate::Error;
@@ -75,7 +74,6 @@ macro_rules! with_balance {
         verifier_has_balance_decreased: $hbd:expr,
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
-        $(extra_init_args: ($($init_arg:ident : $init_ty:ty),+),)?
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -99,11 +97,10 @@ macro_rules! with_balance {
         {
             pub fn init<R: RngCore + CryptoRng>(
                 rng: &mut R,
-                account_state: &mut AccountAssetStateWithPk,
+                account_state: &mut AccountAssetState,
                 leg_ref: &LegRef,
                 leg_enc: &LegEncrypted,
                 amount: Balance,
-                $($($init_arg: $init_ty,)+)?
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
                 let state_change = account_state.$state_method(amount)?;
@@ -197,8 +194,10 @@ macro_rules! with_balance {
             ) -> Result<$SplitProof<C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
-                let challenge_h_final =
-                    append_auth_proof_and_get_challenge(&auth_proof, self.even_prover.transcript())?;
+                let challenge_h_final = append_auth_proof_and_get_challenge(
+                    &auth_proof,
+                    self.even_prover.transcript(),
+                )?;
 
                 let (host_data, balance_proof) = self
                     .protocol
@@ -273,8 +272,8 @@ macro_rules! with_balance {
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
                 let result = (|| -> Result<(), Error> {
-                    let mut verifier =
-                        proof.challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                    let mut verifier = proof
+                        .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
                             updated_comm,
                             nullifier,
                             root,
@@ -311,9 +310,10 @@ macro_rules! with_balance {
                     proof.common.auth_proof.verify(
                         vec![bp_account::LegVerifierConfig {
                             encryption: leg_enc_core,
-                            party_eph_pk: polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
-                                eph_pk,
-                            ),
+                            party_eph_pk:
+                                polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
+                                    eph_pk,
+                                ),
                             has_balance_decreased: $hbd,
                             has_counter_decreased: $hcd,
                         }],
@@ -339,8 +339,8 @@ macro_rules! with_balance {
                             .transcript(),
                     )?;
 
-                    let (even_tuple, odd_tuple) =
-                        proof.verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
+                    let (even_tuple, odd_tuple) = proof
+                        .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                             verifier,
                             &challenge_h_final_v,
                             updated_comm,
@@ -388,7 +388,6 @@ macro_rules! no_balance {
         eph_pk_variant: $EphPkVariant:ident,
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
-        $(extra_init_args: ($($init_arg:ident : $init_ty:ty),+),)?
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -411,13 +410,12 @@ macro_rules! no_balance {
         {
             pub fn init<R: RngCore + CryptoRng>(
                 rng: &mut R,
-                account_state: &mut AccountAssetStateWithPk,
+                account_state: &mut AccountAssetState,
                 leg_ref: &LegRef,
                 leg_enc: &LegEncrypted,
-                $($($init_arg: $init_ty,)+)?
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
-                let state_change = account_state.$state_method($($($init_arg,)+)?)?;
+                let state_change = account_state.$state_method()?;
                 let updated_commitment = state_change.commitment()?;
                 let leaf_path = state_change.get_path(tree_lookup)?;
 
@@ -504,8 +502,10 @@ macro_rules! no_balance {
             ) -> Result<$SplitProof<C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
-                let challenge_h_final =
-                    append_auth_proof_and_get_challenge(&auth_proof, self.even_prover.transcript())?;
+                let challenge_h_final = append_auth_proof_and_get_challenge(
+                    &auth_proof,
+                    self.even_prover.transcript(),
+                )?;
 
                 let host_data = self
                     .protocol
@@ -578,8 +578,8 @@ macro_rules! no_balance {
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
                 let result = (|| -> Result<(), Error> {
-                    let mut verifier =
-                        proof.challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                    let mut verifier = proof
+                        .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
                             updated_comm,
                             nullifier,
                             root,
@@ -616,9 +616,10 @@ macro_rules! no_balance {
                     proof.common.auth_proof.verify(
                         vec![bp_account::LegVerifierConfig {
                             encryption: leg_enc_core,
-                            party_eph_pk: polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
-                                eph_pk,
-                            ),
+                            party_eph_pk:
+                                polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
+                                    eph_pk,
+                                ),
                             has_balance_decreased: None,
                             has_counter_decreased: $hcd,
                         }],
@@ -644,8 +645,8 @@ macro_rules! no_balance {
                             .transcript(),
                     )?;
 
-                    let (even_tuple, odd_tuple) =
-                        proof.verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
+                    let (even_tuple, odd_tuple) = proof
+                        .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                             verifier,
                             &challenge_h_final_v,
                             updated_comm,
@@ -736,7 +737,6 @@ no_balance! {
     eph_pk_variant: Sender,
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
-    extra_init_args: (amount_to_decrease: Option<Balance>),
 }
 
 no_balance! {
@@ -748,7 +748,6 @@ no_balance! {
     eph_pk_variant: Receiver,
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
-    extra_init_args: (amount_to_decrease: Option<Balance>),
 }
 
 with_balance! {

@@ -27,7 +27,6 @@ use polymesh_dart_bp::util::{
 use polymesh_dart_bp::{TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
 
 type BPFeeAccountState = bp_fee_account::FeeAccountState<PallasA>;
-type BPFeeAccountStateWithoutSk = bp_fee_account::FeeAccountStateWithoutSk<PallasA>;
 type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
 
 pub trait FeeAccountStateUpdate {
@@ -40,6 +39,7 @@ pub trait FeeAccountStateUpdate {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct FeeAccountState {
+    pub pk: AccountPublicKey,
     pub balance: Balance,
     pub asset_id: AssetId,
     pub initial_rho: WrappedCanonical<PallasScalar>,
@@ -51,35 +51,30 @@ pub struct FeeAccountState {
 impl FeeAccountState {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountPublicKey,
         asset_id: AssetId,
         balance: Balance,
     ) -> Result<Self, Error> {
-        let bp_state = BPFeeAccountState::new(rng, account.secret.0.0, balance, asset_id);
+        let bp_state = BPFeeAccountState::new(rng, account.get_affine()?, balance, asset_id);
         bp_state.try_into()
     }
 
-    pub fn bp_state(
-        &self,
-        account: &AccountKeyPair,
-    ) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
+    pub fn bp_state(&self) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
         let state = BPFeeAccountState {
-            sk: account.secret.0.0,
-            without_sk: BPFeeAccountStateWithoutSk {
-                balance: self.balance,
-                asset_id: self.asset_id,
-                initial_rho: self.initial_rho.decode()?,
-                initial_randomness: self.initial_randomness.decode()?,
-                rho: self.rho.decode()?,
-                randomness: self.randomness.decode()?,
-            },
+            pk: self.pk.get_affine()?,
+            balance: self.balance,
+            asset_id: self.asset_id,
+            initial_rho: self.initial_rho.decode()?,
+            initial_randomness: self.initial_randomness.decode()?,
+            rho: self.rho.decode()?,
+            randomness: self.randomness.decode()?,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
     }
 
-    pub fn commitment(&self, account: &AccountKeyPair) -> Result<FeeAccountStateCommitment, Error> {
-        let (_state, commitment) = self.bp_state(account)?;
+    pub fn commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
+        let (_state, commitment) = self.bp_state()?;
         FeeAccountStateCommitment::from_affine(commitment.0)
     }
 
@@ -89,23 +84,6 @@ impl FeeAccountState {
         let nullifier = (account_comm_key.rho_gen() * rho).into();
         FeeAccountStateNullifier::from_affine(nullifier)
     }
-
-    pub fn bp_state_without_sk(&self) -> Result<BPFeeAccountStateWithoutSk, Error> {
-        Ok(BPFeeAccountStateWithoutSk {
-            balance: self.balance,
-            asset_id: self.asset_id,
-            initial_rho: self.initial_rho.decode()?,
-            initial_randomness: self.initial_randomness.decode()?,
-            rho: self.rho.decode()?,
-            randomness: self.randomness.decode()?,
-        })
-    }
-
-    pub fn commitment_without_sk(&self) -> Result<PallasA, Error> {
-        let without_sk = self.bp_state_without_sk()?;
-        let comm = without_sk.comm(dart_gens().account_comm_key())?;
-        Ok(comm.into_affine())
-    }
 }
 
 impl TryFrom<BPFeeAccountState> for FeeAccountState {
@@ -113,21 +91,7 @@ impl TryFrom<BPFeeAccountState> for FeeAccountState {
 
     fn try_from(state: BPFeeAccountState) -> Result<Self, Self::Error> {
         Ok(Self {
-            balance: state.without_sk.balance,
-            asset_id: state.without_sk.asset_id,
-            initial_rho: WrappedCanonical::wrap(&state.without_sk.initial_rho)?,
-            initial_randomness: WrappedCanonical::wrap(&state.without_sk.initial_randomness)?,
-            rho: WrappedCanonical::wrap(&state.without_sk.rho)?,
-            randomness: WrappedCanonical::wrap(&state.without_sk.randomness)?,
-        })
-    }
-}
-
-impl TryFrom<BPFeeAccountStateWithoutSk> for FeeAccountState {
-    type Error = Error;
-
-    fn try_from(state: BPFeeAccountStateWithoutSk) -> Result<Self, Self::Error> {
-        Ok(Self {
+            pk: AccountPublicKey::from_affine(state.pk)?,
             balance: state.balance,
             asset_id: state.asset_id,
             initial_rho: WrappedCanonical::wrap(&state.initial_rho)?,
@@ -258,7 +222,7 @@ pub struct FeeAccountAssetState {
 impl FeeAccountAssetState {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        account: &AccountPublicKey,
         asset_id: AssetId,
         balance: Balance,
     ) -> Result<Self, Error> {
@@ -269,11 +233,8 @@ impl FeeAccountAssetState {
         })
     }
 
-    pub fn current_commitment(
-        &self,
-        account: &AccountKeyPair,
-    ) -> Result<FeeAccountStateCommitment, Error> {
-        self.current_state.commitment(account)
+    pub fn current_commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
+        self.current_state.commitment()
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -282,17 +243,15 @@ impl FeeAccountAssetState {
 
     pub fn bp_current_state(
         &self,
-        account: &AccountKeyPair,
     ) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
-        self.current_state.bp_state(account)
+        self.current_state.bp_state()
     }
 
     fn state_change(
         &mut self,
-        account: &AccountKeyPair,
         update: impl FnOnce(&BPFeeAccountState) -> Result<BPFeeAccountState, Error>,
     ) -> Result<FeeAccountAssetStateChange, Error> {
-        let (current_state, current_commitment) = self.bp_current_state(account)?;
+        let (current_state, current_commitment) = self.bp_current_state()?;
 
         // Update the state.
         let new_state = update(&current_state)?;
@@ -309,20 +268,15 @@ impl FeeAccountAssetState {
         })
     }
 
-    pub fn topup(
-        &mut self,
-        account: &AccountKeyPair,
-        amount: Balance,
-    ) -> Result<FeeAccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_topup(amount)?))
+    pub fn topup(&mut self, amount: Balance) -> Result<FeeAccountAssetStateChange, Error> {
+        self.state_change(|state| Ok(state.get_state_for_topup(amount)?))
     }
 
     pub fn get_payment_state(
         &mut self,
-        account: &AccountKeyPair,
         amount: Balance,
     ) -> Result<FeeAccountAssetStateChange, Error> {
-        self.state_change(account, |state| Ok(state.get_state_for_payment(amount)?))
+        self.state_change(|state| Ok(state.get_state_for_payment(amount)?))
     }
 
     pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
@@ -356,13 +310,12 @@ impl FeeAccountRegistrationProof {
         balance: Balance,
         identity: &[u8],
     ) -> Result<(Self, FeeAccountAssetState), Error> {
-        let pk = account.public;
-        let account_state = FeeAccountAssetState::new(rng, account, asset_id, balance)?;
-        let (bp_state, commitment) = account_state.bp_current_state(account)?;
+        let account_state = FeeAccountAssetState::new(rng, &account.public, asset_id, balance)?;
+        let (bp_state, commitment) = account_state.bp_current_state()?;
         let gens = dart_gens();
         let proof = bp_fee_account::RegTxnProof::new(
             rng,
-            pk.get_affine()?,
+            account.secret.0.0,
             &bp_state,
             commitment,
             identity,
@@ -370,7 +323,7 @@ impl FeeAccountRegistrationProof {
         )?;
         Ok((
             Self {
-                account: pk,
+                account: account.public,
                 asset_id,
                 amount: balance,
                 account_state_commitment: FeeAccountStateCommitment::from_affine(commitment.0)?,
@@ -580,8 +533,7 @@ impl<
         ctx: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let pk = account.public;
-        let state_change = account_state.topup(account, amount)?;
+        let state_change = account_state.topup(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(tree_lookup)?;
 
@@ -590,7 +542,7 @@ impl<
 
         let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, _, _>(
             rng,
-            &pk.get_affine()?,
+            account.secret.0.0,
             amount,
             &state_change.current_state,
             &state_change.new_state,
@@ -602,8 +554,8 @@ impl<
             dart_gens().account_comm_key(),
         )?;
         Ok(Self {
-            account: pk,
-            asset_id: state_change.new_state.without_sk.asset_id,
+            account: account.public,
+            asset_id: state_change.new_state.asset_id,
             amount,
             updated_account_state_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
@@ -1090,7 +1042,7 @@ impl<
         amount: Balance,
         tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let state_change = account_state.get_payment_state(account, amount)?;
+        let state_change = account_state.get_payment_state(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
@@ -1101,6 +1053,7 @@ impl<
         let (proof, nullifier) = bp_fee_account::FeePaymentProof::new::<_, _, _>(
             rng,
             amount,
+            account.secret.0.0,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -1111,7 +1064,7 @@ impl<
             dart_gens().account_comm_key(),
         )?;
         Ok(Self {
-            asset_id: state_change.new_state.without_sk.asset_id,
+            asset_id: state_change.new_state.asset_id,
             amount,
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment,

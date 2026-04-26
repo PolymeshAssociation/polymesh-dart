@@ -393,8 +393,8 @@ mod tests {
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
-            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, pk_bob), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -444,44 +444,44 @@ mod tests {
             let (mut alice_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_id_1,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_1,
             );
-            alice_account_1.without_sk.balance = 500;
+            alice_account_1.balance = 500;
 
             // Alice's account for asset 2
             let alice_id_2 = PallasFr::rand(&mut rng);
             let (mut alice_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_id_2,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_2,
             );
-            alice_account_2.without_sk.balance = 300;
+            alice_account_2.balance = 300;
 
             // Bob's account for asset 1
             let bob_id_1 = PallasFr::rand(&mut rng);
             let (mut bob_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_id_1,
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_1,
             );
-            bob_account_1.without_sk.balance = 400;
+            bob_account_1.balance = 400;
 
             // Bob's account for asset 2
             let bob_id_2 = PallasFr::rand(&mut rng);
             let (mut bob_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_id_2,
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_2,
             );
-            bob_account_2.without_sk.balance = 800;
+            bob_account_2.balance = 800;
 
             let account_tree = get_batched_tree_with_account_comms::<L, M, _>(
                 vec![
@@ -541,6 +541,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_1.clone(),
                 alice_account_1_updated.clone(),
                 alice_account_1_updated_comm,
@@ -562,6 +564,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_2.clone(),
                 alice_account_2_updated.clone(),
                 alice_account_2_after_comm,
@@ -580,6 +584,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_1.clone(),
                 bob_account_1_updated.clone(),
                 bob_account_1_updated_comm,
@@ -598,6 +604,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_2.clone(),
                 bob_account_2_updated.clone(),
                 bob_account_2_updated_comm,
@@ -831,8 +839,8 @@ mod tests {
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
-            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, pk_bob), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -937,130 +945,130 @@ mod tests {
             let (mut alice_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[0],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_1,
             );
-            alice_account_1.without_sk.balance = 1000;
+            alice_account_1.balance = 1000;
 
             let alice_id_2 = PallasFr::rand(&mut rng);
             let (mut alice_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[1],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_2,
             );
-            alice_account_2.without_sk.balance = 1000;
+            alice_account_2.balance = 1000;
 
             let alice_id_3 = PallasFr::rand(&mut rng);
             let (mut alice_account_3, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[2],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_3,
             );
-            alice_account_3.without_sk.balance = 1000;
-            alice_account_3.without_sk.counter = 1;
+            alice_account_3.balance = 1000;
+            alice_account_3.counter = 1;
 
             let alice_id_4 = PallasFr::rand(&mut rng);
             let (mut alice_account_4, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[3],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_4,
             );
-            alice_account_4.without_sk.balance = 1000;
-            alice_account_4.without_sk.counter = 1;
+            alice_account_4.balance = 1000;
+            alice_account_4.counter = 1;
 
             let alice_id_5 = PallasFr::rand(&mut rng);
             let (mut alice_account_5, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[4],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_5,
             );
-            alice_account_5.without_sk.balance = 1000;
-            alice_account_5.without_sk.counter = 1;
+            alice_account_5.balance = 1000;
+            alice_account_5.counter = 1;
 
             let alice_id_6 = PallasFr::rand(&mut rng);
             let (mut alice_account_6, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[5],
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_6,
             );
-            alice_account_6.without_sk.balance = 1000;
-            alice_account_6.without_sk.counter = 1;
+            alice_account_6.balance = 1000;
+            alice_account_6.counter = 1;
 
             // Create Bob's 6 accounts (one per asset)
             let bob_id_1 = PallasFr::rand(&mut rng);
             let (mut bob_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[0],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_1,
             );
-            bob_account_1.without_sk.balance = 1000;
+            bob_account_1.balance = 1000;
 
             let bob_id_2 = PallasFr::rand(&mut rng);
             let (mut bob_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[1],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_2,
             );
-            bob_account_2.without_sk.balance = 1000;
+            bob_account_2.balance = 1000;
 
             let bob_id_3 = PallasFr::rand(&mut rng);
             let (mut bob_account_3, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[2],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_3,
             );
-            bob_account_3.without_sk.balance = 1000;
-            bob_account_3.without_sk.counter = 1;
+            bob_account_3.balance = 1000;
+            bob_account_3.counter = 1;
 
             let bob_id_4 = PallasFr::rand(&mut rng);
             let (mut bob_account_4, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[3],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_4,
             );
-            bob_account_4.without_sk.balance = 1000;
-            bob_account_4.without_sk.counter = 1;
+            bob_account_4.balance = 1000;
+            bob_account_4.counter = 1;
 
             let bob_id_5 = PallasFr::rand(&mut rng);
             let (mut bob_account_5, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[4],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_5,
             );
-            bob_account_5.without_sk.balance = 1000;
-            bob_account_5.without_sk.counter = 1;
+            bob_account_5.balance = 1000;
+            bob_account_5.counter = 1;
 
             let bob_id_6 = PallasFr::rand(&mut rng);
             let (mut bob_account_6, _, _, _) = new_account(
                 &mut rng,
                 asset_ids[5],
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_6,
             );
-            bob_account_6.without_sk.balance = 1000;
-            bob_account_6.without_sk.counter = 1;
+            bob_account_6.balance = 1000;
+            bob_account_6.counter = 1;
 
             // Alice's account state transitions
             let alice_account_1_updated = alice_account_1.get_state_for_send(leg_1_amount).unwrap();
@@ -1180,6 +1188,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_1.clone(),
                 alice_account_1_updated.clone(),
                 alice_account_1_updated_comm,
@@ -1200,6 +1210,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_2.clone(),
                 alice_account_2_updated.clone(),
                 alice_account_2_updated_comm,
@@ -1217,6 +1229,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_3.clone(),
                 alice_account_3_updated.clone(),
                 alice_account_3_updated_comm,
@@ -1237,6 +1251,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_4.clone(),
                 alice_account_4_updated.clone(),
                 alice_account_4_updated_comm,
@@ -1254,6 +1270,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_5.clone(),
                 alice_account_5_updated.clone(),
                 alice_account_5_updated_comm,
@@ -1271,6 +1289,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_6.clone(),
                 alice_account_6_updated.clone(),
                 alice_account_6_updated_comm,
@@ -1489,6 +1509,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_1.clone(),
                 bob_account_1_updated.clone(),
                 bob_account_1_updated_comm,
@@ -1506,6 +1528,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_2.clone(),
                 bob_account_2_updated.clone(),
                 bob_account_2_updated_comm,
@@ -1526,6 +1550,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_3.clone(),
                 bob_account_3_updated.clone(),
                 bob_account_3_updated_comm,
@@ -1543,6 +1569,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_4.clone(),
                 bob_account_4_updated.clone(),
                 bob_account_4_updated_comm,
@@ -1563,6 +1591,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_5.clone(),
                 bob_account_5_updated.clone(),
                 bob_account_5_updated_comm,
@@ -1583,6 +1613,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_6.clone(),
                 bob_account_6_updated.clone(),
                 bob_account_6_updated_comm,
@@ -1817,8 +1849,8 @@ mod tests {
 
         // Setup keys for Alice and Bob
         let (
-            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
-            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((sk_bob, pk_bob), (sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1924,42 +1956,42 @@ mod tests {
             let (mut alice_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_id_1,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_1,
             );
-            alice_account_1.without_sk.balance = 1000;
+            alice_account_1.balance = 1000;
 
             let alice_id_2 = PallasFr::rand(&mut rng);
             let (mut alice_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_id_2,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id_2,
             );
-            alice_account_2.without_sk.balance = 1000;
+            alice_account_2.balance = 1000;
 
             // Create Bob's 2 accounts (one per asset)
             let bob_id_1 = PallasFr::rand(&mut rng);
             let (mut bob_account_1, _, _, _) = new_account(
                 &mut rng,
                 asset_id_1,
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_1,
             );
-            bob_account_1.without_sk.balance = 1000;
+            bob_account_1.balance = 1000;
 
             let bob_id_2 = PallasFr::rand(&mut rng);
             let (mut bob_account_2, _, _, _) = new_account(
                 &mut rng,
                 asset_id_2,
-                sk_bob.clone(),
-                sk_bob_e.clone(),
+                pk_bob.clone(),
+                pk_bob_e.clone(),
                 bob_id_2,
             );
-            bob_account_2.without_sk.balance = 1000;
+            bob_account_2.balance = 1000;
 
             let mut builder1 = AccountStateBuilder::init(alice_account_1.clone());
             builder1.update_for_send(leg_1_amount).unwrap();
@@ -2032,6 +2064,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_1.clone(),
                 alice_account_1_updated.clone(),
                 alice_account_1_updated_comm,
@@ -2074,6 +2108,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_2.clone(),
                 alice_account_2_updated.clone(),
                 alice_account_2_updated_comm,
@@ -2125,6 +2161,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_1.clone(),
                 bob_account_1_updated.clone(),
                 bob_account_1_updated_comm,
@@ -2166,6 +2204,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_bob.0,
+                sk_bob_e.0,
                 bob_account_2.clone(),
                 bob_account_2_updated.clone(),
                 bob_account_2_updated_comm,
@@ -2448,8 +2488,11 @@ mod tests {
         let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
-        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_charlie_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_bob_e)),
+            (_, (_, pk_charlie_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let (_, (_, pk_dave_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
         let (_, (_, pk_eve_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
@@ -2574,26 +2617,26 @@ mod tests {
         let (mut alice_account_1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
-            sk_alice.clone(),
-            sk_alice_e.clone(),
+            pk_alice.clone(),
+            pk_alice_e.clone(),
             alice_id_1,
         );
-        alice_account_1.without_sk.balance = 1000;
+        alice_account_1.balance = 1000;
 
         let alice_id_2 = PallasFr::rand(&mut rng);
         let (mut alice_account_2, _, _, _) = new_account(
             &mut rng,
             asset_id_2,
-            sk_alice.clone(),
-            sk_alice_e.clone(),
+            pk_alice.clone(),
+            pk_alice_e.clone(),
             alice_id_2,
         );
-        alice_account_2.without_sk.balance = 1000;
+        alice_account_2.balance = 1000;
 
         let alice_id_3 = PallasFr::rand(&mut rng);
         let (mut alice_account_3, _, _, _) =
-            new_account(&mut rng, asset_id_3, sk_alice, sk_alice_e, alice_id_3);
-        alice_account_3.without_sk.balance = 1000;
+            new_account(&mut rng, asset_id_3, pk_alice, pk_alice_e, alice_id_3);
+        alice_account_3.balance = 1000;
 
         let account_tree = get_batched_tree_with_account_comms::<L, M, _>(
             vec![&alice_account_1, &alice_account_2, &alice_account_3],
@@ -2638,6 +2681,8 @@ mod tests {
 
         let mut alice_proof_builder_1 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_1.clone(),
                 alice_account_1_updated.clone(),
                 alice_account_1_updated_comm,
@@ -2657,6 +2702,8 @@ mod tests {
 
         let mut alice_proof_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_2.clone(),
                 alice_account_2_updated.clone(),
                 alice_account_2_updated_comm,
@@ -2676,6 +2723,8 @@ mod tests {
 
         let mut alice_proof_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_3.clone(),
                 alice_account_3_updated.clone(),
                 alice_account_3_updated_comm,

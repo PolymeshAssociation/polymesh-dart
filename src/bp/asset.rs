@@ -270,11 +270,9 @@ impl<
         amount: Balance,
     ) -> Result<Self, Error> {
         // Generate a new minting state for the account asset.
-        let state_change = account_asset.mint(keys, amount)?;
+        let state_change = account_asset.mint(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
-        let pk = keys.acct.public;
-        let pk_enc = keys.enc.public;
 
         let root_block = tree_lookup.get_block_number()?;
         let root = tree_lookup.root()?;
@@ -282,8 +280,8 @@ impl<
 
         let (proof, nullifier) = MintTxnProof::new::<_, _, _>(
             rng,
-            pk.get_affine()?,
-            pk_enc.get_affine()?,
+            keys.acct.secret.0.0,
+            keys.enc.secret.0.0,
             amount,
             &state_change.current_state,
             &state_change.new_state,
@@ -296,8 +294,8 @@ impl<
             dart_gens().account_comm_key(),
         )?;
         Ok(Self {
-            pk,
-            pk_enc,
+            pk: keys.acct.public,
+            pk_enc: keys.enc.public,
             asset_id: account_asset.asset_id(),
             amount,
             root_block: try_block_number(root_block)?,

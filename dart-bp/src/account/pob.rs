@@ -47,8 +47,8 @@ pub struct PobWithAuditorProof<G: AffineRepr> {
 impl<G: AffineRepr> PobWithAuditorProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk_aff: &G,
-        pk_enc: &G,
+        sk_aff: &G::ScalarField,
+        sk_enc: &G::ScalarField,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
@@ -57,8 +57,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         Self::new_with_given_transcript(
             rng,
-            pk_aff,
-            pk_enc,
+            sk_aff,
+            sk_enc,
             account,
             account_commitment,
             nonce,
@@ -69,8 +69,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        pk_aff: &G,
-        pk_enc: &G,
+        sk_aff: &G::ScalarField,
+        sk_enc: &G::ScalarField,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         nonce: &[u8],
@@ -84,6 +84,8 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         //
         // The prover should share the index of account commitment in tree so verifier can efficiently fetch the commitment and compare. If its not possible then do a membership proof
 
+        let pk_aff = account.pk_aff();
+        let pk_enc = account.pk_enc();
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -122,16 +124,13 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 G::ScalarField::rand(rng),
             ],
         );
-        let t_null = PokDiscreteLogProtocol::init(
-            account.without_sk.current_rho,
-            current_rho_blinding,
-            &null_gen,
-        );
+        let t_null =
+            PokDiscreteLogProtocol::init(account.current_rho, current_rho_blinding, &null_gen);
 
-        let t_pk = PokDiscreteLogProtocol::init(account.sk, G::ScalarField::rand(rng), &pk_gen);
+        let t_pk = PokDiscreteLogProtocol::init(sk_aff.clone(), G::ScalarField::rand(rng), &pk_gen);
 
         let t_pk_enc =
-            PokDiscreteLogProtocol::init(account.sk_enc, G::ScalarField::rand(rng), &enc_key_gen);
+            PokDiscreteLogProtocol::init(sk_enc.clone(), G::ScalarField::rand(rng), &enc_key_gen);
 
         t_acc.challenge_contribution(&mut transcript)?;
         t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
@@ -142,10 +141,10 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let resp_acc = t_acc.response(
             &[
-                account.without_sk.rho,
-                account.without_sk.current_rho,
-                account.without_sk.randomness,
-                account.without_sk.current_randomness,
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.current_randomness,
             ],
             &challenge,
         )?;
@@ -310,8 +309,8 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
 impl<G: AffineRepr> PobWithAnyoneProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk_aff: G,
-        pk_enc: G,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         // Next few fields args can be abstracted in a single argument. Like a map with key as index and value as legs, keys, etc for that index
@@ -327,8 +326,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let transcript = MerlinTranscript::new(TXN_POB_LABEL);
         Self::new_with_given_transcript(
             rng,
-            pk_aff,
-            pk_enc,
+            sk_aff,
+            sk_enc,
             account,
             account_commitment,
             legs,
@@ -345,8 +344,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        pk_aff: G,
-        pk_enc: G,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         // Next few fields args can be abstracted in a single argument. Like a map with key as index and value as legs, keys, etc for that index
@@ -385,6 +384,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // For amount relation, `\sum{C_v} - \sum{S[2]} * sk_en^{-1} = h * \sum{v}`
         // For all above i have assumed prover is sender but for receiver, replace `S` with `R`.
 
+        let pk_aff = account.pk_aff();
+        let pk_enc = account.pk_enc();
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -436,23 +437,23 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ],
         );
         let t_null = PokDiscreteLogProtocol::init(
-            account.without_sk.current_rho,
+            account.current_rho,
             current_rho_blinding,
             &account_comm_key.current_rho_gen(),
         );
 
         // To prove secret key in account state is same as in public key
         let t_pk =
-            PokDiscreteLogProtocol::init(account.sk, sk_blinding, &account_comm_key.sk_gen());
+            PokDiscreteLogProtocol::init(sk_aff.clone(), sk_blinding, &account_comm_key.sk_gen());
 
         // To prove secret key in account state is same as in public key
         let t_pk_enc = PokDiscreteLogProtocol::init(
-            account.sk_enc,
+            sk_enc.clone(),
             sk_enc_blinding,
             &account_comm_key.sk_enc_gen(),
         );
 
-        let sk_enc_inv = account.sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let t_enc_key_gen = PokDiscreteLogProtocol::init(sk_enc_inv, sk_enc_inv_blinding, &pk_enc);
 
         // For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
@@ -541,8 +542,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             &mut transcript,
         )?;
 
-        let minus_h_at =
-            enc_gen.into_group().neg() * G::ScalarField::from(account.without_sk.asset_id);
+        let minus_h_at = enc_gen.into_group().neg() * G::ScalarField::from(account.asset_id);
         let pk_enc_proj = pk_enc.into_group();
 
         for i in 0..num_pending_txns {
@@ -584,10 +584,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let resp_acc = t_acc.response(
             &[
-                account.without_sk.rho,
-                account.without_sk.current_rho,
-                account.without_sk.randomness,
-                account.without_sk.current_randomness,
+                account.rho,
+                account.current_rho,
+                account.randomness,
+                account.current_randomness,
             ],
             &challenge,
         )?;
@@ -1034,17 +1034,17 @@ mod tests {
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_enc, id.clone());
-        account.without_sk.balance = 1000;
-        account.without_sk.counter = 7;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_enc, id.clone());
+        account.balance = 1000;
+        account.counter = 7;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let nonce = b"test-nonce";
 
         let proof = PobWithAuditorProof::new(
             &mut rng,
-            &pk.0,
-            &pk_enc.0,
+            &sk.0,
+            &sk_enc.0,
             &account,
             account_comm.clone(),
             nonce,
@@ -1055,8 +1055,8 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.without_sk.balance,
-                account.without_sk.counter,
+                account.balance,
+                account.counter,
                 id,
                 &pk.0,
                 &pk_enc.0,
@@ -1084,9 +1084,9 @@ mod tests {
 
         // Account exists with some balance and pending txns
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
-        account.without_sk.balance = 1000000;
-        account.without_sk.counter = num_pending_txns;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id.clone());
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         // Create some legs as pending transfers
@@ -1143,8 +1143,8 @@ mod tests {
 
         let proof = PobWithAnyoneProof::new(
             &mut rng,
-            pk.0,
-            pk_e.0,
+            sk.0,
+            sk_e.0,
             &account,
             account_comm.clone(),
             legs.clone(),
@@ -1165,8 +1165,8 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.without_sk.balance,
-                account.without_sk.counter,
+                account.balance,
+                account.counter,
                 id,
                 &pk.0,
                 &pk_e.0,
@@ -1209,9 +1209,9 @@ mod tests {
         let num_pending_txns = 20;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id.clone());
-        account.without_sk.balance = 1000000;
-        account.without_sk.counter = num_pending_txns;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id.clone());
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1277,8 +1277,8 @@ mod tests {
 
         let proof = PobWithAnyoneProof::new(
             &mut rng,
-            pk.0,
-            pk_e.0,
+            sk.0,
+            sk_e.0,
             &account,
             account_comm.clone(),
             legs.clone(),
@@ -1299,8 +1299,8 @@ mod tests {
         proof
             .verify(
                 asset_id,
-                account.without_sk.balance,
-                account.without_sk.counter,
+                account.balance,
+                account.counter,
                 id,
                 &pk.0,
                 &pk_e.0,
@@ -1342,9 +1342,9 @@ mod tests {
         let num_pending_txns = 10;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
-        account.without_sk.balance = 1000000;
-        account.without_sk.counter = num_pending_txns;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id);
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1396,8 +1396,8 @@ mod tests {
 
         let mut proof = PobWithAnyoneProof::new(
             &mut rng,
-            pk.0,
-            pk_e.0,
+            sk.0,
+            sk_e.0,
             &account,
             account_comm.clone(),
             legs.clone(),
@@ -1418,9 +1418,9 @@ mod tests {
             proof
                 .verify(
                     asset_id,
-                    account.without_sk.balance,
-                    account.without_sk.counter,
-                    account.without_sk.id,
+                    account.balance,
+                    account.counter,
+                    account.id,
                     &pk.0,
                     &pk_e.0,
                     account_comm,
@@ -1453,9 +1453,9 @@ mod tests {
         let num_pending_txns = 6;
 
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk, sk_e, id);
-        account.without_sk.balance = 1000000;
-        account.without_sk.counter = num_pending_txns;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id);
+        account.balance = 1000000;
+        account.counter = num_pending_txns;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let mut legs = vec![];
@@ -1507,8 +1507,8 @@ mod tests {
 
         let mut proof = PobWithAnyoneProof::new(
             &mut rng,
-            pk.0,
-            pk_e.0,
+            sk.0,
+            sk_e.0,
             &account,
             account_comm.clone(),
             legs.clone(),
@@ -1528,9 +1528,9 @@ mod tests {
             proof
                 .verify(
                     asset_id,
-                    account.without_sk.balance,
-                    account.without_sk.counter,
-                    account.without_sk.id,
+                    account.balance,
+                    account.counter,
+                    account.id,
                     &pk.0,
                     &pk_e.0,
                     account_comm,

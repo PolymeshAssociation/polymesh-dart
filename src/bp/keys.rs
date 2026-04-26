@@ -17,7 +17,6 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
-use super::account_reg_split::AccountAssetStateWithPk;
 use super::encode::*;
 use super::*;
 use crate::*;
@@ -251,7 +250,7 @@ impl AccountKeyPair {
     /// Creates an account state for the given asset, counter, and identity.
     pub fn account_state(
         &self,
-        enc_key: &EncryptionSecretKey,
+        enc_key: &EncryptionPublicKey,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
         identity: &[u8],
@@ -262,8 +261,8 @@ impl AccountKeyPair {
         let id = hash_identity::<PallasScalar>(identity);
         let state = BPAccountState::new_given_randomness(
             id,
-            self.secret.0.0,
-            enc_key.0.0,
+            self.public.get_affine()?,
+            enc_key.get_affine()?,
             asset_id,
             counter,
             randomness,
@@ -364,20 +363,6 @@ impl AccountKeys {
         AccountAssetState::new(self, asset_id, counter, identity)
     }
 
-    /// Initializes a new asset state containing only the public key (no secret key).
-    pub fn init_asset_state_with_pk(
-        &self,
-        asset_id: AssetId,
-        counter: NullifierSkGenCounter,
-        identity: &[u8],
-    ) -> Result<(AccountAssetStateWithPk, PallasScalar), Error> {
-        let (asset_state, rho_randomness) =
-            AccountAssetState::new(self, asset_id, counter, identity)?;
-        let pk = self.public_keys();
-        let state_with_pk = AccountAssetStateWithPk::from_asset_state(&asset_state, &pk)?;
-        Ok((state_with_pk, rho_randomness))
-    }
-
     /// Creates an account state for the given asset, counter, and identity.
     pub fn account_state(
         &self,
@@ -386,7 +371,7 @@ impl AccountKeys {
         identity: &[u8],
     ) -> Result<(AccountState, PallasScalar), Error> {
         self.acct
-            .account_state(&self.enc.secret, asset_id, counter, identity)
+            .account_state(&self.enc.public, asset_id, counter, identity)
     }
 
     /// Returns the public keys for the account.

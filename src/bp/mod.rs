@@ -468,10 +468,7 @@ mod tests {
         create_fee_payment_auth_proof, create_registration_auth_proof,
     };
     use crate::curve_tree::ProverCurveTree;
-    use crate::fee_split::{
-        FeeAccountAssetStateWithPk, FeePaymentHostProtocol, FeeRegHostProtocol,
-        FeeTopupHostProtocol,
-    };
+    use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
     use crate::mint_split::MintHostProtocol;
     use crate::split_types::{AffirmationDeviceRequest, AffirmationDeviceResponse};
     use ark_ec::short_weierstrass::Affine;
@@ -499,11 +496,11 @@ mod tests {
         let asset_id: AssetId = 0;
         let balance: Balance = 1000;
 
-        let state_without_sk =
-            FeeAccountAssetStateWithPk::new(&mut rng, keys.acct.public, asset_id, balance).unwrap();
+        let account_state =
+            FeeAccountAssetState::new(&mut rng, &keys.acct.public, asset_id, balance).unwrap();
 
         let (protocol, device_request) =
-            FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &state_without_sk, ctx).unwrap();
+            FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, ctx).unwrap();
 
         let sk = keys.acct.secret.0.0;
         let device_response = create_fee_account_auth_proof(
@@ -515,7 +512,7 @@ mod tests {
         .unwrap();
 
         let proof = protocol
-            .finish(&device_response, &keys.acct.public, &state_without_sk)
+            .finish(&device_response, &keys.acct.public, &account_state)
             .unwrap();
 
         proof.verify_split(ctx).unwrap();
@@ -531,8 +528,8 @@ mod tests {
         let initial_balance: Balance = 1000;
         let topup_amount: Balance = 500;
 
-        let mut state_without_sk =
-            FeeAccountAssetStateWithPk::new(&mut rng, keys.acct.public, asset_id, initial_balance)
+        let mut account_state =
+            FeeAccountAssetState::new(&mut rng, &keys.acct.public, asset_id, initial_balance)
                 .unwrap();
 
         let mut fee_tree =
@@ -540,8 +537,8 @@ mod tests {
                 FEE_ACCOUNT_TREE_HEIGHT,
             )
             .unwrap();
-        let leaf = state_without_sk
-            .current_full_commitment()
+        let leaf = account_state
+            .current_commitment()
             .unwrap()
             .as_leaf_value()
             .unwrap();
@@ -551,7 +548,7 @@ mod tests {
         let (protocol, device_request) = FeeTopupHostProtocol::<FeeAccountTreeConfig>::init(
             &mut rng,
             &keys.acct.public,
-            &mut state_without_sk,
+            &mut account_state,
             topup_amount,
             ctx,
             &fee_tree,
@@ -588,7 +585,8 @@ mod tests {
         let payment_amount: Balance = 100;
 
         let mut fee_state =
-            FeeAccountAssetState::new(&mut rng, &keys.acct, asset_id, initial_balance).unwrap();
+            FeeAccountAssetState::new(&mut rng, &keys.acct.public, asset_id, initial_balance)
+                .unwrap();
 
         let mut fee_tree =
             ProverCurveTree::<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FeeAccountTreeConfig>::new(
@@ -596,7 +594,7 @@ mod tests {
             )
             .unwrap();
         let leaf = fee_state
-            .current_commitment(&keys.acct)
+            .current_commitment()
             .unwrap()
             .as_leaf_value()
             .unwrap();
@@ -621,12 +619,9 @@ mod tests {
         fee_tree.insert(leaf).unwrap();
         fee_tree.store_root().unwrap();
 
-        let mut state_without_sk =
-            FeeAccountAssetStateWithPk::from_asset_state(&fee_state, keys.acct.public).unwrap();
-
         let (protocol, device_request) = FeePaymentHostProtocol::<FeeAccountTreeConfig>::init(
             &mut rng,
-            &mut state_without_sk,
+            &mut fee_state,
             payment_amount,
             ctx,
             &fee_tree,
@@ -671,19 +666,12 @@ mod tests {
         let keys = AccountKeys::rand(&mut rng).unwrap();
         let pk = keys.public_keys();
 
-        let (state_without_sk, rho_randomness) = keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
-            .unwrap();
+        let (account_state, rho_randomness) =
+            keys.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol, device_request) = AccountRegHostProtocol::init(
-            &mut rng,
-            &pk,
-            &state_without_sk,
-            rho_randomness,
-            counter,
-            ctx,
-        )
-        .unwrap();
+        let (protocol, device_request) =
+            AccountRegHostProtocol::init(&mut rng, &account_state, rho_randomness, counter, ctx)
+                .unwrap();
 
         let gens = dart_gens();
         let sk = keys.acct.secret.0.0;
@@ -699,7 +687,7 @@ mod tests {
         .unwrap();
 
         let proof = protocol
-            .finish(&mut rng, &device_response, &pk, &state_without_sk, counter)
+            .finish(&mut rng, &device_response, &pk, &account_state, counter)
             .unwrap();
 
         let tree_params = AccountTreeConfig::parameters();
@@ -718,31 +706,17 @@ mod tests {
         let pk1 = keys1.public_keys();
         let pk2 = keys2.public_keys();
 
-        let (state_without_sk1, rho_randomness1) = keys1
-            .init_asset_state_with_pk(asset_id, counter, ctx)
-            .unwrap();
-        let (state_without_sk2, rho_randomness2) = keys2
-            .init_asset_state_with_pk(asset_id, counter, ctx)
-            .unwrap();
+        let (account_state1, rho_randomness1) =
+            keys1.init_asset_state(asset_id, counter, ctx).unwrap();
+        let (account_state2, rho_randomness2) =
+            keys2.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol1, device_request1) = AccountRegHostProtocol::init(
-            &mut rng,
-            &pk1,
-            &state_without_sk1,
-            rho_randomness1,
-            counter,
-            ctx,
-        )
-        .unwrap();
-        let (protocol2, device_request2) = AccountRegHostProtocol::init(
-            &mut rng,
-            &pk2,
-            &state_without_sk2,
-            rho_randomness2,
-            counter,
-            ctx,
-        )
-        .unwrap();
+        let (protocol1, device_request1) =
+            AccountRegHostProtocol::init(&mut rng, &account_state1, rho_randomness1, counter, ctx)
+                .unwrap();
+        let (protocol2, device_request2) =
+            AccountRegHostProtocol::init(&mut rng, &account_state2, rho_randomness2, counter, ctx)
+                .unwrap();
 
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
@@ -767,22 +741,10 @@ mod tests {
         let tree_params = AccountTreeConfig::parameters();
 
         let proof1 = protocol1
-            .finish(
-                &mut rng,
-                &device_response1,
-                &pk1,
-                &state_without_sk1,
-                counter,
-            )
+            .finish(&mut rng, &device_response1, &pk1, &account_state1, counter)
             .unwrap();
         let proof2 = protocol2
-            .finish(
-                &mut rng,
-                &device_response2,
-                &pk2,
-                &state_without_sk2,
-                counter,
-            )
+            .finish(&mut rng, &device_response2, &pk2, &account_state2, counter)
             .unwrap();
 
         let batched: BatchedAccountAssetRegistrationProof = BatchedAccountAssetRegistrationProof {
@@ -808,17 +770,15 @@ mod tests {
         let keys = AccountKeys::rand(&mut rng).unwrap();
         let pk = keys.public_keys();
 
-        let (mut state_without_sk, _) = keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
-            .unwrap();
+        let (mut account_state, _) = keys.init_asset_state(asset_id, counter, ctx).unwrap();
 
         let mut account_tree =
             ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
                 ACCOUNT_TREE_HEIGHT,
             )
             .unwrap();
-        let leaf = state_without_sk
-            .current_full_commitment()
+        let leaf = account_state
+            .current_commitment()
             .unwrap()
             .as_leaf_value()
             .unwrap();
@@ -828,7 +788,7 @@ mod tests {
         let (protocol, device_request) = MintHostProtocol::<AccountTreeConfig>::init(
             &mut rng,
             &pk,
-            &mut state_without_sk,
+            &mut account_state,
             mint_amount,
             ctx,
             &account_tree,
@@ -949,11 +909,11 @@ mod tests {
             let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
             let (mut sender_state, _) = sender_keys
-                .init_asset_state_with_pk(asset_id, counter, ctx)
+                .init_asset_state(asset_id, counter, ctx)
                 .unwrap();
             sender_state.current_state.balance = mint_amount;
 
-            let leaf = sender_state.current_full_commitment().unwrap();
+            let leaf = sender_state.current_commitment().unwrap();
             let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
                 sender_keys.enc.public,
@@ -1020,10 +980,10 @@ mod tests {
             let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
             let (mut receiver_state, _) = receiver_keys
-                .init_asset_state_with_pk(asset_id, counter, ctx)
+                .init_asset_state(asset_id, counter, ctx)
                 .unwrap();
 
-            let leaf = receiver_state.current_full_commitment().unwrap();
+            let leaf = receiver_state.current_commitment().unwrap();
             let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
                 sender_keys.enc.public,
@@ -1084,11 +1044,11 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut receiver_state, _) = receiver_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
         receiver_state.current_state.counter = 1;
 
-        let leaf = receiver_state.current_full_commitment().unwrap();
+        let leaf = receiver_state.current_commitment().unwrap();
         let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
             &mut rng,
             sender_keys.enc.public,
@@ -1138,11 +1098,11 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut sender_state, _) = sender_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
         sender_state.current_state.counter = 1;
 
-        let leaf = sender_state.current_full_commitment().unwrap();
+        let leaf = sender_state.current_commitment().unwrap();
         let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
             &mut rng,
             sender_keys.enc.public,
@@ -1191,11 +1151,11 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut sender_state, _) = sender_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
         sender_state.current_state.counter = 1;
 
-        let leaf = sender_state.current_full_commitment().unwrap();
+        let leaf = sender_state.current_commitment().unwrap();
 
         let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
             &mut rng,
@@ -1212,7 +1172,6 @@ mod tests {
                 &mut sender_state,
                 &leg_ref,
                 &leg_enc,
-                None,
                 &account_tree,
             )
             .unwrap();
@@ -1246,7 +1205,7 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut receiver_state, _) = receiver_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
         receiver_state.current_state.counter = 1;
 
@@ -1274,7 +1233,7 @@ mod tests {
             )
             .unwrap();
         let leaf = receiver_state
-            .current_full_commitment()
+            .current_commitment()
             .unwrap()
             .as_leaf_value()
             .unwrap();
@@ -1287,7 +1246,6 @@ mod tests {
                 &mut receiver_state,
                 &leg_ref,
                 &leg_enc,
-                None,
                 &account_tree,
             )
             .unwrap();
@@ -1322,11 +1280,11 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut sender_state, _) = sender_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
         sender_state.current_state.balance = 1000;
 
-        let leaf = sender_state.current_full_commitment().unwrap();
+        let leaf = sender_state.current_commitment().unwrap();
         let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
             &mut rng,
             sender_keys.enc.public,
@@ -1377,10 +1335,10 @@ mod tests {
         let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
         let (mut receiver_state, _) = receiver_keys
-            .init_asset_state_with_pk(asset_id, counter, ctx)
+            .init_asset_state(asset_id, counter, ctx)
             .unwrap();
 
-        let leaf = receiver_state.current_full_commitment().unwrap();
+        let leaf = receiver_state.current_commitment().unwrap();
         let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
             &mut rng,
             sender_keys.enc.public,

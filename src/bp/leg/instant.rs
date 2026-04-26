@@ -166,7 +166,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeys,
+        keys: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
@@ -174,7 +174,7 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the sender affirmation.
-        let state_change = account_asset.get_instant_sender_affirm_state(account, amount)?;
+        let state_change = account_asset.get_instant_sender_affirm_state(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
@@ -188,6 +188,8 @@ impl<
             rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            keys.acct.secret.0.0,
+            keys.enc.secret.0.0,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,
@@ -304,7 +306,7 @@ impl<
 {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeys,
+        keys: &AccountKeys,
         leg_ref: &LegRef,
         amount: Balance,
         leg_enc: &LegEncrypted,
@@ -312,7 +314,7 @@ impl<
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
         // Generate a new account state for the receiver affirmation.
-        let state_change = account_asset.get_instant_receiver_affirm_state(account, amount)?;
+        let state_change = account_asset.get_instant_receiver_affirm_state(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(&tree_lookup)?;
 
@@ -326,6 +328,8 @@ impl<
             rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            keys.acct.secret.0.0,
+            keys.enc.secret.0.0,
             &state_change.current_state,
             &state_change.new_state,
             state_change.new_commitment,

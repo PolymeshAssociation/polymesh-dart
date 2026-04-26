@@ -1,4 +1,3 @@
-use ark_ec::CurveGroup;
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
 use bulletproofs::r1cs::ConstraintSystem;
@@ -16,9 +15,6 @@ use super::encode::*;
 use super::split_types::*;
 use super::*;
 use crate::*;
-
-type BPFeeAccountStateWithoutSk = bp_fee_account::FeeAccountStateWithoutSk<PallasA>;
-type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
 
 type BPRegTxnProof = bp_fee_account::RegTxnProof<PallasA>;
 type BPRegTxnProofWithoutSkProtocol = bp_fee_account::RegTxnProofWithoutSkProtocol<PallasA>;
@@ -62,141 +58,6 @@ type BPFeePaymentSplitProof = bp_fee_account::FeePaymentSplitProof<
     VestaParameters,
 >;
 
-#[derive(Clone, Debug, Encode, Decode)]
-pub struct FeeAccountAssetStateWithPk {
-    pub current_state: FeeAccountState,
-    pub pending_state: Option<FeeAccountState>,
-    pub pk: CompressedAffine,
-}
-
-impl FeeAccountAssetStateWithPk {
-    pub fn new<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        pk: AccountPublicKey,
-        asset_id: AssetId,
-        balance: Balance,
-    ) -> Result<Self, Error> {
-        let bp_state_without_sk = BPFeeAccountStateWithoutSk::new(rng, balance, asset_id);
-        let current_state = FeeAccountState::try_from(bp_state_without_sk)?;
-        Ok(Self {
-            current_state,
-            pending_state: None,
-            pk: pk.0,
-        })
-    }
-
-    pub fn from_asset_state(
-        asset_state: &FeeAccountAssetState,
-        pk: AccountPublicKey,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            current_state: asset_state.current_state.clone(),
-            pending_state: asset_state.pending_state.clone(),
-            pk: pk.0,
-        })
-    }
-
-    pub fn asset_id(&self) -> AssetId {
-        self.current_state.asset_id
-    }
-
-    fn pk_contribution_affine(&self) -> Result<PallasA, Error> {
-        Ok(PallasA::try_from(&self.pk)?)
-    }
-
-    pub fn current_full_commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
-        let without_sk_comm = self.current_state.commitment_without_sk()?;
-        let pk = self.pk_contribution_affine()?;
-        let full = (without_sk_comm.into_group() + pk).into_affine();
-        FeeAccountStateCommitment::from_affine(full)
-    }
-
-    fn bp_current_state_without_sk(&self) -> Result<BPFeeAccountStateWithoutSk, Error> {
-        self.current_state.bp_state_without_sk()
-    }
-
-    fn full_commitment_from_without_sk(
-        &self,
-        without_sk_comm: PallasA,
-    ) -> Result<BPFeeAccountStateCommitment, Error> {
-        let pk = self.pk_contribution_affine()?;
-        Ok(bp_fee_account::FeeAccountStateCommitment(
-            (without_sk_comm.into_group() + pk).into_affine(),
-        ))
-    }
-
-    fn state_change_without_sk(
-        &mut self,
-        update: impl FnOnce(&BPFeeAccountStateWithoutSk) -> Result<BPFeeAccountStateWithoutSk, Error>,
-    ) -> Result<FeeAccountStateChangeWithoutSk, Error> {
-        let current = self.bp_current_state_without_sk()?;
-        let current_without_sk_comm = current.comm(dart_gens().account_comm_key())?.into_affine();
-        let current_commitment = self.full_commitment_from_without_sk(current_without_sk_comm)?;
-
-        let new = update(&current)?;
-        let new_without_sk_comm = new.comm(dart_gens().account_comm_key())?.into_affine();
-        let new_commitment = self.full_commitment_from_without_sk(new_without_sk_comm)?;
-
-        self.pending_state = Some(new.clone().try_into()?);
-
-        Ok(FeeAccountStateChangeWithoutSk {
-            current_state: current,
-            current_commitment,
-            new_state: new,
-            new_commitment,
-        })
-    }
-
-    pub fn topup(&mut self, amount: Balance) -> Result<FeeAccountStateChangeWithoutSk, Error> {
-        self.state_change_without_sk(|state| Ok(state.get_state_for_topup(amount)?))
-    }
-
-    pub fn get_payment_state(
-        &mut self,
-        amount: Balance,
-    ) -> Result<FeeAccountStateChangeWithoutSk, Error> {
-        self.state_change_without_sk(|state| Ok(state.get_state_for_payment(amount)?))
-    }
-
-    pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
-        match self.pending_state.take() {
-            Some(pending_state) => {
-                self.current_state = pending_state;
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct FeeAccountStateChangeWithoutSk {
-    pub current_state: BPFeeAccountStateWithoutSk,
-    pub current_commitment: BPFeeAccountStateCommitment,
-    pub new_state: BPFeeAccountStateWithoutSk,
-    pub new_commitment: BPFeeAccountStateCommitment,
-}
-
-impl FeeAccountStateChangeWithoutSk {
-    pub fn commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
-        FeeAccountStateCommitment::from_affine(self.new_commitment.0)
-    }
-
-    pub fn get_path<
-        C: CurveTreeConfig<
-                F0 = <PallasParameters as CurveConfig>::ScalarField,
-                F1 = <VestaParameters as CurveConfig>::ScalarField,
-                P0 = PallasParameters,
-                P1 = VestaParameters,
-            >,
-    >(
-        &self,
-        tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
-    ) -> Result<CurveTreePath<FEE_ACCOUNT_TREE_L, C>, Error> {
-        tree_lookup.get_path_to_leaf(CompressedLeafValue::from_affine(self.current_commitment.0)?)
-    }
-}
-
 // Fee Registration — W3 split
 
 pub struct FeeRegHostProtocol {
@@ -208,19 +69,18 @@ impl FeeRegHostProtocol {
     pub fn init<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: &AccountPublicKey,
-        account_state: &FeeAccountAssetStateWithPk,
+        account_state: &FeeAccountAssetState,
         nonce: &[u8],
     ) -> Result<(Self, FeeAccountDeviceRequest), Error> {
         let pk_affine = pk.get_affine()?;
-        let without_sk = account_state.bp_current_state_without_sk()?;
-        let commitment = account_state.current_full_commitment()?.as_commitment()?;
+        let (account, commitment) = account_state.bp_current_state()?;
         let gens = dart_gens();
 
         let mut transcript = MerlinTranscript::new(bp_fee_account::FEE_REG_TXN_LABEL);
         let protocol = BPRegTxnProofWithoutSkProtocol::init_with_given_transcript(
             rng,
             pk_affine,
-            &without_sk,
+            &account,
             commitment,
             nonce,
             gens.account_comm_key(),
@@ -249,7 +109,7 @@ impl FeeRegHostProtocol {
         mut self,
         device_response: &SingleSkDeviceResponse,
         pk: &AccountPublicKey,
-        account_state: &FeeAccountAssetStateWithPk,
+        account_state: &FeeAccountAssetState,
     ) -> Result<FeeAccountRegistrationProof, Error> {
         let auth_proof = device_response.0.decode()?;
 
@@ -266,7 +126,7 @@ impl FeeRegHostProtocol {
             account: *pk,
             asset_id: account_state.asset_id(),
             amount: account_state.current_state.balance,
-            account_state_commitment: account_state.current_full_commitment()?,
+            account_state_commitment: account_state.current_commitment()?,
             inner: WrappedCanonical::wrap(&bp_proof)?,
         })
     }
@@ -298,7 +158,7 @@ impl<
     pub fn init<R: RngCore + CryptoRng>(
         rng: &mut R,
         pk: &AccountPublicKey,
-        account_state: &mut FeeAccountAssetStateWithPk,
+        account_state: &mut FeeAccountAssetState,
         amount: Balance,
         nonce: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
@@ -419,7 +279,7 @@ impl<
 {
     pub fn init<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account_state: &mut FeeAccountAssetStateWithPk,
+        account_state: &mut FeeAccountAssetState,
         amount: Balance,
         nonce: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,

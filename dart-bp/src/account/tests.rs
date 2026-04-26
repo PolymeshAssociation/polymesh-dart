@@ -17,9 +17,9 @@ use crate::account::{
     IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
     ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof, SenderReverseTxnProof,
 };
-use crate::account_registration::tests::{new_account, new_account_without_sk, setup_comm_key};
+use crate::account_registration::tests::{new_account, setup_comm_key};
 use crate::auth_proofs::account::AuthProofAffirmation;
-use crate::keys::keygen_sig;
+use crate::keys::{DecKey, SigKey, keygen_sig};
 use crate::leg::leg_proof::LegCreationProof;
 use crate::leg::mediator::MEDIATOR_TXN_LABEL;
 use crate::leg::public_asset_leg_proof::{
@@ -67,7 +67,7 @@ fn send_txn() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let (((sk_s, _), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -78,9 +78,9 @@ fn send_txn() {
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
-    account.without_sk.balance = 200;
+    account.balance = 200;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -126,6 +126,8 @@ fn send_txn() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -212,7 +214,7 @@ fn receive_txn() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let ((_, (_, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -223,9 +225,9 @@ fn receive_txn() {
 
     // Receiver account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     // Assume that account had some balance. Either got it as the issuer or from another transfer
-    account.without_sk.balance = 200;
+    account.balance = 200;
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
         account_comm_key.clone(),
@@ -269,6 +271,8 @@ fn receive_txn() {
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -355,7 +359,7 @@ fn claim_received_funds() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let ((_, (_, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -366,10 +370,10 @@ fn claim_received_funds() {
 
     // Receiver account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     // Assume that account had some balance and it had sent the receive transaction to increase its counter
-    account.without_sk.balance = 200;
-    account.without_sk.counter += 1;
+    account.balance = 200;
+    account.counter += 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -415,6 +419,8 @@ fn claim_received_funds() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -499,7 +505,7 @@ fn counter_update_txn_by_sender() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let (((sk_s, _), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -510,9 +516,9 @@ fn counter_update_txn_by_sender() {
 
     // Sender account with non-zero counter
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-    account.without_sk.balance = 50;
-    account.without_sk.counter = 1;
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+    account.balance = 50;
+    account.counter = 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -556,6 +562,8 @@ fn counter_update_txn_by_sender() {
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -638,7 +646,7 @@ fn reverse_send_txn() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let (((sk_s, _), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -649,10 +657,10 @@ fn reverse_send_txn() {
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     // Assume that account had some balance and it had sent the send transaction to increase its counter
-    account.without_sk.balance = 200;
-    account.without_sk.counter += 1;
+    account.balance = 200;
+    account.counter += 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -698,6 +706,8 @@ fn reverse_send_txn() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -782,7 +792,7 @@ fn reverse_receive_txn() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // All parties generate their keys
-    let ((_, (_, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -793,9 +803,9 @@ fn reverse_receive_txn() {
 
     // Receiver account with non-zero counter
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
-    account.without_sk.balance = 50;
-    account.without_sk.counter = 1;
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+    account.balance = 50;
+    account.counter = 1;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -840,6 +850,8 @@ fn reverse_receive_txn() {
             ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
                 &account,
                 &updated_account,
                 updated_account_comm,
@@ -929,7 +941,9 @@ fn single_shot_settlement() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -983,6 +997,8 @@ fn single_shot_settlement() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -1002,6 +1018,8 @@ fn single_shot_settlement() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -1179,7 +1197,9 @@ fn single_shot_combined_create_and_send() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -1237,6 +1257,8 @@ fn single_shot_combined_create_and_send() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -1269,6 +1291,8 @@ fn single_shot_combined_create_and_send() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -1473,7 +1497,9 @@ fn single_shot_combined_create_and_recv() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -1535,6 +1561,8 @@ fn single_shot_combined_create_and_recv() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -1567,6 +1595,8 @@ fn single_shot_combined_create_and_recv() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -1792,7 +1822,7 @@ fn single_shot_swap() {
     );
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -1860,25 +1890,25 @@ fn single_shot_swap() {
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 200;
+        new_account(&mut rng, asset_id_1, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_2, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_1, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.without_sk.balance = 300;
+        new_account(&mut rng, asset_id_2, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -2013,6 +2043,8 @@ fn single_shot_swap() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -2036,6 +2068,8 @@ fn single_shot_swap() {
             &mut rng,
             amount_2,
             (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -2079,6 +2113,8 @@ fn single_shot_swap() {
             &mut rng,
             amount_1,
             (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -2101,6 +2137,8 @@ fn single_shot_swap() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -2337,7 +2375,9 @@ fn single_shot_settlement_asset_id_revealed() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -2382,6 +2422,8 @@ fn single_shot_settlement_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -2401,6 +2443,8 @@ fn single_shot_settlement_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -2504,7 +2548,9 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -2561,6 +2607,8 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -2593,6 +2641,8 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -2721,7 +2771,9 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -2782,6 +2834,8 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -2814,6 +2868,8 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -2946,7 +3002,7 @@ fn single_shot_swap_asset_id_revealed() {
     let leaf_level_bp_gens = BulletproofGens::<Affine<PallasParameters>>::new(NUM_GENS as u32, 1);
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -2986,25 +3042,25 @@ fn single_shot_swap_asset_id_revealed() {
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 200;
+        new_account(&mut rng, asset_id_1, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_2, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_1, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.without_sk.balance = 300;
+        new_account(&mut rng, asset_id_2, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -3118,6 +3174,8 @@ fn single_shot_swap_asset_id_revealed() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -3141,6 +3199,8 @@ fn single_shot_swap_asset_id_revealed() {
             &mut rng,
             amount_2,
             (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -3184,6 +3244,8 @@ fn single_shot_swap_asset_id_revealed() {
             &mut rng,
             amount_1,
             (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -3206,6 +3268,8 @@ fn single_shot_swap_asset_id_revealed() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -3425,7 +3489,7 @@ fn swap_settlement_asset_id_revealed() {
     let leaf_level_bp_gens = BulletproofGens::<Affine<PallasParameters>>::new(NUM_GENS as u32, 1);
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -3465,24 +3529,24 @@ fn swap_settlement_asset_id_revealed() {
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 200;
+        new_account(&mut rng, asset_id_1, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_2, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 50;
+        new_account(&mut rng, asset_id_1, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
-    bob_account_2.without_sk.balance = 300;
+    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, pk_r, pk_r_e, bob_id);
+    bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -3632,6 +3696,8 @@ fn swap_settlement_asset_id_revealed() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -3654,6 +3720,8 @@ fn swap_settlement_asset_id_revealed() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -3695,6 +3763,8 @@ fn swap_settlement_asset_id_revealed() {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -3718,6 +3788,8 @@ fn swap_settlement_asset_id_revealed() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -3896,7 +3968,7 @@ fn reverse_settlement_asset_id_revealed() {
         setup_gens_new::<NUM_GENS>(b"testing_reverse_public_asset");
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -3936,29 +4008,29 @@ fn reverse_settlement_asset_id_revealed() {
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
     let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 500;
-    alice_account_1.without_sk.counter = 1;
+        new_account(&mut rng, asset_id_1, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_1.balance = 500;
+    alice_account_1.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
-    alice_account_2.without_sk.counter = 1;
+        new_account(&mut rng, asset_id_2, pk_s.clone(), pk_s_e.clone(), alice_id);
+    alice_account_2.balance = 50;
+    alice_account_2.counter = 1;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
     let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 500;
-    bob_account_1.without_sk.counter = 1;
+        new_account(&mut rng, asset_id_1, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_1.balance = 500;
+    bob_account_1.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
     let (mut bob_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.without_sk.balance = 50;
-    bob_account_2.without_sk.counter = 1;
+        new_account(&mut rng, asset_id_2, pk_r.clone(), pk_r_e.clone(), bob_id);
+    bob_account_2.balance = 50;
+    bob_account_2.counter = 1;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -4025,6 +4097,8 @@ fn reverse_settlement_asset_id_revealed() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -4047,6 +4121,8 @@ fn reverse_settlement_asset_id_revealed() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -4088,6 +4164,8 @@ fn reverse_settlement_asset_id_revealed() {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -4111,6 +4189,8 @@ fn reverse_settlement_asset_id_revealed() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -4301,7 +4381,7 @@ fn batch_send_txn_proofs() {
     // Create accounts and legs
     let mut account_comms = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
-        let ((sk_s, _), (sk_s_e, pk_s_e)) = &all_keys[i].0;
+        let ((_sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
         let (_, (_, pk_r_e)) = &all_keys[i].1;
         let ((_, _), (_, pk_a_e)) = &all_keys[i].2;
 
@@ -4321,9 +4401,8 @@ fn batch_send_txn_proofs() {
 
         // Create sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
-        account.without_sk.balance = 200; // Ensure sufficient balance
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, *pk_s, *pk_s_e, id);
+        account.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -4364,6 +4443,8 @@ fn batch_send_txn_proofs() {
                 leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
                 leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            all_keys[i].0.0.0.0,
+            all_keys[i].0.1.0.0,
             &accounts[i],
             &updated_accounts[i],
             updated_account_comms[i],
@@ -4533,7 +4614,7 @@ fn combined_send_txn_proofs() {
     // Create accounts and legs
     let mut account_comms = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
-        let ((sk_s, _), (sk_s_e, pk_s_e)) = &all_keys[i].0;
+        let ((_sk_s, pk_s), (_sk_s_e, pk_s_e)) = &all_keys[i].0;
         let (_, (_, pk_r_e)) = &all_keys[i].1;
         let (_, (_, pk_a_e)) = &all_keys[i].2;
 
@@ -4553,9 +4634,8 @@ fn combined_send_txn_proofs() {
 
         // Create sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), id);
-        account.without_sk.balance = 200; // Ensure sufficient balance
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, *pk_s, *pk_s_e, id);
+        account.balance = 200; // Ensure sufficient balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -4604,6 +4684,8 @@ fn combined_send_txn_proofs() {
                     leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
                     leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 ),
+                all_keys[i].0.0.0.0,
+                all_keys[i].0.1.0.0,
                 &accounts[i],
                 &updated_accounts[i],
                 updated_account_comms[i],
@@ -4745,7 +4827,7 @@ fn combined_create_and_send() {
     let asset_id = 1;
     let amount = 100;
 
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((_, _), (_, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((_, _), (_, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
         &mut rng,
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
@@ -4785,8 +4867,8 @@ fn combined_create_and_send() {
     );
 
     let id = PallasFr::rand(&mut rng);
-    let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-    account.without_sk.balance = 200;
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+    account.balance = 200;
 
     let account_tree = get_tree_with_account_comm::<L, _>(
         &account,
@@ -4836,6 +4918,8 @@ fn combined_create_and_send() {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -5024,7 +5108,7 @@ fn batch_receive_txn_proofs() {
     let mut account_comms = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
         let (_, (_, pk_s_e)) = &all_keys[i].0;
-        let ((sk_r, _), (sk_r_e, pk_r_e)) = &all_keys[i].1;
+        let ((_sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
         let (_, (_, pk_a_e)) = &all_keys[i].2;
 
         let (leg, leg_enc, _) = setup_leg(
@@ -5043,9 +5127,8 @@ fn batch_receive_txn_proofs() {
 
         // Create receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
-        account.without_sk.balance = 200; // Ensure some initial balance
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, *pk_r, *pk_r_e, id);
+        account.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -5082,6 +5165,8 @@ fn batch_receive_txn_proofs() {
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_encs[i].core_and_eph_keys_for_receiver(),
+            all_keys[i].1.0.0.0,
+            all_keys[i].1.1.0.0,
             &accounts[i],
             &updated_accounts[i],
             updated_account_comms[i],
@@ -5243,7 +5328,7 @@ fn combined_receive_txn_proofs() {
     let mut account_comms = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
         let (_, (_sk_s_e, pk_s_e)) = &all_keys[i].0;
-        let ((sk_r, _), (sk_r_e, pk_r_e)) = &all_keys[i].1;
+        let ((_sk_r, pk_r), (_sk_r_e, pk_r_e)) = &all_keys[i].1;
         let (_, (_, pk_a_e)) = &all_keys[i].2;
 
         let (leg, leg_enc, _) = setup_leg(
@@ -5262,9 +5347,8 @@ fn combined_receive_txn_proofs() {
 
         // Create receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_r.clone(), sk_r_e.clone(), id);
-        account.without_sk.balance = 200; // Ensure some initial balance
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, *pk_r, *pk_r_e, id);
+        account.balance = 200; // Ensure some initial balance
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         accounts.push(account);
@@ -5309,6 +5393,8 @@ fn combined_receive_txn_proofs() {
             AffirmAsReceiverTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
                 leg_encs[i].core_and_eph_keys_for_receiver(),
+                all_keys[i].1.0.0.0,
+                all_keys[i].1.1.0.0,
                 &accounts[i],
                 &updated_accounts[i],
                 updated_account_comms[i],
@@ -5446,7 +5532,7 @@ fn swap_settlement() {
     );
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (sk_e, pk_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (sk_e, pk_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -5519,25 +5605,22 @@ fn swap_settlement() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 200;
+    let (mut alice_account_1, _, _, _) = new_account(&mut rng, asset_id_1, pk_s, pk_s_e, alice_id);
+    alice_account_1.balance = 200;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
+    let (mut alice_account_2, _, _, _) = new_account(&mut rng, asset_id_2, pk_s, pk_s_e, alice_id);
+    alice_account_2.balance = 50;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 50;
+    let (mut bob_account_1, _, _, _) = new_account(&mut rng, asset_id_1, pk_r, pk_r_e, bob_id);
+    bob_account_1.balance = 50;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, sk_r, sk_r_e, bob_id);
-    bob_account_2.without_sk.balance = 300;
+    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, pk_r, pk_r_e, bob_id);
+    bob_account_2.balance = 300;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -5871,6 +5954,8 @@ fn swap_settlement() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -5893,6 +5978,8 @@ fn swap_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -5934,6 +6021,8 @@ fn swap_settlement() {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -5957,6 +6046,8 @@ fn swap_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -6302,6 +6393,8 @@ fn swap_settlement() {
         SenderCounterUpdateTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &updated_alice_account_1,
             &updated_alice_account_4,
             updated_alice_account_comm_4,
@@ -6324,6 +6417,8 @@ fn swap_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_s.0,
+            sk_s_e.0,
             &updated_alice_account_2,
             &updated_alice_account_3,
             updated_alice_account_comm_3,
@@ -6368,6 +6463,8 @@ fn swap_settlement() {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &updated_bob_account_1,
             &updated_bob_account_3,
             updated_bob_account_comm_3,
@@ -6389,6 +6486,8 @@ fn swap_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &updated_bob_account_2,
             &updated_bob_account_4,
             updated_bob_account_comm_4,
@@ -6750,7 +6849,7 @@ fn reverse_settlement() {
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     // Setup keys for sender, receiver, and auditor
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -6789,30 +6888,26 @@ fn reverse_settlement() {
 
     // Alice has accounts for both assets
     let alice_id = PallasFr::rand(&mut rng);
-    let (mut alice_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_1.without_sk.balance = 500;
-    alice_account_1.without_sk.counter = 1;
+    let (mut alice_account_1, _, _, _) = new_account(&mut rng, asset_id_1, pk_s, pk_s_e, alice_id);
+    alice_account_1.balance = 500;
+    alice_account_1.counter = 1;
     let alice_account_comm_1 = alice_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut alice_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_s.clone(), sk_s_e.clone(), alice_id);
-    alice_account_2.without_sk.balance = 50;
-    alice_account_2.without_sk.counter = 1;
+    let (mut alice_account_2, _, _, _) = new_account(&mut rng, asset_id_2, pk_s, pk_s_e, alice_id);
+    alice_account_2.balance = 50;
+    alice_account_2.counter = 1;
     let alice_account_comm_2 = alice_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Bob has accounts for both assets
     let bob_id = PallasFr::rand(&mut rng);
-    let (mut bob_account_1, _, _, _) =
-        new_account(&mut rng, asset_id_1, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_1.without_sk.balance = 500;
-    bob_account_1.without_sk.counter = 1;
+    let (mut bob_account_1, _, _, _) = new_account(&mut rng, asset_id_1, pk_r, pk_r_e, bob_id);
+    bob_account_1.balance = 500;
+    bob_account_1.counter = 1;
     let bob_account_comm_1 = bob_account_1.commit(account_comm_key.clone()).unwrap();
 
-    let (mut bob_account_2, _, _, _) =
-        new_account(&mut rng, asset_id_2, sk_r.clone(), sk_r_e.clone(), bob_id);
-    bob_account_2.without_sk.balance = 50;
-    bob_account_2.without_sk.counter = 1;
+    let (mut bob_account_2, _, _, _) = new_account(&mut rng, asset_id_2, pk_r, pk_r_e, bob_id);
+    bob_account_2.balance = 50;
+    bob_account_2.counter = 1;
     let bob_account_comm_2 = bob_account_2.commit(account_comm_key.clone()).unwrap();
 
     // Account tree for all four accounts
@@ -6879,6 +6974,8 @@ fn reverse_settlement() {
             &mut rng,
             amount_1,
             leg_enc_1.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_1,
             &updated_alice_account_1,
             updated_alice_account_comm_1,
@@ -6901,6 +6998,8 @@ fn reverse_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_s.0,
+            sk_s_e.0,
             &alice_account_2,
             &updated_alice_account_2,
             updated_alice_account_comm_2,
@@ -6942,6 +7041,8 @@ fn reverse_settlement() {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_1,
             &updated_bob_account_1,
             updated_bob_account_comm_1,
@@ -6965,6 +7066,8 @@ fn reverse_settlement() {
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ),
+            sk_r.0,
+            sk_r_e.0,
             &bob_account_2,
             &updated_bob_account_2,
             updated_bob_account_comm_2,
@@ -7283,7 +7386,9 @@ fn multi_asset_settlement() {
         leg_encs,
         leg_enc_rands,
         alice_accounts,
+        (sk_s, sk_s_e),
         bob_accounts,
+        (sk_r, sk_r_e),
         alice_paths,
         bob_paths,
         account_tree_root,
@@ -7344,6 +7449,8 @@ fn multi_asset_settlement() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_s.0,
+                sk_s_e.0,
                 alice_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -7398,6 +7505,8 @@ fn multi_asset_settlement() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_r.0,
+                sk_r_e.0,
                 bob_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -7654,7 +7763,9 @@ fn multi_asset_combined_create_and_send() {
         leg_encs,
         leg_enc_rands,
         alice_accounts,
+        (sk_s, sk_s_e),
         bob_accounts,
+        (sk_r, sk_r_e),
         alice_paths,
         bob_paths,
         account_tree_root,
@@ -7718,6 +7829,8 @@ fn multi_asset_combined_create_and_send() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_s.0,
+                sk_s_e.0,
                 alice_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -7776,6 +7889,8 @@ fn multi_asset_combined_create_and_send() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_r.0,
+                sk_r_e.0,
                 bob_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -8053,7 +8168,9 @@ fn multi_asset_combined_create_and_recv() {
         leg_encs,
         leg_enc_rands,
         alice_accounts,
+        (sk_s, sk_s_e),
         bob_accounts,
+        (sk_r, sk_r_e),
         alice_paths,
         bob_paths,
         account_tree_root,
@@ -8113,6 +8230,8 @@ fn multi_asset_combined_create_and_recv() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_r.0,
+                sk_r_e.0,
                 bob_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -8165,6 +8284,8 @@ fn multi_asset_combined_create_and_recv() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_s.0,
+                sk_s_e.0,
                 alice_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -8452,8 +8573,8 @@ fn multi_asset_state_transition_different_confs() {
         let mut rng = rand::thread_rng();
 
         let (
-            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
-            ((sk_bob, _), (sk_bob_e, pk_bob_e)),
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_sk_bob, pk_bob), (_sk_bob_e, pk_bob_e)),
             (_, (_, pk_auditor_e)),
         ) = setup_keys(
             &mut rng,
@@ -8486,14 +8607,9 @@ fn multi_asset_state_transition_different_confs() {
         let mut alice_account_comms = Vec::with_capacity(num_legs);
 
         for asset_id in 1..=num_legs as u32 {
-            let (mut account, _, _, _) = new_account(
-                &mut rng,
-                asset_id,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
-                alice_id,
-            );
-            account.without_sk.balance = 500;
+            let (mut account, _, _, _) =
+                new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+            account.balance = 500;
             let comm = account.commit(account_comm_key.clone()).unwrap();
             alice_account_comms.push(comm.0);
             alice_accounts.push(account);
@@ -8505,9 +8621,8 @@ fn multi_asset_state_transition_different_confs() {
         let mut bob_account_comms = Vec::with_capacity(num_legs);
 
         for asset_id in 1..=num_legs as u32 {
-            let (mut account, _, _, _) =
-                new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
-            account.without_sk.balance = 300;
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_bob, pk_bob_e, bob_id);
+            account.balance = 300;
             let comm = account.commit(account_comm_key.clone()).unwrap();
             bob_account_comms.push(comm.0);
             bob_accounts.push(account);
@@ -8545,6 +8660,8 @@ fn multi_asset_state_transition_different_confs() {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_accounts[i].clone(),
                 updated_account,
                 updated_comm,
@@ -8944,7 +9061,9 @@ pub fn setup_single_leg_settlement_common<
     LegEncryption<PallasA>,
     LegEncryptionRandomness<PallasFr>,
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
     AccountState<PallasA>,
     AccountStateCommitment<PallasA>,
@@ -8961,7 +9080,7 @@ pub fn setup_single_leg_settlement_common<
     let mut rng = rand::thread_rng();
 
     // All parties generate their keys
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -9009,15 +9128,15 @@ pub fn setup_single_leg_settlement_common<
 
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
-    sender_account.without_sk.balance = 200; // Ensure sufficient balance
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, sender_id);
+    sender_account.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
     let (mut receiver_account, _, _, _) =
-        new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-    receiver_account.without_sk.balance = 150; // Some initial balance
+        new_account(&mut rng, asset_id, pk_r, pk_r_e, receiver_id);
+    receiver_account.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
     // Create the account tree with both accounts
@@ -9055,7 +9174,9 @@ pub fn setup_single_leg_settlement_common<
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -9082,7 +9203,9 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
     LegEncryption<PallasA>,
     LegEncryptionRandomness<PallasFr>,
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
     AccountState<PallasA>,
     AccountStateCommitment<PallasA>,
@@ -9145,7 +9268,9 @@ pub fn setup_multi_asset_settlement<
     Vec<LegEncryption<PallasA>>,
     Vec<LegEncryptionRandomness<PallasFr>>,
     Vec<AccountState<PallasA>>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     Vec<AccountState<PallasA>>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     Vec<CurveTreeWitnessMultiPath<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>>,
     Vec<CurveTreeWitnessMultiPath<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>>,
     Root<L, ACCOUNT_TREE_M, PallasParameters, VestaParameters>,
@@ -9161,8 +9286,8 @@ pub fn setup_multi_asset_settlement<
         setup_asset_and_account_params_new::<NUM_GENS>();
 
     let (
-        ((sk_alice, _), (sk_alice_e, pk_alice_e)),
-        ((sk_bob, _), (sk_bob_e, pk_bob_e)),
+        ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+        ((sk_bob, pk_bob), (sk_bob_e, pk_bob_e)),
         (_, (_, pk_auditor_e)),
     ) = setup_keys(
         &mut rng,
@@ -9229,14 +9354,9 @@ pub fn setup_multi_asset_settlement<
     let mut alice_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let (mut account, _, _, _) = new_account(
-            &mut rng,
-            asset_id,
-            sk_alice.clone(),
-            sk_alice_e.clone(),
-            alice_id,
-        );
-        account.without_sk.balance = 500;
+        let (mut account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        account.balance = 500;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         alice_account_comms.push(comm.0);
         alice_accounts.push(account);
@@ -9247,9 +9367,8 @@ pub fn setup_multi_asset_settlement<
     let mut bob_account_comms = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_bob.clone(), sk_bob_e.clone(), bob_id);
-        account.without_sk.balance = 300;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_bob, pk_bob_e, bob_id);
+        account.balance = 300;
         let comm = account.commit(account_comm_key.clone()).unwrap();
         bob_account_comms.push(comm.0);
         bob_accounts.push(account);
@@ -9291,7 +9410,9 @@ pub fn setup_multi_asset_settlement<
         leg_encs,
         leg_enc_rands,
         alice_accounts,
+        (sk_alice, sk_alice_e),
         bob_accounts,
+        (sk_bob, sk_bob_e),
         alice_paths,
         bob_paths,
         account_tree_root,
@@ -9348,7 +9469,9 @@ pub fn setup_single_leg_settlement_public_asset_common<
     LegEncryption<PallasA>,
     LegEncryptionRandomness<PallasFr>,
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
     AccountState<PallasA>,
     AccountStateCommitment<PallasA>,
@@ -9363,7 +9486,7 @@ pub fn setup_single_leg_settlement_public_asset_common<
     let mut rng = rand::thread_rng();
 
     // All parties generate their keys
-    let (((sk_s, _), (sk_s_e, pk_s_e)), ((sk_r, _), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) =
         setup_keys(
             &mut rng,
             account_comm_key.sk_gen(),
@@ -9388,15 +9511,15 @@ pub fn setup_single_leg_settlement_public_asset_common<
 
     // Create sender account
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, sender_id);
-    sender_account.without_sk.balance = 200; // Ensure sufficient balance
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, sender_id);
+    sender_account.balance = 200; // Ensure sufficient balance
     let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
     // Create receiver account
     let receiver_id = PallasFr::rand(&mut rng);
     let (mut receiver_account, _, _, _) =
-        new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-    receiver_account.without_sk.balance = 150; // Some initial balance
+        new_account(&mut rng, asset_id, pk_r, pk_r_e, receiver_id);
+    receiver_account.balance = 150; // Some initial balance
     let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
     // Create the account tree with both accounts
@@ -9431,7 +9554,9 @@ pub fn setup_single_leg_settlement_public_asset_common<
         leg_enc,
         leg_enc_rand,
         sender_account,
+        (sk_s, sk_s_e),
         receiver_account,
+        (sk_r, sk_r_e),
         updated_sender_account,
         updated_receiver_account,
         updated_sender_account_comm,
@@ -9452,7 +9577,9 @@ pub fn setup_single_leg_settlement_public_asset<const NUM_GENS: usize, const L: 
     LegEncryption<PallasA>,
     LegEncryptionRandomness<PallasFr>,
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
+    (SigKey<PallasA>, DecKey<PallasA>),
     AccountState<PallasA>,
     AccountState<PallasA>,
     AccountStateCommitment<PallasA>,
@@ -10167,23 +10294,15 @@ fn send_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
     let sk_s_e_scalar = sk_s_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     account.balance = 200;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_send(amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_s.0,
-            pk_s_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -10327,23 +10446,15 @@ fn receive_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;
     let sk_r_e_scalar = sk_r_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     account.balance = 200;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_receive();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_r.0,
-            pk_r_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -10485,24 +10596,16 @@ fn claim_received_funds_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;
     let sk_r_e_scalar = sk_r_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     account.balance = 200;
     account.counter += 1;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_r.0,
-            pk_r_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -10632,24 +10735,16 @@ fn counter_update_txn_by_sender_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
     let sk_s_e_scalar = sk_s_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     account.balance = 50;
     account.counter = 1;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_s.0,
-            pk_s_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -10777,24 +10872,16 @@ fn reverse_send_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
     let sk_s_e_scalar = sk_s_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     account.balance = 200;
     account.counter += 1;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_s.0,
-            pk_s_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -10924,24 +11011,16 @@ fn reverse_receive_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;
     let sk_r_e_scalar = sk_r_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     account.balance = 50;
     account.counter = 1;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_r.0,
-            pk_r_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -11069,23 +11148,15 @@ fn irreversible_send_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
     let sk_s_e_scalar = sk_s_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
     account.balance = 200;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_irreversible_send(amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_s.0,
-            pk_s_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -11215,23 +11286,15 @@ fn irreversible_receive_txn_split_proof() {
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;
     let sk_r_e_scalar = sk_r_e.0;
-    let (mut account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
     account.balance = 200;
-    let account_comm = AccountStateCommitment::from_without_sk(
-        account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let nonce = b"test-nonce";
         let updated_account = account.get_state_for_irreversible_receive(amount).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_r.0,
-            pk_r_e.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
             &mut rng,
             reveal_asset_id,
@@ -11400,24 +11463,17 @@ fn single_shot_settlement_split_proof() {
 
     // Create sender and receiver accounts.
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, sender_id);
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, sender_id);
     sender_account.balance = 200;
 
     let receiver_id = PallasFr::rand(&mut rng);
-    let (mut receiver_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, receiver_id);
+    let (mut receiver_account, _, _, _) =
+        new_account(&mut rng, asset_id, pk_r, pk_r_e, receiver_id);
     receiver_account.balance = 150;
 
     // Two-account tree (sender at index 0, receiver at index 1).
-    let sender_account_comm = AccountStateCommitment::from_without_sk(
-        sender_account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
-    let receiver_account_comm = AccountStateCommitment::from_without_sk(
-        receiver_account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+    let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
     let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
         &vec![sender_account_comm.0, receiver_account_comm.0],
         &account_tree_params,
@@ -11428,24 +11484,16 @@ fn single_shot_settlement_split_proof() {
     let updated_sender_account = sender_account
         .get_state_for_irreversible_send(amount)
         .unwrap();
-    let updated_sender_account_comm = AccountStateCommitment::from_without_sk(
-        updated_sender_account
-            .commit(account_comm_key.clone())
-            .unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let updated_sender_account_comm = updated_sender_account
+        .commit(account_comm_key.clone())
+        .unwrap();
 
     let updated_receiver_account = receiver_account
         .get_state_for_irreversible_receive(amount)
         .unwrap();
-    let updated_receiver_account_comm = AccountStateCommitment::from_without_sk(
-        updated_receiver_account
-            .commit(account_comm_key.clone())
-            .unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let updated_receiver_account_comm = updated_receiver_account
+        .commit(account_comm_key.clone())
+        .unwrap();
 
     println!(
         "For L={L}, asset tree height = {asset_tree_height}, account tree height = {account_tree_height}"
@@ -11796,23 +11844,16 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
     );
 
     let sender_id = PallasFr::rand(&mut rng);
-    let (mut sender_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, sender_id);
+    let (mut sender_account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, sender_id);
     sender_account.balance = 200;
 
     let receiver_id = PallasFr::rand(&mut rng);
-    let (mut receiver_account, _, _, _) = new_account_without_sk(&mut rng, asset_id, receiver_id);
+    let (mut receiver_account, _, _, _) =
+        new_account(&mut rng, asset_id, pk_r, pk_r_e, receiver_id);
     receiver_account.balance = 150;
 
-    let sender_account_comm = AccountStateCommitment::from_without_sk(
-        sender_account.commit(account_comm_key.clone()).unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
-    let receiver_account_comm = AccountStateCommitment::from_without_sk(
-        receiver_account.commit(account_comm_key.clone()).unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+    let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
     let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
         &vec![sender_account_comm.0, receiver_account_comm.0],
         &account_tree_params,
@@ -11823,24 +11864,16 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
     let updated_sender_account = sender_account
         .get_state_for_irreversible_send(amount)
         .unwrap();
-    let updated_sender_account_comm = AccountStateCommitment::from_without_sk(
-        updated_sender_account
-            .commit(account_comm_key.clone())
-            .unwrap(),
-        pk_s.0,
-        pk_s_e.0,
-    );
+    let updated_sender_account_comm = updated_sender_account
+        .commit(account_comm_key.clone())
+        .unwrap();
 
     let updated_receiver_account = receiver_account
         .get_state_for_irreversible_receive(amount)
         .unwrap();
-    let updated_receiver_account_comm = AccountStateCommitment::from_without_sk(
-        updated_receiver_account
-            .commit(account_comm_key.clone())
-            .unwrap(),
-        pk_r.0,
-        pk_r_e.0,
-    );
+    let updated_receiver_account_comm = updated_receiver_account
+        .commit(account_comm_key.clone())
+        .unwrap();
 
     let nonce = b"single_shot_settlement_asset_id_revealed_split_proof_nonce";
 
@@ -12136,7 +12169,7 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
-        account.without_sk.balance = 200;
+        account.balance = 200;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -12153,7 +12186,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that doesn't decrease the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.without_sk.balance = account.without_sk.balance; // Keep same balance
+        updated_account.balance = account.without_sk.balance; // Keep same balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12192,7 +12225,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that instead increases the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.without_sk.balance = account.without_sk.balance + amount; // Increase balance
+        updated_account.balance = account.without_sk.balance + amount; // Increase balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12271,7 +12304,7 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
-        account.without_sk.balance = 200;
+        account.balance = 200;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -12288,7 +12321,7 @@ mod input_sanitation_disabled {
 
         // Create a malicious updated account that increases balance
         let mut updated_account = account.get_state_for_receive();
-        updated_account.without_sk.balance = account.without_sk.balance + amount;
+        updated_account.balance = account.without_sk.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12366,8 +12399,8 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
-        account.without_sk.balance = 200;
-        account.without_sk.counter += 2;
+        account.balance = 200;
+        account.counter += 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -12384,7 +12417,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than the actual claim amount
         let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        updated_account.without_sk.balance = account.without_sk.balance + 75; // Add extra on top of the actual amount
+        updated_account.balance = account.without_sk.balance + 75; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12423,7 +12456,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        updated_account.without_sk.counter -= 1;
+        updated_account.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12501,8 +12534,8 @@ mod input_sanitation_disabled {
         // Sender account with non-zero counter
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
-        account.without_sk.balance = 50;
-        account.without_sk.counter = 2;
+        account.balance = 50;
+        account.counter = 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -12519,7 +12552,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance when it should remain the same
         let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        updated_account.without_sk.balance = account.without_sk.balance + amount;
+        updated_account.balance = account.without_sk.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12557,7 +12590,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        updated_account.without_sk.counter -= 1;
+        updated_account.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12634,8 +12667,8 @@ mod input_sanitation_disabled {
         let id = PallasFr::rand(&mut rng);
         let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
-        account.without_sk.balance = 200;
-        account.without_sk.counter += 2;
+        account.balance = 200;
+        account.counter += 2;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -12652,7 +12685,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than required
         let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        updated_account.without_sk.balance = account.without_sk.balance + 50; // Add extra on top of the actual amount
+        updated_account.balance = account.without_sk.balance + 50; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12691,7 +12724,7 @@ mod input_sanitation_disabled {
 
         // Update account with counter decreased by 1 more than it should be
         let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        updated_account.without_sk.counter -= 1;
+        updated_account.counter -= 1;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12767,16 +12800,16 @@ mod input_sanitation_disabled {
         let sender_id = PallasFr::rand(&mut rng);
         let (mut sender_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), sender_id);
-        sender_account.without_sk.balance = 200; // Ensure sufficient balance
-        sender_account.without_sk.counter = 5; // Set non-zero counter for testing
+        sender_account.balance = 200; // Ensure sufficient balance
+        sender_account.counter = 5; // Set non-zero counter for testing
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
 
         // Create receiver account
         let receiver_id = PallasFr::rand(&mut rng);
         let (mut receiver_account, _, _, _) =
             new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
-        receiver_account.without_sk.balance = 150; // Some initial balance
-        receiver_account.without_sk.counter = 3; // Set non-zero counter for testing
+        receiver_account.balance = 150; // Some initial balance
+        receiver_account.counter = 3; // Set non-zero counter for testing
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
 
         // Create the account tree with both accounts
@@ -12798,7 +12831,7 @@ mod input_sanitation_disabled {
         let mut malicious_sender_account = sender_account
             .get_state_for_irreversible_send(amount)
             .unwrap();
-        malicious_sender_account.without_sk.balance += 50;
+        malicious_sender_account.balance += 50;
 
         let malicious_sender_comm = malicious_sender_account
             .commit(account_comm_key.clone())
@@ -12843,7 +12876,7 @@ mod input_sanitation_disabled {
         let mut malicious_receiver_account = receiver_account
             .get_state_for_irreversible_receive(amount)
             .unwrap();
-        malicious_receiver_account.without_sk.balance += 50;
+        malicious_receiver_account.balance += 50;
 
         let malicious_receiver_comm = malicious_receiver_account
             .commit(account_comm_key.clone())
@@ -12887,7 +12920,7 @@ mod input_sanitation_disabled {
         let mut malicious_sender_account = sender_account
             .get_state_for_irreversible_send(amount)
             .unwrap();
-        malicious_sender_account.without_sk.counter -= 1;
+        malicious_sender_account.counter -= 1;
 
         let malicious_sender_comm = malicious_sender_account
             .commit(account_comm_key.clone())
@@ -12931,7 +12964,7 @@ mod input_sanitation_disabled {
         let mut malicious_receiver_account = receiver_account
             .get_state_for_irreversible_receive(amount)
             .unwrap();
-        malicious_receiver_account.without_sk.counter -= 1;
+        malicious_receiver_account.counter -= 1;
 
         let malicious_receiver_comm = malicious_receiver_account
             .commit(account_comm_key.clone())

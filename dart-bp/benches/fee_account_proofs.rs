@@ -10,7 +10,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::account::state::NUM_GENERATORS;
 use polymesh_dart_bp::fee_account::{FeeAccountState, FeeAccountTopupTxnProof, FeePaymentProof};
-use polymesh_dart_bp::keys::{SigKey, keygen_sig};
+use polymesh_dart_bp::keys::{VerKey, keygen_sig};
 use polymesh_dart_bp::util::verify_rmc;
 use rand_core::CryptoRngCore;
 
@@ -32,10 +32,10 @@ fn setup_comm_key(label: &[u8]) -> [PallasA; NUM_GENERATORS] {
 fn new_fee_account<R: CryptoRngCore>(
     rng: &mut R,
     asset_id: u32,
-    sk: SigKey<PallasA>,
+    pk: VerKey<PallasA>,
     balance: u64,
 ) -> FeeAccountState<PallasA> {
-    FeeAccountState::new(rng, sk.0, balance, asset_id)
+    FeeAccountState::new(rng, pk.0, balance, asset_id)
 }
 
 fn create_shared_setup() -> (
@@ -61,7 +61,7 @@ fn create_shared_setup() -> (
 fn create_fee_account_and_tree<R: CryptoRngCore>(
     rng: &mut R,
     asset_id: u32,
-    sk: SigKey<PallasA>,
+    pk: VerKey<PallasA>,
     balance: u64,
     account_comm_key: &[PallasA; NUM_GENERATORS],
     account_tree_params: &SelRerandProofParametersNew<
@@ -74,7 +74,7 @@ fn create_fee_account_and_tree<R: CryptoRngCore>(
     FeeAccountState<PallasA>,
     CurveTree<64, 1, PallasParameters, VestaParameters>,
 ) {
-    let account = new_fee_account(rng, asset_id, sk, balance);
+    let account = new_fee_account(rng, asset_id, pk, balance);
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
     // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
@@ -103,7 +103,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
     let (account, account_tree) = create_fee_account_and_tree(
         &mut setup_rng,
         asset_id,
-        sk_i,
+        pk_i,
         balance,
         &account_comm_key,
         &account_tree_params,
@@ -117,7 +117,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
 
     let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, _, _>(
         &mut setup_rng,
-        &pk_i.0,
+        sk_i.0,
         increase_bal_by,
         &account,
         &updated_account,
@@ -167,7 +167,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
     let (account, account_tree) = create_fee_account_and_tree(
         &mut setup_rng,
         asset_id,
-        sk_i,
+        pk_i,
         balance,
         &account_comm_key,
         &account_tree_params,
@@ -181,7 +181,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
 
     let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, _, _>(
         &mut setup_rng,
-        &pk_i.0,
+        sk_i.0,
         increase_bal_by,
         &account,
         &updated_account,
@@ -230,12 +230,12 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     let fee_amount = 10;
 
     // Investor has fee payment account with some balance
-    let (sk, _) = keygen_sig(&mut setup_rng, account_comm_key.sk_gen());
+    let (sk, pk) = keygen_sig(&mut setup_rng, account_comm_key.sk_gen());
 
     let (account, account_tree) = create_fee_account_and_tree(
         &mut setup_rng,
         asset_id,
-        sk,
+        pk,
         balance,
         &account_comm_key,
         &account_tree_params,
@@ -251,6 +251,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     let (proof, nullifier) = FeePaymentProof::new::<_, _, _>(
         &mut setup_rng,
         fee_amount,
+        sk.0,
         &account,
         &updated_account,
         updated_account_comm,
@@ -293,12 +294,12 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
     let fee_amount = 10;
 
     // Investor has fee payment account with some balance
-    let (sk, _) = keygen_sig(&mut setup_rng, account_comm_key.sk_gen());
+    let (sk, pk) = keygen_sig(&mut setup_rng, account_comm_key.sk_gen());
 
     let (account, account_tree) = create_fee_account_and_tree(
         &mut setup_rng,
         asset_id,
-        sk,
+        pk,
         balance,
         &account_comm_key,
         &account_tree_params,
@@ -314,6 +315,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
     let (proof, nullifier) = FeePaymentProof::new::<_, _, _>(
         &mut setup_rng,
         fee_amount,
+        sk.0,
         &account,
         &updated_account,
         updated_account_comm,

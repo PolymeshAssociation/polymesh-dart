@@ -4,9 +4,7 @@ use crate::account::common::balance::{
 use crate::account::common::leg_link::{LegProverConfig, LegVerifierConfig};
 use crate::account::common::verifier::StateChangeVerifier;
 use crate::account::common::{CommonStateChangeProof, CommonStateChangeProver};
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AccountStateWithoutSk,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::leg::AmountCiphertext;
 use crate::leg::PartyEphemeralPublicKey;
 use crate::leg::{LegEncryptionCore, ReceiverEphemeralPublicKey, SenderEphemeralPublicKey};
@@ -56,8 +54,8 @@ pub struct AccountStateTransitionHostProofBuilder<
     pub(crate) legs: Vec<LegProverConfig<Affine<G0>>>,
     pub(crate) balance_changes: Vec<BalanceChangeConfig<G0>>,
     pub(crate) net_counter_change: i32,
-    pub(crate) account: AccountStateWithoutSk<Affine<G0>>,
-    pub(crate) updated_account: AccountStateWithoutSk<Affine<G0>>,
+    pub(crate) account: AccountState<Affine<G0>>,
+    pub(crate) updated_account: AccountState<Affine<G0>>,
     pub(crate) updated_account_commitment: AccountStateCommitment<Affine<G0>>,
     pub(crate) nonce: Vec<u8>,
     marker: PhantomData<G1>,
@@ -72,8 +70,8 @@ impl<
 > AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>
 {
     pub fn new(
-        account: AccountStateWithoutSk<Affine<G0>>,
-        updated_account: AccountStateWithoutSk<Affine<G0>>,
+        account: AccountState<Affine<G0>>,
+        updated_account: AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nonce: &[u8],
     ) -> Self {
@@ -319,7 +317,8 @@ pub struct AccountStateTransitionProofBuilder<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub(crate) host: AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>,
-    // TODO: I could just keep secret keys here than duplicating (from host) this info but would need changes. Maybe later
+    pub(crate) sk_aff: G0::ScalarField,
+    pub(crate) sk_enc: G0::ScalarField,
     pub(crate) account: AccountState<Affine<G0>>,
     pub(crate) updated_account: AccountState<Affine<G0>>,
 }
@@ -333,19 +332,23 @@ impl<
 > AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
 {
     pub fn init(
+        sk_aff: G0::ScalarField,
+        sk_enc: G0::ScalarField,
         account: AccountState<Affine<G0>>,
         updated_account: AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nonce: &[u8],
     ) -> Self {
         let host = AccountStateTransitionHostProofBuilder::new(
-            account.without_sk.clone(),
-            updated_account.without_sk.clone(),
+            account.clone(),
+            updated_account.clone(),
             updated_account_commitment,
             nonce,
         );
         Self {
             host,
+            sk_aff,
+            sk_enc,
             account,
             updated_account,
         }
@@ -425,6 +428,7 @@ impl<
             CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 self.host.legs.clone(),
+                self.sk_enc,
                 &self.account,
                 &self.updated_account,
                 self.host.updated_account_commitment,
@@ -468,6 +472,7 @@ impl<
         let common_prover = CommonStateChangeProver::init_with_given_prover_with_rerandomized_leaf(
             rng,
             self.host.legs.clone(),
+            self.sk_enc,
             &self.account,
             &self.updated_account,
             self.host.updated_account_commitment,
@@ -508,6 +513,7 @@ impl<
             Some(BalanceChangeProver::init(
                 rng,
                 self.host.balance_changes,
+                self.sk_enc,
                 &self.account,
                 &self.updated_account,
                 common_prover.old_balance_blinding,
@@ -526,6 +532,8 @@ impl<
         let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
         let common_proof = common_prover.generate_sigma_responses(
+            self.sk_aff,
+            self.sk_enc,
             &self.account,
             &self.updated_account,
             &challenge,
@@ -1063,8 +1071,11 @@ mod tests {
         let tree_height = 6;
 
         // Setup keys for Alice, Bob, Carol, and auditor
-        let ((_, (_, pk_alice_e)), (_, (_, pk_bob_e)), ((sk_carol, _), (sk_carol_e, pk_carol_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (
+            (_, (_, pk_alice_e)),
+            (_, (_, pk_bob_e)),
+            ((sk_carol, pk_carol), (sk_carol_e, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1112,11 +1123,11 @@ mod tests {
             let (mut carol_account, _, _, _) = new_account(
                 &mut rng,
                 asset_id,
-                sk_carol.clone(),
-                sk_carol_e.clone(),
+                pk_carol.clone(),
+                pk_carol_e.clone(),
                 carol_id,
             );
-            carol_account.without_sk.balance = 500;
+            carol_account.balance = 500;
 
             let account_tree = get_tree_with_account_comm::<L, _>(
                 &carol_account,
@@ -1148,6 +1159,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_carol.0,
+                sk_carol_e.0,
                 carol_account.clone(),
                 carol_receives.clone(),
                 carol_receives_comm,
@@ -1250,6 +1263,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_carol.0,
+                sk_carol_e.0,
                 carol_receives.clone(),
                 carol_final.clone(),
                 carol_final_comm,
@@ -1344,7 +1359,7 @@ mod tests {
 
         // Setup keys for Alice, Bob, Carol, and auditor
         let (
-            ((sk_alice, _), (sk_alice_e, pk_alice_e)),
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
             ((_, _), (_, pk_bob_e)),
             ((_, _), (_, pk_carol_e)),
         ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
@@ -1395,11 +1410,11 @@ mod tests {
             let (mut alice_account, _, _, _) = new_account(
                 &mut rng,
                 asset_id,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id,
             );
-            alice_account.without_sk.balance = 1000;
+            alice_account.balance = 1000;
 
             // Alice sends and receives
             let mut builder = AccountStateBuilder::init(alice_account.clone());
@@ -1429,6 +1444,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,
@@ -1524,6 +1541,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_updated.clone(),
                 alice_final.clone(),
                 alice_final_comm,
@@ -1616,8 +1635,11 @@ mod tests {
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice, Bob, Carol, Dave, and auditor
-        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_bob_e)),
+            (_, (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, (_, pk_dave_e)) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen).0;
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
@@ -1688,8 +1710,8 @@ mod tests {
         // Create Alice's account
         let alice_id = PallasFr::rand(&mut rng);
         let (mut alice_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.without_sk.balance = 1000;
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &alice_account,
@@ -1716,6 +1738,8 @@ mod tests {
 
         let mut alice_builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,
@@ -1806,8 +1830,11 @@ mod tests {
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice, Bob, Carol, and auditor
-        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_bob_e)),
+            (_, (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
@@ -1855,11 +1882,11 @@ mod tests {
             let (mut alice_account, _, _, _) = new_account(
                 &mut rng,
                 asset_id,
-                sk_alice.clone(),
-                sk_alice_e.clone(),
+                pk_alice.clone(),
+                pk_alice_e.clone(),
                 alice_id,
             );
-            alice_account.without_sk.balance = 1000;
+            alice_account.balance = 1000;
 
             let account_tree = get_tree_with_account_comm::<L, _>(
                 &alice_account,
@@ -1891,6 +1918,8 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,
@@ -1986,7 +2015,7 @@ mod tests {
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
         // Setup keys for Alice and Bob
-        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), _) =
+        let (((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), _) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
@@ -2061,15 +2090,15 @@ mod tests {
         let (mut alice_account_asset1, _, _, _) = new_account(
             &mut rng,
             asset_id_1,
-            sk_alice.clone(),
-            sk_alice_e.clone(),
+            pk_alice.clone(),
+            pk_alice_e.clone(),
             alice_id,
         );
-        alice_account_asset1.without_sk.balance = 1000;
+        alice_account_asset1.balance = 1000;
 
         let (mut alice_account_asset2, _, _, _) =
-            new_account(&mut rng, asset_id_2, sk_alice, sk_alice_e, alice_id);
-        alice_account_asset2.without_sk.balance = 2000;
+            new_account(&mut rng, asset_id_2, pk_alice, pk_alice_e, alice_id);
+        alice_account_asset2.balance = 2000;
 
         // Commit both Alice accounts and create a single account tree with both
         let alice_comm_asset1 = alice_account_asset1
@@ -2125,6 +2154,8 @@ mod tests {
         // Alice creates builders for both assets using the single account tree
         let mut alice_builder_asset1 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_asset1.clone(),
                 alice_updated_asset1.clone(),
                 alice_updated_comm_asset1,
@@ -2137,6 +2168,8 @@ mod tests {
 
         let mut alice_builder_asset2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account_asset2.clone(),
                 alice_updated_asset2.clone(),
                 alice_updated_comm_asset2,
@@ -2353,8 +2386,11 @@ mod tests {
 
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
-        let (((sk_alice, _), (sk_alice_e, pk_alice_e)), (_, (_, pk_bob_e)), (_, (_, pk_carol_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_bob_e)),
+            (_, (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let ((_, (_, pk_dave_e)), (_, (_, pk_eve_e)), (_, (_, pk_frank_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
         let (_, _, (_, (_, pk_auditor_e))) =
@@ -2484,8 +2520,8 @@ mod tests {
 
         let alice_id = PallasFr::rand(&mut rng);
         let (mut alice_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_alice, sk_alice_e, alice_id);
-        alice_account.without_sk.balance = 1000;
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &alice_account,
@@ -2510,6 +2546,8 @@ mod tests {
 
         let mut alice_builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_alice.0,
+                sk_alice_e.0,
                 alice_account.clone(),
                 alice_updated.clone(),
                 alice_updated_comm,

@@ -45,7 +45,7 @@ schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = 
 ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 ark-host-msm = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-host-msm-impl = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+#ark-host-msm-impl = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }

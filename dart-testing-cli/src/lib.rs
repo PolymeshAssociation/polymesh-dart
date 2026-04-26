@@ -851,13 +851,6 @@ impl DartTestingDb {
             |row| row.get(0)
         )?;
 
-        if count > 0 {
-            return Err(anyhow!(
-                "Account {} is already registered with asset {}",
-                account_name,
-                asset_id
-            ));
-        }
         let params = get_account_curve_tree_parameters();
 
         let account_keys = account_info.account_keys()?;
@@ -875,7 +868,7 @@ impl DartTestingDb {
 
             (proof, asset_state)
         };
-        let current_commitment = asset_state.current_commitment(&account_keys)?;
+        let current_commitment = asset_state.current_commitment()?;
 
         // If proof action is to generate only, save proof and return
         if !proof_action.apply_proof() {
@@ -895,6 +888,13 @@ impl DartTestingDb {
             return Ok(());
         }
 
+        if count > 0 {
+            return Err(anyhow!(
+                "Account {} is already registered with asset {}",
+                account_name,
+                asset_id
+            ));
+        }
         // Register in database
         self.conn.execute(
             "INSERT INTO asset_registered_accounts (account_db_id, asset_db_id) VALUES (?1, ?2)",

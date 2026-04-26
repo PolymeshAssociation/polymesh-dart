@@ -338,7 +338,7 @@ pub mod tests {
             account_comm_key.sk_enc_gen(),
         );
 
-        let account = new_fee_account(&mut rng, asset_id, sk_s.clone(), 100);
+        let account = new_fee_account(&mut rng, asset_id, pk_s.clone(), 100);
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let leaf_blinding = Fr::rand(&mut rng);
@@ -427,9 +427,8 @@ pub mod tests {
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
         let id = Fr::rand(&mut rng);
 
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_aff.clone(), sk_enc.clone(), id);
-        account.without_sk.balance = 100;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+        account.balance = 100;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let updated_account = account.get_state_for_withdraw(30).unwrap();
@@ -525,9 +524,8 @@ pub mod tests {
 
         let id = Fr::rand(&mut rng);
 
-        let (mut account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_aff.clone(), sk_enc.clone(), id);
-        account.without_sk.balance = 200;
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+        account.balance = 200;
         let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let updated_account = account.get_state_for_send(amount).unwrap();

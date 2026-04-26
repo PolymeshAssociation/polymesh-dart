@@ -26,7 +26,6 @@ use super::*;
 use crate::*;
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
-pub(crate) type BPAccountStateWithoutSk = bp_account::AccountStateWithoutSk<PallasA>;
 pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<PallasA>;
 
 pub type AssetCommitmentData =
@@ -42,6 +41,7 @@ pub trait AccountStateUpdate {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct AccountState {
+    pub keys: AccountPublicKeys,
     pub balance: Balance,
     pub counter: PendingTxnCounter,
     pub identity: WrappedCanonical<PallasScalar>,
@@ -53,30 +53,25 @@ pub struct AccountState {
 }
 
 impl AccountState {
-    pub fn bp_state(
-        &self,
-        keys: &AccountKeys,
-    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+    pub fn bp_state(&self) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
         let state = BPAccountState {
-            sk: keys.acct.secret.0.0,
-            sk_enc: keys.enc.secret.0.0,
-            without_sk: BPAccountStateWithoutSk {
-                id: self.identity.decode()?,
-                balance: self.balance,
-                counter: self.counter,
-                asset_id: self.asset_id,
-                rho: self.rho.decode()?,
-                current_rho: self.current_rho.decode()?,
-                randomness: self.randomness.decode()?,
-                current_randomness: self.current_randomness.decode()?,
-            },
+            pk_aff: self.keys.acct.get_affine()?,
+            pk_enc: self.keys.enc.get_affine()?,
+            id: self.identity.decode()?,
+            balance: self.balance,
+            counter: self.counter,
+            asset_id: self.asset_id,
+            rho: self.rho.decode()?,
+            current_rho: self.current_rho.decode()?,
+            randomness: self.randomness.decode()?,
+            current_randomness: self.current_randomness.decode()?,
         };
         let commitment = state.commit(dart_gens().account_comm_key())?;
         Ok((state, commitment))
     }
 
-    pub fn commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
-        let (_state, commitment) = self.bp_state(keys)?;
+    pub fn commitment(&self) -> Result<AccountStateCommitment, Error> {
+        let (_state, commitment) = self.bp_state()?;
         AccountStateCommitment::from_affine(commitment.0)
     }
 
@@ -93,14 +88,18 @@ impl TryFrom<BPAccountState> for AccountState {
 
     fn try_from(state: BPAccountState) -> Result<Self, Self::Error> {
         Ok(Self {
-            balance: state.without_sk.balance,
-            counter: state.without_sk.counter,
-            asset_id: state.without_sk.asset_id,
-            identity: WrappedCanonical::wrap(&state.without_sk.id)?,
-            rho: WrappedCanonical::wrap(&state.without_sk.rho)?,
-            current_rho: WrappedCanonical::wrap(&state.without_sk.current_rho)?,
-            randomness: WrappedCanonical::wrap(&state.without_sk.randomness)?,
-            current_randomness: WrappedCanonical::wrap(&state.without_sk.current_randomness)?,
+            keys: AccountPublicKeys {
+                acct: AccountPublicKey::from_affine(state.pk_aff)?,
+                enc: EncryptionPublicKey::from_affine(state.pk_enc)?,
+            },
+            balance: state.balance,
+            counter: state.counter,
+            asset_id: state.asset_id,
+            identity: WrappedCanonical::wrap(&state.id)?,
+            rho: WrappedCanonical::wrap(&state.rho)?,
+            current_rho: WrappedCanonical::wrap(&state.current_rho)?,
+            randomness: WrappedCanonical::wrap(&state.randomness)?,
+            current_randomness: WrappedCanonical::wrap(&state.current_randomness)?,
         })
     }
 }
@@ -237,27 +236,31 @@ impl AccountAssetState {
         ))
     }
 
-    pub fn current_commitment(&self, keys: &AccountKeys) -> Result<AccountStateCommitment, Error> {
-        self.current_state.commitment(&keys)
+    pub fn current_commitment(&self) -> Result<AccountStateCommitment, Error> {
+        self.current_state.commitment()
     }
 
     pub fn asset_id(&self) -> AssetId {
         self.current_state.asset_id
     }
 
-    pub fn bp_current_state(
-        &self,
-        keys: &AccountKeys,
-    ) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
-        self.current_state.bp_state(keys)
+    pub fn pk_aff(&self) -> AccountPublicKey {
+        self.current_state.keys.acct
+    }
+
+    pub fn pk_enc(&self) -> EncryptionPublicKey {
+        self.current_state.keys.enc
+    }
+
+    pub fn bp_current_state(&self) -> Result<(BPAccountState, BPAccountStateCommitment), Error> {
+        self.current_state.bp_state()
     }
 
     fn state_change(
         &mut self,
-        keys: &AccountKeys,
         update: impl FnOnce(&BPAccountState) -> Result<BPAccountState, Error>,
     ) -> Result<AccountAssetStateChange, Error> {
-        let (current_state, current_commitment) = self.bp_current_state(keys)?;
+        let (current_state, current_commitment) = self.bp_current_state()?;
 
         // Update the state.
         let new_state = update(&current_state)?;
@@ -274,77 +277,51 @@ impl AccountAssetState {
         })
     }
 
-    pub fn mint(
-        &mut self,
-        keys: &AccountKeys,
-        amount: Balance,
-    ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| Ok(state.get_state_for_mint(amount)?))
+    pub fn mint(&mut self, amount: Balance) -> Result<AccountAssetStateChange, Error> {
+        self.state_change(|state| Ok(state.get_state_for_mint(amount)?))
     }
 
     pub fn get_sender_affirm_state(
         &mut self,
-        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| Ok(state.get_state_for_send(amount)?))
+        self.state_change(|state| Ok(state.get_state_for_send(amount)?))
     }
 
-    pub fn get_receiver_affirm_state(
-        &mut self,
-        keys: &AccountKeys,
-    ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| Ok(state.get_state_for_receive()))
+    pub fn get_receiver_affirm_state(&mut self) -> Result<AccountAssetStateChange, Error> {
+        self.state_change(|state| Ok(state.get_state_for_receive()))
     }
 
     pub fn get_instant_sender_affirm_state(
         &mut self,
-        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| {
-            Ok(state.get_state_for_irreversible_send(amount)?)
-        })
+        self.state_change(|state| Ok(state.get_state_for_irreversible_send(amount)?))
     }
 
     pub fn get_instant_receiver_affirm_state(
         &mut self,
-        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| {
-            Ok(state.get_state_for_irreversible_receive(amount)?)
-        })
+        self.state_change(|state| Ok(state.get_state_for_irreversible_receive(amount)?))
     }
 
     pub fn get_state_for_claiming_received(
         &mut self,
-        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| {
-            Ok(state.get_state_for_claiming_received(amount)?)
-        })
+        self.state_change(|state| Ok(state.get_state_for_claiming_received(amount)?))
     }
 
     pub fn get_state_for_reversing_send(
         &mut self,
-        keys: &AccountKeys,
         amount: Balance,
     ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(
-            keys,
-            |state| Ok(state.get_state_for_reversing_send(amount)?),
-        )
+        self.state_change(|state| Ok(state.get_state_for_reversing_send(amount)?))
     }
 
-    pub fn get_state_for_decreasing_counter(
-        &mut self,
-        keys: &AccountKeys,
-    ) -> Result<AccountAssetStateChange, Error> {
-        self.state_change(keys, |state| {
-            Ok(state.get_state_for_decreasing_counter(None)?)
-        })
+    pub fn get_state_for_decreasing_counter(&mut self) -> Result<AccountAssetStateChange, Error> {
+        self.state_change(|state| Ok(state.get_state_for_decreasing_counter(None)?))
     }
 
     pub fn commit_pending_state(&mut self) -> Result<bool, Error> {
@@ -591,13 +568,13 @@ impl AccountAssetRegistrationProof {
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, AccountAssetState), Error> {
         let (account_state, rho_randomness) = keys.init_asset_state(asset_id, counter, identity)?;
-        let (bp_state, commitment) = account_state.bp_current_state(keys)?;
+        let (bp_state, commitment) = account_state.bp_current_state()?;
         let params = poseidon_params();
         let gens = dart_gens();
         let proof = account_registration::RegTxnProof::new(
             rng,
-            keys.acct.public.get_affine()?,
-            keys.enc.public.get_affine()?,
+            keys.acct.secret.0.0,
+            keys.enc.secret.0.0,
             &bp_state,
             commitment,
             rho_randomness,

@@ -49,7 +49,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
         .commit_pending_state()
         .expect("Failed to commit pending state");
     let current_commitment = fee_account_state
-        .current_commitment(&account_keys.acct)
+        .current_commitment()
         .expect("Failed to get current commitment");
     let leaf = current_commitment
         .as_leaf_value()

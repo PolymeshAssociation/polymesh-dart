@@ -1,9 +1,7 @@
 use crate::account::common::balance::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AccountStateWithoutSk,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -113,8 +111,8 @@ impl<
         issuer_aff_pk: Affine<G0>,
         issuer_enc_pk: Affine<G0>,
         increase_bal_by: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -337,8 +335,8 @@ impl<
         issuer_aff_pk: Affine<G0>,
         issuer_enc_pk: Affine<G0>,
         increase_bal_by: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -392,8 +390,8 @@ impl<
         issuer_aff_pk: Affine<G0>,
         issuer_enc_pk: Affine<G0>,
         increase_bal_by: Balance,
-        account: &AccountStateWithoutSk<Affine<G0>>,
-        updated_account: &AccountStateWithoutSk<Affine<G0>>,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         leaf_path: CurveTreeWitnessPath<L, G0, G1>,
         root: &Root<L, 1, G0, G1>,
@@ -767,8 +765,8 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         rng: &mut R,
-        issuer_aff_pk: Affine<G0>,
-        issuer_enc_pk: Affine<G0>,
+        issuer_aff_sk: G0::ScalarField,
+        issuer_enc_sk: G0::ScalarField,
         increase_bal_by: Balance,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -784,8 +782,8 @@ impl<
 
         Self::new_with_given_transcript::<_, Parameters0, Parameters1>(
             rng,
-            issuer_aff_pk,
-            issuer_enc_pk,
+            issuer_aff_sk,
+            issuer_enc_sk,
             increase_bal_by,
             account,
             updated_account,
@@ -806,8 +804,8 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         rng: &mut R,
-        issuer_aff_pk: Affine<G0>,
-        issuer_enc_pk: Affine<G0>,
+        issuer_aff_sk: G0::ScalarField,
+        issuer_enc_sk: G0::ScalarField,
         increase_bal_by: Balance,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
@@ -821,12 +819,7 @@ impl<
         transcript_odd: MerlinTranscript,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts(account, updated_account, true)?;
-        ensure_correct_balance_change(
-            account.as_ref_without_sk(),
-            updated_account.as_ref_without_sk(),
-            increase_bal_by,
-            false,
-        )?;
+        ensure_correct_balance_change(account, updated_account, increase_bal_by, false)?;
 
         let mut even_prover = Prover::new(
             account_tree_params.even_parameters.pc_gens(),
@@ -838,14 +831,16 @@ impl<
         let aff_key_gen = account_comm_key.sk_gen();
         let enc_key_gen = account_comm_key.sk_enc_gen();
 
+        let issuer_aff_pk = account.pk_aff();
+        let issuer_enc_pk = account.pk_enc();
         let (partial_proto, nullifier) =
             MintTxnProofPartialProtocol::init_with_given_prover::<_, Parameters0, Parameters1>(
                 rng,
                 issuer_aff_pk,
                 issuer_enc_pk,
                 increase_bal_by,
-                account.as_ref_without_sk(),
-                updated_account.as_ref_without_sk(),
+                account,
+                updated_account,
                 updated_account_commitment,
                 leaf_path,
                 root,
@@ -859,8 +854,8 @@ impl<
         let mut transcript = even_prover.transcript();
         let auth_protocol = AuthProofOnlySksProtocol::init(
             rng,
-            account.sk_aff(),
-            account.sk_enc(),
+            issuer_aff_sk,
+            issuer_enc_sk,
             &issuer_aff_pk,
             &issuer_enc_pk,
             &aff_key_gen,
@@ -1084,11 +1079,11 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::common::ensure_same_accounts_without_sk;
+    use crate::account::common::ensure_same_accounts;
     use crate::account::tests::{
         get_tree_with_account_comm, get_tree_with_commitment, setup_gens_new,
     };
-    use crate::account_registration::tests::{new_account, new_account_without_sk};
+    use crate::account_registration::tests::new_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_pallas::Fr as PallasFr;
@@ -1111,7 +1106,7 @@ mod tests {
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
 
         let id = PallasFr::rand(&mut rng);
-        let (account, _, _, _) = new_account(&mut rng, asset_id, sk_aff, sk_enc, id.clone());
+        let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
 
         let account_tree = get_tree_with_account_comm::<L, _>(
             &account,
@@ -1128,22 +1123,16 @@ mod tests {
         let clock = Instant::now();
 
         let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
+        assert_eq!(updated_account.balance, account.balance + increase_bal_by);
+        assert_eq!(updated_account.rho, account.rho);
         assert_eq!(
-            updated_account.without_sk.balance,
-            account.without_sk.balance + increase_bal_by
+            updated_account.current_rho,
+            account.current_rho * account.rho
         );
-        assert_eq!(updated_account.without_sk.rho, account.without_sk.rho);
+        assert_eq!(updated_account.randomness, account.randomness);
         assert_eq!(
-            updated_account.without_sk.current_rho,
-            account.without_sk.current_rho * account.without_sk.rho
-        );
-        assert_eq!(
-            updated_account.without_sk.randomness,
-            account.without_sk.randomness
-        );
-        assert_eq!(
-            updated_account.without_sk.current_randomness,
-            account.without_sk.current_randomness * account.without_sk.randomness
+            updated_account.current_randomness,
+            account.current_randomness * account.randomness
         );
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -1153,8 +1142,8 @@ mod tests {
 
         let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            pk_aff.0,
-            pk_enc.0,
+            sk_aff.0,
+            sk_enc.0,
             increase_bal_by,
             &account,
             &updated_account,
@@ -1210,13 +1199,9 @@ mod tests {
         let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
         let id = PallasFr::rand(&mut rng);
-        let (account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id.clone());
+        let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk_aff.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -1225,15 +1210,11 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_aff.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
-        ensure_same_accounts_without_sk(&account, &updated_account, true).unwrap();
+        ensure_same_accounts(&account, &updated_account, true).unwrap();
         ensure_correct_balance_change(&account, &updated_account, increase_bal_by, false).unwrap();
 
         let sk_gen = account_comm_key.sk_gen();
@@ -1326,13 +1307,9 @@ mod tests {
         let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
         let id = PallasFr::rand(&mut rng);
-        let (account, _, _, _) = new_account_without_sk(&mut rng, asset_id, id.clone());
+        let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
 
-        let account_comm = AccountStateCommitment::from_without_sk(
-            account.commit(account_comm_key.clone()).unwrap(),
-            pk_aff.0,
-            pk_enc.0,
-        );
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
         let account_tree =
             get_tree_with_commitment::<L, _>(account_comm.clone(), &account_tree_params, 6);
@@ -1341,16 +1318,12 @@ mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
-        let updated_account_comm = AccountStateCommitment::from_without_sk(
-            updated_account.commit(account_comm_key.clone()).unwrap(),
-            pk_aff.0,
-            pk_enc.0,
-        );
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
         //  Host pre-challenge phase
-        ensure_same_accounts_without_sk(&account, &updated_account, true).unwrap();
+        ensure_same_accounts(&account, &updated_account, true).unwrap();
         ensure_correct_balance_change(&account, &updated_account, increase_bal_by, false).unwrap();
 
         let sk_gen = account_comm_key.sk_gen();

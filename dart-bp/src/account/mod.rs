@@ -15,7 +15,6 @@ pub use common::{CommonStateChangeProof, CommonStateChangeProver};
 
 pub use state::{
     AccountCommitmentKeyTrait, AccountState, AccountStateBuilder, AccountStateCommitment,
-    AccountStateWithoutSk,
 };
 
 pub use state_transition::AccountStateTransitionProof;
@@ -85,7 +84,7 @@ macro_rules! impl_txn_proof {
     // generate the counter-equality check or nothing
     (@maybe_check_counter yes, $acc:ident, $new_acc:ident) => {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if $acc.without_sk.counter != $new_acc.without_sk.counter {
+        if $acc.counter != $new_acc.counter {
             return Err(Error::ProofGenerationError(
                 "counter mismatch between old and new account states".to_string(),
             ));
@@ -154,6 +153,8 @@ macro_rules! impl_txn_proof {
                 LegEncryptionCore<Affine<G0>>,
                 $EphPkType<Affine<G0>>,
             ),
+            sk_aff: G0::ScalarField,
+            sk_enc: G0::ScalarField,
             account: &AccountState<Affine<G0>>,
             updated_account: &AccountState<Affine<G0>>,
             updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -178,6 +179,8 @@ macro_rules! impl_txn_proof {
                     rng,
                     $($amount,)?
                     leg_enc,
+                    sk_aff,
+                    sk_enc,
                     account,
                     updated_account,
                     updated_account_commitment,
@@ -255,6 +258,8 @@ macro_rules! impl_txn_proof {
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
                 ),
+                sk_aff: G0::ScalarField,
+                sk_enc: G0::ScalarField,
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -280,6 +285,7 @@ macro_rules! impl_txn_proof {
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             has_balance_changed: true,
                         }],
+                        sk_enc,
                         account,
                         updated_account,
                         updated_account_commitment,
@@ -301,6 +307,7 @@ macro_rules! impl_txn_proof {
                         eph_pk_amount,
                         has_balance_decreased: $prover_bal_dec,
                     }],
+                    sk_enc,
                     account,
                     updated_account,
                     common_prover.old_balance_blinding,
@@ -319,7 +326,7 @@ macro_rules! impl_txn_proof {
                     .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
                 let common_proof =
-                    common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
+                    common_prover.generate_sigma_responses(sk_aff, sk_enc, account, updated_account, &challenge)?;
 
                 let balance_proof = balance_change_prover.gen_proof(&challenge)?;
 
@@ -516,6 +523,8 @@ macro_rules! impl_txn_proof {
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
                 ),
+                sk_aff: G0::ScalarField,
+                sk_enc: G0::ScalarField,
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -539,6 +548,7 @@ macro_rules! impl_txn_proof {
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             has_balance_changed: false,
                         }],
+                        sk_enc,
                         account,
                         updated_account,
                         updated_account_commitment,
@@ -559,7 +569,7 @@ macro_rules! impl_txn_proof {
                     .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
                 let common_proof =
-                    common_prover.generate_sigma_responses(account, updated_account, &challenge)?;
+                    common_prover.generate_sigma_responses(sk_aff, sk_enc, account, updated_account, &challenge)?;
 
                 Ok((Self { common_proof }, nullifier))
             }
@@ -703,7 +713,7 @@ macro_rules! impl_txn_proof {
 ///   `prover_has_balance_decreased`   — forwarded to `BalanceChangeConfig`
 ///   `verifier_has_balance_decreased` — forwarded to `LegVerifierConfig`
 macro_rules! impl_txn_split_proof {
-    // Counter equality check (on AccountStateWithoutSk)
+    // Counter equality check (on AccountState)
     (@maybe_check_counter yes, $acc:ident, $new_acc:ident) => {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if $acc.counter != $new_acc.counter {
@@ -778,8 +788,8 @@ macro_rules! impl_txn_split_proof {
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
                 ),
-                account: &AccountStateWithoutSk<Affine<G0>>,
-                updated_account: &AccountStateWithoutSk<Affine<G0>>,
+                account: &AccountState<Affine<G0>>,
+                updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,
@@ -898,8 +908,8 @@ macro_rules! impl_txn_split_proof {
                 rng: &mut R,
                 amount: Balance,
                 leg_enc: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>),
-                account: &AccountStateWithoutSk<Affine<G0>>,
-                updated_account: &AccountStateWithoutSk<Affine<G0>>,
+                account: &AccountState<Affine<G0>>,
+                updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,
@@ -1235,8 +1245,8 @@ macro_rules! impl_txn_split_proof {
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
                 ),
-                account: &AccountStateWithoutSk<Affine<G0>>,
-                updated_account: &AccountStateWithoutSk<Affine<G0>>,
+                account: &AccountState<Affine<G0>>,
+                updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,
@@ -1313,8 +1323,8 @@ macro_rules! impl_txn_split_proof {
             >(
                 rng: &mut R,
                 leg_enc: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>),
-                account: &AccountStateWithoutSk<Affine<G0>>,
-                updated_account: &AccountStateWithoutSk<Affine<G0>>,
+                account: &AccountState<Affine<G0>>,
+                updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,

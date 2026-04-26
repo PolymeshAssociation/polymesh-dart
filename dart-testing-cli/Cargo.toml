@@ -20,6 +20,7 @@ lazy_static = { workspace = true, default-features = false }
 thiserror = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
 hex = { workspace = true, default-features = false }
+ark-serialize = { workspace = true, default-features = false }
 
 # CLI
 anyhow = { workspace = true }

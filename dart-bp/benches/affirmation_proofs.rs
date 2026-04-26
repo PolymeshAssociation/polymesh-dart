@@ -122,7 +122,7 @@ fn create_account_and_tree<
     K: AccountCommitmentKeyTrait<PallasA> + Clone,
 >(
     rng: &mut R,
-    sk: SigKey<PallasA>,
+    sk_aff: SigKey<PallasA>,
     sk_enc: DecKey<PallasA>,
     account_comm_key: K,
     account_tree_params: &SelRerandProofParametersNew<
@@ -138,9 +138,11 @@ fn create_account_and_tree<
     let asset_id = 1;
     let id = PallasFr::rand(rng);
     let poseidon_config = get_poseidon2_params_for_2_1_hashing().unwrap();
+    let pk_aff = (account_comm_key.sk_gen() * sk_aff.0).into_affine();
+    let pk_enc = (account_comm_key.sk_enc_gen() * sk_enc.0).into_affine();
     let (mut account, _) =
-        AccountState::new(rng, id, sk.0, sk_enc.0, asset_id, 0, poseidon_config).unwrap();
-    account.without_sk.balance = 200;
+        AccountState::new(rng, id, pk_aff, pk_enc, asset_id, 0, poseidon_config).unwrap();
+    account.balance = 200;
 
     let account_comm = account.commit(account_comm_key.clone()).unwrap();
     let set = vec![account_comm.0];
@@ -174,8 +176,8 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
-        sk_s,
-        sk_s_e,
+        sk_s.clone(),
+        sk_s_e.clone(),
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -191,6 +193,8 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
         &mut rng,
         amount,
         leg_enc.core_and_eph_keys_for_sender(),
+        sk_s.0.clone(),
+        sk_s_e.0.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -244,8 +248,8 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
-        sk_r,
-        sk_r_e,
+        sk_r.clone(),
+        sk_r_e.clone(),
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -259,6 +263,8 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
         leg_enc.core_and_eph_keys_for_receiver(),
+        sk_r.0.clone(),
+        sk_r_e.0.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -313,8 +319,8 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
-        sk_s,
-        sk_s_e,
+        sk_s.clone(),
+        sk_s_e.clone(),
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -330,6 +336,8 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
         &mut rng,
         amount,
         leg_enc.core_and_eph_keys_for_sender(),
+        sk_s.0.clone(),
+        sk_s_e.0.clone(),
         &account,
         &updated_account,
         updated_account_comm,
@@ -388,8 +396,8 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
 
     let (account, account_tree) = create_account_and_tree(
         &mut rng,
-        sk_r,
-        sk_r_e,
+        sk_r.clone(),
+        sk_r_e.clone(),
         account_comm_key.clone(),
         &account_tree_params,
     );
@@ -403,6 +411,8 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
         leg_enc.core_and_eph_keys_for_receiver(),
+        sk_r.0.clone(),
+        sk_r_e.0.clone(),
         &account,
         &updated_account,
         updated_account_comm,

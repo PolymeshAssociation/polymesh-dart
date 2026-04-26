@@ -1,4 +1,4 @@
-use crate::account::{AccountState, AccountStateWithoutSk};
+use crate::account::AccountState;
 use crate::util::{
     create_balance_bp_t_values, enforce_balance_change_prover,
     generate_host_sigma_responses_for_balance_change,
@@ -81,6 +81,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
         balance_change_config: Vec<BalanceChangeConfig<G0>>,
+        sk_enc: F0,
         account: &AccountState<Affine<G0>>,
         updated_account: &AccountState<Affine<G0>>,
         mut old_balance_blinding: F0,
@@ -104,12 +105,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         } else {
             (-delta as Balance, false)
         };
-        ensure_correct_balance_change(
-            account.as_ref_without_sk(),
-            updated_account.as_ref_without_sk(),
-            amount,
-            has_balance_decreased,
-        )?;
+        ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
 
         let mut amounts = Vec::with_capacity(balance_change_config.len());
         let mut ct_amounts = Vec::with_capacity(balance_change_config.len());
@@ -124,8 +120,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
             rng,
-            account.without_sk.balance,
-            updated_account.without_sk.balance,
+            account.balance,
+            updated_account.balance,
             amounts.clone(),
             has_balance_decreased,
             &mut even_prover,
@@ -144,7 +140,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
             old_balance_blinding,
             new_balance_blinding,
             amount_blinding,
-            account.sk_enc.inverse().ok_or(Error::InvertingZero)?,
+            sk_enc.inverse().ok_or(Error::InvertingZero)?,
             sk_enc_inv_blinding,
             eph_pk_amounts,
             pc_gens,
@@ -159,8 +155,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         Ok(Self {
             amount: amounts,
-            old_balance: account.without_sk.balance,
-            new_balance: updated_account.without_sk.balance,
+            old_balance: account.balance,
+            new_balance: updated_account.balance,
             comm_bp_bal_blinding,
             comm_bp_bal,
             t_comm_bp_bal,
@@ -189,8 +185,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 }
 
 pub fn ensure_correct_balance_change<G: AffineRepr>(
-    old_state: &AccountStateWithoutSk<G>,
-    new_state: &AccountStateWithoutSk<G>,
+    old_state: &AccountState<G>,
+    new_state: &AccountState<G>,
     amount: Balance,
     has_balance_decreased: bool,
 ) -> Result<()> {
