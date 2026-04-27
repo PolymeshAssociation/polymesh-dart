@@ -4,7 +4,9 @@ use rand_core::{CryptoRng, RngCore};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account::mint::{MintTxnProof, MintTxnProofPartialProtocol};
-use polymesh_dart_bp::util::{BPProof, prove_with_rng};
+use polymesh_dart_bp::util::{
+    BPProof, append_auth_proof_and_get_challenge, prove_with_rng, serialize_challenge,
+};
 
 use super::encode::*;
 use super::split_types::*;
@@ -118,7 +120,7 @@ impl<
         mut self,
         rng: &mut R,
         device_response: &TwoSksDeviceResponse,
-        root_block: u64,
+        root_block: BlockNumber,
         tree_params: &CurveTreeParameters<C>,
     ) -> Result<AssetMintingProof<C>, Error> {
         let auth_proof = device_response.0.decode()?;

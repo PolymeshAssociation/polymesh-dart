@@ -2471,6 +2471,36 @@ pub fn handle_verification_tuples<
     }
 }
 
+pub fn serialize_challenge<T: CanonicalSerialize>(challenge: &T) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    challenge.serialize_compressed(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Serialize `challenge_h` and combine with `ctx` to form a ledger nonce.
+pub fn make_ledger_nonce<T: CanonicalSerialize>(
+    challenge_h: &T,
+    ctx: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let bytes = serialize_challenge(challenge_h)?;
+    let mut nonce = Vec::with_capacity(bytes.len() + ctx.len());
+    nonce.extend_from_slice(&bytes);
+    nonce.extend_from_slice(ctx);
+    Ok(nonce)
+}
+
+/// Serialize `auth_proof`, append it to `transcript` under `AUTH_PROOF_LABEL`,
+/// and derive the final challenge scalar.
+pub fn append_auth_proof_and_get_challenge<F: PrimeField, P: CanonicalSerialize, T: Transcript>(
+    auth_proof: &P,
+    transcript: &mut T,
+) -> Result<F, Error> {
+    let mut bytes = Vec::new();
+    auth_proof.serialize_compressed(&mut bytes)?;
+    transcript.append_message(crate::AUTH_PROOF_LABEL, &bytes);
+    Ok(transcript.challenge_scalar::<F>(crate::TXN_CHALLENGE_LABEL))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

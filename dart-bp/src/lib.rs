@@ -60,6 +60,7 @@ pub const UPDATED_ACCOUNT_COMMITMENT_LABEL: &'static [u8; 26] = b"updated_accoun
 pub const TXN_ODD_LABEL: &[u8; 13] = b"txn-odd-level";
 pub const TXN_EVEN_LABEL: &'static [u8; 14] = b"txn-even-level";
 pub const TXN_CHALLENGE_LABEL: &'static [u8; 13] = b"txn-challenge";
+pub const AUTH_PROOF_LABEL: &[u8] = b"auth-proof";
 pub const BALANCE_LABEL: &'static [u8; 7] = b"balance";
 
 #[macro_use]

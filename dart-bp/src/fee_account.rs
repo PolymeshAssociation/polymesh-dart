@@ -3,7 +3,8 @@ use crate::auth_proofs::fee_account::AuthProofFeePayment;
 use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol};
 use crate::error::*;
 use crate::util::{
-    BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
+    BPProof, append_auth_proof_and_get_challenge, get_verification_tuples_with_rng,
+    handle_verification_tuples, make_ledger_nonce, prove_with_rng,
 };
 use crate::{
     ASSET_ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL, RE_RANDOMIZED_PATH_LABEL,
@@ -462,6 +463,44 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &challenge,
             rmc.as_deref_mut(),
         )
+    }
+
+    pub fn verify_split(
+        &self,
+        pk: &G,
+        balance: Balance,
+        asset_id: AssetId,
+        account_commitment: &FeeAccountStateCommitment<G>,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> Result<()> {
+        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
+        let reduced_acc_comm = self.partial.challenge_contribution(
+            pk,
+            balance,
+            asset_id,
+            account_commitment,
+            nonce,
+            account_comm_key.clone(),
+            &mut transcript,
+        )?;
+        let challenge_h_v = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
+
+        self.auth_proof
+            .verify(*pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+
+        let challenge_h_final_v =
+            append_auth_proof_and_get_challenge(&self.auth_proof, &mut transcript)?;
+
+        self.partial.verify_with_given_transcript(
+            reduced_acc_comm,
+            account_comm_key,
+            &challenge_h_final_v,
+            None,
+        )?;
+        Ok(())
     }
 }
 
@@ -1318,6 +1357,121 @@ impl<
             },
             nullifier,
         ))
+    }
+
+    pub fn verify_split<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        &self,
+        pk: Affine<G0>,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        rng: &mut R,
+        mut rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
+    ) -> Result<()> {
+        let rmc_0 = match rmc.as_mut() {
+            Some((rmc_0, _)) => Some(&mut **rmc_0),
+            None => None,
+        };
+
+        let (even_tuple, odd_tuple) = self
+            .verify_split_and_return_tuples::<R, Parameters0, Parameters1>(
+                pk,
+                asset_id,
+                increase_bal_by,
+                updated_account_commitment,
+                nullifier,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key,
+                rng,
+                rmc_0,
+            )?;
+
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
+    }
+
+    pub fn verify_split_and_return_tuples<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        &self,
+        pk: Affine<G0>,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+    ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+        let (mut even_verifier, odd_verifier) = self
+            .partial
+            .challenge_contribution::<Parameters0, Parameters1>(
+                pk,
+                asset_id,
+                increase_bal_by,
+                updated_account_commitment,
+                nullifier,
+                root,
+                nonce,
+                account_tree_params,
+                account_comm_key.clone(),
+            )?;
+
+        let challenge_h_v = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
+
+        self.auth_proof
+            .verify(pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+
+        let challenge_h_final_v: F0 =
+            append_auth_proof_and_get_challenge(&self.auth_proof, even_verifier.transcript())?;
+
+        self.partial
+            .verify_with_challenge::<Parameters0, Parameters1>(
+                pk,
+                asset_id,
+                increase_bal_by,
+                updated_account_commitment,
+                nullifier,
+                account_tree_params,
+                account_comm_key,
+                &challenge_h_final_v,
+                rmc,
+            )?;
+
+        let r1cs =
+            self.partial.r1cs_proof.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("R1CS proof is missing".to_string())
+            })?;
+
+        get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs.even_proof,
+            &r1cs.odd_proof,
+            rng,
+        )
     }
 
     pub fn verify<

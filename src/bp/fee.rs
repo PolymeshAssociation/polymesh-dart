@@ -1,3 +1,4 @@
+use dock_crypto_utils::transcript::Transcript as _;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -5,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use ark_ec::short_weierstrass::Affine;
 use ark_std::vec::Vec;
-use bulletproofs::r1cs::{ConstraintSystem, VerificationTuple};
+use bulletproofs::r1cs::{ConstraintSystem as _, VerificationTuple};
 use curve_tree_relations::curve_tree::Root;
 
 use bounded_collections::BoundedVec;
@@ -16,15 +17,13 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use super::encode::*;
 use super::*;
+use crate::auth_proofs::{create_fee_account_auth_proof, create_fee_payment_auth_proof};
+use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
 use ark_std::UniformRand;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_bp::fee_account::FEE_REG_TXN_LABEL;
-use polymesh_dart_bp::util::{
-    batch_verify_bp_with_rng, get_verification_tuples_with_rng, handle_verification_tuples,
-};
-use polymesh_dart_bp::{TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
+use polymesh_dart_bp::util::{batch_verify_bp_with_rng, serialize_challenge};
+use polymesh_dart_bp::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
 
 type BPFeeAccountState = bp_fee_account::FeeAccountState<PallasA>;
 type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
@@ -241,6 +240,10 @@ impl FeeAccountAssetState {
         self.current_state.asset_id
     }
 
+    pub fn pk(&self) -> AccountPublicKey {
+        self.current_state.pk
+    }
+
     pub fn bp_current_state(
         &self,
     ) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
@@ -305,84 +308,38 @@ impl FeeAccountRegistrationProof {
     /// Generate a new account state for an asset and a registration proof for it.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        key: &AccountKeyPair,
         asset_id: AssetId,
         balance: Balance,
         identity: &[u8],
     ) -> Result<(Self, FeeAccountAssetState), Error> {
-        let account_state = FeeAccountAssetState::new(rng, &account.public, asset_id, balance)?;
-        let (bp_state, commitment) = account_state.bp_current_state()?;
         let gens = dart_gens();
-        let proof = bp_fee_account::RegTxnProof::new(
-            rng,
-            account.secret.0.0,
-            &bp_state,
-            commitment,
-            identity,
-            gens.account_comm_key(),
-        )?;
-        Ok((
-            Self {
-                account: account.public,
-                asset_id,
-                amount: balance,
-                account_state_commitment: FeeAccountStateCommitment::from_affine(commitment.0)?,
+        let account_state = FeeAccountAssetState::new(rng, &key.public, asset_id, balance)?;
 
-                inner: WrappedCanonical::wrap(&proof)?,
-            },
-            account_state,
-        ))
+        let (protocol, device_request) =
+            FeeRegHostProtocol::init(rng, &key.public, &account_state, identity)?;
+
+        let device_response = create_fee_account_auth_proof(
+            rng,
+            key.secret.0.0,
+            &device_request,
+            gens.account_comm_key().sk_gen(),
+        )?;
+
+        let proof = protocol.finish(&device_response)?;
+        Ok((proof, account_state))
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
         let proof = self.inner.decode()?;
-        proof.verify(
+        proof.verify_split(
             &self.account.get_affine()?,
             self.amount,
             self.asset_id,
             &self.account_state_commitment.as_commitment()?,
             identity,
             dart_gens().account_comm_key(),
-            None,
-        )?;
-        Ok(())
-    }
-
-    pub fn verify_split(&self, identity: &[u8]) -> Result<(), Error> {
-        let proof = self.inner.decode()?;
-        let pk = self.account.get_affine()?;
-        let commitment = self.account_state_commitment.as_commitment()?;
-        let gens = dart_gens();
-        let comm_key = gens.account_comm_key();
-        let sk_gen = comm_key.sk_gen();
-
-        let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
-        let reduced_acc_comm = proof.partial.challenge_contribution(
-            &pk,
-            self.amount,
-            self.asset_id,
-            &commitment,
-            identity,
-            comm_key.clone(),
-            &mut transcript,
-        )?;
-        let challenge_h_v = transcript.challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
-
-        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, identity)?;
-
-        proof
-            .auth_proof
-            .verify(pk, &ledger_nonce_v, &sk_gen, None)?;
-
-        let challenge_h_final_v =
-            append_auth_proof_and_get_challenge(&proof.auth_proof, &mut transcript)?;
-
-        proof.partial.verify_with_given_transcript(
-            reduced_acc_comm,
-            comm_key,
-            &challenge_h_final_v,
-            None,
         )?;
         Ok(())
     }
@@ -527,12 +484,13 @@ impl<
     /// Generate a new topup proof for the given state change.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        key: &AccountKeyPair,
         account_state: &mut FeeAccountAssetState,
         amount: Balance,
         ctx: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
+        /*
         let state_change = account_state.topup(amount)?;
         let updated_account_state_commitment = state_change.commitment()?;
         let current_account_path = state_change.get_path(tree_lookup)?;
@@ -542,7 +500,7 @@ impl<
 
         let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, _, _>(
             rng,
-            account.secret.0.0,
+            key.secret.0.0,
             amount,
             &state_change.current_state,
             &state_change.new_state,
@@ -554,7 +512,7 @@ impl<
             dart_gens().account_comm_key(),
         )?;
         Ok(Self {
-            account: account.public,
+            account: key.public,
             asset_id: state_change.new_state.asset_id,
             amount,
             updated_account_state_commitment,
@@ -562,6 +520,29 @@ impl<
 
             inner: WrappedCanonical::wrap(&proof)?,
         })
+        // */
+
+        //*
+        let (protocol, device_request) = FeeTopupHostProtocol::<C>::init(
+            rng,
+            &key.public,
+            account_state,
+            amount,
+            ctx,
+            tree_lookup,
+        )?;
+
+        let device_response = create_fee_account_auth_proof(
+            rng,
+            key.secret.0.0,
+            &device_request,
+            dart_gens().account_comm_key().sk_gen(),
+        )?;
+
+        let proof = protocol.finish(rng, &device_response, tree_lookup.params())?;
+
+        Ok(proof)
+        // */
     }
 
     /// Verifies the topup proof against the provided public key, asset ID, amount, and account state commitment.
@@ -575,7 +556,8 @@ impl<
         let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
         let rmc = Some((&mut even_rmc, &mut odd_rmc));
         let proof = self.inner.decode()?;
-        proof.verify(
+        //let result = proof.verify(
+        let result = proof.verify_split(
             self.account.get_affine()?,
             self.asset_id,
             self.amount,
@@ -587,87 +569,7 @@ impl<
             dart_gens().account_comm_key(),
             rng,
             rmc,
-        )?;
-        even_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
-        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
-        Ok(())
-    }
-
-    pub fn verify_split<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-        ctx: &[u8],
-        root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
-    ) -> Result<(), Error> {
-        let proof = self.inner.decode()?;
-        let pk = self.account.get_affine()?;
-        let updated_comm = self.updated_account_state_commitment.as_commitment()?;
-        let nullifier = self.nullifier.get_affine()?;
-        let gens = dart_gens();
-        let comm_key = gens.account_comm_key();
-        let sk_gen = comm_key.sk_gen();
-
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let result = (|| -> Result<(), Error> {
-            let (mut even_verifier, odd_verifier) = proof
-                .partial
-                .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
-                    pk,
-                    self.asset_id,
-                    self.amount,
-                    updated_comm,
-                    nullifier,
-                    root,
-                    ctx,
-                    C::parameters(),
-                    comm_key.clone(),
-                )?;
-
-            let challenge_h_v = even_verifier
-                .transcript()
-                .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
-
-            let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx)?;
-
-            proof
-                .auth_proof
-                .verify(pk, &ledger_nonce_v, &sk_gen, None)?;
-
-            let challenge_h_final_v: C::F0 =
-                append_auth_proof_and_get_challenge(&proof.auth_proof, even_verifier.transcript())?;
-
-            proof
-                .partial
-                .verify_with_challenge::<C::DLogParams0, C::DLogParams1>(
-                    pk,
-                    self.asset_id,
-                    self.amount,
-                    updated_comm,
-                    nullifier,
-                    C::parameters(),
-                    comm_key,
-                    &challenge_h_final_v,
-                    Some(&mut even_rmc),
-                )?;
-
-            let r1cs = proof
-                .partial
-                .r1cs_proof
-                .as_ref()
-                .ok_or(Error::RMCVerifyError)?;
-            let (even_tuple, odd_tuple) = get_verification_tuples_with_rng(
-                even_verifier,
-                odd_verifier,
-                &r1cs.even_proof,
-                &r1cs.odd_proof,
-                rng,
-            )?;
-            let rmc = Some((&mut even_rmc, &mut odd_rmc));
-            handle_verification_tuples(even_tuple, odd_tuple, C::parameters(), rmc)?;
-            Ok(())
-        })();
-
+        );
         process_result_and_rmcs(result, even_rmc, odd_rmc)
     }
 
@@ -685,7 +587,7 @@ impl<
         Error,
     > {
         let proof = self.inner.decode()?;
-        let tuples = proof.verify_and_return_tuples(
+        let tuples = proof.verify_split_and_return_tuples(
             self.account.get_affine()?,
             self.asset_id,
             self.amount,
@@ -746,16 +648,9 @@ impl<
         let proofs_vec = topups
             .par_iter_mut()
             .zip(seeds)
-            .map(|((account, amount, account_state), seed)| {
+            .map(|((key, amount, account_state), seed)| {
                 let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-                FeeAccountTopupProof::new(
-                    &mut rng,
-                    account,
-                    account_state,
-                    *amount,
-                    ctx,
-                    &tree_lookup,
-                )
+                FeeAccountTopupProof::new(&mut rng, key, account_state, *amount, ctx, &tree_lookup)
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
@@ -783,9 +678,9 @@ impl<
         let root_block = tree_lookup.get_block_number()?;
 
         let mut proofs = BoundedVec::with_bounded_capacity(topups.len());
-        for (account, amount, account_state) in topups.iter_mut() {
+        for (key, amount, account_state) in topups.iter_mut() {
             let proof =
-                FeeAccountTopupProof::new(rng, account, account_state, *amount, ctx, tree_lookup)?;
+                FeeAccountTopupProof::new(rng, key, account_state, *amount, ctx, tree_lookup)?;
             proofs
                 .try_push(proof)
                 .map_err(|_| Error::TooManyBatchedProofs)?;
@@ -941,51 +836,6 @@ impl<
         Ok(())
     }
 
-    /// Verify the batched fee account topup split proofs.
-    #[cfg(feature = "parallel")]
-    pub fn verify_split<R: RngCore + CryptoRng + Send + Sync + Clone>(
-        &self,
-        rng: &mut R,
-        ctx: &[u8],
-        tree_roots: &(
-             impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C> + Send + Sync
-         ),
-    ) -> Result<(), Error> {
-        let root = tree_roots
-            .get_block_root(self.root_block.into())
-            .ok_or_else(|| {
-                log::error!("Invalid root for fee account topup split proof");
-                Error::CurveTreeRootNotFound
-            })?;
-        let root = root.root_node()?;
-        self.proofs.par_iter().try_for_each_init(
-            || rng.clone(),
-            |rng, proof| proof.verify_split(rng, ctx, &root),
-        )?;
-        Ok(())
-    }
-
-    /// Verify the batched fee account topup split proofs.
-    #[cfg(not(feature = "parallel"))]
-    pub fn verify_split<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-        ctx: &[u8],
-        tree_roots: &impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
-    ) -> Result<(), Error> {
-        let root = tree_roots
-            .get_block_root(self.root_block.into())
-            .ok_or_else(|| {
-                log::error!("Invalid root for fee account topup split proof");
-                Error::CurveTreeRootNotFound
-            })?;
-        let root = root.root_node()?;
-        for proof in &self.proofs {
-            proof.verify_split(rng, ctx, &root)?;
-        }
-        Ok(())
-    }
-
     /// Get the number of proofs in the batch.
     pub fn len(&self) -> usize {
         self.proofs.len()
@@ -1003,15 +853,6 @@ impl<
     }
 }
 
-type BPFeePaymentProof<C> = bp_fee_account::FeePaymentProof<
-    FEE_ACCOUNT_TREE_L,
-    <C as CurveTreeConfig>::F0,
-    <C as CurveTreeConfig>::F1,
-    <C as CurveTreeConfig>::P0,
-    <C as CurveTreeConfig>::P1,
->;
-
-/// Fee payment proof.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
 pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
@@ -1021,7 +862,7 @@ pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    inner: WrappedCanonical<BPFeePaymentProof<C>>,
+    pub(crate) inner: WrappedCanonical<BPFeePaymentSplitProof<C>>,
 }
 
 impl<
@@ -1036,77 +877,138 @@ impl<
     /// Generate a new payment proof for the given fee payment account.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        key: &AccountKeyPair,
         ctx: &[u8],
         account_state: &mut FeeAccountAssetState,
         amount: Balance,
         tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let state_change = account_state.get_payment_state(amount)?;
-        let updated_account_state_commitment = state_change.commitment()?;
-        let current_account_path = state_change.get_path(&tree_lookup)?;
-
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root()?;
-        let root = root.root_node()?;
 
-        let (proof, nullifier) = bp_fee_account::FeePaymentProof::new::<_, _, _>(
+        let (protocol, device_request) =
+            FeePaymentHostProtocol::<C>::init(rng, account_state, amount, ctx, &tree_lookup)?;
+
+        let gens = dart_gens();
+        let tree_params = tree_lookup.params();
+        let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
+        let device_response = create_fee_payment_auth_proof(
             rng,
-            amount,
-            account.secret.0.0,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx,
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
+            key.secret.0.0,
+            &device_request,
+            gens.account_comm_key().sk_gen(),
+            gens.account_comm_key().randomness_gen(),
+            comm_re_rand_gen,
         )?;
-        Ok(Self {
-            asset_id: state_change.new_state.asset_id,
-            amount,
-            root_block: try_block_number(root_block)?,
-            updated_account_state_commitment,
-            nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
-            inner: WrappedCanonical::wrap(&proof)?,
-        })
+
+        let proof = protocol.finish(rng, &device_response, root_block, tree_params)?;
+        Ok(proof)
     }
 
-    /// Verifies the payment proof against the provided asset ID, amount, and account state commitment.
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         ctx: &[u8],
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let rmc = Some((&mut even_rmc, &mut odd_rmc));
-        // Get the curve tree root.
-        let root = tree_roots
-            .get_block_root(self.root_block.into())
-            .ok_or_else(|| {
-                log::error!("Invalid root for fee payment proof");
-                Error::CurveTreeRootNotFound
-            })?;
-        let root = root.root_node()?;
-        let proof = self.inner.decode()?;
-        proof.verify(
-            self.asset_id,
-            self.amount,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
-            &root,
-            ctx,
-            tree_roots.params(),
-            dart_gens().account_comm_key(),
-            rng,
-            rmc,
-        )?;
-        even_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
-        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
-        Ok(())
+        let mut even_rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(VestaScalar::rand(rng));
+
+        let result = (|| -> Result<(), Error> {
+            let root = tree_roots
+                .get_block_root(self.root_block.into())
+                .ok_or(Error::CurveTreeRootNotFound)?;
+            let root = root.root_node()?;
+            let proof = self.inner.decode()?;
+            let account_comm_key = dart_gens().account_comm_key();
+            let updated_account_commitment =
+                self.updated_account_state_commitment.as_commitment()?;
+            let nullifier = self.nullifier.get_affine()?;
+
+            // Phase 1: derive challenge_h from host transcript
+            let (mut even_verifier, odd_verifier, challenge_h) = proof
+                .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                    self.asset_id,
+                    self.amount,
+                    updated_account_commitment,
+                    nullifier,
+                    &root,
+                    ctx,
+                    tree_roots.params(),
+                    account_comm_key.clone(),
+                )?;
+
+            // Phase 2: reconstruct ledger_nonce and verify auth proof
+            let challenge_h_bytes = serialize_challenge(&challenge_h)?;
+            let ledger_nonce: Vec<u8> = challenge_h_bytes
+                .iter()
+                .chain(ctx.iter())
+                .copied()
+                .collect();
+
+            let sk_gen = account_comm_key.sk_gen();
+            let randomness_gen = account_comm_key.randomness_gen();
+            let b_blinding = tree_roots
+                .params()
+                .even_parameters
+                .sl_params
+                .pc_gens()
+                .B_blinding;
+
+            let rerandomized_leaf = proof.partial.rerandomized_leaf();
+            proof.commitment_proof.auth_proof.verify(
+                &rerandomized_leaf,
+                &updated_account_commitment.0,
+                nullifier,
+                &ledger_nonce,
+                sk_gen,
+                randomness_gen,
+                b_blinding,
+                Some(&mut even_rmc),
+            )?;
+
+            // Phase 3: hash auth_proof into transcript, derive final challenge, verify host
+            let mut auth_proof_bytes = Vec::new();
+            proof
+                .commitment_proof
+                .auth_proof
+                .serialize_compressed(&mut auth_proof_bytes)?;
+            even_verifier
+                .transcript()
+                .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+            let challenge_h_final = even_verifier
+                .transcript()
+                .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
+
+            let (even_tuple, odd_tuple) =
+                proof.verify_host_and_return_tuples_with_given_challenge::<
+                    _,
+                    C::DLogParams0,
+                    C::DLogParams1,
+                >(
+                    &challenge_h_final,
+                    even_verifier,
+                    odd_verifier,
+                    self.asset_id,
+                    self.amount,
+                    updated_account_commitment,
+                    nullifier,
+                    tree_roots.params(),
+                    account_comm_key,
+                    rng,
+                    Some(&mut even_rmc),
+                )?;
+
+            polymesh_dart_bp::util::handle_verification_tuples(
+                even_tuple,
+                odd_tuple,
+                tree_roots.params(),
+                Some((&mut even_rmc, &mut odd_rmc)),
+            )?;
+
+            Ok(())
+        })();
+
+        process_result_and_rmcs(result, even_rmc, odd_rmc)
     }
 }
 
@@ -1136,7 +1038,7 @@ impl<
     /// Generate a new fee payment for a batch of proofs.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account: &AccountKeyPair,
+        key: &AccountKeyPair,
         batched_proofs: BatchedProofs<T>,
         account_state: &mut FeeAccountAssetState,
         amount: Balance,
@@ -1144,7 +1046,7 @@ impl<
     ) -> Result<Self, Error> {
         let ctx = batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
         let fee_payment =
-            FeeAccountPaymentProof::new(rng, account, &ctx.0, account_state, amount, tree_lookup)?;
+            FeeAccountPaymentProof::new(rng, key, &ctx.0, account_state, amount, tree_lookup)?;
 
         Ok(Self {
             fee_payment,

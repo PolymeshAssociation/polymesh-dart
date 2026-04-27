@@ -140,7 +140,14 @@ impl DartUserAccountInner {
             .assets
             .get_mut(&asset_id)
             .ok_or_else(|| anyhow!("Asset ID {} is not initialized for this account", asset_id))?;
-        let proof = AssetMintingProof::new(rng, &self.keys, asset_state, account_tree, amount)?;
+        let proof = AssetMintingProof::new(
+            rng,
+            &self.keys,
+            self.address.ctx(),
+            asset_state,
+            account_tree,
+            amount,
+        )?;
         chain.mint_assets(&self.address, proof)?;
         asset_state.commit_pending_state()?;
         Ok(())

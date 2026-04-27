@@ -156,6 +156,7 @@ fn proof_benchmark(c: &mut Criterion) {
             let _proof = AssetMintingProof::new(
                 &mut rng,
                 &issuer_keys,
+                ctx,
                 &mut account_state,
                 &account_tree,
                 mint_amount,
@@ -168,6 +169,7 @@ fn proof_benchmark(c: &mut Criterion) {
     let proof = AssetMintingProof::new(
         &mut rng,
         &issuer_keys,
+        ctx,
         &mut account_state,
         &account_tree,
         mint_amount,

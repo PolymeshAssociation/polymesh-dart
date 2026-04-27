@@ -1,4 +1,3 @@
-use crate::TXN_CHALLENGE_LABEL;
 use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
@@ -10,6 +9,7 @@ use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
+use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
@@ -1335,6 +1335,135 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
                 .map_err(|e| e.into()),
         }
+    }
+
+    /// Create a new verifier and verify the given proof
+    /// `pk_aff` is the affirmation public key
+    /// `pk_enc` is the encryption public key
+    pub fn verify_split<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        id: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        let tuple = self.verify_split_and_return_tuples(
+            rng,
+            id,
+            pk_aff,
+            pk_enc,
+            asset_id,
+            account_commitment,
+            counter,
+            nonce,
+            account_comm_key,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            poseidon_config,
+            T,
+            rmc.as_deref_mut(),
+        )?;
+
+        match rmc.as_mut() {
+            Some(rmc) => {
+                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
+                    .map_err(|e| e.into())
+            }
+            _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
+                .map_err(|e| e.into()),
+        }
+    }
+
+    /// Create a new verifier and verify the given proof
+    /// `pk_aff` is the affirmation public key
+    /// `pk_enc` is the encryption public key
+    pub fn verify_split_and_return_tuples<R: CryptoRngCore>(
+        &self,
+        rng: &mut R,
+        id: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        asset_id: AssetId,
+        account_commitment: &AccountStateCommitment<G>,
+        counter: NullifierSkGenCounter,
+        nonce: &[u8],
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        leaf_level_pc_gens: &PedersenGens<G>,
+        leaf_level_bp_gens: &BulletproofGens<G>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
+        T: Option<(G, G, G)>,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<VerificationTuple<G>> {
+        let mut verifier = self.partial.challenge_contribution(
+            id,
+            pk_aff,
+            pk_enc,
+            asset_id,
+            &account_commitment,
+            counter,
+            nonce,
+            &account_comm_key,
+            poseidon_config,
+            T,
+        )?;
+
+        let challenge_h_v = verifier
+            .transcript()
+            .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        let mut challenge_h_v_bytes = Vec::new();
+        challenge_h_v.serialize_compressed(&mut challenge_h_v_bytes)?;
+        let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+            .iter()
+            .chain(nonce.iter())
+            .copied()
+            .collect();
+
+        let sk_gen = account_comm_key.sk_gen();
+        let sk_enc_gen = account_comm_key.sk_enc_gen();
+        self.auth_proof
+            .verify(pk_aff, pk_enc, &ledger_nonce_v, &sk_gen, &sk_enc_gen, None)?;
+
+        let mut auth_proof_bytes = Vec::new();
+        self.auth_proof
+            .serialize_compressed(&mut auth_proof_bytes)?;
+        verifier
+            .transcript()
+            .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+        let challenge_h_final_v = verifier
+            .transcript()
+            .challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
+
+        self.partial.verify_with_challenge(
+            &challenge_h_final_v,
+            &account_comm_key,
+            pk_aff,
+            pk_enc,
+            id,
+            asset_id,
+            &account_commitment,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            None,
+            rmc,
+        )?;
+
+        let bp_proof =
+            self.partial.proof.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("R1CS proof is missing".to_string())
+            })?;
+        let tuple = verifier.verification_scalars_and_points_with_rng(bp_proof, rng)?;
+        Ok(tuple)
     }
 
     pub fn verify_and_return_tuples<R: CryptoRngCore>(

@@ -11,7 +11,6 @@ use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use digest::Digest;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::transcript::Transcript;
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
 };
@@ -46,9 +45,11 @@ mod fee;
 pub mod key_distribution_proof;
 
 pub mod account_reg_split;
-pub mod affirmation_split;
+pub mod affirmation_proofs;
+pub use affirmation_proofs::*;
 pub mod auth_proofs;
 pub mod fee_split;
+pub use fee_split::*;
 pub mod mint_split;
 pub mod split_types;
 
@@ -154,7 +155,6 @@ pub type VestaA = ark_vesta::Affine;
 pub type VestaScalar = <VestaA as AffineRepr>::ScalarField;
 
 pub const ACCOUNT_IDENTITY_LABEL: &[u8; 16] = b"account-identity";
-pub const AUTH_PROOF_LABEL: &[u8] = b"auth-proof";
 pub(crate) fn hash_identity<F: PrimeField>(did: &[u8]) -> F {
     let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<F>>::new(ACCOUNT_IDENTITY_LABEL);
     let r = hasher.hash_to_field::<1>(&did);
@@ -388,37 +388,6 @@ pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
         .map_err(|_| Error::CurveTreeBlockNumberNotFound)
 }
 
-pub(crate) fn serialize_challenge(challenge: &PallasScalar) -> Result<Vec<u8>, Error> {
-    let mut bytes = Vec::new();
-    challenge.serialize_compressed(&mut bytes)?;
-    Ok(bytes)
-}
-
-/// Serialize `challenge_h` and combine with `ctx` to form a ledger nonce.
-pub(crate) fn make_ledger_nonce(challenge_h: &PallasScalar, ctx: &[u8]) -> Result<Vec<u8>, Error> {
-    let bytes = serialize_challenge(challenge_h)?;
-    let mut nonce = Vec::with_capacity(bytes.len() + ctx.len());
-    nonce.extend_from_slice(&bytes);
-    nonce.extend_from_slice(ctx);
-    Ok(nonce)
-}
-
-/// Serialize `auth_proof`, append it to `transcript` under `AUTH_PROOF_LABEL`,
-/// and derive the final challenge scalar.
-pub(crate) fn append_auth_proof_and_get_challenge<
-    F: PrimeField,
-    P: CanonicalSerialize,
-    T: Transcript,
->(
-    auth_proof: &P,
-    transcript: &mut T,
-) -> Result<F, Error> {
-    let mut bytes = Vec::new();
-    auth_proof.serialize_compressed(&mut bytes)?;
-    transcript.append_message(AUTH_PROOF_LABEL, &bytes);
-    Ok(transcript.challenge_scalar::<F>(polymesh_dart_bp::TXN_CHALLENGE_LABEL))
-}
-
 pub(crate) fn process_result_and_rmcs<O, E>(
     result: Result<O, E>,
     mut even_rmc: RandomizedMultChecker<PallasA>,
@@ -457,7 +426,7 @@ where
 mod tests {
     use super::*;
     use crate::account_reg_split::AccountRegHostProtocol;
-    use crate::affirmation_split::{
+    use crate::affirmation_proofs::{
         ClaimReceivedHostProtocol, InstantReceiverAffirmationHostProtocol,
         InstantSenderAffirmationHostProtocol, ReceiverAffirmationHostProtocol,
         ReceiverCounterUpdateHostProtocol, SenderAffirmationHostProtocol,
@@ -511,11 +480,9 @@ mod tests {
         )
         .unwrap();
 
-        let proof = protocol
-            .finish(&device_response, &keys.acct.public, &account_state)
-            .unwrap();
+        let proof = protocol.finish(&device_response).unwrap();
 
-        proof.verify_split(ctx).unwrap();
+        proof.verify(ctx).unwrap();
     }
 
     #[test]
@@ -570,7 +537,7 @@ mod tests {
             .unwrap();
 
         let root = fee_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, ctx, &root).unwrap();
+        proof.verify(&mut rng, ctx, &root).unwrap();
     }
 
     #[test]
@@ -647,7 +614,7 @@ mod tests {
         .unwrap();
 
         let root = fee_tree.root().unwrap();
-        let root_block = fee_tree.get_block_number().unwrap() as u64;
+        let root_block = fee_tree.get_block_number().unwrap();
         let tree_params = FeeAccountTreeConfig::parameters();
         let proof = protocol
             .finish(&mut rng, &device_response, root_block, tree_params)
@@ -663,8 +630,9 @@ mod tests {
         let asset_id: AssetId = 1;
         let counter: NullifierSkGenCounter = 0;
 
+        let tree_params = AccountTreeConfig::parameters();
+
         let keys = AccountKeys::rand(&mut rng).unwrap();
-        let pk = keys.public_keys();
 
         let (account_state, rho_randomness) =
             keys.init_asset_state(asset_id, counter, ctx).unwrap();
@@ -687,11 +655,10 @@ mod tests {
         .unwrap();
 
         let proof = protocol
-            .finish(&mut rng, &device_response, &pk, &account_state, counter)
+            .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
-        let tree_params = AccountTreeConfig::parameters();
-        proof.verify_split(ctx, tree_params, &mut rng).unwrap();
+        proof.verify(ctx, tree_params, &mut rng).unwrap();
     }
 
     #[test]
@@ -701,10 +668,10 @@ mod tests {
         let asset_id: AssetId = 1;
         let counter: NullifierSkGenCounter = 0;
 
+        let tree_params = AccountTreeConfig::parameters();
+
         let keys1 = AccountKeys::rand(&mut rng).unwrap();
         let keys2 = AccountKeys::rand(&mut rng).unwrap();
-        let pk1 = keys1.public_keys();
-        let pk2 = keys2.public_keys();
 
         let (account_state1, rho_randomness1) =
             keys1.init_asset_state(asset_id, counter, ctx).unwrap();
@@ -738,13 +705,11 @@ mod tests {
         )
         .unwrap();
 
-        let tree_params = AccountTreeConfig::parameters();
-
         let proof1 = protocol1
-            .finish(&mut rng, &device_response1, &pk1, &account_state1, counter)
+            .finish(&mut rng, &device_response1, counter, tree_params)
             .unwrap();
         let proof2 = protocol2
-            .finish(&mut rng, &device_response2, &pk2, &account_state2, counter)
+            .finish(&mut rng, &device_response2, counter, tree_params)
             .unwrap();
 
         let batched: BatchedAccountAssetRegistrationProof = BatchedAccountAssetRegistrationProof {
@@ -756,7 +721,7 @@ mod tests {
             },
         };
 
-        batched.verify_split(ctx, tree_params, &mut rng).unwrap();
+        batched.verify(ctx, tree_params, &mut rng).unwrap();
     }
 
     #[test]
@@ -809,13 +774,13 @@ mod tests {
         .unwrap();
 
         let root = account_tree.root().unwrap();
-        let root_block = account_tree.get_block_number().unwrap() as u64;
+        let root_block = account_tree.get_block_number().unwrap();
         let tree_params = AccountTreeConfig::parameters();
         let proof = protocol
             .finish(&mut rng, &device_response, root_block, tree_params)
             .unwrap();
 
-        proof.verify_split(ctx, root, &mut rng).unwrap();
+        proof.verify(ctx, root, &mut rng).unwrap();
     }
 
     fn make_affirmation_device_response<R: rand_core::RngCore + rand_core::CryptoRng>(
@@ -950,13 +915,10 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let root_block = account_tree.get_block_number().unwrap() as u64;
-            let proof = protocol
-                .finish(&mut rng, &device_response, root_block, tree_params)
-                .unwrap();
+            let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-            let root = account_tree.root().unwrap().root_node().unwrap();
-            proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
         };
 
         test_with_config(false);
@@ -1019,13 +981,10 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let root_block = account_tree.get_block_number().unwrap() as u64;
-            let proof = protocol
-                .finish(&mut rng, &device_response, root_block, tree_params)
-                .unwrap();
+            let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-            let root = account_tree.root().unwrap().root_node().unwrap();
-            proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
         };
 
         test_with_config(false);
@@ -1077,13 +1036,10 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 
     #[test]
@@ -1131,13 +1087,10 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 
     #[test]
@@ -1185,13 +1138,10 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 
     #[test]
@@ -1259,13 +1209,10 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 
     #[test]
@@ -1314,13 +1261,10 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 
     #[test]
@@ -1368,12 +1312,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let root_block = account_tree.get_block_number().unwrap() as u64;
-        let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
-            .unwrap();
+        let proof = protocol.finish(&mut rng, &device_response).unwrap();
 
-        let root = account_tree.root().unwrap().root_node().unwrap();
-        proof.verify_split(&mut rng, &leg_enc, &root).unwrap();
+        let root = account_tree.root().unwrap();
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
     }
 }

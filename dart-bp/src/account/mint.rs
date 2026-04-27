@@ -1,3 +1,4 @@
+use crate::AUTH_PROOF_LABEL;
 use crate::account::common::balance::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
@@ -5,7 +6,7 @@ use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommit
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
-    prove_with_rng, verify_with_rng,
+    get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, verify_with_rng,
 };
 use crate::{
     ASSET_ID_LABEL, Error, ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
@@ -26,6 +27,7 @@ use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
@@ -1029,6 +1031,112 @@ impl<
             &account_tree_params.odd_parameters.bp_gens(),
             rng,
         )?)
+    }
+
+    pub fn verify_split<
+        R: CryptoRngCore,
+        Parameters0: DiscreteLogParameters,
+        Parameters1: DiscreteLogParameters,
+    >(
+        &self,
+        issuer_aff_pk: Affine<G0>,
+        issuer_enc_pk: Affine<G0>,
+        id: G0::ScalarField,
+        asset_id: AssetId,
+        increase_bal_by: Balance,
+        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+        nullifier: Affine<G0>,
+        root: &Root<L, 1, G0, G1>,
+        nonce: &[u8],
+        account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        rng: &mut R,
+        rmc: Option<(
+            &mut RandomizedMultChecker<Affine<G0>>,
+            &mut RandomizedMultChecker<Affine<G1>>,
+        )>,
+    ) -> Result<()> {
+        let sk_gen = account_comm_key.sk_gen();
+        let sk_enc_gen = account_comm_key.sk_enc_gen();
+
+        let (mut even_verifier, odd_verifier) = self
+            .partial
+            .challenge_contribution::<Parameters0, Parameters1>(
+                issuer_aff_pk,
+                issuer_enc_pk,
+                id,
+                asset_id,
+                increase_bal_by,
+                updated_account_commitment,
+                nullifier,
+                &root,
+                nonce,
+                account_tree_params,
+                account_comm_key.clone(),
+            )?;
+        eprintln!("Partial proof verified, contributing auth proof to challenge...");
+
+        let challenge_h_v = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        let mut challenge_h_v_bytes = Vec::new();
+        challenge_h_v.serialize_compressed(&mut challenge_h_v_bytes)?;
+        let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+            .iter()
+            .chain(nonce.iter())
+            .copied()
+            .collect();
+
+        eprintln!("Verifying auth proof...");
+        self.auth_proof.verify(
+            issuer_aff_pk,
+            issuer_enc_pk,
+            &ledger_nonce_v,
+            &sk_gen,
+            &sk_enc_gen,
+            None,
+        )?;
+
+        let mut auth_proof_bytes = Vec::new();
+        self.auth_proof
+            .serialize_compressed(&mut auth_proof_bytes)?;
+        even_verifier
+            .transcript()
+            .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+        let challenge_h_final_v = even_verifier
+            .transcript()
+            .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
+
+        eprintln!("Verifying partial proof with final challenge...");
+        self.partial
+            .verify_with_challenge::<Parameters0, Parameters1>(
+                issuer_aff_pk,
+                issuer_enc_pk,
+                id,
+                asset_id,
+                increase_bal_by,
+                updated_account_commitment,
+                nullifier,
+                account_tree_params,
+                account_comm_key,
+                &challenge_h_final_v,
+            )?;
+
+        let r1cs =
+            self.partial.r1cs_proof.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("R1CS proof is missing".to_string())
+            })?;
+
+        eprintln!("Verifying R1CS proof with RNG...");
+        let (even_tuple, odd_tuple) = get_verification_tuples_with_rng(
+            even_verifier,
+            odd_verifier,
+            &r1cs.even_proof,
+            &r1cs.odd_proof,
+            rng,
+        )?;
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     fn leaf_gens(

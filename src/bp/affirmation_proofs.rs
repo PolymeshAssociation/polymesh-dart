@@ -3,7 +3,6 @@
 
 use bulletproofs::r1cs::{ConstraintSystem, Prover};
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use curve_tree_relations::curve_tree::Root;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::Transcript;
 use rand_core::{CryptoRng, RngCore};
@@ -14,12 +13,15 @@ use ark_std::{string::ToString, vec};
 use dock_crypto_utils::transcript::MerlinTranscript;
 use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account as bp_account;
-use polymesh_dart_bp::util::handle_verification_tuples;
+use polymesh_dart_bp::util::{
+    append_auth_proof_and_get_challenge, handle_verification_tuples, make_ledger_nonce,
+    serialize_challenge,
+};
 
 use super::split_types::*;
 use super::*;
 use crate::Error;
-use crate::curve_tree::{CurveTreeLookup, CurveTreeParameters};
+use crate::curve_tree::CurveTreeLookup;
 
 macro_rules! bp_types {
     ($proto:ident, $proof:ident) => {
@@ -83,6 +85,7 @@ macro_rules! with_balance {
             updated_commitment: AccountStateCommitment,
             leg_ref: LegRef,
             amount: Balance,
+            root_block: BlockNumber,
             _marker: core::marker::PhantomData<C>,
         }
 
@@ -107,6 +110,7 @@ macro_rules! with_balance {
                 let updated_commitment = state_change.commitment()?;
                 let leaf_path = state_change.get_path(tree_lookup)?;
 
+                let root_block = tree_lookup.get_block_number()?;
                 let root = tree_lookup.root()?;
                 let root = root.root_node()?;
 
@@ -179,6 +183,7 @@ macro_rules! with_balance {
                         updated_commitment,
                         leg_ref: leg_ref.clone(),
                         amount,
+                        root_block,
                         _marker: core::marker::PhantomData,
                     },
                     device_request,
@@ -189,8 +194,6 @@ macro_rules! with_balance {
                 mut self,
                 rng: &mut R,
                 device_response: &AffirmationDeviceResponse,
-                root_block: u64,
-                _tree_params: &CurveTreeParameters<C>,
             ) -> Result<$SplitProof<C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
@@ -213,7 +216,7 @@ macro_rules! with_balance {
 
                 Ok($SplitProof {
                     leg_ref: self.leg_ref,
-                    root_block: try_block_number(root_block)?,
+                    root_block: self.root_block,
                     updated_account_state_commitment: self.updated_commitment,
                     nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
                     amount: self.amount,
@@ -250,12 +253,50 @@ macro_rules! with_balance {
                 >,
         > $SplitProof<C>
         {
-            pub fn verify_split<R: RngCore + CryptoRng>(
-                &self,
+            pub fn new<R: RngCore + CryptoRng>(
                 rng: &mut R,
+                keys: &AccountKeys,
+                leg_ref: &LegRef,
+                amount: Balance,
                 leg_enc: &LegEncrypted,
-                root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
+                account_asset: &mut AccountAssetState,
+                tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<Self, Error> {
+                let gens = dart_gens();
+                let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
+
+                let (protocol, device_request) =
+                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
+
+                let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
+                    rng,
+                    keys.acct.secret.0.0,
+                    keys.enc.secret.0.0,
+                    &device_request,
+                    gens.account_comm_key().sk_gen(),
+                    gens.enc_key_gen(),
+                    comm_re_rand_gen,
+                    gens.leg_asset_value_gen(),
+                )?;
+
+                protocol.finish(rng, &device_response)
+            }
+
+            pub fn verify<R: RngCore + CryptoRng>(
+                &self,
+                leg_enc: &LegEncrypted,
+                tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+                rng: &mut R,
             ) -> Result<(), Error> {
+                // Get the curve tree root.
+                let root = tree_roots
+                    .get_block_root(self.root_block.into())
+                    .ok_or_else(|| {
+                        log::error!("Invalid root for sender affirmation proof");
+                        Error::CurveTreeRootNotFound
+                    })?;
+                let root = root.root_node()?;
+
                 let proof = self.inner.decode()?;
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
@@ -276,7 +317,7 @@ macro_rules! with_balance {
                         .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
                             updated_comm,
                             nullifier,
-                            root,
+                            &root,
                             ctx.as_bytes(),
                             C::parameters(),
                             &comm_key,
@@ -396,6 +437,7 @@ macro_rules! no_balance {
             nullifier: PallasA,
             updated_commitment: AccountStateCommitment,
             leg_ref: LegRef,
+            root_block: BlockNumber,
             _marker: core::marker::PhantomData<C>,
         }
 
@@ -419,6 +461,7 @@ macro_rules! no_balance {
                 let updated_commitment = state_change.commitment()?;
                 let leaf_path = state_change.get_path(tree_lookup)?;
 
+                let root_block = tree_lookup.get_block_number()?;
                 let root = tree_lookup.root()?;
                 let root = root.root_node()?;
 
@@ -487,6 +530,7 @@ macro_rules! no_balance {
                         nullifier,
                         updated_commitment,
                         leg_ref: leg_ref.clone(),
+                        root_block,
                         _marker: core::marker::PhantomData,
                     },
                     device_request,
@@ -497,8 +541,6 @@ macro_rules! no_balance {
                 mut self,
                 rng: &mut R,
                 device_response: &AffirmationDeviceResponse,
-                root_block: u64,
-                _tree_params: &CurveTreeParameters<C>,
             ) -> Result<$SplitProof<C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
@@ -521,7 +563,7 @@ macro_rules! no_balance {
 
                 Ok($SplitProof {
                     leg_ref: self.leg_ref,
-                    root_block: try_block_number(root_block)?,
+                    root_block: self.root_block,
                     updated_account_state_commitment: self.updated_commitment,
                     nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
                     inner: WrappedCanonical::wrap(&bp_proof)?,
@@ -556,12 +598,49 @@ macro_rules! no_balance {
                 >,
         > $SplitProof<C>
         {
-            pub fn verify_split<R: RngCore + CryptoRng>(
-                &self,
+            pub fn new<R: RngCore + CryptoRng>(
                 rng: &mut R,
+                keys: &AccountKeys,
+                leg_ref: &LegRef,
                 leg_enc: &LegEncrypted,
-                root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
+                account_asset: &mut AccountAssetState,
+                tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<Self, Error> {
+                let gens = dart_gens();
+                let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
+
+                let (protocol, device_request) =
+                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, &tree_lookup)?;
+
+                let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
+                    rng,
+                    keys.acct.secret.0.0,
+                    keys.enc.secret.0.0,
+                    &device_request,
+                    gens.account_comm_key().sk_gen(),
+                    gens.enc_key_gen(),
+                    comm_re_rand_gen,
+                    gens.leg_asset_value_gen(),
+                )?;
+
+                protocol.finish(rng, &device_response)
+            }
+
+            pub fn verify<R: RngCore + CryptoRng>(
+                &self,
+                leg_enc: &LegEncrypted,
+                tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+                rng: &mut R,
             ) -> Result<(), Error> {
+                // Get the curve tree root.
+                let root = tree_roots
+                    .get_block_root(self.root_block.into())
+                    .ok_or_else(|| {
+                        log::error!("Invalid root for sender affirmation proof");
+                        Error::CurveTreeRootNotFound
+                    })?;
+                let root = root.root_node()?;
+
                 let proof = self.inner.decode()?;
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
@@ -582,7 +661,7 @@ macro_rules! no_balance {
                         .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
                             updated_comm,
                             nullifier,
-                            root,
+                            &root,
                             ctx.as_bytes(),
                             C::parameters(),
                             &comm_key,
@@ -683,7 +762,7 @@ macro_rules! no_balance {
 
 with_balance! {
     host_protocol: SenderAffirmationHostProtocol,
-    split_proof: SenderAffirmationSplitProof,
+    split_proof: SenderAffirmationProof,
     bp_protocol: AffirmAsSenderSplitProtocol,
     bp_proof: AffirmAsSenderSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -695,7 +774,7 @@ with_balance! {
 
 no_balance! {
     host_protocol: ReceiverAffirmationHostProtocol,
-    split_proof: ReceiverAffirmationSplitProof,
+    split_proof: ReceiverAffirmationProof,
     bp_protocol: AffirmAsReceiverSplitProtocol,
     bp_proof: AffirmAsReceiverSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,
@@ -706,7 +785,7 @@ no_balance! {
 
 with_balance! {
     host_protocol: ClaimReceivedHostProtocol,
-    split_proof: ClaimReceivedHostSplitProof,
+    split_proof: ReceiverClaimProof,
     bp_protocol: ClaimReceivedSplitProtocol,
     bp_proof: ClaimReceivedSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,
@@ -718,7 +797,7 @@ with_balance! {
 
 with_balance! {
     host_protocol: SenderReverseHostProtocol,
-    split_proof: SenderReversalSplitProof,
+    split_proof: SenderReversalProof,
     bp_protocol: SenderReverseSplitProtocol,
     bp_proof: SenderReverseSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -730,7 +809,7 @@ with_balance! {
 
 no_balance! {
     host_protocol: SenderCounterUpdateHostProtocol,
-    split_proof: SenderCounterUpdateHostSplitProof,
+    split_proof: SenderCounterUpdateProof,
     bp_protocol: SenderCounterUpdateSplitProtocol,
     bp_proof: SenderCounterUpdateSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -741,7 +820,7 @@ no_balance! {
 
 no_balance! {
     host_protocol: ReceiverCounterUpdateHostProtocol,
-    split_proof: ReceiverCounterUpdateHostSplitProof,
+    split_proof: ReceiverCounterUpdateProof,
     bp_protocol: ReceiverCounterUpdateSplitProtocol,
     bp_proof: ReceiverCounterUpdateSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,
@@ -752,7 +831,7 @@ no_balance! {
 
 with_balance! {
     host_protocol: InstantSenderAffirmationHostProtocol,
-    split_proof: InstantSenderAffirmationSplitProof,
+    split_proof: InstantSenderAffirmationProof,
     bp_protocol: IrreversibleAffirmAsSenderSplitProtocol,
     bp_proof: IrreversibleAffirmAsSenderSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -764,7 +843,7 @@ with_balance! {
 
 with_balance! {
     host_protocol: InstantReceiverAffirmationHostProtocol,
-    split_proof: InstantReceiverAffirmationSplitProof,
+    split_proof: InstantReceiverAffirmationProof,
     bp_protocol: IrreversibleAffirmAsReceiverSplitProtocol,
     bp_proof: IrreversibleAffirmAsReceiverSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,

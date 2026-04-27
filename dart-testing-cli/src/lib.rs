@@ -944,6 +944,7 @@ impl DartTestingDb {
             let proof = AssetMintingProof::new(
                 rng,
                 &account_keys,
+                &did,
                 &mut asset_state,
                 &self.account_tree,
                 amount,

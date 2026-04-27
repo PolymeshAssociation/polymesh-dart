@@ -16,7 +16,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use rand_core::{CryptoRng, RngCore};
 
 use super::*;
-use crate::*;
+use crate::{auth_proofs::create_registration_auth_proof, mint_split::MintHostProtocol, *};
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
 #[derive(Clone, Debug, Encode, Decode, Default, DecodeWithMemTracking, TypeInfo)]
@@ -265,45 +265,34 @@ impl<
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         keys: &AccountKeys,
+        identity: &[u8],
         account_asset: &mut AccountAssetState,
         tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
         amount: Balance,
     ) -> Result<Self, Error> {
-        // Generate a new minting state for the account asset.
-        let state_change = account_asset.mint(amount)?;
-        let updated_account_state_commitment = state_change.commitment()?;
-        let current_account_path = state_change.get_path(&tree_lookup)?;
-
         let root_block = tree_lookup.get_block_number()?;
-        let root = tree_lookup.root()?;
-        let root = root.root_node()?;
 
-        let (proof, nullifier) = MintTxnProof::new::<_, _, _>(
+        let (protocol, device_request) = MintHostProtocol::<C>::init(
+            rng,
+            &keys.public_keys(),
+            account_asset,
+            amount,
+            identity,
+            &tree_lookup,
+        )?;
+
+        let gens = dart_gens();
+        let device_response = create_registration_auth_proof(
             rng,
             keys.acct.secret.0.0,
             keys.enc.secret.0.0,
-            amount,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            // TODO: Use the caller's identity?
-            b"",
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
+            &device_request,
+            gens.account_comm_key().sk_gen(),
+            gens.account_comm_key().sk_enc_gen(),
         )?;
-        Ok(Self {
-            pk: keys.acct.public,
-            pk_enc: keys.enc.public,
-            asset_id: account_asset.asset_id(),
-            amount,
-            root_block: try_block_number(root_block)?,
-            updated_account_state_commitment,
-            nullifier: AccountStateNullifier::from_affine(nullifier)?,
 
-            inner: WrappedCanonical::wrap(&proof)?,
-        })
+        let proof = protocol.finish(rng, &device_response, root_block, tree_lookup.params())?;
+        Ok(proof)
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -322,7 +311,10 @@ impl<
             })?;
         let root = root.root_node()?;
         let proof = self.inner.decode()?;
-        proof.verify(
+
+        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
+        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
+        let result = proof.verify_split(
             self.pk.get_affine()?,
             self.pk_enc.get_affine()?,
             id,
@@ -331,120 +323,12 @@ impl<
             self.updated_account_state_commitment.as_commitment()?,
             self.nullifier.get_affine()?,
             &root,
-            b"",
+            identity,
             tree_roots.params(),
             dart_gens().account_comm_key(),
             rng,
-        )?;
-        Ok(())
-    }
-
-    pub fn verify_split<R: RngCore + CryptoRng>(
-        &self,
-        identity: &[u8],
-        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
-        rng: &mut R,
-    ) -> Result<(), Error> {
-        use ark_serialize::CanonicalSerialize;
-        use bulletproofs::r1cs::ConstraintSystem;
-        use dock_crypto_utils::transcript::Transcript;
-        use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
-        use polymesh_dart_bp::util::{
-            get_verification_tuples_with_rng, handle_verification_tuples,
-        };
-
-        let id = hash_identity::<PallasScalar>(identity);
-        let root = tree_roots
-            .get_block_root(self.root_block.into())
-            .ok_or(Error::CurveTreeRootNotFound)?;
-        let root = root.root_node()?;
-        let proof = self.inner.decode()?;
-        let gens = dart_gens();
-        let comm_key = gens.account_comm_key();
-        let sk_gen = comm_key.sk_gen();
-        let sk_enc_gen = comm_key.sk_enc_gen();
-        let pk = self.pk.get_affine()?;
-        let pk_enc = self.pk_enc.get_affine()?;
-        let updated_comm = self.updated_account_state_commitment.as_commitment()?;
-        let nullifier = self.nullifier.get_affine()?;
-
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let result = (|| -> Result<(), Error> {
-            let (mut even_verifier, odd_verifier) = proof
-                .partial
-                .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
-                    pk,
-                    pk_enc,
-                    id,
-                    self.asset_id,
-                    self.amount,
-                    updated_comm,
-                    nullifier,
-                    &root,
-                    identity,
-                    tree_roots.params(),
-                    comm_key.clone(),
-                )?;
-
-            let challenge_h_v = even_verifier
-                .transcript()
-                .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
-
-            let mut challenge_h_v_bytes = Vec::new();
-            challenge_h_v.serialize_compressed(&mut challenge_h_v_bytes)?;
-            let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
-                .iter()
-                .chain(identity.iter())
-                .copied()
-                .collect();
-
-            proof
-                .auth_proof
-                .verify(pk, pk_enc, &ledger_nonce_v, &sk_gen, &sk_enc_gen, None)?;
-
-            let mut auth_proof_bytes = Vec::new();
-            proof
-                .auth_proof
-                .serialize_compressed(&mut auth_proof_bytes)?;
-            even_verifier
-                .transcript()
-                .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
-            let challenge_h_final_v = even_verifier
-                .transcript()
-                .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
-
-            proof
-                .partial
-                .verify_with_challenge::<C::DLogParams0, C::DLogParams1>(
-                    pk,
-                    pk_enc,
-                    id,
-                    self.asset_id,
-                    self.amount,
-                    updated_comm,
-                    nullifier,
-                    tree_roots.params(),
-                    comm_key,
-                    &challenge_h_final_v,
-                )?;
-
-            let r1cs = proof
-                .partial
-                .r1cs_proof
-                .as_ref()
-                .ok_or(Error::CurveTreeRootNotFound)?;
-            let (even_tuple, odd_tuple) = get_verification_tuples_with_rng(
-                even_verifier,
-                odd_verifier,
-                &r1cs.even_proof,
-                &r1cs.odd_proof,
-                rng,
-            )?;
-            let rmc = Some((&mut even_rmc, &mut odd_rmc));
-            handle_verification_tuples(even_tuple, odd_tuple, tree_roots.params(), rmc)?;
-            Ok(())
-        })();
+            Some((&mut even_rmc, &mut odd_rmc)),
+        );
 
         process_result_and_rmcs(result, even_rmc, odd_rmc)
     }

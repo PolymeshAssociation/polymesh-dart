@@ -4,6 +4,7 @@ use rand_core::{CryptoRng, RngCore};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account_registration;
+use polymesh_dart_bp::util::{append_auth_proof_and_get_challenge, serialize_challenge};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::encode::*;
@@ -17,6 +18,7 @@ type BPRegTxnWithoutSkProtocol = account_registration::RegTxnWithoutSkProtocol<P
 // Account Registration — W3 split
 
 pub struct AccountRegHostProtocol {
+    account_state: AccountAssetState,
     protocol: BPRegTxnWithoutSkProtocol,
     prover: bulletproofs::r1cs::Prover<'static, MerlinTranscript, PallasA>,
 }
@@ -63,16 +65,22 @@ impl AccountRegHostProtocol {
             pk_enc: CompressedAffine::try_from(pk_enc)?,
         };
 
-        Ok((Self { protocol, prover }, device_request))
+        Ok((
+            Self {
+                account_state: account_state.clone(),
+                protocol,
+                prover,
+            },
+            device_request,
+        ))
     }
 
     pub fn finish<R: RngCore + CryptoRng>(
         mut self,
         rng: &mut R,
         device_response: &TwoSksDeviceResponse,
-        pk: &AccountPublicKeys,
-        account_state: &AccountAssetState,
         counter: NullifierSkGenCounter,
+        tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<AccountAssetRegistrationProof, Error> {
         let auth_proof = device_response.0.decode()?;
 
@@ -81,7 +89,6 @@ impl AccountRegHostProtocol {
 
         let mut partial = self.protocol.gen_proof(&challenge_h_final)?;
 
-        let tree_params = AccountTreeConfig::parameters();
         let r1cs_proof = self
             .prover
             .prove_with_rng(tree_params.even_parameters.bp_gens(), rng)?;
@@ -93,10 +100,13 @@ impl AccountRegHostProtocol {
         };
 
         Ok(AccountAssetRegistrationProof {
-            account: *pk,
-            asset_id: account_state.asset_id(),
+            account: AccountPublicKeys {
+                acct: self.account_state.pk_aff(),
+                enc: self.account_state.pk_enc(),
+            },
+            asset_id: self.account_state.asset_id(),
             counter,
-            account_state_commitment: account_state.current_commitment()?,
+            account_state_commitment: self.account_state.current_commitment()?,
             inner: WrappedCanonical::wrap(&bp_proof)?,
         })
     }
