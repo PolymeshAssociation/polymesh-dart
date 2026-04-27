@@ -1074,7 +1074,6 @@ impl<
                 account_tree_params,
                 account_comm_key.clone(),
             )?;
-        eprintln!("Partial proof verified, contributing auth proof to challenge...");
 
         let challenge_h_v = even_verifier
             .transcript()
@@ -1088,7 +1087,6 @@ impl<
             .copied()
             .collect();
 
-        eprintln!("Verifying auth proof...");
         self.auth_proof.verify(
             issuer_aff_pk,
             issuer_enc_pk,
@@ -1108,7 +1106,6 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        eprintln!("Verifying partial proof with final challenge...");
         self.partial
             .verify_with_challenge::<Parameters0, Parameters1>(
                 issuer_aff_pk,
@@ -1128,7 +1125,6 @@ impl<
                 Error::ProofVerificationError("R1CS proof is missing".to_string())
             })?;
 
-        eprintln!("Verifying R1CS proof with RNG...");
         let (even_tuple, odd_tuple) = get_verification_tuples_with_rng(
             even_verifier,
             odd_verifier,
