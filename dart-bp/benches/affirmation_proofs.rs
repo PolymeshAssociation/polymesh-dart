@@ -40,7 +40,6 @@ fn create_shared_setup(
     SelRerandProofParametersNew<PallasParameters, VestaParameters, PallasParams, VestaParams>,
     impl AccountCommitmentKeyTrait<PallasA>,
     PallasA,
-    PallasA,
 ) {
     const NUM_GENS: usize = 1 << 12;
 
@@ -54,17 +53,15 @@ fn create_shared_setup(
 
     let account_comm_key = setup_comm_key(label);
 
-    let enc_key_gen = hash_to_pallas(b"bench-affirmation", b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(b"bench-affirmation", b"enc-key-h").into_affine();
 
-    (account_tree_params, account_comm_key, enc_key_gen, enc_gen)
+    (account_tree_params, account_comm_key, enc_gen)
 }
 
 /// Generate all keys needed for benchmarks
 fn create_keys<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyTrait<PallasA>>(
     rng: &mut R,
     account_comm_key: &K,
-    enc_key_gen: PallasA,
 ) -> (
     (SigKey<PallasA>, VerKey<PallasA>),
     (DecKey<PallasA>, EncKey<PallasA>),
@@ -73,12 +70,12 @@ fn create_keys<R: rand_core::CryptoRngCore, K: AccountCommitmentKeyTrait<PallasA
     (DecKey<PallasA>, EncKey<PallasA>),
 ) {
     let (sk_s, pk_s) = keygen_sig(rng, account_comm_key.sk_gen());
-    let (sk_s_e, pk_s_e) = keygen_enc(rng, enc_key_gen);
+    let (sk_s_e, pk_s_e) = keygen_enc(rng, account_comm_key.sk_enc_gen());
 
     let (sk_r, pk_r) = keygen_sig(rng, account_comm_key.sk_gen());
-    let (sk_r_e, pk_r_e) = keygen_enc(rng, enc_key_gen);
+    let (sk_r_e, pk_r_e) = keygen_enc(rng, account_comm_key.sk_enc_gen());
 
-    let (sk_a_e, pk_a_e) = keygen_enc(rng, enc_key_gen);
+    let (sk_a_e, pk_a_e) = keygen_enc(rng, account_comm_key.sk_enc_gen());
 
     (
         (sk_s, pk_s),
@@ -159,18 +156,18 @@ fn create_account_and_tree<
 fn bench_sender_affirmation_verification(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
-    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+    let (account_tree_params, account_comm_key, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
     let ((sk_s, _pk_s), (sk_s_e, pk_s_e), (_sk_r, _pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
-        create_keys(&mut rng, &account_comm_key, enc_key_gen);
+        create_keys(&mut rng, &account_comm_key);
 
     let leg_enc = create_leg_and_encryption(
         &mut rng,
         pk_s_e,
         pk_r_e,
         pk_a_e,
-        enc_key_gen,
+        account_comm_key.sk_enc_gen(),
         enc_gen,
         false,
     );
@@ -230,18 +227,17 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
 fn bench_receiver_affirmation_verification(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
-    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+    let (account_tree_params, account_comm_key, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
     let ((_sk_s, _pk_s), (_sk_s_e, pk_s_e), (sk_r, _pk_r), (sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
-        create_keys(&mut rng, &account_comm_key, enc_key_gen);
-
+        create_keys(&mut rng, &account_comm_key);
     let leg_enc = create_leg_and_encryption(
         &mut rng,
         pk_s_e,
         pk_r_e,
         pk_a_e,
-        enc_key_gen,
+        account_comm_key.sk_enc_gen(),
         enc_gen,
         false,
     );
@@ -299,18 +295,18 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
 fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
-    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+    let (account_tree_params, account_comm_key, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
     let ((sk_s, _pk_s), (sk_s_e, pk_s_e), (_sk_r, _pk_r), (_sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
-        create_keys(&mut rng, &account_comm_key, enc_key_gen);
+        create_keys(&mut rng, &account_comm_key);
 
     let leg_enc = create_leg_and_encryption(
         &mut rng,
         pk_s_e,
         pk_r_e,
         pk_a_e,
-        enc_key_gen,
+        account_comm_key.sk_enc_gen(),
         enc_gen,
         false,
     );
@@ -374,18 +370,18 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
 fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
-    let (account_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+    let (account_tree_params, account_comm_key, enc_gen) =
         create_shared_setup(b"bench-affirmation");
 
     let ((_sk_s, _pk_s), (_sk_s_e, pk_s_e), (sk_r, _pk_r), (sk_r_e, pk_r_e), (_sk_a_e, pk_a_e)) =
-        create_keys(&mut rng, &account_comm_key, enc_key_gen);
+        create_keys(&mut rng, &account_comm_key);
 
     let leg_enc = create_leg_and_encryption(
         &mut rng,
         pk_s_e,
         pk_r_e,
         pk_a_e,
-        enc_key_gen,
+        account_comm_key.sk_enc_gen(),
         enc_gen,
         false,
     );
