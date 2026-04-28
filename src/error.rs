@@ -4,6 +4,7 @@ use polymesh_dart_common::{AssetId, MediatorId};
 
 use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
 use ark_std::string::String;
+use dock_crypto_utils::error::UtilsError;
 
 /// The errors that can occur in the Dart protocol.
 #[derive(Debug, Error)]
@@ -131,6 +132,15 @@ pub enum Error {
     /// Error during crypto operation.
     #[error("Error during crypto operation: {0}")]
     CryptoError(String),
+}
+
+impl From<UtilsError> for Error {
+    fn from(err: UtilsError) -> Self {
+        match err {
+            UtilsError::MultCheckFailed => Error::RMCVerifyError,
+            other => Error::CryptoError(format!("Crypto operation error: {other}")),
+        }
+    }
 }
 
 impl From<ark_serialize::SerializationError> for Error {

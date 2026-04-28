@@ -358,6 +358,8 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account::state::AccountStateBuilder;

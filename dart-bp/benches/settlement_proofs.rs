@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use ark_ec::CurveGroup;
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::Affine as PallasA;
@@ -7,7 +9,9 @@ use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use criterion::{Criterion, criterion_group, criterion_main};
 use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::{
+    PairRandomizedMultCheckerGuard, RandomizedMultChecker,
+};
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
 use polymesh_dart_bp::account::state_transition::{
     AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
@@ -288,25 +292,31 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Large settlement proof verification with RMC   ", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
-            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
-            proof
-                .verify(
-                    &mut local_rng,
-                    leg_encs.clone(),
-                    &root,
-                    vec![],
-                    vec![],
-                    vec![],
-                    nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                    Some((&mut rmc_1, &mut rmc_0)),
-                )
-                .unwrap();
+            PairRandomizedMultCheckerGuard::new(
+                VestaFr::rand(&mut local_rng),
+                PallasFr::rand(&mut local_rng),
+            )
+            .with_err((), |rmcs| {
+                proof
+                    .verify(
+                        &mut local_rng,
+                        leg_encs.clone(),
+                        &root,
+                        vec![],
+                        vec![],
+                        vec![],
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        Some(rmcs),
+                    )
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
         });
     });
 }
@@ -703,25 +713,31 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     c.bench_function("Multi-asset settlement proof verification with RMC", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();
-            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut local_rng));
-            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut local_rng));
 
-            settlement_proof
-                .verify(
-                    &mut local_rng,
-                    leg_encs.clone(),
-                    &asset_tree_root,
-                    vec![],
-                    vec![],
-                    vec![],
-                    nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                    Some((&mut rmc_1, &mut rmc_0)),
-                )
-                .unwrap();
+            PairRandomizedMultCheckerGuard::new(
+                VestaFr::rand(&mut local_rng),
+                PallasFr::rand(&mut local_rng),
+            )
+            .with_err((), |rmcs| {
+                settlement_proof
+                    .verify(
+                        &mut local_rng,
+                        leg_encs.clone(),
+                        &asset_tree_root,
+                        vec![],
+                        vec![],
+                        vec![],
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        Some(rmcs),
+                    )
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
         });
     });
 

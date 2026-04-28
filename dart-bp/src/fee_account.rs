@@ -3595,6 +3595,8 @@ pub fn ensure_correct_account_state<G: AffineRepr>(
 
 #[cfg(test)]
 pub mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::account::tests::setup_gens_new;
     use crate::account_registration::tests::setup_comm_key;

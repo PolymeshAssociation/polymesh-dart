@@ -9,7 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
-    UniformRand, format,
+    format,
     string::{String, ToString},
     vec,
     vec::Vec,
@@ -22,10 +22,12 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use super::{WrappedCanonical, process_result_and_rmc};
+use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::{
+    PairRandomizedMultCheckerGuard, RandomizedMultCheckerGuard,
+};
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{LegId, MediatorId};
@@ -928,17 +930,13 @@ impl<
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
 
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let rmc = Some((&mut even_rmc, &mut odd_rmc));
-
-        let public_enc_keys: Vec<PallasA> = self
-            .public_enc_keys
-            .iter()
-            .map(|pk| pk.get_affine())
-            .collect::<Result<_, _>>()?;
-        proof
-            .verify(
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
+            let public_enc_keys: Vec<PallasA> = self
+                .public_enc_keys
+                .iter()
+                .map(|pk| pk.get_affine())
+                .collect::<Result<_, _>>()?;
+            proof.verify(
                 rng,
                 leg_enc.clone(),
                 &root,
@@ -948,18 +946,11 @@ impl<
                 asset_comm_params,
                 dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
-                rmc,
-            )
-            .map_err(|e| {
-                even_rmc.cancel();
-                odd_rmc.cancel();
-                e
-            })?;
-        even_rmc.verify().map_err(|_| {
-            odd_rmc.cancel();
-            Error::RMCVerifyError
+                Some(rmc),
+            )?;
+            Ok(())
         })?;
-        odd_rmc.verify().map_err(|_| Error::RMCVerifyError)?;
+
         Ok(())
     }
 
@@ -1085,29 +1076,30 @@ impl SettlementLegProofRevealedAssetId {
         log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
         let proof = self.inner.decode()?;
 
-        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
+        RandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
+            let public_enc_keys: Vec<PallasA> = self
+                .public_enc_keys
+                .iter()
+                .map(|pk| pk.get_affine())
+                .collect::<Result<_, _>>()?;
 
-        let public_enc_keys: Vec<PallasA> = self
-            .public_enc_keys
-            .iter()
-            .map(|pk| pk.get_affine())
-            .collect::<Result<_, _>>()?;
+            proof.verify(
+                rng,
+                leg_enc,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                ctx,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                dart_gens().enc_key_gen(),
+                dart_gens().leg_asset_value_gen(),
+                Some(rmc),
+            )?;
+            Ok(())
+        })?;
 
-        let result = proof.verify(
-            rng,
-            leg_enc,
-            enc_keys,
-            med_keys,
-            public_enc_keys,
-            ctx,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
-            dart_gens().enc_key_gen(),
-            dart_gens().leg_asset_value_gen(),
-            Some(&mut rmc),
-        );
-
-        process_result_and_rmc(result, rmc)
+        Ok(())
     }
 
     pub(crate) fn batched_verify<R: RngCore + CryptoRng>(

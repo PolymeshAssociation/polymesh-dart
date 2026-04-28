@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use ark_ec::CurveGroup;
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::Affine as PallasA;

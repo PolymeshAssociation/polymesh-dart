@@ -12,7 +12,7 @@ use ark_std::vec::Vec;
 
 use bounded_collections::BoundedVec;
 use bulletproofs::r1cs::VerificationTuple;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
 use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
@@ -563,26 +563,29 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
-        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-
-        let result = proof.verify_split(
-            rng,
-            id,
-            self.account.acct.get_affine()?,
-            self.account.enc.get_affine()?,
-            self.asset_id,
-            &self.account_state_commitment.as_commitment()?,
-            self.counter,
-            identity,
-            dart_gens().account_comm_key(),
-            tree_params.even_parameters.pc_gens(),
-            tree_params.even_parameters.bp_gens(),
-            &params.params,
-            None,
-            Some(&mut rmc),
-        );
-
-        process_result_and_rmc(result, rmc)
+        RandomizedMultCheckerGuard::new(PallasScalar::rand(rng)).with_err(
+            Error::RMCVerifyError,
+            |rmc| {
+                proof.verify_split(
+                    rng,
+                    id,
+                    self.account.acct.get_affine()?,
+                    self.account.enc.get_affine()?,
+                    self.asset_id,
+                    &self.account_state_commitment.as_commitment()?,
+                    self.counter,
+                    identity,
+                    dart_gens().account_comm_key(),
+                    tree_params.even_parameters.pc_gens(),
+                    tree_params.even_parameters.bp_gens(),
+                    &params.params,
+                    None,
+                    Some(rmc),
+                )?;
+                Ok(())
+            },
+        )?;
+        Ok(())
     }
 
     /// Verify this registration proof inside a batch of proofs.
@@ -596,25 +599,28 @@ impl AccountAssetRegistrationProof {
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
-        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-        let result = proof.verify_split_and_return_tuples(
-            rng,
-            id,
-            self.account.acct.get_affine()?,
-            self.account.enc.get_affine()?,
-            self.asset_id,
-            &self.account_state_commitment.as_commitment()?,
-            self.counter,
-            identity,
-            dart_gens().account_comm_key(),
-            tree_params.even_parameters.pc_gens(),
-            tree_params.even_parameters.bp_gens(),
-            &params.params,
-            None,
-            //rng,
-            Some(&mut rmc),
-        );
+        let tuples = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng)).with_err(
+            Error::RMCVerifyError,
+            |rmc| {
+                Ok(proof.verify_split_and_return_tuples(
+                    rng,
+                    id,
+                    self.account.acct.get_affine()?,
+                    self.account.enc.get_affine()?,
+                    self.asset_id,
+                    &self.account_state_commitment.as_commitment()?,
+                    self.counter,
+                    identity,
+                    dart_gens().account_comm_key(),
+                    tree_params.even_parameters.pc_gens(),
+                    tree_params.even_parameters.bp_gens(),
+                    &params.params,
+                    None,
+                    Some(rmc),
+                )?)
+            },
+        )?;
 
-        process_result_and_rmc(result, rmc)
+        Ok(tuples)
     }
 }

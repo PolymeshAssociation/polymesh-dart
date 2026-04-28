@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use super::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use crate::leg::leg_proof::LegCreationProof;

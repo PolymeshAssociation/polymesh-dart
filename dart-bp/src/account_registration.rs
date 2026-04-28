@@ -2220,6 +2220,8 @@ impl MasterSeed {
 
 #[cfg(test)]
 pub mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;

@@ -1036,6 +1036,8 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::account::AccountStateBuilder;
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};

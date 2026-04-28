@@ -3092,6 +3092,8 @@ fn acc_new_gens_host<G0: SWCurveConfig + Clone + Copy>(
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::account::tests::{
         get_tree_with_account_comm, get_tree_with_commitment, setup_gens_new,

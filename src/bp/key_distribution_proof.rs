@@ -3,13 +3,12 @@ use scale_info::TypeInfo;
 
 use super::{
     AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
-    dart_gens, process_result_and_rmc,
+    dart_gens,
 };
 use crate::{PallasA, PallasScalar, WrappedCanonical};
 use ark_ec::AffineRepr;
-use ark_std::UniformRand;
 use ark_std::vec::Vec;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
 use polymesh_dart_bp::key_distribution;
 use rand_core::{CryptoRng, RngCore};
 
@@ -82,20 +81,22 @@ impl KeyDistributionProof {
 
         let gens = dart_gens();
 
-        let mut rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-        let result = proof.verify(
-            rng,
-            &pk,
-            &rec_pks,
-            gens.enc_key_gen(),
-            gens.leg_asset_value_gen(),
-            nonce,
-            tree_params.even_parameters.pc_gens(),
-            tree_params.even_parameters.bp_gens(),
-            Some(&mut rmc),
-        );
+        RandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
+            proof.verify(
+                rng,
+                &pk,
+                &rec_pks,
+                gens.enc_key_gen(),
+                gens.leg_asset_value_gen(),
+                nonce,
+                tree_params.even_parameters.pc_gens(),
+                tree_params.even_parameters.bp_gens(),
+                Some(rmc),
+            )?;
+            Ok(())
+        })?;
 
-        process_result_and_rmc(result, rmc)
+        Ok(())
     }
 
     /// Decrypt the distributed secret key as the recipient at `recipient_index`.

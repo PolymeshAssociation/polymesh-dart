@@ -147,6 +147,7 @@ mod tests {
     use crate::leg::{Leg, LegEncConfig};
     use ark_ec::CurveGroup;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
     use std::time::Instant;
 
     #[test]
@@ -257,18 +258,23 @@ mod tests {
 
             // Test verification with RMC as well
             let clock = Instant::now();
-            let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
-            proof
-                .verify(
-                    leg_enc.mediators[mediator_index].clone(),
-                    accept,
-                    nonce,
-                    sig_key_gen,
-                    Some(&mut rmc),
-                )
-                .unwrap();
+            let res = RandomizedMultCheckerGuard::new(ark_pallas::Fr::rand(&mut rng)).with_err(
+                (),
+                |rmc| {
+                    proof
+                        .verify(
+                            leg_enc.mediators[mediator_index].clone(),
+                            accept,
+                            nonce,
+                            sig_key_gen,
+                            Some(rmc),
+                        )
+                        .unwrap();
+                    Ok(())
+                },
+            );
+            assert!(res.is_ok());
 
-            rmc.verify().unwrap();
             let verifier_time_rmc = clock.elapsed();
 
             log::info!("proof size = {}", proof.compressed_size());

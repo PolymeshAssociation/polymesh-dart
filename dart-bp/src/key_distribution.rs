@@ -447,6 +447,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use ark_ff::Field;
     use ark_pallas::{Affine as PallasA, Fr as PallasFr};

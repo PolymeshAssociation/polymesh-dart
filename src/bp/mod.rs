@@ -10,7 +10,6 @@ use blake2::Blake2b512;
 use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use digest::Digest;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
 };
@@ -386,40 +385,6 @@ pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
     block_number
         .try_into()
         .map_err(|_| Error::CurveTreeBlockNumberNotFound)
-}
-
-pub(crate) fn process_result_and_rmcs<O, E>(
-    result: Result<O, E>,
-    mut even_rmc: RandomizedMultChecker<PallasA>,
-    mut odd_rmc: RandomizedMultChecker<VestaA>,
-) -> Result<O, Error>
-where
-    E: Into<Error>,
-{
-    let r = result.map_err(|e| {
-        even_rmc.cancel();
-        odd_rmc.cancel();
-        e.into()
-    })?;
-
-    polymesh_dart_bp::util::verify_rmc(even_rmc, odd_rmc).map_err(|_| Error::RMCVerifyError)?;
-    Ok(r)
-}
-
-pub(crate) fn process_result_and_rmc<G: AffineRepr, O, E>(
-    result: Result<O, E>,
-    mut rmc: RandomizedMultChecker<G>,
-) -> Result<O, Error>
-where
-    E: Into<Error>,
-{
-    let r = result.map_err(|e| {
-        rmc.cancel();
-        e.into()
-    })?;
-
-    rmc.verify().map_err(|_| Error::RMCVerifyError)?;
-    Ok(r)
 }
 
 #[cfg(test)]

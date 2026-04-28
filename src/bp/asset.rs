@@ -8,11 +8,10 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
-use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
 use bounded_collections::{BoundedBTreeMap, BoundedBTreeSet};
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
 use rand_core::{CryptoRng, RngCore};
 
 use super::*;
@@ -312,25 +311,28 @@ impl<
         let root = root.root_node()?;
         let proof = self.inner.decode()?;
 
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let result = proof.verify_split(
-            self.pk.get_affine()?,
-            self.pk_enc.get_affine()?,
-            id,
-            self.asset_id,
-            self.amount,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
-            &root,
-            identity,
-            tree_roots.params(),
-            dart_gens().account_comm_key(),
-            rng,
-            Some((&mut even_rmc, &mut odd_rmc)),
-        );
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+            |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                proof.verify_split(
+                    self.pk.get_affine()?,
+                    self.pk_enc.get_affine()?,
+                    id,
+                    self.asset_id,
+                    self.amount,
+                    self.updated_account_state_commitment.as_commitment()?,
+                    self.nullifier.get_affine()?,
+                    &root,
+                    identity,
+                    tree_roots.params(),
+                    dart_gens().account_comm_key(),
+                    rng,
+                    Some((even_rmc, odd_rmc)),
+                )?;
+                Ok(())
+            },
+        )?;
 
-        process_result_and_rmcs(result, even_rmc, odd_rmc)
+        Ok(())
     }
 }
 

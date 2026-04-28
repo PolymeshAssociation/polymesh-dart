@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate::account::state_transition::{
     AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
 };

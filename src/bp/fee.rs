@@ -20,8 +20,7 @@ use super::*;
 use crate::auth_proofs::{create_fee_account_auth_proof, create_fee_payment_auth_proof};
 use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
-use ark_std::UniformRand;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
 use polymesh_dart_bp::util::{batch_verify_bp_with_rng, serialize_challenge};
 use polymesh_dart_bp::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
 
@@ -552,25 +551,25 @@ impl<
         ctx: &[u8],
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
     ) -> Result<(), Error> {
-        let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
-        let rmc = Some((&mut even_rmc, &mut odd_rmc));
-        let proof = self.inner.decode()?;
-        //let result = proof.verify(
-        let result = proof.verify_split(
-            self.account.get_affine()?,
-            self.asset_id,
-            self.amount,
-            self.updated_account_state_commitment.as_commitment()?,
-            self.nullifier.get_affine()?,
-            &root,
-            ctx,
-            C::parameters(),
-            dart_gens().account_comm_key(),
-            rng,
-            rmc,
-        );
-        process_result_and_rmcs(result, even_rmc, odd_rmc)
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
+            let proof = self.inner.decode()?;
+            proof.verify_split(
+                self.account.get_affine()?,
+                self.asset_id,
+                self.amount,
+                self.updated_account_state_commitment.as_commitment()?,
+                self.nullifier.get_affine()?,
+                &root,
+                ctx,
+                C::parameters(),
+                dart_gens().account_comm_key(),
+                rng,
+                Some(rmc),
+            )?;
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     /// Verify this fee account topup proof inside a batch of proofs.
@@ -910,76 +909,74 @@ impl<
         ctx: &[u8],
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
-        let mut even_rmc = RandomizedMultChecker::new(PallasScalar::rand(rng));
-        let mut odd_rmc = RandomizedMultChecker::new(VestaScalar::rand(rng));
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+            |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                let root = tree_roots
+                    .get_block_root(self.root_block.into())
+                    .ok_or(Error::CurveTreeRootNotFound)?;
+                let root = root.root_node()?;
+                let proof = self.inner.decode()?;
+                let account_comm_key = dart_gens().account_comm_key();
+                let updated_account_commitment =
+                    self.updated_account_state_commitment.as_commitment()?;
+                let nullifier = self.nullifier.get_affine()?;
 
-        let result = (|| -> Result<(), Error> {
-            let root = tree_roots
-                .get_block_root(self.root_block.into())
-                .ok_or(Error::CurveTreeRootNotFound)?;
-            let root = root.root_node()?;
-            let proof = self.inner.decode()?;
-            let account_comm_key = dart_gens().account_comm_key();
-            let updated_account_commitment =
-                self.updated_account_state_commitment.as_commitment()?;
-            let nullifier = self.nullifier.get_affine()?;
+                // Phase 1: derive challenge_h from host transcript
+                let (mut even_verifier, odd_verifier, challenge_h) = proof
+                    .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                        self.asset_id,
+                        self.amount,
+                        updated_account_commitment,
+                        nullifier,
+                        &root,
+                        ctx,
+                        tree_roots.params(),
+                        account_comm_key.clone(),
+                    )?;
 
-            // Phase 1: derive challenge_h from host transcript
-            let (mut even_verifier, odd_verifier, challenge_h) = proof
-                .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
-                    self.asset_id,
-                    self.amount,
-                    updated_account_commitment,
+                // Phase 2: reconstruct ledger_nonce and verify auth proof
+                let challenge_h_bytes = serialize_challenge(&challenge_h)?;
+                let ledger_nonce: Vec<u8> = challenge_h_bytes
+                    .iter()
+                    .chain(ctx.iter())
+                    .copied()
+                    .collect();
+
+                let sk_gen = account_comm_key.sk_gen();
+                let randomness_gen = account_comm_key.randomness_gen();
+                let b_blinding = tree_roots
+                    .params()
+                    .even_parameters
+                    .sl_params
+                    .pc_gens()
+                    .B_blinding;
+
+                let rerandomized_leaf = proof.partial.rerandomized_leaf();
+                proof.commitment_proof.auth_proof.verify(
+                    &rerandomized_leaf,
+                    &updated_account_commitment.0,
                     nullifier,
-                    &root,
-                    ctx,
-                    tree_roots.params(),
-                    account_comm_key.clone(),
+                    &ledger_nonce,
+                    sk_gen,
+                    randomness_gen,
+                    b_blinding,
+                    Some(even_rmc),
                 )?;
 
-            // Phase 2: reconstruct ledger_nonce and verify auth proof
-            let challenge_h_bytes = serialize_challenge(&challenge_h)?;
-            let ledger_nonce: Vec<u8> = challenge_h_bytes
-                .iter()
-                .chain(ctx.iter())
-                .copied()
-                .collect();
+                // Phase 3: hash auth_proof into transcript, derive final challenge, verify host
+                let mut auth_proof_bytes = Vec::new();
+                proof
+                    .commitment_proof
+                    .auth_proof
+                    .serialize_compressed(&mut auth_proof_bytes)?;
+                even_verifier
+                    .transcript()
+                    .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+                let challenge_h_final = even_verifier
+                    .transcript()
+                    .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
 
-            let sk_gen = account_comm_key.sk_gen();
-            let randomness_gen = account_comm_key.randomness_gen();
-            let b_blinding = tree_roots
-                .params()
-                .even_parameters
-                .sl_params
-                .pc_gens()
-                .B_blinding;
-
-            let rerandomized_leaf = proof.partial.rerandomized_leaf();
-            proof.commitment_proof.auth_proof.verify(
-                &rerandomized_leaf,
-                &updated_account_commitment.0,
-                nullifier,
-                &ledger_nonce,
-                sk_gen,
-                randomness_gen,
-                b_blinding,
-                Some(&mut even_rmc),
-            )?;
-
-            // Phase 3: hash auth_proof into transcript, derive final challenge, verify host
-            let mut auth_proof_bytes = Vec::new();
-            proof
-                .commitment_proof
-                .auth_proof
-                .serialize_compressed(&mut auth_proof_bytes)?;
-            even_verifier
-                .transcript()
-                .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
-            let challenge_h_final = even_verifier
-                .transcript()
-                .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
-
-            let (even_tuple, odd_tuple) =
+                let (even_tuple, odd_tuple) =
                 proof.verify_host_and_return_tuples_with_given_challenge::<
                     _,
                     C::DLogParams0,
@@ -995,20 +992,21 @@ impl<
                     tree_roots.params(),
                     account_comm_key,
                     rng,
-                    Some(&mut even_rmc),
+                    Some(even_rmc),
                 )?;
 
-            polymesh_dart_bp::util::handle_verification_tuples(
-                even_tuple,
-                odd_tuple,
-                tree_roots.params(),
-                Some((&mut even_rmc, &mut odd_rmc)),
-            )?;
+                polymesh_dart_bp::util::handle_verification_tuples(
+                    even_tuple,
+                    odd_tuple,
+                    tree_roots.params(),
+                    Some((even_rmc, odd_rmc)),
+                )?;
 
-            Ok(())
-        })();
+                Ok(())
+            },
+        )?;
 
-        process_result_and_rmcs(result, even_rmc, odd_rmc)
+        Ok(())
     }
 }
 

@@ -1260,6 +1260,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::{Leg, LegEncConfig};

@@ -3,7 +3,7 @@
 
 use bulletproofs::r1cs::{ConstraintSystem, Prover};
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
 use dock_crypto_utils::transcript::Transcript;
 use rand_core::{CryptoRng, RngCore};
 use scale_info::TypeInfo;
@@ -306,99 +306,105 @@ macro_rules! with_balance {
                 let sk_gen = comm_key.sk_gen();
                 let sk_enc_gen = comm_key.sk_enc_gen();
                 let enc_gen = gens.leg_asset_value_gen();
-                let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-                let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
 
-                let leg_enc_inner = leg_enc.decode()?;
-                let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
+                PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+                    |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                        let leg_enc_inner = leg_enc.decode()?;
+                        let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
-                let result = (|| -> Result<(), Error> {
-                    let mut verifier = proof
-                        .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
-                            updated_comm,
-                            nullifier,
-                            &root,
-                            ctx.as_bytes(),
-                            C::parameters(),
-                            &comm_key,
-                            enc_gen,
-                            &leg_enc_core,
-                            &eph_pk,
-                        )?;
+                        let mut verifier = proof
+                            .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                                updated_comm,
+                                nullifier,
+                                &root,
+                                ctx.as_bytes(),
+                                C::parameters(),
+                                &comm_key,
+                                enc_gen,
+                                &leg_enc_core,
+                                &eph_pk,
+                            )?;
 
-                    let challenge_h_v = verifier
-                        .even_verifier
-                        .as_mut()
-                        .ok_or_else(|| {
-                            Error::ProofGenerationError("Missing even_verifier".to_string())
-                        })?
-                        .transcript()
-                        .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
-
-                    let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
-
-                    let re_randomized_leaf_v = proof
-                        .common
-                        .partial
-                        .re_randomized_path
-                        .as_ref()
-                        .ok_or_else(|| {
-                            Error::ProofGenerationError("Missing re_randomized_path".to_string())
-                        })?
-                        .path
-                        .get_rerandomized_leaf();
-
-                    proof.common.auth_proof.verify(
-                        vec![bp_account::LegVerifierConfig {
-                            encryption: leg_enc_core,
-                            party_eph_pk:
-                                polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
-                                    eph_pk,
-                                ),
-                            has_balance_decreased: $hbd,
-                            has_counter_decreased: $hcd,
-                        }],
-                        &re_randomized_leaf_v,
-                        &updated_comm.0,
-                        nullifier,
-                        &ledger_nonce_v,
-                        sk_gen,
-                        sk_enc_gen,
-                        C::parameters().even_parameters.pc_gens().B_blinding,
-                        enc_gen,
-                        None,
-                    )?;
-
-                    let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
-                        &proof.common.auth_proof,
-                        verifier
+                        let challenge_h_v = verifier
                             .even_verifier
                             .as_mut()
                             .ok_or_else(|| {
                                 Error::ProofGenerationError("Missing even_verifier".to_string())
                             })?
-                            .transcript(),
-                    )?;
+                            .transcript()
+                            .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
 
-                    let (even_tuple, odd_tuple) = proof
-                        .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
-                            verifier,
-                            &challenge_h_final_v,
-                            updated_comm,
+                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
+
+                        let re_randomized_leaf_v = proof
+                            .common
+                            .partial
+                            .re_randomized_path
+                            .as_ref()
+                            .ok_or_else(|| {
+                                Error::ProofGenerationError(
+                                    "Missing re_randomized_path".to_string(),
+                                )
+                            })?
+                            .path
+                            .get_rerandomized_leaf();
+
+                        proof.common.auth_proof.verify(
+                            vec![bp_account::LegVerifierConfig {
+                                encryption: leg_enc_core,
+                                party_eph_pk:
+                                    polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
+                                        eph_pk,
+                                    ),
+                                has_balance_decreased: $hbd,
+                                has_counter_decreased: $hcd,
+                            }],
+                            &re_randomized_leaf_v,
+                            &updated_comm.0,
                             nullifier,
-                            C::parameters(),
-                            &comm_key,
+                            &ledger_nonce_v,
+                            sk_gen,
+                            sk_enc_gen,
+                            C::parameters().even_parameters.pc_gens().B_blinding,
                             enc_gen,
-                            rng,
-                            Some(&mut even_rmc),
+                            None,
                         )?;
 
-                    let rmc = Some((&mut even_rmc, &mut odd_rmc));
-                    handle_verification_tuples(even_tuple, odd_tuple, C::parameters(), rmc)?;
-                    Ok(())
-                })();
+                        let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
+                            &proof.common.auth_proof,
+                            verifier
+                                .even_verifier
+                                .as_mut()
+                                .ok_or_else(|| {
+                                    Error::ProofGenerationError("Missing even_verifier".to_string())
+                                })?
+                                .transcript(),
+                        )?;
 
-                process_result_and_rmcs(result, even_rmc, odd_rmc)
+                        let (even_tuple, odd_tuple) = proof
+                            .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
+                                verifier,
+                                &challenge_h_final_v,
+                                updated_comm,
+                                nullifier,
+                                C::parameters(),
+                                &comm_key,
+                                enc_gen,
+                                rng,
+                                Some(even_rmc),
+                            )?;
+
+                        handle_verification_tuples(
+                            even_tuple,
+                            odd_tuple,
+                            C::parameters(),
+                            Some((even_rmc, odd_rmc)),
+                        )?;
+                        Ok(())
+                    },
+                )?;
+
+                Ok(())
             }
         }
 
@@ -650,99 +656,105 @@ macro_rules! no_balance {
                 let sk_gen = comm_key.sk_gen();
                 let sk_enc_gen = comm_key.sk_enc_gen();
                 let enc_gen = gens.leg_asset_value_gen();
-                let mut even_rmc = RandomizedMultChecker::new(C::F0::rand(rng));
-                let mut odd_rmc = RandomizedMultChecker::new(C::F1::rand(rng));
 
-                let leg_enc_inner = leg_enc.decode()?;
-                let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
+                PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+                    |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                        let leg_enc_inner = leg_enc.decode()?;
+                        let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
-                let result = (|| -> Result<(), Error> {
-                    let mut verifier = proof
-                        .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
-                            updated_comm,
-                            nullifier,
-                            &root,
-                            ctx.as_bytes(),
-                            C::parameters(),
-                            &comm_key,
-                            enc_gen,
-                            &leg_enc_core,
-                            &eph_pk,
-                        )?;
+                        let mut verifier = proof
+                            .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                                updated_comm,
+                                nullifier,
+                                &root,
+                                ctx.as_bytes(),
+                                C::parameters(),
+                                &comm_key,
+                                enc_gen,
+                                &leg_enc_core,
+                                &eph_pk,
+                            )?;
 
-                    let challenge_h_v = verifier
-                        .even_verifier
-                        .as_mut()
-                        .ok_or_else(|| {
-                            Error::ProofGenerationError("Missing even_verifier".to_string())
-                        })?
-                        .transcript()
-                        .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
-
-                    let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
-
-                    let re_randomized_leaf_v = proof
-                        .common
-                        .partial
-                        .re_randomized_path
-                        .as_ref()
-                        .ok_or_else(|| {
-                            Error::ProofGenerationError("Missing re_randomized_path".to_string())
-                        })?
-                        .path
-                        .get_rerandomized_leaf();
-
-                    proof.common.auth_proof.verify(
-                        vec![bp_account::LegVerifierConfig {
-                            encryption: leg_enc_core,
-                            party_eph_pk:
-                                polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
-                                    eph_pk,
-                                ),
-                            has_balance_decreased: None,
-                            has_counter_decreased: $hcd,
-                        }],
-                        &re_randomized_leaf_v,
-                        &updated_comm.0,
-                        nullifier,
-                        &ledger_nonce_v,
-                        sk_gen,
-                        sk_enc_gen,
-                        C::parameters().even_parameters.pc_gens().B_blinding,
-                        enc_gen,
-                        None,
-                    )?;
-
-                    let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
-                        &proof.common.auth_proof,
-                        verifier
+                        let challenge_h_v = verifier
                             .even_verifier
                             .as_mut()
                             .ok_or_else(|| {
                                 Error::ProofGenerationError("Missing even_verifier".to_string())
                             })?
-                            .transcript(),
-                    )?;
+                            .transcript()
+                            .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
 
-                    let (even_tuple, odd_tuple) = proof
-                        .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
-                            verifier,
-                            &challenge_h_final_v,
-                            updated_comm,
+                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
+
+                        let re_randomized_leaf_v = proof
+                            .common
+                            .partial
+                            .re_randomized_path
+                            .as_ref()
+                            .ok_or_else(|| {
+                                Error::ProofGenerationError(
+                                    "Missing re_randomized_path".to_string(),
+                                )
+                            })?
+                            .path
+                            .get_rerandomized_leaf();
+
+                        proof.common.auth_proof.verify(
+                            vec![bp_account::LegVerifierConfig {
+                                encryption: leg_enc_core,
+                                party_eph_pk:
+                                    polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
+                                        eph_pk,
+                                    ),
+                                has_balance_decreased: None,
+                                has_counter_decreased: $hcd,
+                            }],
+                            &re_randomized_leaf_v,
+                            &updated_comm.0,
                             nullifier,
-                            C::parameters(),
-                            &comm_key,
+                            &ledger_nonce_v,
+                            sk_gen,
+                            sk_enc_gen,
+                            C::parameters().even_parameters.pc_gens().B_blinding,
                             enc_gen,
-                            rng,
-                            Some(&mut even_rmc),
+                            None,
                         )?;
 
-                    let rmc = Some((&mut even_rmc, &mut odd_rmc));
-                    handle_verification_tuples(even_tuple, odd_tuple, C::parameters(), rmc)?;
-                    Ok(())
-                })();
+                        let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
+                            &proof.common.auth_proof,
+                            verifier
+                                .even_verifier
+                                .as_mut()
+                                .ok_or_else(|| {
+                                    Error::ProofGenerationError("Missing even_verifier".to_string())
+                                })?
+                                .transcript(),
+                        )?;
 
-                process_result_and_rmcs(result, even_rmc, odd_rmc)
+                        let (even_tuple, odd_tuple) = proof
+                            .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
+                                verifier,
+                                &challenge_h_final_v,
+                                updated_comm,
+                                nullifier,
+                                C::parameters(),
+                                &comm_key,
+                                enc_gen,
+                                rng,
+                                Some(even_rmc),
+                            )?;
+
+                        handle_verification_tuples(
+                            even_tuple,
+                            odd_tuple,
+                            C::parameters(),
+                            Some((even_rmc, odd_rmc)),
+                        )?;
+                        Ok(())
+                    },
+                )?;
+
+                Ok(())
             }
         }
 
