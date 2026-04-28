@@ -12144,7 +12144,7 @@ mod input_sanitation_disabled {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_r, _pk_r), (_sk_r_e, pk_r_e)),
             ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(
             &mut rng,
@@ -12169,7 +12169,7 @@ mod input_sanitation_disabled {
 
         // Sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -12188,7 +12188,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that doesn't decrease the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.balance = account.without_sk.balance; // Keep same balance
+        updated_account.balance = account.balance; // Keep same balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12196,6 +12196,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12227,7 +12229,7 @@ mod input_sanitation_disabled {
 
         // Create an updated account that instead increases the balance
         let mut updated_account = account.get_state_for_send(amount).unwrap();
-        updated_account.balance = account.without_sk.balance + amount; // Increase balance
+        updated_account.balance = account.balance + amount; // Increase balance
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12235,6 +12237,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12278,7 +12282,7 @@ mod input_sanitation_disabled {
 
         // All parties generate their keys
         let (
-            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_s, _pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (sk_r_e, pk_r_e)),
             ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(
@@ -12304,7 +12308,7 @@ mod input_sanitation_disabled {
 
         // Receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
         // Assume that account had some balance. Either got it as the issuer or from another transfer
         account.balance = 200;
 
@@ -12323,13 +12327,15 @@ mod input_sanitation_disabled {
 
         // Create a malicious updated account that increases balance
         let mut updated_account = account.get_state_for_receive();
-        updated_account.balance = account.without_sk.balance + amount;
+        updated_account.balance = account.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12373,7 +12379,7 @@ mod input_sanitation_disabled {
 
         // All parties generate their keys
         let (
-            ((_sk_s, pk_s), (_sk_s_e, pk_s_e)),
+            ((_sk_s, _pk_s), (_sk_s_e, pk_s_e)),
             ((sk_r, pk_r), (sk_r_e, pk_r_e)),
             ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(
@@ -12399,7 +12405,7 @@ mod input_sanitation_disabled {
 
         // Receiver account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_r, sk_r_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
         // Assume that account had some balance and it had sent the receive transaction to increase its counter
         account.balance = 200;
         account.counter += 2;
@@ -12419,7 +12425,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than the actual claim amount
         let mut updated_account = account.get_state_for_claiming_received(amount).unwrap();
-        updated_account.balance = account.without_sk.balance + 75; // Add extra on top of the actual amount
+        updated_account.balance = account.balance + 75; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12427,6 +12433,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12466,6 +12474,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_receiver(),
+            sk_r.0,
+            sk_r_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12510,7 +12520,7 @@ mod input_sanitation_disabled {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_r, _pk_r), (_sk_r_e, pk_r_e)),
             ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(
             &mut rng,
@@ -12535,7 +12545,7 @@ mod input_sanitation_disabled {
 
         // Sender account with non-zero counter
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
         account.balance = 50;
         account.counter = 2;
 
@@ -12554,13 +12564,15 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance when it should remain the same
         let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
-        updated_account.balance = account.without_sk.balance + amount;
+        updated_account.balance = account.balance + amount;
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12599,6 +12611,8 @@ mod input_sanitation_disabled {
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12642,7 +12656,7 @@ mod input_sanitation_disabled {
         // All parties generate their keys
         let (
             ((sk_s, pk_s), (sk_s_e, pk_s_e)),
-            ((_sk_r, pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_r, _pk_r), (_sk_r_e, pk_r_e)),
             ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
         ) = setup_keys(
             &mut rng,
@@ -12667,7 +12681,7 @@ mod input_sanitation_disabled {
 
         // Sender account
         let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, sk_s, sk_s_e, id);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
         // Assume that account had some balance and it had sent the send transaction to increase its counter
         account.balance = 200;
         account.counter += 2;
@@ -12687,7 +12701,7 @@ mod input_sanitation_disabled {
 
         // Update account that increases balance more than required
         let mut updated_account = account.get_state_for_reversing_send(amount).unwrap();
-        updated_account.balance = account.without_sk.balance + 50; // Add extra on top of the actual amount
+        updated_account.balance = account.balance + 50; // Add extra on top of the actual amount
 
         let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
 
@@ -12695,6 +12709,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12734,6 +12750,8 @@ mod input_sanitation_disabled {
             &mut rng,
             amount,
             leg_enc.core_and_eph_keys_for_sender(),
+            sk_s.0,
+            sk_s_e.0,
             &account,
             &updated_account,
             updated_account_comm,
@@ -12801,7 +12819,7 @@ mod input_sanitation_disabled {
         // Create sender account
         let sender_id = PallasFr::rand(&mut rng);
         let (mut sender_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_s.clone(), sk_s_e.clone(), sender_id);
+            new_account(&mut rng, asset_id, pk_s, pk_s_e, sender_id);
         sender_account.balance = 200; // Ensure sufficient balance
         sender_account.counter = 5; // Set non-zero counter for testing
         let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
@@ -12809,7 +12827,7 @@ mod input_sanitation_disabled {
         // Create receiver account
         let receiver_id = PallasFr::rand(&mut rng);
         let (mut receiver_account, _, _, _) =
-            new_account(&mut rng, asset_id, sk_r, sk_r_e, receiver_id);
+            new_account(&mut rng, asset_id, pk_r, pk_r_e, receiver_id);
         receiver_account.balance = 150; // Some initial balance
         receiver_account.counter = 3; // Set non-zero counter for testing
         let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
@@ -12844,6 +12862,8 @@ mod input_sanitation_disabled {
                 &mut rng,
                 amount,
                 leg_enc.core_and_eph_keys_for_sender(),
+                sk_s.0,
+                sk_s_e.0,
                 &sender_account,
                 &malicious_sender_account,
                 malicious_sender_comm,
@@ -12889,6 +12909,8 @@ mod input_sanitation_disabled {
                 &mut rng,
                 amount,
                 leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
                 &receiver_account,
                 &malicious_receiver_account,
                 malicious_receiver_comm,
@@ -12933,6 +12955,8 @@ mod input_sanitation_disabled {
                 &mut rng,
                 amount,
                 leg_enc.core_and_eph_keys_for_sender(),
+                sk_s.0,
+                sk_s_e.0,
                 &sender_account,
                 &malicious_sender_account,
                 malicious_sender_comm,
@@ -12977,6 +13001,8 @@ mod input_sanitation_disabled {
                 &mut rng,
                 amount,
                 leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
                 &receiver_account,
                 &malicious_receiver_account,
                 malicious_receiver_comm,

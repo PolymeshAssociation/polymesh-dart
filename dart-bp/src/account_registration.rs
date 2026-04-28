@@ -4037,10 +4037,10 @@ pub mod tests {
             let id = Fr::rand(&mut rng);
 
             let enc_key_gen = account_comm_key.sk_enc_gen();
-            let (sk_enc, _) = keygen_enc(&mut rng, enc_key_gen);
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
 
             let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
-                new_account(&mut rng, asset_id, sk_i, sk_enc, id.clone());
+                new_account(&mut rng, asset_id, pk_i, pk_enc, id.clone());
 
             // Set non-zero balance - this should cause proof verification to fail
             account.balance = 100;
@@ -4049,13 +4049,11 @@ pub mod tests {
 
             let nonce = b"test-nonce-0";
 
-            let pk_enc = (enc_key_gen * account.sk_enc).into_affine();
-
             // With ignore_prover_input_sanitation, proof creation should succeed
             let reg_proof = RegTxnProof::<_, 48, 6>::new(
                 &mut rng,
-                pk_i.0,
-                pk_enc,
+                sk_i.0,
+                sk_enc.0,
                 &account,
                 account_comm.clone(),
                 rho_randomness,
@@ -4075,7 +4073,7 @@ pub mod tests {
                         &mut rng,
                         id,
                         pk_i.0,
-                        pk_enc,
+                        pk_enc.0,
                         asset_id,
                         &account_comm,
                         nullifier_gen_counter,
@@ -4116,15 +4114,15 @@ pub mod tests {
             // Wrong affirmation secret key in account state
             {
                 let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-                let (sk_wrong, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (_sk_wrong, pk_wrong) = keygen_sig(&mut rng, account_comm_key.sk_gen());
                 let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
 
                 // Create account with wrong affirmation key
                 let (account, rho_randomness) = AccountState::new(
                     &mut rng,
                     id,
-                    sk_wrong.0,
-                    sk_enc.0,
+                    pk_wrong.0,
+                    pk_enc.0,
                     asset_id,
                     nullifier_gen_counter,
                     poseidon_params.clone(),
@@ -4137,8 +4135,8 @@ pub mod tests {
                 // Proof creation succeeds with ignore_prover_input_sanitation
                 let reg_proof = RegTxnProof::<_, 48, 6>::new(
                     &mut rng,
-                    pk_i.0,
-                    pk_enc.0,
+                    sk_i.0,
+                    sk_enc.0,
                     &account,
                     account_comm.clone(),
                     rho_randomness,
@@ -4179,14 +4177,14 @@ pub mod tests {
             {
                 let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
                 let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
-                let (sk_enc_wrong, _) = keygen_enc(&mut rng, enc_key_gen);
+                let (_sk_enc_wrong, pk_enc_wrong) = keygen_enc(&mut rng, enc_key_gen);
 
                 // Create account with wrong encryption key inverse
                 let (account, rho_randomness) = AccountState::new(
                     &mut rng,
                     id,
-                    sk_i.0,
-                    sk_enc_wrong.0,
+                    pk_i.0,
+                    pk_enc_wrong.0,
                     asset_id,
                     nullifier_gen_counter,
                     poseidon_params.clone(),
@@ -4199,8 +4197,8 @@ pub mod tests {
                 // Proof creation succeeds with ignore_prover_input_sanitation
                 let reg_proof = RegTxnProof::<_, 48, 6>::new(
                     &mut rng,
-                    pk_i.0,
-                    pk_enc.0,
+                    sk_i.0,
+                    sk_enc.0,
                     &account,
                     account_comm.clone(),
                     rho_randomness,
@@ -4247,8 +4245,8 @@ pub mod tests {
                 let (account, rho_randomness) = AccountState::new(
                     &mut rng,
                     id,
-                    sk_i.0,
-                    sk_enc.0.inverse().unwrap(), // Providing inverse so that account state does not inverse
+                    pk_i.0,
+                    pk_enc.0,
                     asset_id,
                     nullifier_gen_counter,
                     poseidon_params.clone(),
@@ -4261,8 +4259,8 @@ pub mod tests {
                 // Proof creation succeeds with ignore_prover_input_sanitation
                 let reg_proof = RegTxnProof::<_, 48, 6>::new(
                     &mut rng,
-                    pk_i.0,
-                    pk_enc.0,
+                    sk_i.0,
+                    sk_enc.0.inverse().unwrap(),
                     &account,
                     account_comm.clone(),
                     rho_randomness,

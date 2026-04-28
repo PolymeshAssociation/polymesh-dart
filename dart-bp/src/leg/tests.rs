@@ -2456,7 +2456,6 @@ mod input_sanitation_disabled {
     use crate::keys::{keygen_enc, keygen_sig};
     use ark_pallas::Affine as PallasA;
     use ark_std::UniformRand;
-    use blake2::Blake2b512;
 
     #[test]
     fn settlement_proof_with_mismatched_asset_data() {
@@ -2490,10 +2489,6 @@ mod input_sanitation_disabled {
             (num_auditors + num_mediators) as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
-
-        // Account signing (affirmation) keys
-        let (_, pk_s) = keygen_sig(&mut rng, sig_key_gen);
-        let (_, pk_r) = keygen_sig(&mut rng, sig_key_gen);
 
         // Encryption keys
         let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);

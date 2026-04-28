@@ -4950,7 +4950,7 @@ pub mod tests {
             let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
             let balance = 1000;
-            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk_i, balance);
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
             // Add fee account commitment in curve tree
@@ -4976,7 +4976,7 @@ pub mod tests {
 
             let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                &pk_i.0,
+                sk_i.0,
                 increase_bal_by,
                 &account,
                 &updated_account,
@@ -5021,9 +5021,9 @@ pub mod tests {
             let asset_id = 1;
 
             // Investor has fee payment account with some balance
-            let (sk, _) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let balance = 1000;
-            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, sk, balance);
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
             let set = vec![account_comm.0];
@@ -5048,6 +5048,7 @@ pub mod tests {
             let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
                 fee_amount,
+                sk.0,
                 &account,
                 &updated_account,
                 updated_account_comm,
