@@ -62,7 +62,6 @@ fn create_shared_setup<const NUM_GENS: usize>(
     SelRerandProofParametersNew<VestaParameters, PallasParameters, VestaParams, PallasParams>,
     [PallasA; NUM_GENERATORS],
     PallasA,
-    PallasA,
 ) {
     let account_tree_params = SelRerandProofParametersNew::<
         PallasParameters,
@@ -82,14 +81,12 @@ fn create_shared_setup<const NUM_GENS: usize>(
     .unwrap();
 
     let account_comm_key = setup_comm_key(label);
-    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
     (
         account_tree_params,
         asset_tree_params,
         account_comm_key,
-        enc_key_gen,
         enc_gen,
     )
 }
@@ -521,9 +518,10 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     const NUM_GENS: usize = 1 << 17;
     const L: usize = 64;
 
-    let (account_tree_params, asset_tree_params, account_comm_key, enc_key_gen, enc_gen) =
+    let (account_tree_params, asset_tree_params, account_comm_key, enc_gen) =
         create_shared_setup::<NUM_GENS>(b"bench");
 
+    let enc_key_gen = account_comm_key.sk_enc_gen();
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
