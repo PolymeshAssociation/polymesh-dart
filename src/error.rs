@@ -3,7 +3,7 @@ use thiserror::Error;
 use polymesh_dart_common::{AssetId, MediatorId};
 
 use crate::{ChildIndex, LeafIndex, NodeIndex, NodeLevel};
-use ark_std::string::String;
+use ark_std::{format, string::String};
 use dock_crypto_utils::error::UtilsError;
 
 /// The errors that can occur in the Dart protocol.

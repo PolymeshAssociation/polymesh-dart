@@ -930,26 +930,28 @@ impl<
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
 
-        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
-            let public_enc_keys: Vec<PallasA> = self
-                .public_enc_keys
-                .iter()
-                .map(|pk| pk.get_affine())
-                .collect::<Result<_, _>>()?;
-            proof.verify(
-                rng,
-                leg_enc.clone(),
-                &root,
-                public_enc_keys,
-                ctx,
-                C::parameters(),
-                asset_comm_params,
-                dart_gens().enc_key_gen(),
-                dart_gens().leg_asset_value_gen(),
-                Some(rmc),
-            )?;
-            Ok(())
-        })?;
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+            |even_rmc, odd_rmc| -> Result<(), Error> {
+                let public_enc_keys: Vec<PallasA> = self
+                    .public_enc_keys
+                    .iter()
+                    .map(|pk| pk.get_affine())
+                    .collect::<Result<_, _>>()?;
+                proof.verify(
+                    rng,
+                    leg_enc.clone(),
+                    &root,
+                    public_enc_keys,
+                    ctx,
+                    C::parameters(),
+                    asset_comm_params,
+                    dart_gens().enc_key_gen(),
+                    dart_gens().leg_asset_value_gen(),
+                    Some((even_rmc, odd_rmc)),
+                )?;
+                Ok(())
+            },
+        )?;
 
         Ok(())
     }

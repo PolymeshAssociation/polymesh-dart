@@ -551,23 +551,25 @@ impl<
         ctx: &[u8],
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
     ) -> Result<(), Error> {
-        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
-            let proof = self.inner.decode()?;
-            proof.verify_split(
-                self.account.get_affine()?,
-                self.asset_id,
-                self.amount,
-                self.updated_account_state_commitment.as_commitment()?,
-                self.nullifier.get_affine()?,
-                &root,
-                ctx,
-                C::parameters(),
-                dart_gens().account_comm_key(),
-                rng,
-                Some(rmc),
-            )?;
-            Ok(())
-        })?;
+        PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
+            |even_rmc, odd_rmc| -> Result<(), Error> {
+                let proof = self.inner.decode()?;
+                proof.verify_split(
+                    self.account.get_affine()?,
+                    self.asset_id,
+                    self.amount,
+                    self.updated_account_state_commitment.as_commitment()?,
+                    self.nullifier.get_affine()?,
+                    &root,
+                    ctx,
+                    C::parameters(),
+                    dart_gens().account_comm_key(),
+                    rng,
+                    Some((even_rmc, odd_rmc)),
+                )?;
+                Ok(())
+            },
+        )?;
 
         Ok(())
     }
@@ -910,7 +912,7 @@ impl<
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
-            |(even_rmc, odd_rmc)| -> Result<(), Error> {
+            |even_rmc, odd_rmc| -> Result<(), Error> {
                 let root = tree_roots
                     .get_block_root(self.root_block.into())
                     .ok_or(Error::CurveTreeRootNotFound)?;

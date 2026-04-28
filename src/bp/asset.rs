@@ -312,7 +312,7 @@ impl<
         let proof = self.inner.decode()?;
 
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
-            |(even_rmc, odd_rmc)| -> Result<(), Error> {
+            |even_rmc, odd_rmc| -> Result<(), Error> {
                 proof.verify_split(
                     self.pk.get_affine()?,
                     self.pk_enc.get_affine()?,

@@ -308,7 +308,7 @@ macro_rules! with_balance {
                 let enc_gen = gens.leg_asset_value_gen();
 
                 PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
-                    |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                    |even_rmc, odd_rmc| -> Result<(), Error> {
                         let leg_enc_inner = leg_enc.decode()?;
                         let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
@@ -658,7 +658,7 @@ macro_rules! no_balance {
                 let enc_gen = gens.leg_asset_value_gen();
 
                 PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
-                    |(even_rmc, odd_rmc)| -> Result<(), Error> {
+                    |even_rmc, odd_rmc| -> Result<(), Error> {
                         let leg_enc_inner = leg_enc.decode()?;
                         let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 

@@ -297,7 +297,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                 VestaFr::rand(&mut local_rng),
                 PallasFr::rand(&mut local_rng),
             )
-            .with_err((), |rmcs| {
+            .with_err((), |even_rmc, odd_rmc| {
                 proof
                     .verify(
                         &mut local_rng,
@@ -311,7 +311,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                         &asset_comm_params,
                         enc_key_gen,
                         enc_gen,
-                        Some(rmcs),
+                        Some((even_rmc, odd_rmc)),
                     )
                     .unwrap();
                 Ok(())
@@ -718,7 +718,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 VestaFr::rand(&mut local_rng),
                 PallasFr::rand(&mut local_rng),
             )
-            .with_err((), |rmcs| {
+            .with_err((), |even_rmc, odd_rmc| {
                 settlement_proof
                     .verify(
                         &mut local_rng,
@@ -732,7 +732,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                         &asset_comm_params,
                         enc_key_gen,
                         enc_gen,
-                        Some(rmcs),
+                        Some((even_rmc, odd_rmc)),
                     )
                     .unwrap();
                 Ok(())
