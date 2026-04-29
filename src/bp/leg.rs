@@ -544,7 +544,7 @@ impl<
 pub struct SettlementBuilder<T: DartLimits = ()> {
     pub memo: Vec<u8>,
     pub legs: Vec<LegBuilder>,
-    paths: Option<MultiLeafPathAndRoot<ASSET_TREE_L, ACCOUNT_TREE_M, AssetTreeConfig>>,
+    paths: Option<MultiLeafPathAndRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>>,
     _marker: core::marker::PhantomData<T>,
 }
 
