@@ -16,14 +16,14 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::{
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS,
     MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
-    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx_impl;
 
 pub mod encode;
-pub use encode::{CompressedAffine, WrappedCanonical};
+pub use encode::{BoundedCanonical, CompressedAffine, WrappedCanonical};
 
 mod account;
 pub use account::*;
@@ -63,7 +63,10 @@ use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 
 /// Use `GetExtra` as the trait bounds for pallet `Config` parameters
 /// that will be used for bounded collections.
-pub trait GetExtra<T>: Get<T> + Clone + core::fmt::Debug + Default + PartialEq + Eq {}
+pub trait GetExtra<T>:
+    Get<T> + Clone + core::fmt::Debug + Default + PartialEq + Eq + Send + Sync + 'static
+{
+}
 
 /// ConstSize type wrapper.
 ///
@@ -79,7 +82,7 @@ impl<const T: u32> Get<u32> for ConstSize<T> {
 
 impl<const T: u32> GetExtra<u32> for ConstSize<T> {}
 
-pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
+pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq + Send + Sync + 'static {
     /// The maximum number of keys in an account registration proof.
     type MaxKeysPerRegProof: GetExtra<u32>;
 
@@ -109,6 +112,9 @@ pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
 
     /// The maximum number of asset encryption keys (for both auditors and mediators) in the asset state.
     type MaxAssetEncryptionKeys: GetExtra<u32>;
+
+    /// The maximum inner proof size.
+    type MaxInnerProofSize: GetExtra<u32>;
 }
 
 impl DartLimits for () {
@@ -122,12 +128,13 @@ impl DartLimits for () {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolymeshPrivateLimits;
+pub struct PolymeshLimits;
 
-impl DartLimits for PolymeshPrivateLimits {
+impl DartLimits for PolymeshLimits {
     type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
     type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
@@ -138,6 +145,7 @@ impl DartLimits for PolymeshPrivateLimits {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
 pub type LeafIndex = u64;
@@ -445,7 +453,7 @@ mod tests {
         )
         .unwrap();
 
-        let proof = protocol.finish(&device_response).unwrap();
+        let proof = protocol.finish::<()>(&device_response).unwrap();
 
         proof.verify(ctx).unwrap();
     }
@@ -498,7 +506,7 @@ mod tests {
 
         let tree_params = FeeAccountTreeConfig::parameters();
         let proof = protocol
-            .finish(&mut rng, &device_response, tree_params)
+            .finish::<_, ()>(&mut rng, &device_response, tree_params)
             .unwrap();
 
         let root = fee_tree.root().unwrap().root_node().unwrap();
@@ -533,7 +541,7 @@ mod tests {
         fee_tree.insert(leaf).unwrap();
         fee_tree.store_root().unwrap();
 
-        let topup_proof = FeeAccountTopupProof::new(
+        let topup_proof = FeeAccountTopupProof::<()>::new(
             &mut rng,
             &keys.acct,
             &mut fee_state,
@@ -582,7 +590,7 @@ mod tests {
         let root_block = fee_tree.get_block_number().unwrap();
         let tree_params = FeeAccountTreeConfig::parameters();
         let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
+            .finish::<_, ()>(&mut rng, &device_response, root_block, tree_params)
             .unwrap();
 
         proof.verify(&mut rng, ctx, root).unwrap();
@@ -619,7 +627,7 @@ mod tests {
         )
         .unwrap();
 
-        let proof = protocol
+        let proof: AccountAssetRegistrationProof<()> = protocol
             .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
@@ -741,7 +749,7 @@ mod tests {
         let root = account_tree.root().unwrap();
         let root_block = account_tree.get_block_number().unwrap();
         let tree_params = AccountTreeConfig::parameters();
-        let proof = protocol
+        let proof: AssetMintingProof<()> = protocol
             .finish(&mut rng, &device_response, root_block, tree_params)
             .unwrap();
 
@@ -880,7 +888,9 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let proof = protocol.finish(&mut rng, &device_response).unwrap();
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
 
             let root = account_tree.root().unwrap();
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -946,7 +956,9 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let proof = protocol.finish(&mut rng, &device_response).unwrap();
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
 
             let root = account_tree.root().unwrap();
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1001,7 +1013,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1052,7 +1066,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1103,7 +1119,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1174,7 +1192,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1226,7 +1246,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1277,7 +1299,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();

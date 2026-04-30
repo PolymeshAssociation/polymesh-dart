@@ -15,7 +15,9 @@ use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
 use rand_core::{CryptoRng, RngCore};
 
 use super::*;
-use crate::{auth_proofs::create_registration_auth_proof, mint_split::MintHostProtocol, *};
+use crate::{
+    BoundedCanonical, auth_proofs::create_registration_auth_proof, mint_split::MintHostProtocol, *,
+};
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
 #[derive(Clone, Debug, Encode, Decode, Default, DecodeWithMemTracking, TypeInfo)]
@@ -238,7 +240,7 @@ type BPMintTxnProof<C> = MintTxnProof<
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(C))]
-pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
+pub struct AssetMintingProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.
     pub pk: AccountPublicKey,
     pub pk_enc: EncryptionPublicKey,
@@ -248,17 +250,18 @@ pub struct AssetMintingProof<C: CurveTreeConfig = AccountTreeConfig> {
     pub updated_account_state_commitment: AccountStateCommitment,
     pub nullifier: AccountStateNullifier,
 
-    pub(crate) inner: WrappedCanonical<BPMintTxnProof<C>>,
+    pub(crate) inner: BoundedCanonical<BPMintTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
             F1 = <VestaParameters as CurveConfig>::ScalarField,
             P0 = PallasParameters,
             P1 = VestaParameters,
         >,
-> AssetMintingProof<C>
+> AssetMintingProof<T, C>
 {
     /// Generate a new asset minting proof.
     pub fn new<R: RngCore + CryptoRng>(
@@ -336,7 +339,7 @@ impl<
     }
 }
 
-impl<C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<C> {
+impl<T: DartLimits, C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof<T, C> {
     fn account_state_commitment(&self) -> AccountStateCommitment {
         self.updated_account_state_commitment
     }

@@ -22,6 +22,7 @@ use polymesh_dart_common::NullifierSkGenCounter;
 use super::*;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::auth_proofs::create_registration_auth_proof;
+use crate::encode::BoundedCanonical;
 use crate::*;
 
 pub(crate) type BPAccountState = bp_account::AccountState<PallasA>;
@@ -340,7 +341,7 @@ impl AccountAssetState {
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedAccountAssetRegistrationProof<T: DartLimits = ()> {
-    pub proofs: BoundedVec<AccountAssetRegistrationProof, T::MaxAccountAssetRegProofs>,
+    pub proofs: BoundedVec<AccountAssetRegistrationProof<T>, T::MaxAccountAssetRegProofs>,
 }
 
 impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
@@ -513,16 +514,18 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
 
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct AccountAssetRegistrationProof {
+#[scale_info(skip_type_params(T))]
+pub struct AccountAssetRegistrationProof<T: DartLimits = ()> {
     pub account: AccountPublicKeys,
     pub asset_id: AssetId,
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
 
-    pub(crate) inner: WrappedCanonical<account_registration::RegTxnProof<PallasA>>,
+    pub(crate) inner:
+        BoundedCanonical<account_registration::RegTxnProof<PallasA>, T::MaxInnerProofSize>,
 }
 
-impl AccountAssetRegistrationProof {
+impl<T: DartLimits> AccountAssetRegistrationProof<T> {
     /// Generate a new account state for an asset and a registration proof for it.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,

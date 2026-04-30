@@ -294,16 +294,17 @@ impl FeeAccountAssetState {
 
 /// Fee account registration proof to initialize an account for an fee payment asset.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct FeeAccountRegistrationProof {
+#[scale_info(skip_type_params(T))]
+pub struct FeeAccountRegistrationProof<T: DartLimits = ()> {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
     pub amount: Balance,
     pub account_state_commitment: FeeAccountStateCommitment,
 
-    pub(crate) inner: WrappedCanonical<bp_fee_account::RegTxnProof<PallasA>>,
+    pub(crate) inner: BoundedCanonical<bp_fee_account::RegTxnProof<PallasA>, T::MaxInnerProofSize>,
 }
 
-impl FeeAccountRegistrationProof {
+impl<T: DartLimits> FeeAccountRegistrationProof<T> {
     /// Generate a new account state for an asset and a registration proof for it.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
@@ -348,7 +349,7 @@ impl FeeAccountRegistrationProof {
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub struct BatchedFeeAccountRegistrationProof<T: DartLimits = ()> {
-    pub proofs: BoundedVec<FeeAccountRegistrationProof, T::MaxFeeAccountRegProofs>,
+    pub proofs: BoundedVec<FeeAccountRegistrationProof<T>, T::MaxFeeAccountRegProofs>,
 }
 
 impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
@@ -460,25 +461,26 @@ type BPFeeAccountTopupTxnProof<C> = bp_fee_account::FeeAccountTopupTxnProof<
 
 /// Fee payment account topup proof.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub struct FeeAccountTopupProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub struct FeeAccountTopupProof<T: DartLimits = (), C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub account: AccountPublicKey,
     pub asset_id: AssetId,
     pub amount: Balance,
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    pub(crate) inner: WrappedCanonical<BPFeeAccountTopupTxnProof<C>>,
+    pub(crate) inner: BoundedCanonical<BPFeeAccountTopupTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
             F1 = <VestaParameters as CurveConfig>::ScalarField,
             P0 = PallasParameters,
             P1 = VestaParameters,
         >,
-> FeeAccountTopupProof<C>
+> FeeAccountTopupProof<T, C>
 {
     /// Generate a new topup proof for the given state change.
     pub fn new<R: RngCore + CryptoRng>(
@@ -580,7 +582,7 @@ pub struct BatchedFeeAccountTopupProof<
 > {
     pub root_block: BlockNumber,
 
-    pub proofs: BoundedVec<FeeAccountTopupProof<C>, T::MaxFeeAccountTopupProofs>,
+    pub proofs: BoundedVec<FeeAccountTopupProof<T, C>, T::MaxFeeAccountTopupProofs>,
 }
 
 impl<
@@ -821,25 +823,26 @@ impl<
 }
 
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub struct FeeAccountPaymentProof<C: CurveTreeConfig = FeeAccountTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub struct FeeAccountPaymentProof<T: DartLimits = (), C: CurveTreeConfig = FeeAccountTreeConfig> {
     pub asset_id: AssetId,
     pub amount: Balance,
     pub root_block: BlockNumber,
     pub updated_account_state_commitment: FeeAccountStateCommitment,
     pub nullifier: FeeAccountStateNullifier,
 
-    pub(crate) inner: WrappedCanonical<BPFeePaymentSplitProof<C>>,
+    pub(crate) inner: BoundedCanonical<BPFeePaymentSplitProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <PallasParameters as CurveConfig>::ScalarField,
             F1 = <VestaParameters as CurveConfig>::ScalarField,
             P0 = PallasParameters,
             P1 = VestaParameters,
         >,
-> FeeAccountPaymentProof<C>
+> FeeAccountPaymentProof<T, C>
 {
     /// Generate a new payment proof for the given fee payment account.
     pub fn new<R: RngCore + CryptoRng>(
@@ -985,7 +988,7 @@ pub struct FeePaymentWithBatchedProofs<
     T: DartLimits = (),
     C: CurveTreeConfig = FeeAccountTreeConfig,
 > {
-    pub fee_payment: FeeAccountPaymentProof<C>,
+    pub fee_payment: FeeAccountPaymentProof<T, C>,
     pub batched_proofs: BatchedProofs<T>,
 }
 

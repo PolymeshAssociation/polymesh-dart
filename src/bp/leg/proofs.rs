@@ -5,7 +5,6 @@ use rand_core::{CryptoRng, RngCore};
 
 use bounded_collections::BoundedVec;
 
-use super::WrappedCanonical;
 use super::*;
 use polymesh_dart_bp::leg::mediator;
 use polymesh_dart_common::{LegId, MediatorId};
@@ -13,11 +12,14 @@ use polymesh_dart_common::{LegId, MediatorId};
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct BatchedSettlementLegAffirmations<C: CurveTreeConfig = AccountTreeConfig> {
+pub struct BatchedSettlementLegAffirmations<
+    T: DartLimits = (),
+    C: CurveTreeConfig = AccountTreeConfig,
+> {
     /// The sender's affirmation proof.
-    pub sender: Option<SenderAffirmationProof<C>>,
+    pub sender: Option<SenderAffirmationProof<T, C>>,
     /// The receiver's affirmation proof.
-    pub receiver: Option<ReceiverAffirmationProof<C>>,
+    pub receiver: Option<ReceiverAffirmationProof<T, C>>,
 }
 
 /// A batched settlement proof allows including the sender and receiver affirmation proofs
@@ -34,7 +36,7 @@ pub struct BatchedSettlementProof<
     pub settlement: SettlementProof<T, C>,
 
     /// The leg affirmations for each leg in the settlement.
-    pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<A>, T::MaxSettlementLegs>,
+    pub leg_affirmations: BoundedVec<BatchedSettlementLegAffirmations<T, A>, T::MaxSettlementLegs>,
 }
 
 impl<
@@ -101,15 +103,16 @@ impl<
 
 /// Mediator affirmation proof in the Dart BP protocol.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct MediatorAffirmationProof {
+#[scale_info(skip_type_params(T))]
+pub struct MediatorAffirmationProof<T: DartLimits = ()> {
     pub leg_ref: LegRef,
     pub accept: bool,
     pub key_index: MediatorId,
 
-    inner: WrappedCanonical<mediator::MediatorTxnProof<PallasA>>,
+    inner: BoundedCanonical<mediator::MediatorTxnProof<PallasA>, T::MaxInnerProofSize>,
 }
 
-impl MediatorAffirmationProof {
+impl<T: DartLimits> MediatorAffirmationProof<T> {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
@@ -134,7 +137,7 @@ impl MediatorAffirmationProof {
             accept,
             key_index,
 
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 

@@ -75,13 +75,13 @@ impl AccountRegHostProtocol {
         ))
     }
 
-    pub fn finish<R: RngCore + CryptoRng>(
+    pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
         device_response: &TwoSksDeviceResponse,
         counter: NullifierSkGenCounter,
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
-    ) -> Result<AccountAssetRegistrationProof, Error> {
+    ) -> Result<AccountAssetRegistrationProof<T>, Error> {
         let auth_proof = device_response.0.decode()?;
 
         let challenge_h_final =
@@ -107,7 +107,7 @@ impl AccountRegHostProtocol {
             asset_id: self.account_state.asset_id(),
             counter,
             account_state_commitment: self.account_state.current_commitment()?,
-            inner: WrappedCanonical::wrap(&bp_proof)?,
+            inner: BoundedCanonical::wrap(&bp_proof)?,
         })
     }
 }

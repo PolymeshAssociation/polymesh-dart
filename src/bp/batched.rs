@@ -32,15 +32,15 @@ pub struct ProofHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] p
 #[scale_info(skip_type_params(T))]
 pub enum BatchedProof<T: DartLimits = ()> {
     CreateSettlement(SettlementProof<T>),
-    SenderAffirmation(SenderAffirmationProof),
-    ReceiverAffirmation(ReceiverAffirmationProof),
-    MediatorAffirmation(MediatorAffirmationProof),
-    SenderCounterUpdate(SenderCounterUpdateProof),
-    SenderReversal(SenderReversalProof),
-    ReceiverClaim(ReceiverClaimProof),
+    SenderAffirmation(SenderAffirmationProof<T>),
+    ReceiverAffirmation(ReceiverAffirmationProof<T>),
+    MediatorAffirmation(MediatorAffirmationProof<T>),
+    SenderCounterUpdate(SenderCounterUpdateProof<T>),
+    SenderReversal(SenderReversalProof<T>),
+    ReceiverClaim(ReceiverClaimProof<T>),
     ExecuteInstantSettlement(InstantSettlementProof<T>),
-    InstantSenderAffirmation(InstantSenderAffirmationProof),
-    InstantReceiverAffirmation(InstantReceiverAffirmationProof),
+    InstantSenderAffirmation(InstantSenderAffirmationProof<T>),
+    InstantReceiverAffirmation(InstantReceiverAffirmationProof<T>),
 }
 
 /// A batch of DART proofs.
