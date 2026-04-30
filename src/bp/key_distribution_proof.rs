@@ -1,3 +1,4 @@
+use bounded_collections::BoundedVec;
 use codec::{Decode, Encode};
 use scale_info::TypeInfo;
 
@@ -5,7 +6,7 @@ use super::{
     AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
     dart_gens,
 };
-use crate::{PallasA, PallasScalar, WrappedCanonical};
+use crate::{BoundedCanonical, DartLimits, PallasA, PallasScalar};
 use ark_ec::AffineRepr;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
@@ -18,15 +19,16 @@ use rand_core::{CryptoRng, RngCore};
 /// The proof owner distributes their encryption secret key to `recipient_pks`
 /// so each recipient can independently decrypt it.
 #[derive(Clone, Encode, Decode, Debug, TypeInfo, PartialEq, Eq)]
-pub struct KeyDistributionProof {
+#[scale_info(skip_type_params(T))]
+pub struct KeyDistributionProof<T: DartLimits = ()> {
     /// The public key corresponding to the distributed secret key (`enc_key_gen * sk`).
     pub public_key: EncryptionPublicKey,
     /// The recipient public keys the secret was distributed to.
-    pub recipient_pks: Vec<EncryptionPublicKey>,
-    inner: WrappedCanonical<key_distribution::KeyDistributionProof<PallasA>>,
+    pub recipient_pks: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
+    inner: BoundedCanonical<key_distribution::KeyDistributionProof<PallasA>, T::MaxInnerProofSize>,
 }
 
-impl KeyDistributionProof {
+impl<T: DartLimits> KeyDistributionProof<T> {
     /// Generate a key distribution proof proving that `enc_key` has been correctly
     /// split and encrypted for each entry in `recipient_pks`.
     ///
@@ -60,8 +62,11 @@ impl KeyDistributionProof {
 
         Ok(Self {
             public_key: pk_enc.clone(),
-            recipient_pks: recipient_pks.to_vec(),
-            inner: WrappedCanonical::wrap(&proof)?,
+            recipient_pks: recipient_pks
+                .to_vec()
+                .try_into()
+                .map_err(|_| Error::TooManyPublicInputsInProof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 

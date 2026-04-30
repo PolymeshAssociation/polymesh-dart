@@ -24,14 +24,14 @@ fn ledger_nonce(challenge_h_bytes: &[u8], nonce: &[u8]) -> Vec<u8> {
 /// Create `AuthProofOnlySk` for fee registration and fee topup proofs (1 key).
 pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    sk: PallasScalar,
+    key: &AccountKeyPair,
     request: &FeeAccountDeviceRequest,
     sk_gen: PallasA,
 ) -> Result<SingleSkDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk = PallasA::try_from(&request.pk)?;
 
-    let proof = BPAuthProofOnlySk::new(rng, sk, pk, &nonce, &sk_gen)?;
+    let proof = BPAuthProofOnlySk::new(rng, key.secret.0.0, pk, &nonce, &sk_gen)?;
 
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
 }
@@ -39,8 +39,7 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofOnlySks` for account registration and mint proofs (2 keys).
 pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    sk: PallasScalar,
-    sk_enc: PallasScalar,
+    keys: &AccountKeys,
     request: &RegistrationDeviceRequest,
     sk_gen: PallasA,
     sk_enc_gen: PallasA,
@@ -51,8 +50,8 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofOnlySks::new(
         rng,
-        sk,
-        sk_enc,
+        keys.acct.secret.0.0,
+        keys.enc.secret.0.0,
         pk_aff,
         pk_enc,
         &nonce,
@@ -66,7 +65,7 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofFeePayment` for fee payment proofs.
 pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    sk: PallasScalar,
+    key: &AccountKeyPair,
     request: &FeePaymentDeviceRequest,
     sk_gen: PallasA,
     randomness_gen: PallasA,
@@ -81,7 +80,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofFeePayment::new(
         rng,
-        sk,
+        key.secret.0.0,
         auth_rerandomization,
         auth_new_randomness,
         &rerandomized_leaf,
@@ -99,8 +98,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofAffirmation` for affirmation/claim/reversal/counter-update proofs.
 pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    sk: PallasScalar,
-    sk_enc: PallasScalar,
+    keys: &AccountKeys,
     request: &AffirmationDeviceRequest,
     sk_gen: PallasA,
     enc_key_gen: PallasA,
@@ -133,8 +131,8 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofAffirmation::new(
         rng,
-        sk,
-        sk_enc,
+        keys.acct.secret.0.0,
+        keys.enc.secret.0.0,
         auth_rerandomization,
         auth_rand_new_comm,
         k_amounts,

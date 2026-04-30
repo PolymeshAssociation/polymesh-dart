@@ -17,11 +17,11 @@ pub struct InstantSettlementLegAffirmations<
     C: CurveTreeConfig = AccountTreeConfig,
 > {
     /// The sender's affirmation proof.
-    pub sender: InstantSenderAffirmationProof<C>,
+    pub sender: InstantSenderAffirmationProof<T, C>,
     /// The receiver's affirmation proof.
-    pub receiver: InstantReceiverAffirmationProof<C>,
+    pub receiver: InstantReceiverAffirmationProof<T, C>,
     /// The mediator affirmation proofs.
-    pub mediators: BoundedVec<MediatorAffirmationProof, T::MaxAssetMediators>,
+    pub mediators: BoundedVec<MediatorAffirmationProof<T>, T::MaxAssetMediators>,
 }
 
 /// A batched settlement proof allows including the sender and receiver affirmation proofs

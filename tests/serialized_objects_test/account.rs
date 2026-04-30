@@ -149,9 +149,14 @@ pub fn gen_encryption_key_registration_proof() {
 pub fn gen_fee_account_registration_proof() {
     let mut rng = default_rng();
     let fee_keys = alice_keys();
-    let (proof, _) =
-        FeeAccountRegistrationProof::new(&mut rng, &fee_keys.acct, ASSET_ID_1, BALANCE, IDENTITY)
-            .unwrap();
+    let (proof, _) = FeeAccountRegistrationProof::<()>::new(
+        &mut rng,
+        &fee_keys.acct,
+        ASSET_ID_1,
+        BALANCE,
+        IDENTITY,
+    )
+    .unwrap();
     save_scale_v1(FEE_ACCOUNT_REGISTRATION_PROOF, &proof);
 }
 
@@ -159,7 +164,7 @@ pub fn gen_account_asset_registration_proof() {
     let mut rng = default_rng();
     let tree_params = AccountTreeConfig::parameters();
     let asset_reg_keys = alice_keys();
-    let (proof, _) = AccountAssetRegistrationProof::new(
+    let (proof, _) = AccountAssetRegistrationProof::<()>::new(
         &mut rng,
         &asset_reg_keys,
         ASSET_ID_1,
@@ -231,7 +236,7 @@ pub fn gen_key_distribution_proof_2_recipients() {
         .iter()
         .map(|s| AccountKeys::from_seed(s).unwrap().enc.public)
         .collect();
-    let proof = KeyDistributionProof::new(
+    let proof = KeyDistributionProof::<()>::new(
         &mut rng,
         dist_keys.enc.secret.clone(),
         &dist_keys.enc.public,
@@ -251,7 +256,7 @@ pub fn gen_key_distribution_proof_3_recipients() {
         .iter()
         .map(|s| AccountKeys::from_seed(s).unwrap().enc.public)
         .collect();
-    let proof = KeyDistributionProof::new(
+    let proof = KeyDistributionProof::<()>::new(
         &mut rng,
         dist_keys.enc.secret.clone(),
         &dist_keys.enc.public,
@@ -268,7 +273,7 @@ pub fn gen_asset_minting_proof() {
     let keys = alice_keys();
     let (mut asset_state, _) = AccountAssetState::new(&keys, ASSET_ID_1, 0u16, IDENTITY).unwrap();
     let account_tree = alice_account_tree(&keys);
-    let proof = AssetMintingProof::new(
+    let proof = AssetMintingProof::<()>::new(
         &mut rng,
         &keys,
         IDENTITY,

@@ -398,6 +398,7 @@ impl LegBuilder {
 
     pub fn encrypt_and_prove<
         R: RngCore + CryptoRng,
+        T: DartLimits,
         C: CurveTreeConfig<
                 F0 = <VestaParameters as CurveConfig>::ScalarField,
                 F1 = <PallasParameters as CurveConfig>::ScalarField,
@@ -409,7 +410,7 @@ impl LegBuilder {
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
-    ) -> Result<AnySettlementLegProof<C>, Error> {
+    ) -> Result<AnySettlementLegProof<T, C>, Error> {
         let asset_id = self.asset.asset_id;
         let leg = Leg::new(
             self.sender.enc,
@@ -459,22 +460,23 @@ impl LegBuilder {
 /// When the asset-id is hidden, the proof includes a curve tree membership proof.
 /// When the asset-id is revealed, a simpler proof (`PublicAssetLegCreationProof`) is used instead.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub enum AnySettlementLegProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     /// Asset ID is hidden; uses `SettlementLegProof` with curve-tree membership.
-    HiddenAssetId(SettlementLegProof<C>),
+    HiddenAssetId(SettlementLegProof<T, C>),
     /// Asset ID is publicly revealed; uses `SettlementLegProofRevealedAssetId`.
-    RevealedAssetId(SettlementLegProofRevealedAssetId),
+    RevealedAssetId(SettlementLegProofRevealedAssetId<T>),
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
             F1 = <PallasParameters as CurveConfig>::ScalarField,
             P0 = VestaParameters,
             P1 = PallasParameters,
         >,
-> AnySettlementLegProof<C>
+> AnySettlementLegProof<T, C>
 {
     pub fn leg_enc(&self) -> &LegEncrypted {
         match self {
@@ -658,7 +660,7 @@ pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeCon
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     pub root_block: BlockNumber,
 
-    pub legs: BoundedVec<AnySettlementLegProof<C>, T::MaxSettlementLegs>,
+    pub legs: BoundedVec<AnySettlementLegProof<T, C>, T::MaxSettlementLegs>,
 }
 
 impl<
@@ -856,23 +858,24 @@ type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub struct SettlementLegProof<T: DartLimits, C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: WrappedCanonical<BPSettlementTxnProof<C>>,
+    inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
             F1 = <PallasParameters as CurveConfig>::ScalarField,
             P0 = VestaParameters,
             P1 = PallasParameters,
         >,
-> SettlementLegProof<C>
+> SettlementLegProof<T, C>
 {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
@@ -907,7 +910,7 @@ impl<
             leg_enc,
             public_enc_keys,
 
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 
@@ -1013,18 +1016,20 @@ fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
 /// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
 /// The auditor and mediator public keys are also known to the verifier.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SettlementLegProofRevealedAssetId {
+#[scale_info(skip_type_params(T))]
+pub struct SettlementLegProofRevealedAssetId<T: DartLimits> {
     pub asset_id: AssetId,
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: WrappedCanonical<
+    inner: BoundedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
+        T::MaxInnerProofSize,
     >,
 }
 
-impl SettlementLegProofRevealedAssetId {
+impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg: bp_leg::Leg<PallasA>,
@@ -1053,7 +1058,7 @@ impl SettlementLegProofRevealedAssetId {
             asset_id,
             leg_enc,
             public_enc_keys,
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 
