@@ -203,13 +203,6 @@ impl AccountPublicKey {
 )]
 pub struct AccountSecretKey(pub(crate) bp_keys::SigKey<PallasA>);
 
-impl AccountSecretKey {
-    /// Gets the inner signing key.
-    pub fn inner(&self) -> &bp_keys::SigKey<PallasA> {
-        &self.0
-    }
-}
-
 /// The account key pair, consisting of the public and secret keys.
 #[derive(
     Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Zeroize, ZeroizeOnDrop,

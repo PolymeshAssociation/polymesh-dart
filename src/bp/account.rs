@@ -543,8 +543,7 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
 
         let device_response = create_registration_auth_proof(
             rng,
-            keys.acct.secret.0.0,
-            keys.enc.secret.0.0,
+            keys,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),

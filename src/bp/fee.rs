@@ -321,7 +321,7 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
 
         let device_response = create_fee_account_auth_proof(
             rng,
-            key.secret.0.0,
+            key,
             &device_request,
             gens.account_comm_key().sk_gen(),
         )?;
@@ -502,7 +502,7 @@ impl<
 
         let device_response = create_fee_account_auth_proof(
             rng,
-            key.secret.0.0,
+            key,
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )?;
@@ -863,7 +863,7 @@ impl<
         let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
         let device_response = create_fee_payment_auth_proof(
             rng,
-            key.secret.0.0,
+            key,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().randomness_gen(),

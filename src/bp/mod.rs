@@ -444,10 +444,9 @@ mod tests {
         let (protocol, device_request) =
             FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, ctx).unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
@@ -495,10 +494,9 @@ mod tests {
         )
         .unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
@@ -568,7 +566,6 @@ mod tests {
         )
         .unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let gens = dart_gens();
         let tree_params_for_gens = FeeAccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params_for_gens
@@ -578,7 +575,7 @@ mod tests {
             .B_blinding;
         let device_response = create_fee_payment_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().randomness_gen(),
@@ -615,12 +612,9 @@ mod tests {
                 .unwrap();
 
         let gens = dart_gens();
-        let sk = keys.acct.secret.0.0;
-        let sk_enc = keys.enc.secret.0.0;
         let device_response = create_registration_auth_proof(
             &mut rng,
-            sk,
-            sk_enc,
+            &keys,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -661,8 +655,7 @@ mod tests {
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
             &mut rng,
-            keys1.acct.secret.0.0,
-            keys1.enc.secret.0.0,
+            &keys1,
             &device_request1,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -670,8 +663,7 @@ mod tests {
         .unwrap();
         let device_response2 = create_registration_auth_proof(
             &mut rng,
-            keys2.acct.secret.0.0,
-            keys2.enc.secret.0.0,
+            &keys2,
             &device_request2,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -734,12 +726,9 @@ mod tests {
         .unwrap();
 
         let gens = dart_gens();
-        let sk = keys.acct.secret.0.0;
-        let sk_enc = keys.enc.secret.0.0;
         let device_response = create_registration_auth_proof(
             &mut rng,
-            sk,
-            sk_enc,
+            &keys,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -765,8 +754,7 @@ mod tests {
         let gens = dart_gens();
         create_affirmation_auth_proof(
             rng,
-            keys.acct.secret.0.0,
-            keys.enc.secret.0.0,
+            keys,
             request,
             gens.account_comm_key().sk_gen(),
             gens.enc_key_gen(),
