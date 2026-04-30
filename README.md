@@ -47,6 +47,32 @@ The library provides several feature flags:
 - `parallel` - Enable parallel computation for improved performance
 - `async_tree` - Enable asynchronous curve tree operations
 
+## Testing
+
+Tests that check against serialized data to detect breaking changes are run as
+```
+cargo test -r --test serialized_objects_test
+```
+
+To create the serialized data, run
+```
+cargo test -r --test serialized_objects_test generate_v1_serialized_objects -- --ignored
+```
+
+## Code coverage
+
+Run code coverage as 
+```
+cargo llvm-cov -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
+```
+
+To get report in HTML, install `lcov` and run run
+```
+genhtml -o target/coverage/html target/coverage/lcov.info
+```
+
+This will generate a `target/coverage/html/index.html` file.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
