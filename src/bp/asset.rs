@@ -239,7 +239,7 @@ type BPMintTxnProof<C> = MintTxnProof<
 
 /// Asset minting proof.  Report section 5.1.4 "Increase Asset Supply".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
+#[scale_info(skip_type_params(T, C))]
 pub struct AssetMintingProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
     // Public inputs.
     pub pk: AccountPublicKey,

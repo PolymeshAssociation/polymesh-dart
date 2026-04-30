@@ -381,7 +381,10 @@ impl TypeInfo for AccountCommitmentKey {
                     .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("rho_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("current_rho_gen").ty::<CompressedAffine>())
-                    .field(|f| f.name("randomness_gen").ty::<CompressedAffine>()),
+                    .field(|f| f.name("randomness_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("current_randomness_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("identity_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("sk_gen").ty::<CompressedAffine>()),
             )
     }
 }
@@ -566,7 +569,7 @@ impl<T: 'static, S: Get<u32> + 'static> TypeInfo for BoundedCanonical<T, S> {
 
         Type::builder()
             .path(Path::new(ident, module_path))
-            .composite(Fields::unnamed().field(|f| f.ty::<Vec<u8>>()))
+            .composite(Fields::unnamed().field(|f| f.ty::<BoundedVec<u8, S>>()))
     }
 }
 

@@ -21,7 +21,7 @@ pub struct InstantSettlementLegAffirmations<
     /// The receiver's affirmation proof.
     pub receiver: InstantReceiverAffirmationProof<T, C>,
     /// The mediator affirmation proofs.
-    pub mediators: BoundedVec<MediatorAffirmationProof, T::MaxAssetMediators>,
+    pub mediators: BoundedVec<MediatorAffirmationProof<T>, T::MaxAssetMediators>,
 }
 
 /// A batched settlement proof allows including the sender and receiver affirmation proofs

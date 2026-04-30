@@ -9,6 +9,7 @@ use ark_std::vec::Vec;
 use blake2::Blake2b512;
 use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use digest::Digest;
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
@@ -18,6 +19,7 @@ use polymesh_dart_common::{
     MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
     MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
+use scale_info::TypeInfo;
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx_impl;
@@ -82,7 +84,21 @@ impl<const T: u32> Get<u32> for ConstSize<T> {
 
 impl<const T: u32> GetExtra<u32> for ConstSize<T> {}
 
-pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq + Send + Sync + 'static {
+pub trait DartLimits:
+    Clone
+    + Copy
+    + Sized
+    + PartialEq
+    + Eq
+    + core::fmt::Debug
+    + Encode
+    + Decode
+    + DecodeWithMemTracking
+    + TypeInfo
+    + Send
+    + Sync
+    + 'static
+{
     /// The maximum number of keys in an account registration proof.
     type MaxKeysPerRegProof: GetExtra<u32>;
 
@@ -131,7 +147,7 @@ impl DartLimits for () {
     type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 pub struct PolymeshLimits;
 
 impl DartLimits for PolymeshLimits {

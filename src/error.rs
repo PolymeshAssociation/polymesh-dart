@@ -113,10 +113,6 @@ pub enum Error {
     #[error("Too many public inputs in proof")]
     TooManyPublicInputsInProof,
 
-    /// Proof size exceeds maximum allowed size.
-    #[error("Proof size exceeds maximum allowed size")]
-    ProofSizeExceedsLimit,
-
     /// Bounded Canonical value exceeds the specified bound.
     #[error("Bounded Canonical value exceeds the specified bound")]
     ValueExceedsBound,

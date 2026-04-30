@@ -12,6 +12,7 @@ use polymesh_dart_common::{LegId, MediatorId};
 /// Represents the affirmation proofs for each leg in a settlement.
 /// This includes the sender, and receiver affirmation proofs.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
+#[scale_info(skip_type_params(T))]
 pub struct BatchedSettlementLegAffirmations<
     T: DartLimits = (),
     C: CurveTreeConfig = AccountTreeConfig,

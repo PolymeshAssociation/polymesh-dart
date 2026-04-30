@@ -226,7 +226,7 @@ macro_rules! with_balance {
         }
 
         #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-        #[scale_info(skip_type_params(C))]
+        #[scale_info(skip_type_params(T, C))]
         pub struct $SplitProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
             pub leg_ref: LegRef,
             pub root_block: BlockNumber,
@@ -579,7 +579,7 @@ macro_rules! no_balance {
         }
 
         #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-        #[scale_info(skip_type_params(C))]
+        #[scale_info(skip_type_params(T, C))]
         pub struct $SplitProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
             pub leg_ref: LegRef,
             pub root_block: BlockNumber,
