@@ -489,39 +489,6 @@ impl<
         ctx: &[u8],
         tree_lookup: &impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        /*
-        let state_change = account_state.topup(amount)?;
-        let updated_account_state_commitment = state_change.commitment()?;
-        let current_account_path = state_change.get_path(tree_lookup)?;
-
-        let root = tree_lookup.root()?;
-        let root = root.root_node()?;
-
-        let (proof, nullifier) = bp_fee_account::FeeAccountTopupTxnProof::new::<_, _, _>(
-            rng,
-            key.secret.0.0,
-            amount,
-            &state_change.current_state,
-            &state_change.new_state,
-            state_change.new_commitment,
-            current_account_path,
-            &root,
-            ctx,
-            tree_lookup.params(),
-            dart_gens().account_comm_key(),
-        )?;
-        Ok(Self {
-            account: key.public,
-            asset_id: state_change.new_state.asset_id,
-            amount,
-            updated_account_state_commitment,
-            nullifier: FeeAccountStateNullifier::from_affine(nullifier)?,
-
-            inner: WrappedCanonical::wrap(&proof)?,
-        })
-        // */
-
-        //*
         let (protocol, device_request) = FeeTopupHostProtocol::<C>::init(
             rng,
             &key.public,
@@ -541,7 +508,6 @@ impl<
         let proof = protocol.finish(rng, &device_response, tree_lookup.params())?;
 
         Ok(proof)
-        // */
     }
 
     /// Verifies the topup proof against the provided public key, asset ID, amount, and account state commitment.

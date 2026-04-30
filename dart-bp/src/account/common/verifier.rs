@@ -9,11 +9,10 @@ use crate::account::{
     AccountCommitmentKeyTrait, AccountStateCommitment, AmountCiphertext, CommonStateChangeProof,
 };
 use crate::util::{
-    add_verification_tuples_to_rmc, bp_gens_vec_for_randomness_relations,
-    enforce_balance_change_verifier,
+    bp_gens_vec_for_randomness_relations, enforce_balance_change_verifier,
     enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
     enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng,
-    take_challenge_contrib_of_sigma_t_values_for_balance_change, verify_given_verification_tuples,
+    handle_verification_tuples, take_challenge_contrib_of_sigma_t_values_for_balance_change,
     verify_sigma_for_balance_change, verify_sigma_for_common_state_change,
 };
 use crate::{
@@ -163,16 +162,7 @@ impl<
             rmc_0,
         )?;
 
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
-        }
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 
     /// Verifies the proof except for final Bulletproof verification
@@ -1305,16 +1295,7 @@ impl<
             rng,
             rmc_0,
         )?;
-        match rmc {
-            Some((rmc_0, rmc_1)) => add_verification_tuples_to_rmc(
-                even_tuple,
-                odd_tuple,
-                account_tree_params,
-                rmc_0,
-                rmc_1,
-            ),
-            None => verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params),
-        }
+        handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
 }
 

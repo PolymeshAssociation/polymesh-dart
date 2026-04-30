@@ -748,7 +748,6 @@ pub struct MintTxnProof<
 > {
     pub partial: MintTxnProofPartial<F0, F1, G0, G1, { L }>,
     /// Commitment to randomness and response for proving knowledge of issuer secret key using Schnorr protocol (step 1 and 3 of Schnorr)
-    // pub resp_pk_aff: PokDiscreteLog<Affine<G0>>,
     pub auth_proof: AuthProofOnlySks<Affine<G0>>,
 }
 
