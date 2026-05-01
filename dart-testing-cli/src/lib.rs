@@ -450,6 +450,7 @@ impl DartTestingDb {
             "CREATE TABLE IF NOT EXISTS asset_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 block_number INTEGER NOT NULL,
+                height INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],
@@ -460,6 +461,7 @@ impl DartTestingDb {
             "CREATE TABLE IF NOT EXISTS account_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 block_number INTEGER NOT NULL,
+                height INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],

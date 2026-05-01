@@ -396,7 +396,7 @@ pub struct CompressedInner<const M: usize, C: CurveTreeConfig> {
     pub is_even: bool,
     pub commitments: [CompressedAffine; M],
     #[codec(skip)]
-    _marker: PhantomData<C>,
+    pub(crate) _marker: PhantomData<C>,
 }
 
 impl<const M: usize, C: CurveTreeConfig> CompressedInner<M, C> {
@@ -625,7 +625,7 @@ macro_rules! impl_curve_tree_with_backend {
             $($async_fn)* fn init_inner_nodes(
                 &mut self,
             ) -> Result<CompressedCurveTreeRoot<L, M, C>, Error> {
-                let height = self.height()$($await)*;
+                let height = self.height(None)$($await)*?;
                 let mut current_root = CompressedCurveTreeRoot::new(height);
 
                 // Start at the first leaf's location.
@@ -691,8 +691,8 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(current_root)
             }
 
-            pub $($async_fn)* fn height(&self) -> NodeLevel {
-                self.backend.height()$($await)*
+            pub $($async_fn)* fn height(&self, block_number: Option<BlockNumber>) -> Result<NodeLevel, Error> {
+                self.backend.height(block_number)$($await)*
             }
 
             pub fn parameters(&self) -> &SelRerandProofParametersNew<C::P0, C::P1, C::DLogParams0, C::DLogParams1> {
@@ -848,7 +848,7 @@ macro_rules! impl_curve_tree_with_backend {
                     // Fallback to slow build if not found in storage.
                     let root = self.inner_slow_build_root(None)$($await)*?;
 
-                    let height = self.height()$($await)*;
+                    let height = self.height(None)$($await)*?;
                     Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
                 }
             }
@@ -864,7 +864,7 @@ macro_rules! impl_curve_tree_with_backend {
                 block_number: Option<BlockNumber>,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 let params = self.parameters();
-                let root = NodeLocation::<L>::root(self.height()$($await)*);
+                let root = NodeLocation::<L>::root(self.height(block_number)$($await)*?);
                 match self.backend.get_inner_node(root, block_number)$($await)*? {
                     Some(node) => match node.decompress()? {
                         Inner::Even(commitments) => Ok(Root::Even(RootNode {
@@ -910,7 +910,7 @@ macro_rules! impl_curve_tree_with_backend {
                 tree_index: TreeIndex,
                 block_number: Option<BlockNumber>,
             ) -> Result<CurveTreeWitnessPath<L, C::P0, C::P1>, Error> {
-                let height = self.height()$($await)*;
+                let height = self.height(block_number)$($await)*?;
                 let mut even_internal_nodes = Vec::with_capacity(height as usize);
                 let mut odd_internal_nodes = Vec::with_capacity(height as usize);
 
@@ -1014,7 +1014,7 @@ macro_rules! impl_curve_tree_with_backend {
                     return Ok(false);
                 }
 
-                let mut height = self.height()$($await)*;
+                let mut height = self.height(None)$($await)*?;
                 let mut current_root = self.get_or_init_root()$($await)*?;
 
                 while leaf_index < leaf_count {
@@ -1031,7 +1031,7 @@ macro_rules! impl_curve_tree_with_backend {
 
                     // Start at the leaf's location.
                     let mut location = NodeLocation::<L>::leaf(leaf_index);
-                    let mut is_root = location.is_root(height);
+                    let mut is_root = false;
                     let mut child_is_leaf = true;
 
                     leaf_index += 1;
@@ -1054,14 +1054,31 @@ macro_rules! impl_curve_tree_with_backend {
                                 node
                             },
                             None => {
-                                if location.is_even() {
-                                    even_old_child = None;
-                                    // Create a new even node with zero commitments.
-                                    CompressedInner::default_even()
+                                if is_root {
+                                    let old_height = height;
+                                    current_root.increase_height::<B::Updater>()?;
+                                    height = current_root.height();
+
+                                    log::warn!("Tree height increased from {} to {}", old_height, height);
+                                    self.backend.set_height(height)$($await)*?;
+
+                                    // Return the new root as the current inner node.  Still need to add the new child to it.
+                                    if location.is_even() {
+                                        even_old_child = None;
+                                    } else {
+                                        odd_old_child = None;
+                                    }
+                                    current_root.compressed_inner_node()
                                 } else {
-                                    odd_old_child = None;
-                                    // Create a new odd node with zero commitments.
-                                    CompressedInner::default_odd()
+                                    if location.is_even() {
+                                        even_old_child = None;
+                                        // Create a new even node with zero commitments.
+                                        CompressedInner::default_even()
+                                    } else {
+                                        odd_old_child = None;
+                                        // Create a new odd node with zero commitments.
+                                        CompressedInner::default_odd()
+                                    }
                                 }
                             }
                         };
@@ -1147,15 +1164,6 @@ macro_rules! impl_curve_tree_with_backend {
                         // Save the updated node back to the backend.
                         self.backend.set_inner_node(location, node)$($await)*?;
                     }
-
-                    // Check if the tree has grown to accommodate the new leaf.
-                    // if the root's level is higher than the current height, we need to update the height.
-                    let level = location.level();
-                    if level > height {
-                        log::warn!("Tree height increased from {} to {}", height, level);
-                        self.backend.set_height(level)$($await)*?;
-                        height = level;
-                    }
                 }
                 // Update the last committed leaf index in the backend.
                 self.backend.set_committed_leaf_index(leaf_index)$($await)*?;
@@ -1172,7 +1180,7 @@ macro_rules! impl_curve_tree_with_backend {
                 old_leaf_value: Option<CompressedLeafValue<C>>,
                 new_leaf_value: CompressedLeafValue<C>,
             ) -> Result<(), Error> {
-                let height = self.height()$($await)*;
+                let mut height = self.height(None)$($await)*?;
                 let mut current_root = self.get_or_init_root()$($await)*?;
 
                 let mut even_old_child = old_leaf_value.map(CompressedChildCommitments::leaf);
@@ -1182,7 +1190,7 @@ macro_rules! impl_curve_tree_with_backend {
 
                 // Start at the leaf's location.
                 let mut location = NodeLocation::<L>::leaf(leaf_index);
-                let mut is_root = location.is_root(height);
+                let mut is_root = false;
 
                 // Keep going until we reach the root of the tree.
                 while !is_root {
@@ -1202,14 +1210,31 @@ macro_rules! impl_curve_tree_with_backend {
                             node
                         },
                         None => {
-                            if location.is_even() {
-                                even_old_child = None;
-                                // Create a new even node with zero commitments.
-                                CompressedInner::default_even()
+                            if is_root {
+                                let old_height = height;
+                                current_root.increase_height::<B::Updater>()?;
+                                height = current_root.height();
+
+                                log::warn!("Tree height increased from {} to {}", old_height, height);
+                                self.backend.set_height(height)$($await)*?;
+
+                                if location.is_even() {
+                                    even_old_child = None;
+                                } else {
+                                    odd_old_child = None;
+                                }
+                                // Return the new root as the current inner node.  Still need to add the new child to it.
+                                current_root.compressed_inner_node()
                             } else {
-                                odd_old_child = None;
-                                // Create a new odd node with zero commitments.
-                                CompressedInner::default_odd()
+                                if location.is_even() {
+                                    even_old_child = None;
+                                    // Create a new even node with zero commitments.
+                                    CompressedInner::default_even()
+                                } else {
+                                    odd_old_child = None;
+                                    // Create a new odd node with zero commitments.
+                                    CompressedInner::default_odd()
+                                }
                             }
                         }
                     };
@@ -1250,14 +1275,6 @@ macro_rules! impl_curve_tree_with_backend {
 
                     // Save the updated node back to the backend.
                     self.backend.set_inner_node(location, node)$($await)*?;
-                }
-
-                // Check if the tree has grown to accommodate the new leaf.
-                // if the root's level is higher than the current height, we need to update the height.
-                let level = location.level();
-                if level > height {
-                    log::warn!("Tree height increased from {} to {}", height, level);
-                    self.backend.set_height(level)$($await)*?;
                 }
 
                 // Store the updated root.

@@ -11,8 +11,8 @@ use polymesh_dart::{
         CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
         CurveTreeWithBackend, DefaultCurveTreeUpdater, NodeLocation, ValidateCurveTreeRoot,
     },
-    BlockNumber, Error as DartError, LeafIndex, NodeLevel, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L,
-    ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L, ASSET_TREE_M,
+    BlockNumber, Error as DartError, LeafIndex, NodeLevel, ACCOUNT_TREE_L, ACCOUNT_TREE_M,
+    ASSET_TREE_L, ASSET_TREE_M,
 };
 
 /// Asset Curve Tree SQLite Storage backend.
@@ -52,23 +52,22 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
     fn store_root(
         &mut self,
         root: CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
-    ) -> std::result::Result<BlockNumber, Self::Error> {
+    ) -> Result<BlockNumber, Self::Error> {
+        let height = root.height;
         let block_number = self.get_block_number()? + 1;
         let root_bytes = root.encode();
-        let mut stmt = self
-            .db
-            .prepare("INSERT INTO asset_root_history (block_number, root_data) VALUES (?1, ?2)")?;
-        stmt.execute((block_number as i64, root_bytes))?;
+        let mut stmt = self.db.prepare(
+            "INSERT INTO asset_root_history (block_number, height, root_data) VALUES (?1, ?2, ?3)",
+        )?;
+        stmt.execute((block_number as i64, height as i64, root_bytes))?;
         Ok(block_number)
     }
 
     fn fetch_root(
         &self,
         block_number: Option<BlockNumber>,
-    ) -> std::result::Result<
-        CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
-        Self::Error,
-    > {
+    ) -> Result<CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>, Self::Error>
+    {
         let block_number = match block_number {
             Some(bn) => bn,
             None => self.get_block_number()?,
@@ -81,14 +80,22 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         Ok(Decode::decode(&mut root_data.as_slice())?)
     }
 
-    fn height(&self) -> NodeLevel {
-        ASSET_TREE_HEIGHT
+    fn height(&self, block_number: Option<BlockNumber>) -> Result<NodeLevel, Self::Error> {
+        let block_number = match block_number {
+            Some(bn) => bn,
+            None => self.get_block_number()?,
+        };
+        let mut stmt = self.db.prepare(
+            "SELECT COALESCE(height, 1) FROM asset_root_history WHERE block_number = ?1",
+        )?;
+        let height: i64 = stmt
+            .query_row([block_number as i64], |row| row.get(0))
+            .unwrap_or(1);
+        Ok(height as NodeLevel)
     }
 
     fn set_height(&mut self, _height: NodeLevel) -> Result<(), Self::Error> {
-        Err(anyhow::anyhow!(
-            "Read-only storage does not support set_height()"
-        ))
+        Ok(())
     }
 
     fn allocate_leaf_index(&mut self) -> LeafIndex {
@@ -281,20 +288,21 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
     fn store_root(
         &mut self,
         root: CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
-    ) -> std::result::Result<BlockNumber, Self::Error> {
+    ) -> Result<BlockNumber, Self::Error> {
+        let height = root.height;
         let block_number = self.get_block_number()? + 1;
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
-            "INSERT INTO account_root_history (block_number, root_data) VALUES (?1, ?2)",
+            "INSERT INTO account_root_history (block_number, height, root_data) VALUES (?1, ?2, ?3)",
         )?;
-        stmt.execute((block_number as i64, root_bytes))?;
+        stmt.execute((block_number as i64, height as i64, root_bytes))?;
         Ok(block_number)
     }
 
     fn fetch_root(
         &self,
         block_number: Option<BlockNumber>,
-    ) -> std::result::Result<
+    ) -> Result<
         CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         Self::Error,
     > {
@@ -310,14 +318,22 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
         Ok(Decode::decode(&mut root_data.as_slice())?)
     }
 
-    fn height(&self) -> NodeLevel {
-        ACCOUNT_TREE_HEIGHT
+    fn height(&self, block_number: Option<BlockNumber>) -> Result<NodeLevel, Self::Error> {
+        let block_number = match block_number {
+            Some(bn) => bn,
+            None => self.get_block_number()?,
+        };
+        let mut stmt = self.db.prepare(
+            "SELECT COALESCE(height, 1) FROM account_root_history WHERE block_number = ?1",
+        )?;
+        let height: i64 = stmt
+            .query_row([block_number as i64], |row| row.get(0))
+            .unwrap_or(1);
+        Ok(height as NodeLevel)
     }
 
     fn set_height(&mut self, _height: NodeLevel) -> Result<(), Self::Error> {
-        Err(anyhow::anyhow!(
-            "Read-only storage does not support set_height()"
-        ))
+        Ok(())
     }
 
     fn allocate_leaf_index(&mut self) -> LeafIndex {
@@ -518,11 +534,12 @@ impl AssetRootHistory {
         block: BlockNumber,
         root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>,
     ) -> Result<()> {
+        let height = root.height;
         let root_bytes = root.encode();
-        let mut stmt = self
-            .db
-            .prepare("INSERT INTO asset_root_history (block_number, root_data) VALUES (?1, ?2)")?;
-        stmt.execute((block as i64, root_bytes))?;
+        let mut stmt = self.db.prepare(
+            "INSERT INTO asset_root_history (block_number, height, root_data) VALUES (?1, ?2, ?3)",
+        )?;
+        stmt.execute((block as i64, height as i64, root_bytes))?;
         Ok(())
     }
 }
@@ -562,11 +579,12 @@ impl AccountRootHistory {
         block: BlockNumber,
         root: &CompressedCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
     ) -> Result<()> {
+        let height = root.height;
         let root_bytes = root.encode();
         let mut stmt = self.db.prepare(
-            "INSERT INTO account_root_history (block_number, root_data) VALUES (?1, ?2)",
+            "INSERT INTO account_root_history (block_number, height, root_data) VALUES (?1, ?2, ?3)",
         )?;
-        stmt.execute((block as i64, root_bytes))?;
+        stmt.execute((block as i64, height as i64, root_bytes))?;
         Ok(())
     }
 }

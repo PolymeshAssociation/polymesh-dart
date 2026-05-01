@@ -858,6 +858,14 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         })
     }
 
+    pub fn compressed_inner_node(&self) -> CompressedInner<M, C> {
+        CompressedInner {
+            is_even: self.is_even(),
+            commitments: self.commitments,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn is_even(&self) -> bool {
         self.height % 2 == 0
     }
@@ -1068,7 +1076,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
 
             // Start at the leaf's location.
             let mut location = NodeLocation::<L>::leaf(leaf_index_base + leaf_idx);
-            let mut is_root = location.is_root(self.height);
+            let mut is_root = false;
             let mut child_is_leaf = true;
 
             leaf_idx += 1;
@@ -1096,14 +1104,27 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
                     })
                     .or_insert_with(|| {
                         is_new_node = true;
-                        if location.is_even() {
-                            even_old_child = None;
-                            // Create a new even node with zero commitments.
-                            CompressedInner::default_even()
+                        if is_root {
+                            if let Err(err) = current_root.increase_height::<U>() {
+                                log::error!("Failed to increase root height: {:?}", err);
+                            }
+                            if location.is_even() {
+                                even_old_child = None;
+                            } else {
+                                odd_old_child = None;
+                            }
+                            // Return the new root as the current inner node.  Still need to add the new child to it.
+                            current_root.compressed_inner_node()
                         } else {
-                            odd_old_child = None;
-                            // Create a new odd node with zero commitments.
-                            CompressedInner::default_odd()
+                            if location.is_even() {
+                                even_old_child = None;
+                                // Create a new even node with zero commitments.
+                                CompressedInner::default_even()
+                            } else {
+                                odd_old_child = None;
+                                // Create a new odd node with zero commitments.
+                                CompressedInner::default_odd()
+                            }
                         }
                     });
 
