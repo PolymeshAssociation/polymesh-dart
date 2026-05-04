@@ -11,8 +11,8 @@ use polymesh_dart::{
         CurveTreeBackend, CurveTreeLookup, CurveTreeParameters, CurveTreePath,
         CurveTreeWithBackend, DefaultCurveTreeUpdater, NodeLocation, ValidateCurveTreeRoot,
     },
-    BlockNumber, Error as DartError, LeafIndex, NodeLevel, ACCOUNT_TREE_L, ACCOUNT_TREE_M,
-    ASSET_TREE_L, ASSET_TREE_M,
+    BlockNumber, Error as DartError, LeafIndex, NodeLevel, ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L,
+    ACCOUNT_TREE_M, ASSET_TREE_HEIGHT, ASSET_TREE_L, ASSET_TREE_M,
 };
 
 /// Asset Curve Tree SQLite Storage backend.
@@ -90,7 +90,7 @@ impl CurveTreeBackend<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig> for AssetCurv
         )?;
         let height: i64 = stmt
             .query_row([block_number as i64], |row| row.get(0))
-            .unwrap_or(1);
+            .unwrap_or(ASSET_TREE_HEIGHT as i64);
         Ok(height as NodeLevel)
     }
 
@@ -328,7 +328,7 @@ impl CurveTreeBackend<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>
         )?;
         let height: i64 = stmt
             .query_row([block_number as i64], |row| row.get(0))
-            .unwrap_or(1);
+            .unwrap_or(ACCOUNT_TREE_HEIGHT as i64);
         Ok(height as NodeLevel)
     }
 
