@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4#39862f694be817c1311d4a571981eb23b756f548"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ec4e07fec4fbcff6d4f36cbd96975dda5d64cffc"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -237,7 +237,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4#39862f694be817c1311d4a571981eb23b756f548"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ec4e07fec4fbcff6d4f36cbd96975dda5d64cffc"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -623,12 +623,13 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4#39862f694be817c1311d4a571981eb23b756f548"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ec4e07fec4fbcff6d4f36cbd96975dda5d64cffc"
 dependencies = [
  "ahash",
  "ark-ec",
  "ark-ff",
  "ark-helios",
+ "ark-host-msm",
  "ark-pallas",
  "ark-selene",
  "ark-serialize",
@@ -640,6 +641,7 @@ dependencies = [
  "dock_crypto_utils",
  "fnv",
  "hashbrown 0.15.5",
+ "lazy_static",
  "log",
  "rand",
  "rand_core",
@@ -2850,7 +2852,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4#39862f694be817c1311d4a571981eb23b756f548"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ec4e07fec4fbcff6d4f36cbd96975dda5d64cffc"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
