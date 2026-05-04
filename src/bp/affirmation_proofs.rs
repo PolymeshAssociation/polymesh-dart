@@ -84,7 +84,6 @@ macro_rules! with_balance {
             nullifier: PallasA,
             updated_commitment: AccountStateCommitment,
             leg_ref: LegRef,
-            amount: Balance,
             root_block: BlockNumber,
             _marker: core::marker::PhantomData<C>,
         }
@@ -182,7 +181,6 @@ macro_rules! with_balance {
                         nullifier,
                         updated_commitment,
                         leg_ref: leg_ref.clone(),
-                        amount,
                         root_block,
                         _marker: core::marker::PhantomData,
                     },
@@ -219,7 +217,6 @@ macro_rules! with_balance {
                     root_block: self.root_block,
                     updated_account_state_commitment: self.updated_commitment,
                     nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
-                    amount: self.amount,
                     inner: BoundedCanonical::wrap(&bp_proof)?,
                 })
             }
@@ -232,7 +229,6 @@ macro_rules! with_balance {
             pub root_block: BlockNumber,
             pub updated_account_state_commitment: AccountStateCommitment,
             pub nullifier: AccountStateNullifier,
-            pub amount: Balance,
             pub(crate) inner: BoundedCanonical<
                 bp_account::$BPProof<
                     ACCOUNT_TREE_L,
