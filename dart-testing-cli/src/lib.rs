@@ -1330,7 +1330,7 @@ impl DartTestingDb {
             |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
-                Ok(SenderReversalProof::<()>::new(
+                Ok(SenderRevertAffirmationProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,

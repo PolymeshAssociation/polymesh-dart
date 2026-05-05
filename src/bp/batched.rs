@@ -36,7 +36,7 @@ pub enum BatchedProof<T: DartLimits = ()> {
     ReceiverAffirmation(ReceiverAffirmationProof<T>),
     MediatorAffirmation(MediatorAffirmationProof<T>),
     SenderCounterUpdate(SenderCounterUpdateProof<T>),
-    SenderReversal(SenderReversalProof<T>),
+    SenderReversal(SenderRevertAffirmationProof<T>),
     ReceiverClaim(ReceiverClaimProof<T>),
     ExecuteInstantSettlement(InstantSettlementProof<T>),
     InstantSenderAffirmation(InstantSenderAffirmationProof<T>),

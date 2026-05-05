@@ -794,7 +794,7 @@ no_balance! {
 }
 
 with_balance! {
-    host_protocol: ClaimReceivedHostProtocol,
+    host_protocol: ReceiverClaimHostProtocol,
     split_proof: ReceiverClaimProof,
     bp_protocol: ClaimReceivedSplitProtocol,
     bp_proof: ClaimReceivedSplitProof,
@@ -806,8 +806,8 @@ with_balance! {
 }
 
 with_balance! {
-    host_protocol: SenderReverseHostProtocol,
-    split_proof: SenderReversalProof,
+    host_protocol: SenderRevertAffirmationHostProtocol,
+    split_proof: SenderRevertAffirmationProof,
     bp_protocol: SenderReverseSplitProtocol,
     bp_proof: SenderReverseSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -829,8 +829,8 @@ no_balance! {
 }
 
 no_balance! {
-    host_protocol: ReceiverCounterUpdateHostProtocol,
-    split_proof: ReceiverCounterUpdateProof,
+    host_protocol: ReceiverRevertAffirmationHostProtocol,
+    split_proof: ReceiverRevertAffirmationProof,
     bp_protocol: ReceiverCounterUpdateSplitProtocol,
     bp_proof: ReceiverCounterUpdateSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,

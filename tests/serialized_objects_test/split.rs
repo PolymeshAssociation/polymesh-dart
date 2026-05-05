@@ -1,9 +1,9 @@
 use polymesh_dart::account_reg_split::AccountRegHostProtocol;
 use polymesh_dart::affirmation_proofs::{
-    ClaimReceivedHostProtocol, InstantReceiverAffirmationHostProtocol,
-    InstantSenderAffirmationHostProtocol, ReceiverAffirmationHostProtocol,
-    ReceiverCounterUpdateHostProtocol, SenderAffirmationHostProtocol,
-    SenderCounterUpdateHostProtocol, SenderReverseHostProtocol,
+    InstantReceiverAffirmationHostProtocol, InstantSenderAffirmationHostProtocol,
+    ReceiverAffirmationHostProtocol, ReceiverClaimHostProtocol,
+    ReceiverRevertAffirmationHostProtocol, SenderAffirmationHostProtocol,
+    SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
 };
 use polymesh_dart::auth_proofs::{
     create_affirmation_auth_proof, create_fee_account_auth_proof, create_fee_payment_auth_proof,
@@ -514,14 +514,15 @@ pub fn gen_receiver_counter_update_split() {
         0,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = ReceiverCounterUpdateHostProtocol::<AccountTreeConfig>::init(
-        &mut rng,
-        &mut receiver_state,
-        &leg_ref,
-        &leg_enc,
-        &tree,
-    )
-    .unwrap();
+    let (protocol, device_request) =
+        ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+            &mut rng,
+            &mut receiver_state,
+            &leg_ref,
+            &leg_enc,
+            &tree,
+        )
+        .unwrap();
     run_affirmation_split_protocol(
         RECEIVER_COUNTER_UPDATE_SPLIT_REQUEST,
         RECEIVER_COUNTER_UPDATE_SPLIT_RESPONSE,
@@ -551,7 +552,7 @@ fn verify_v1_receiver_counter_update_split() {
         0,
     );
     let tree = make_account_tree(leaf);
-    let proof: ReceiverCounterUpdateProof = load_scale_v1(RECEIVER_COUNTER_UPDATE_SPLIT_PROOF);
+    let proof: ReceiverRevertAffirmationProof = load_scale_v1(RECEIVER_COUNTER_UPDATE_SPLIT_PROOF);
     proof
         .verify(&leg_enc, tree.root().unwrap(), &mut rng)
         .unwrap();
@@ -575,7 +576,7 @@ pub fn gen_claim_received_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = ClaimReceivedHostProtocol::<AccountTreeConfig>::init(
+    let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
         &mut rng,
         &mut receiver_state,
         &leg_ref,
@@ -636,15 +637,16 @@ pub fn gen_sender_reverse_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = SenderReverseHostProtocol::<AccountTreeConfig>::init(
-        &mut rng,
-        &mut sender_state,
-        &leg_ref,
-        &leg_enc,
-        SETTLEMENT_AMOUNT,
-        &tree,
-    )
-    .unwrap();
+    let (protocol, device_request) =
+        SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+            &mut rng,
+            &mut sender_state,
+            &leg_ref,
+            &leg_enc,
+            SETTLEMENT_AMOUNT,
+            &tree,
+        )
+        .unwrap();
     run_affirmation_split_protocol(
         SENDER_REVERSE_SPLIT_REQUEST,
         SENDER_REVERSE_SPLIT_RESPONSE,
@@ -674,7 +676,7 @@ fn verify_v1_sender_reverse_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let proof: SenderReversalProof = load_scale_v1(SENDER_REVERSE_SPLIT_PROOF);
+    let proof: SenderRevertAffirmationProof = load_scale_v1(SENDER_REVERSE_SPLIT_PROOF);
     proof
         .verify(&leg_enc, tree.root().unwrap(), &mut rng)
         .unwrap();

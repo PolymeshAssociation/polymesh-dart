@@ -416,10 +416,10 @@ mod tests {
     use super::*;
     use crate::account_reg_split::AccountRegHostProtocol;
     use crate::affirmation_proofs::{
-        ClaimReceivedHostProtocol, InstantReceiverAffirmationHostProtocol,
-        InstantSenderAffirmationHostProtocol, ReceiverAffirmationHostProtocol,
-        ReceiverCounterUpdateHostProtocol, SenderAffirmationHostProtocol,
-        SenderCounterUpdateHostProtocol, SenderReverseHostProtocol,
+        InstantReceiverAffirmationHostProtocol, InstantSenderAffirmationHostProtocol,
+        ReceiverAffirmationHostProtocol, ReceiverClaimHostProtocol,
+        ReceiverRevertAffirmationHostProtocol, SenderAffirmationHostProtocol,
+        SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
     };
     use crate::auth_proofs::{
         create_affirmation_auth_proof, create_fee_account_auth_proof,
@@ -998,7 +998,7 @@ mod tests {
             leaf,
         );
 
-        let (protocol, device_request) = ClaimReceivedHostProtocol::<AccountTreeConfig>::init(
+        let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
             &mut rng,
             &mut receiver_state,
             &leg_ref,
@@ -1051,15 +1051,16 @@ mod tests {
             leaf,
         );
 
-        let (protocol, device_request) = SenderReverseHostProtocol::<AccountTreeConfig>::init(
-            &mut rng,
-            &mut sender_state,
-            &leg_ref,
-            &leg_enc,
-            reverse_amount,
-            &account_tree,
-        )
-        .unwrap();
+        let (protocol, device_request) =
+            SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+                &mut rng,
+                &mut sender_state,
+                &leg_ref,
+                &leg_enc,
+                reverse_amount,
+                &account_tree,
+            )
+            .unwrap();
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
@@ -1178,7 +1179,7 @@ mod tests {
         account_tree.store_root().unwrap();
 
         let (protocol, device_request) =
-            ReceiverCounterUpdateHostProtocol::<AccountTreeConfig>::init(
+            ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
                 &mut rng,
                 &mut receiver_state,
                 &leg_ref,
