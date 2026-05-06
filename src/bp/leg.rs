@@ -15,7 +15,7 @@ use ark_std::{
     vec,
     vec::Vec,
 };
-use bulletproofs::r1cs::VerificationTuple;
+use bulletproofs::r1cs::{VerificationTuple, batch_verify_with_rng};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
 
@@ -801,20 +801,16 @@ impl<
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
         for (even, odd) in tuples {
-            even_tuples.push(even);
-            odd_tuples.push(odd);
+            // If any tuple is empty which can happen when asset id is revealed
+            if !even.proof_independent_scalars.is_empty() {
+                even_tuples.push(even);
+            }
+            if !odd.proof_independent_scalars.is_empty() {
+                odd_tuples.push(odd);
+            }
         }
 
-        let params = C::parameters();
-        batch_verify_bp_with_rng(
-            even_tuples,
-            odd_tuples,
-            params.even_parameters.pc_gens(),
-            params.odd_parameters.pc_gens(),
-            params.even_parameters.bp_gens(),
-            params.odd_parameters.bp_gens(),
-            rng,
-        )?;
+        Self::batch_verify_tuples(even_tuples, odd_tuples, rng)?;
 
         Ok(())
     }
@@ -845,21 +841,52 @@ impl<
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
             let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng)?;
-            even_tuples.push(even);
-            odd_tuples.push(odd);
+            // If any tuple is empty which can happen when asset id is revealed
+            if !even.proof_independent_scalars.is_empty() {
+                even_tuples.push(even);
+            }
+            if !odd.proof_independent_scalars.is_empty() {
+                odd_tuples.push(odd);
+            }
         }
 
-        let params = C::parameters();
-        batch_verify_bp_with_rng(
-            even_tuples,
-            odd_tuples,
-            params.even_parameters.pc_gens(),
-            params.odd_parameters.pc_gens(),
-            params.even_parameters.bp_gens(),
-            params.odd_parameters.bp_gens(),
-            rng,
-        )?;
+        Self::batch_verify_tuples(even_tuples, odd_tuples, rng)?;
 
+        Ok(())
+    }
+
+    fn batch_verify_tuples<R: RngCore + CryptoRng>(
+        even_tuples: Vec<VerificationTuple<Affine<C::P0>>>,
+        odd_tuples: Vec<VerificationTuple<Affine<C::P1>>>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        // This could be moved to helper but i want helpers to do minimum error handling
+        let params = C::parameters();
+        if !even_tuples.is_empty() && !odd_tuples.is_empty() {
+            batch_verify_bp_with_rng(
+                even_tuples,
+                odd_tuples,
+                params.even_parameters.pc_gens(),
+                params.odd_parameters.pc_gens(),
+                params.even_parameters.bp_gens(),
+                params.odd_parameters.bp_gens(),
+                rng,
+            )?;
+        } else if !even_tuples.is_empty() {
+            batch_verify_with_rng(
+                even_tuples,
+                params.even_parameters.pc_gens(),
+                params.even_parameters.bp_gens(),
+                rng,
+            )?
+        } else {
+            batch_verify_with_rng(
+                odd_tuples,
+                params.odd_parameters.pc_gens(),
+                params.odd_parameters.bp_gens(),
+                rng,
+            )?
+        }
         Ok(())
     }
 }

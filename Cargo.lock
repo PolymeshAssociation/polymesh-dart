@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3ecf7a0ac7e48251eecc94c2374be5c74929c95a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4.2#66b43d12285368ab48be044c0a443272859b80d7"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -237,7 +237,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3ecf7a0ac7e48251eecc94c2374be5c74929c95a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4.2#66b43d12285368ab48be044c0a443272859b80d7"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -623,7 +623,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3ecf7a0ac7e48251eecc94c2374be5c74929c95a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4.2#66b43d12285368ab48be044c0a443272859b80d7"
 dependencies = [
  "ahash",
  "ark-ec",
@@ -2852,7 +2852,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#3ecf7a0ac7e48251eecc94c2374be5c74929c95a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch4.2#66b43d12285368ab48be044c0a443272859b80d7"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",

@@ -834,6 +834,111 @@ mod tests {
     }
 
     #[test]
+    fn test_settlement_revealed_asset_id() {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let asset_id_0: AssetId = 0;
+        let asset_id_1: AssetId = 1;
+        let amount_0: Balance = 300;
+        let amount_1: Balance = 175;
+
+        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let asset_state_0 = AssetState::new::<()>(asset_id_0, &[], &[]).unwrap();
+        let asset_state_1 = AssetState::new::<()>(asset_id_1, &[], &[]).unwrap();
+
+        let mut asset_tree =
+            ProverCurveTree::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(ASSET_TREE_HEIGHT)
+                .unwrap();
+        asset_tree
+            .insert(asset_state_0.commitment().unwrap())
+            .unwrap();
+        asset_tree
+            .insert(asset_state_1.commitment().unwrap())
+            .unwrap();
+        asset_tree.store_root().unwrap();
+
+        let mut asset_lookup = AssetKeysLookup::new();
+        asset_lookup.add(asset_state_0.clone());
+        asset_lookup.add(asset_state_1.clone());
+
+        let mut test_with_config = |reveal_0: bool, reveal_1: bool| {
+            let settlement = SettlementBuilder::<()>::new(b"test")
+                .leg(LegBuilder {
+                    sender: sender_keys.public_keys(),
+                    receiver: receiver_keys.public_keys(),
+                    asset: asset_state_0.clone(),
+                    amount: amount_0,
+                    config: LegConfig {
+                        reveal_asset_id: reveal_0,
+                        parties_see_each_other: true,
+                    },
+                    public_enc_keys: vec![],
+                })
+                .leg(LegBuilder {
+                    sender: receiver_keys.public_keys(),
+                    receiver: sender_keys.public_keys(),
+                    asset: asset_state_1.clone(),
+                    amount: amount_1,
+                    config: LegConfig {
+                        reveal_asset_id: reveal_1,
+                        parties_see_each_other: true,
+                    },
+                    public_enc_keys: vec![],
+                })
+                .encrypt_and_prove(&mut rng, &asset_tree)
+                .unwrap();
+
+            assert_eq!(settlement.legs.len(), 2);
+            if reveal_0 && reveal_1 {
+                assert_eq!(settlement.revealed_asset_ids().len(), 2);
+            } else if reveal_0 || reveal_1 {
+                assert_eq!(settlement.revealed_asset_ids().len(), 1);
+            } else {
+                assert_eq!(settlement.revealed_asset_ids().len(), 0);
+            }
+            if reveal_0 {
+                assert!(matches!(
+                    settlement.legs[0],
+                    AnySettlementLegProof::RevealedAssetId(_)
+                ));
+            } else {
+                assert!(matches!(
+                    settlement.legs[0],
+                    AnySettlementLegProof::HiddenAssetId(_)
+                ));
+            }
+            if reveal_1 {
+                assert!(matches!(
+                    settlement.legs[1],
+                    AnySettlementLegProof::RevealedAssetId(_)
+                ));
+            } else {
+                assert!(matches!(
+                    settlement.legs[1],
+                    AnySettlementLegProof::HiddenAssetId(_)
+                ));
+            }
+
+            settlement
+                .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+
+            settlement
+                .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+        };
+
+        // Both legs revealed
+        test_with_config(true, true);
+        // One hidden leg, one revealed
+        test_with_config(true, false);
+        test_with_config(false, true);
+        // Both legs hidden
+        test_with_config(false, false);
+    }
+
+    #[test]
     fn test_sender_affirmation_split() {
         let test_with_config = |reveal_asset_id: bool| {
             let mut rng = rand::thread_rng();
