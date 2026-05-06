@@ -269,8 +269,8 @@ This is an important “rollback” scenario and is exercised in tests.
 3. Mediator affirmation (reject)
    - The settlement becomes `Rejected`.
 
-4. Sender reversal (cleanup)
-   - Sender submits a reversal proof for the rejected leg.
+4. Sender revert affirmation (cleanup)
+   - Sender submits a revert affirmation proof for the rejected leg.
    - This undoes the sender’s earlier state transition for that rejected leg.
 
 5. Settlement becomes `Finalized`
@@ -313,7 +313,7 @@ At the flow level:
 - Receiver affirmation: consumes the receiver’s current account state and produces a new state consistent with “I have committed to receive this leg”.
 - Receiver claim: in the executed phase, updates receiver state to actually claim the received amount for the leg.
 - Sender counter update: in the executed phase, updates sender state to finalize the sender-side accounting for the leg.
-- Sender reversal (after rejection): in the rejected phase, updates sender state to undo the earlier sender affirmation for the rejected leg.
+- Sender revert affirmation (after rejection): in the rejected phase, updates sender state to undo the earlier sender affirmation for the rejected leg.
 
 The *chain* only sees:
 
@@ -506,9 +506,9 @@ This section links the settlement lifecycle actions in this doc to the concrete 
    - Build/verify: `SenderCounterUpdateProof::{new, verify}`
    - Code: [src/bp/leg/proofs.rs](src/bp/leg/proofs.rs)
 
-- Sender reversal (rejected-phase cleanup)
-   - Proof: `SenderReversalProof`
-   - Build/verify: `SenderReversalProof::{new, verify}`
+- Sender revert affirmation (rejected-phase cleanup)
+   - Proof: `SenderRevertAffirmationProof`
+   - Build/verify: `SenderRevertAffirmationProof::{new, verify}`
    - Code: [src/bp/leg/proofs.rs](src/bp/leg/proofs.rs)
 
 - Instant settlement (creation proof + all affirmations packaged together)
@@ -521,7 +521,7 @@ Binding note (important for reviewers): most follow-on proofs are keyed by a `Le
 
 This doc intentionally reflects what is exercised in the integration tests:
 
-- Sender reversal is exercised for rejected settlements.
+- Sender revert affirmation is exercised for rejected settlements.
 - Receiver-side “reversal” and some alternative counter/balance transition variants are described in the math spec, but may not be wired through all higher-level APIs/tests in this repo yet.
 
 If you want this doc to be treated as the authoritative spec for *all* txn variants (including every reversal/irreversible mode), we should decide whether to:
