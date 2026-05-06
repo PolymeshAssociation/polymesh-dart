@@ -238,8 +238,7 @@ pub fn gen_key_distribution_proof_2_recipients() {
         .collect();
     let proof = KeyDistributionProof::<()>::new(
         &mut rng,
-        dist_keys.enc.secret.clone(),
-        &dist_keys.enc.public,
+        &dist_keys.enc,
         &recipient_pks,
         NONCE,
         tree_params,
@@ -258,8 +257,7 @@ pub fn gen_key_distribution_proof_3_recipients() {
         .collect();
     let proof = KeyDistributionProof::<()>::new(
         &mut rng,
-        dist_keys.enc.secret.clone(),
-        &dist_keys.enc.public,
+        &dist_keys.enc,
         &recipient_pks,
         NONCE,
         tree_params,

@@ -1,4 +1,4 @@
-use bounded_collections::BoundedVec;
+use bounded_collections::BoundedBTreeSet;
 use codec::{Decode, Encode};
 use scale_info::TypeInfo;
 
@@ -6,7 +6,7 @@ use super::{
     AccountTreeConfig, CurveTreeParameters, EncryptionPublicKey, EncryptionSecretKey, Error,
     dart_gens,
 };
-use crate::{BoundedCanonical, DartLimits, PallasA, PallasScalar};
+use crate::{BoundedCanonical, DartLimits, EncryptionKeyPair, PallasA, PallasScalar};
 use ark_ec::AffineRepr;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
@@ -24,7 +24,7 @@ pub struct KeyDistributionProof<T: DartLimits = ()> {
     /// The public key corresponding to the distributed secret key (`enc_key_gen * sk`).
     pub public_key: EncryptionPublicKey,
     /// The recipient public keys the secret was distributed to.
-    pub recipient_pks: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
+    pub recipient_pks: BoundedBTreeSet<EncryptionPublicKey, T::MaxKeysPerRegProof>,
     inner: BoundedCanonical<key_distribution::KeyDistributionProof<PallasA>, T::MaxInnerProofSize>,
 }
 
@@ -35,17 +35,24 @@ impl<T: DartLimits> KeyDistributionProof<T> {
     /// `sk` is the key being distributed. `pk = enc_key_gen * sk`.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        sk: EncryptionSecretKey,
-        pk_enc: &EncryptionPublicKey,
+        key: &EncryptionKeyPair,
         recipient_pks: &[EncryptionPublicKey],
         nonce: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<Self, Error> {
+        let sk = key.secret.clone();
+        let pk_enc = key.public;
         let pk = pk_enc.get_affine()?;
-        let rec_pks: Vec<PallasA> = recipient_pks
+        let mut recipient_pks_set = BoundedBTreeSet::new();
+        for pk in recipient_pks {
+            recipient_pks_set
+                .try_insert(pk.clone())
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let rec_pks = recipient_pks_set
             .iter()
             .map(|k| k.get_affine())
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         let gens = dart_gens();
         let proof = key_distribution::KeyDistributionProof::new(
@@ -62,10 +69,7 @@ impl<T: DartLimits> KeyDistributionProof<T> {
 
         Ok(Self {
             public_key: pk_enc.clone(),
-            recipient_pks: recipient_pks
-                .to_vec()
-                .try_into()
-                .map_err(|_| Error::TooManyPublicInputsInProof)?,
+            recipient_pks: recipient_pks_set,
             inner: BoundedCanonical::wrap(&proof)?,
         })
     }
