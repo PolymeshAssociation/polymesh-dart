@@ -1084,7 +1084,10 @@ impl DartTestingDb {
                 receiver: receiver_keys,
                 asset: asset_state,
                 amount,
-                config: LegConfig::default(),
+                config: LegConfig {
+                    reveal_asset_id: true,
+                    ..Default::default()
+                },
                 public_enc_keys: vec![],
             });
         }
@@ -1106,7 +1109,7 @@ impl DartTestingDb {
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
         let mut asset_lookup = AssetKeysLookup::new();
-        let revealed_assets = settlement.revealed_asset_ids()?;
+        let revealed_assets = settlement.revealed_asset_ids();
         for asset_id in revealed_assets {
             if !asset_lookup.contains_key(&asset_id) {
                 let asset_info = self.get_asset_by_id(asset_id)?;

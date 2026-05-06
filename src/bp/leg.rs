@@ -704,14 +704,14 @@ impl<
     }
 
     /// Get the set of revealed asset IDs in the settlement proof.
-    pub fn revealed_asset_ids(&self) -> Result<BTreeSet<AssetId>, Error> {
+    pub fn revealed_asset_ids(&self) -> BTreeSet<AssetId> {
         let mut asset_ids = BTreeSet::new();
         for leg_proof in &self.legs {
             if let Some(asset_id) = leg_proof.revealed_asset_id() {
                 asset_ids.insert(asset_id);
             }
         }
-        Ok(asset_ids)
+        asset_ids
     }
 
     #[cfg(feature = "parallel")]
