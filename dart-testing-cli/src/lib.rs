@@ -1106,22 +1106,13 @@ impl DartTestingDb {
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
         let mut asset_lookup = AssetKeysLookup::new();
-        for leg_proof in settlement.legs.iter() {
-            if let AnySettlementLegProof::RevealedAssetId(_) = leg_proof {
-                let leg_enc = leg_proof
-                    .leg_enc()
-                    .decode()
-                    .map_err(|e| anyhow!("{:?}", e))?;
-                if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) =
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_asset_id
-                {
-                    if !asset_lookup.contains_key(&asset_id) {
-                        let asset_info = self.get_asset_by_id(asset_id)?;
-                        let mediators = asset_info.mediators()?;
-                        let auditors = asset_info.auditors()?;
-                        asset_lookup.add(AssetState::new::<()>(asset_id, &mediators, &auditors)?);
-                    }
-                }
+        let revealed_assets = settlement.revealed_asset_ids()?;
+        for asset_id in revealed_assets {
+            if !asset_lookup.contains_key(&asset_id) {
+                let asset_info = self.get_asset_by_id(asset_id)?;
+                let mediators = asset_info.mediators()?;
+                let auditors = asset_info.auditors()?;
+                asset_lookup.add(AssetState::new::<()>(asset_id, &mediators, &auditors)?);
             }
         }
 

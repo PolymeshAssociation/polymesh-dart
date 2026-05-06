@@ -9,6 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
+    collections::BTreeSet,
     format,
     string::{String, ToString},
     vec,
@@ -485,6 +486,13 @@ impl<
         }
     }
 
+    pub fn revealed_asset_id(&self) -> Option<AssetId> {
+        match self {
+            Self::HiddenAssetId(_) => None,
+            Self::RevealedAssetId(p) => Some(p.asset_id),
+        }
+    }
+
     pub fn mediator_count(&self) -> Result<usize, Error> {
         match self {
             Self::HiddenAssetId(p) => p.mediator_count(),
@@ -693,6 +701,17 @@ impl<
             receiver_count: leg_count,
             mediator_count,
         })
+    }
+
+    /// Get the set of revealed asset IDs in the settlement proof.
+    pub fn revealed_asset_ids(&self) -> Result<BTreeSet<AssetId>, Error> {
+        let mut asset_ids = BTreeSet::new();
+        for leg_proof in &self.legs {
+            if let Some(asset_id) = leg_proof.revealed_asset_id() {
+                asset_ids.insert(asset_id);
+            }
+        }
+        Ok(asset_ids)
     }
 
     #[cfg(feature = "parallel")]
@@ -1082,6 +1101,11 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
         let proof = self.inner.decode()?;
+
+        // TODO: move this check into the inner proof.
+        if leg_enc.asset_id() != Some(self.asset_id) {
+            return Err(Error::CryptoError("Asset ID mismatch".to_string()));
+        }
 
         RandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
             let public_enc_keys: Vec<PallasA> = self
