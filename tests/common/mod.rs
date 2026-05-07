@@ -1173,7 +1173,7 @@ impl DartSettlementLeg {
     ///
     /// The sender is only allowed to submit this proof if the settlement is pending or has been rejected and their status is affirmed.
     ///
-    /// If the settelement is pending, this allows the sender to revert their affirmation to claim back their assets before the settlement is executed.
+    /// If the settlement is pending, this allows the sender to revert their affirmation to claim back their assets before the settlement is executed.
     /// If the settlement is rejected, this allows the sender to claim back their assets if they had affirmed before the rejection.
     /// If the settlement is executed, the sender is not allowed to revert their affirmation since the assets now belong to the receiver.
     pub fn sender_revert_affirmation<R: RngCore + CryptoRng>(
@@ -1200,7 +1200,7 @@ impl DartSettlementLeg {
         // verify the proof.
         proof
             .verify(&self.enc, tree_roots, rng)
-            .context("Invalid sender reversal proof")?;
+            .context("Invalid sender revert affirmation proof")?;
 
         // Update the sender's status for this leg.
         self.sender = new_status;

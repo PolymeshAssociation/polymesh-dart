@@ -64,10 +64,12 @@ pub const RECEIVER_AFFIRM_SPLIT_REQUEST: &str = "receiver_affirm_split_request.b
 pub const RECEIVER_AFFIRM_SPLIT_RESPONSE: &str = "receiver_affirm_split_response.bin";
 pub const RECEIVER_AFFIRM_SPLIT_PROOF: &str = "receiver_affirm_split_proof.bin";
 
-pub const RECEIVER_COUNTER_UPDATE_SPLIT_REQUEST: &str = "receiver_counter_update_split_request.bin";
-pub const RECEIVER_COUNTER_UPDATE_SPLIT_RESPONSE: &str =
-    "receiver_counter_update_split_response.bin";
-pub const RECEIVER_COUNTER_UPDATE_SPLIT_PROOF: &str = "receiver_counter_update_split_proof.bin";
+pub const RECEIVER_REVERT_AFFIRMATION_SPLIT_REQUEST: &str =
+    "receiver_revert_affirmation_split_request.bin";
+pub const RECEIVER_REVERT_AFFIRMATION_SPLIT_RESPONSE: &str =
+    "receiver_revert_affirmation_split_response.bin";
+pub const RECEIVER_REVERT_AFFIRMATION_SPLIT_PROOF: &str =
+    "receiver_revert_affirmation_split_proof.bin";
 
 pub const CLAIM_RECEIVED_SPLIT_REQUEST: &str = "claim_received_split_request.bin";
 pub const CLAIM_RECEIVED_SPLIT_RESPONSE: &str = "claim_received_split_response.bin";

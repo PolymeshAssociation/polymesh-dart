@@ -497,7 +497,7 @@ fn verify_v1_receiver_affirm_split() {
         .unwrap();
 }
 
-pub fn gen_receiver_counter_update_split() {
+pub fn gen_receiver_revert_affirmation_split() {
     let mut rng = default_rng();
     let counter: NullifierSkGenCounter = 0;
     let sender_keys = alice_keys();
@@ -524,9 +524,9 @@ pub fn gen_receiver_counter_update_split() {
         )
         .unwrap();
     run_affirmation_split_protocol(
-        RECEIVER_COUNTER_UPDATE_SPLIT_REQUEST,
-        RECEIVER_COUNTER_UPDATE_SPLIT_RESPONSE,
-        RECEIVER_COUNTER_UPDATE_SPLIT_PROOF,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_REQUEST,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_RESPONSE,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_PROOF,
         device_request,
         &receiver_keys,
         &tree,
@@ -535,7 +535,7 @@ pub fn gen_receiver_counter_update_split() {
 }
 
 #[test]
-fn verify_v1_receiver_counter_update_split() {
+fn verify_v1_receiver_revert_affirmation_split() {
     let mut rng = default_rng();
     let counter: NullifierSkGenCounter = 0;
     let sender_keys = alice_keys();
@@ -552,7 +552,8 @@ fn verify_v1_receiver_counter_update_split() {
         0,
     );
     let tree = make_account_tree(leaf);
-    let proof: ReceiverRevertAffirmationProof = load_scale_v1(RECEIVER_COUNTER_UPDATE_SPLIT_PROOF);
+    let proof: ReceiverRevertAffirmationProof =
+        load_scale_v1(RECEIVER_REVERT_AFFIRMATION_SPLIT_PROOF);
     proof
         .verify(&leg_enc, tree.root().unwrap(), &mut rng)
         .unwrap();

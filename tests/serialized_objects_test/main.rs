@@ -41,7 +41,7 @@ fn generate_v1_serialized_objects() {
     split::gen_mint_split();
     split::gen_sender_affirm_split();
     split::gen_receiver_affirm_split();
-    split::gen_receiver_counter_update_split();
+    split::gen_receiver_revert_affirmation_split();
     split::gen_claim_received_split();
     split::gen_sender_reverse_split();
     split::gen_sender_counter_update_split();
