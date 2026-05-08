@@ -201,6 +201,9 @@ lazy_static::lazy_static! {
 pub fn set_dart_gens(_gens: DartBPGenerators) {}
 
 #[cfg(feature = "std")]
+pub fn reset_dart_gens() {}
+
+#[cfg(feature = "std")]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
@@ -213,6 +216,14 @@ static mut DART_GENS: Option<DartBPGenerators> = None;
 pub fn set_dart_gens(gens: DartBPGenerators) {
     unsafe {
         DART_GENS = Some(gens);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn reset_dart_gens() {
+    unsafe {
+        DART_GENS = None;
     }
 }
 
@@ -231,6 +242,9 @@ pub fn dart_gens() -> &'static DartBPGenerators {
 pub fn set_poseidon_params(_params: PoseidonParameters) {}
 
 #[cfg(feature = "std")]
+pub fn reset_poseidon_params() {}
+
+#[cfg(feature = "std")]
 pub fn poseidon_params() -> &'static PoseidonParameters {
     &POSEIDON_PARAMS
 }
@@ -243,6 +257,14 @@ static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 pub fn set_poseidon_params(params: PoseidonParameters) {
     unsafe {
         POSEIDON_PARAMS = Some(params);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn reset_poseidon_params() {
+    unsafe {
+        POSEIDON_PARAMS = None;
     }
 }
 

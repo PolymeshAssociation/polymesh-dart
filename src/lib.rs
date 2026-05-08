@@ -40,10 +40,13 @@ pub mod init {
         Error,
         curve_tree::{
             get_asset_commitment_parameters, get_pallas_layer_parameters,
-            get_vesta_layer_parameters, set_asset_commitment_parameters,
-            set_pallas_layer_parameters, set_vesta_layer_parameters,
+            get_vesta_layer_parameters, reset_asset_commitment_parameters,
+            reset_pallas_layer_parameters, reset_vesta_layer_parameters,
+            set_asset_commitment_parameters, set_pallas_layer_parameters,
+            set_vesta_layer_parameters,
         },
-        dart_gens, poseidon_params, set_dart_gens, set_poseidon_params,
+        dart_gens, poseidon_params, reset_dart_gens, reset_poseidon_params, set_dart_gens,
+        set_poseidon_params,
     };
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use ark_std::vec::Vec;
@@ -115,5 +118,18 @@ pub mod init {
         )?);
 
         Ok(())
+    }
+
+    pub fn unload_params() {
+        // Load the curve tree parameters.
+        reset_pallas_layer_parameters();
+        reset_vesta_layer_parameters();
+        reset_asset_commitment_parameters();
+
+        // Load the Dart BP parameters.
+        reset_dart_gens();
+
+        // Load the Poseidon2 parameters.
+        reset_poseidon_params();
     }
 }

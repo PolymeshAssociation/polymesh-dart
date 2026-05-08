@@ -77,6 +77,9 @@ pub fn set_pallas_layer_parameters(
 }
 
 #[cfg(feature = "std")]
+pub fn reset_pallas_layer_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_pallas_layer_parameters()
 -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     &CURVE_TREE_PARAMETERS_PALLAS
@@ -87,6 +90,9 @@ pub fn set_vesta_layer_parameters(
     _parameters: SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
 }
+
+#[cfg(feature = "std")]
+pub fn reset_vesta_layer_parameters() {}
 
 #[cfg(feature = "std")]
 pub fn get_vesta_layer_parameters()
@@ -108,6 +114,9 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
 pub fn set_asset_commitment_parameters(_parameters: AssetCommitmentParameters<AssetTreeConfig>) {}
 
 #[cfg(feature = "std")]
+pub fn reset_asset_commitment_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<AccountTreeConfig> {
     &ACCOUNT_CURVE_TREE_PARAMETERS
 }
@@ -119,6 +128,14 @@ pub fn set_pallas_layer_parameters(
 ) {
     unsafe {
         CURVE_TREE_PARAMETERS_PALLAS = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_pallas_layer_parameters() {
+    unsafe {
+        CURVE_TREE_PARAMETERS_PALLAS = None;
     }
 }
 
@@ -148,6 +165,14 @@ pub fn set_vesta_layer_parameters(
 ) {
     unsafe {
         CURVE_TREE_PARAMETERS_VESTA = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_vesta_layer_parameters() {
+    unsafe {
+        CURVE_TREE_PARAMETERS_VESTA = None;
     }
 }
 
@@ -187,6 +212,14 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 pub fn set_asset_commitment_parameters(parameters: AssetCommitmentParameters<AssetTreeConfig>) {
     unsafe {
         ASSET_COMMITMENT_PARAMETERS = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_asset_commitment_parameters() {
+    unsafe {
+        ASSET_COMMITMENT_PARAMETERS = None;
     }
 }
 
