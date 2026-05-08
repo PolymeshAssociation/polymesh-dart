@@ -239,7 +239,7 @@ pub fn gen_key_distribution_proof_2_recipients() {
     let proof = KeyDistributionProof::<()>::new(
         &mut rng,
         &dist_keys.enc,
-        &recipient_pks,
+        recipient_pks,
         NONCE,
         tree_params,
     )
@@ -258,7 +258,7 @@ pub fn gen_key_distribution_proof_3_recipients() {
     let proof = KeyDistributionProof::<()>::new(
         &mut rng,
         &dist_keys.enc,
-        &recipient_pks,
+        recipient_pks,
         NONCE,
         tree_params,
     )

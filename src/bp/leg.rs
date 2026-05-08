@@ -1049,14 +1049,14 @@ impl<
 ///
 /// Returns the leaf-level PedersenGens for the Pallas curve, used by
 /// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
-fn get_leaf_level_pc_gens() -> PedersenGens<PallasA> {
-    get_pallas_layer_parameters().pc_gens().clone()
+fn get_leaf_level_pc_gens<'a>() -> &'a PedersenGens<PallasA> {
+    get_pallas_layer_parameters().pc_gens()
 }
 
 /// Returns the leaf-level BulletproofGens for the Pallas curve, used by
 /// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
-fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
-    get_pallas_layer_parameters().bp_gens().clone()
+fn get_leaf_level_bp_gens<'a>() -> &'a BulletproofGens<PallasA> {
+    get_pallas_layer_parameters().bp_gens()
 }
 
 /// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
@@ -1094,8 +1094,8 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             leg_enc.decode()?,
             leg_enc_rand.decode()?,
             ctx,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
@@ -1122,17 +1122,16 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
-        let (enc_keys, med_keys) = asset_lookup.get_keys(self.asset_id)?;
-        let leaf_level_pc_gens = get_leaf_level_pc_gens();
-        let leaf_level_bp_gens = get_leaf_level_bp_gens();
         let leg_enc = self.leg_enc.decode()?;
-        log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
-        let proof = self.inner.decode()?;
-
-        // TODO: move this check into the inner proof.
         if leg_enc.asset_id() != Some(self.asset_id) {
             return Err(Error::CryptoError("Asset ID mismatch".to_string()));
         }
+
+        let (enc_keys, med_keys) = asset_lookup.get_keys(self.asset_id)?;
+        let leaf_level_pc_gens = get_leaf_level_pc_gens();
+        let leaf_level_bp_gens = get_leaf_level_bp_gens();
+        log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
+        let proof = self.inner.decode()?;
 
         RandomizedMultCheckerGuard::new_using_rng(rng).with(|rmc| -> Result<(), Error> {
             let public_enc_keys: Vec<PallasA> = self
@@ -1148,8 +1147,8 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
                 med_keys,
                 public_enc_keys,
                 ctx,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
                 dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
                 Some(rmc),
@@ -1184,8 +1183,8 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             med_keys,
             public_enc_keys,
             ctx,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rng,

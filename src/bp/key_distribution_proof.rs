@@ -36,23 +36,23 @@ impl<T: DartLimits> KeyDistributionProof<T> {
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         key: &EncryptionKeyPair,
-        recipient_pks: &[EncryptionPublicKey],
+        recipient_pks: Vec<EncryptionPublicKey>,
         nonce: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<Self, Error> {
         let sk = key.secret.clone();
         let pk_enc = key.public;
         let pk = pk_enc.get_affine()?;
-        let mut recipient_pks_set = BoundedBTreeSet::new();
-        for pk in recipient_pks {
-            recipient_pks_set
-                .try_insert(pk.clone())
-                .map_err(|_| Error::TooManyPublicInputsInProof)?;
-        }
-        let rec_pks = recipient_pks_set
+        let rec_pks = recipient_pks
             .iter()
             .map(|k| k.get_affine())
             .collect::<Result<Vec<_>, _>>()?;
+        let mut recipient_pks_set = BoundedBTreeSet::new();
+        for pk in recipient_pks {
+            recipient_pks_set
+                .try_insert(pk)
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
 
         let gens = dart_gens();
         let proof = key_distribution::KeyDistributionProof::new(
