@@ -49,21 +49,27 @@ The library provides several feature flags:
 
 ## Testing
 
+`cargo nextest` is preferred for running tests. To run all tests, use
+
+```
+cargo nextest run -r
+```
+
 Tests that check against serialized data to detect breaking changes are run as
 ```
-cargo test -r --test serialized_objects_test
+cargo nextest run -r --test serialized_objects_test
 ```
 
 To create the serialized data, run
 ```
-cargo test -r --test serialized_objects_test generate_v1_serialized_objects -- --ignored
+cargo nextest run -r --test serialized_objects_test --run-ignored ignored
 ```
 
 ## Code coverage
 
 Run code coverage as 
 ```
-cargo llvm-cov -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
+cargo llvm-cov nextest -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
 ```
 
 To get report in HTML, install `lcov` and run

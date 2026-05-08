@@ -1,5 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(non_snake_case)]
+#![cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    feature(proc_macro_hygiene)
+)]
 
 // This feature is intentionally for negative testing only. Prevent accidentally shipping a release
 // build with prover-side input sanitation disabled.

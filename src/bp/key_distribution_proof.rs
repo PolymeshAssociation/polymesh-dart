@@ -14,7 +14,7 @@ use polymesh_dart_bp::key_distribution;
 use rand_core::{CryptoRng, RngCore};
 
 /// Wraps [`key_distribution::KeyDistributionProof`], proving that a secret key has been
-/// correctly split and encrypted under each recipient's public key.
+/// correctly encrypted under each recipient's public key.
 ///
 /// The proof owner distributes their encryption secret key to `recipient_pks`
 /// so each recipient can independently decrypt it.

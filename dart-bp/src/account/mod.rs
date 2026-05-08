@@ -742,7 +742,7 @@ macro_rules! impl_txn_split_proof {
         }
     };
 
-    // ── With balance change ─────────────────────────────────────────────
+    //  With balance change ─
     (
         $(#[$proto_attr:meta])*
         $ProtocolName:ident,
@@ -842,8 +842,8 @@ macro_rules! impl_txn_split_proof {
                 let balance_prover = BalanceSplitProver::init(
                     rng,
                     &balance_changes,
-                    account.balance,
-                    updated_account.balance,
+                    account.balance(),
+                    updated_account.balance(),
                     inner.old_balance_blinding(),
                     inner.new_balance_blinding(),
                     enc_gen,
@@ -1203,7 +1203,7 @@ macro_rules! impl_txn_split_proof {
         }
     };
 
-    // ── Without balance change ──────────────────────────────────────────
+    //  Without balance change
     (
         $(#[$proto_attr:meta])*
         $ProtocolName:ident,

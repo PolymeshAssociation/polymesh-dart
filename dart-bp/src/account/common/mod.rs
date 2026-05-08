@@ -129,7 +129,7 @@ pub struct CommonStateChangeProver<
     pub t_acc_old: SchnorrCommitment<Affine<G0>>,
     pub t_acc_new: SchnorrCommitment<Affine<G0>>,
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
-    // TODO: Remove zeroize skip
+    // This zeroizes itself
     #[zeroize(skip)]
     pub t_leg_link: Vec<LegAccountLinkProtocol<G0>>,
     #[zeroize(skip)]
@@ -790,7 +790,7 @@ impl<
         new_randomness_blinding: F0,
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
-        let asset_id = account.asset_id;
+        let asset_id = account.asset_id();
         let (_, legs) = legs_for_proof(legs_with_conf, asset_id)?;
 
         add_to_transcript!(
@@ -814,12 +814,12 @@ impl<
         let (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp) = create_bp_and_null_t_values(
             rng,
             false, // include_sk: host mode
-            account.rho,
-            account.current_rho,
-            updated_account.current_rho,
-            account.randomness,
-            account.current_randomness,
-            updated_account.current_randomness,
+            account.rho(),
+            account.current_rho(),
+            updated_account.current_rho(),
+            account.randomness(),
+            account.current_randomness(),
+            updated_account.current_randomness(),
             initial_rho_blinding,
             old_rho_blinding,
             new_rho_blinding,
@@ -1167,7 +1167,7 @@ impl<
 
         let mut ct_asset_id_2_protos = Vec::new();
         if let Some(asset_id_blinding) = asset_id_blinding {
-            let asset_id = F0::from(account.asset_id);
+            let asset_id = F0::from(account.asset_id());
             for &k_asset_id in k_asset_ids.iter() {
                 let ct_asset_id_2 = (enc_gen * asset_id + b_blinding * (-k_asset_id)).into_affine();
                 let proto = PokPedersenCommitmentProtocol::init(
@@ -1200,19 +1200,19 @@ impl<
 
         {
             let is_asset_id_revealed = acc_host_proto.is_asset_id_revealed;
-            let balance: F0 = account.balance.into();
-            let counter: F0 = account.counter.into();
+            let balance: F0 = account.balance().into();
+            let counter: F0 = account.counter().into();
             let mut old_wits = Vec::with_capacity(NUM_GENERATORS);
             old_wits.push(balance);
             old_wits.push(counter);
             if !is_asset_id_revealed {
-                old_wits.push(account.asset_id.into());
+                old_wits.push(account.asset_id().into());
             }
-            old_wits.push(account.rho);
-            old_wits.push(account.current_rho);
-            old_wits.push(account.randomness);
-            old_wits.push(account.current_randomness);
-            old_wits.push(account.id);
+            old_wits.push(account.rho());
+            old_wits.push(account.current_rho());
+            old_wits.push(account.randomness());
+            old_wits.push(account.current_randomness());
+            old_wits.push(account.id());
             old_wits.push(host_rerandomization);
 
             let gens_old: Vec<Affine<G0>> = if is_asset_id_revealed {
@@ -1232,14 +1232,14 @@ impl<
             let mut new_wits = old_wits;
             let last = new_wits.len() - 1;
             new_wits[last] = -acc_host_proto.rand_new_comm;
-            let has_balance_changed = account.balance != updated_account.balance;
+            let has_balance_changed = account.balance() != updated_account.balance();
             if has_balance_changed {
-                new_wits[0] = updated_account.balance.into();
+                new_wits[0] = updated_account.balance().into();
             }
             let current_rho_idx = if is_asset_id_revealed { 3 } else { 4 };
             let current_randomness_idx = if is_asset_id_revealed { 5 } else { 6 };
-            new_wits[current_rho_idx] = updated_account.current_rho;
-            new_wits[current_randomness_idx] = updated_account.current_randomness;
+            new_wits[current_rho_idx] = updated_account.current_rho();
+            new_wits[current_randomness_idx] = updated_account.current_randomness();
 
             let mut gens_new = gens_old;
             gens_new[last] = b_blinding;
@@ -1254,11 +1254,11 @@ impl<
                 // B_blinding term).
                 let mut diff_wits = vec![F0::zero(); gens_new.len()];
                 if has_balance_changed {
-                    diff_wits[0] = balance - F0::from(updated_account.balance);
+                    diff_wits[0] = balance - F0::from(updated_account.balance());
                 }
-                diff_wits[current_rho_idx] = account.current_rho - updated_account.current_rho;
+                diff_wits[current_rho_idx] = account.current_rho() - updated_account.current_rho();
                 diff_wits[current_randomness_idx] =
-                    account.current_randomness - updated_account.current_randomness;
+                    account.current_randomness() - updated_account.current_randomness();
                 diff_wits[last] = host_rerandomization + acc_host_proto.rand_new_comm;
                 debug_assert_eq!(
                     (reduced_acc_old.into_group() - reduced_acc_new.into_group()).into_affine(),
@@ -1458,12 +1458,12 @@ pub fn ensure_same_accounts<G: AffineRepr>(
     {
         if old_state.pk_aff() != new_state.pk_aff() {
             return Err(Error::ProofGenerationError(
-                "Secret key mismatch between old and new account states".to_string(),
+                "Affirmation public key mismatch between old and new account states".to_string(),
             ));
         }
         if old_state.pk_enc() != new_state.pk_enc() {
             return Err(Error::ProofGenerationError(
-                "Secret key inverse mismatch between old and new account states".to_string(),
+                "Encryption public key mismatch between old and new account states".to_string(),
             ));
         }
         if old_state.id != new_state.id {

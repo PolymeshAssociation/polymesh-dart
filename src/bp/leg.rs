@@ -1143,6 +1143,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             proof.verify(
                 rng,
                 leg_enc,
+                self.asset_id,
                 enc_keys,
                 med_keys,
                 public_enc_keys,
@@ -1179,6 +1180,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
 
         let tuple = proof.verify_and_return_tuples(
             leg_enc,
+            self.asset_id,
             enc_keys,
             med_keys,
             public_enc_keys,

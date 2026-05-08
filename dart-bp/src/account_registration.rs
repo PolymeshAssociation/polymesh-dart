@@ -7,7 +7,7 @@ use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
-use crate::util::bp_gens_for_vec_commitment;
+use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -20,7 +20,6 @@ use ark_std::string::ToString;
 use ark_std::{UniformRand, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
-    add_verification_tuple_to_rmc, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::mem;
@@ -162,6 +161,20 @@ struct RegTxnEncryptionProtocolState<
     com_s_rho_bp_blinding: G::ScalarField,
 }
 
+struct RegTxnEncryptedScalarPrep<G: AffineRepr, const NUM_CHUNKS: usize> {
+    chunks: [G::ScalarField; NUM_CHUNKS],
+    chunks_as_u64: [u64; NUM_CHUNKS],
+    enc_rands: Vec<G::ScalarField>,
+    ciphertexts: Vec<Ciphertext<G>>,
+    chunk_blindings: Vec<G::ScalarField>,
+    eph_proto: Vec<PokDiscreteLogProtocol<G>>,
+    enc_proto: Vec<PokPedersenCommitmentProtocol<G>>,
+}
+
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     RegTxnWithoutSkProtocol<G, CHUNK_BITS, NUM_CHUNKS>
 {
@@ -175,16 +188,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     /// Initialise the partial protocol. Takes `AccountState` (no secret keys).
     /// After calling this, the caller should add auth challenge contribution to the transcript
     /// before deriving the challenge.
-    pub fn init_with_given_prover<R: CryptoRngCore>(
+    pub fn init_with_given_prover<R: CryptoRngCore, CK: AccountCommitmentKeyTrait<G>>(
         rng: &mut R,
-        pk_aff: G,
-        pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         rho_randomness: G::ScalarField,
         counter: NullifierSkGenCounter,
         nonce: &[u8],
-        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        account_comm_key: &CK,
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
@@ -194,13 +205,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let _ = Self::CHECK_CHUNK_BITS;
 
         ensure_correct_registration_state(account)?;
+        let pk_aff = account.pk_aff();
+        let pk_enc = account.pk_enc();
         let mut transcript_ref = prover.transcript();
         add_to_transcript!(
             transcript_ref,
             NONCE_LABEL,
             nonce,
             ASSET_ID_LABEL,
-            account.asset_id,
+            account.asset_id(),
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
@@ -208,14 +221,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ENC_PK_LABEL,
             pk_enc,
             ID_LABEL,
-            account.id
+            account.id()
         );
 
         // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
         let D = pk_aff.into_group()
             + pk_enc.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id))
-            + (account_comm_key.id_gen() * account.id);
+            + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id()))
+            + (account_comm_key.id_gen() * account.id());
 
         let mut rho_blinding = G::ScalarField::rand(rng);
         let mut rho_sq_blinding = G::ScalarField::rand(rng);
@@ -236,141 +249,35 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
 
         // N = current_rho_gen * rho (initial nullifier)
-        let initial_nullifier = (account_comm_key.current_rho_gen() * account.rho).into_affine();
-        let init_null_protocol = PokDiscreteLogProtocol::init(
-            account.rho,
-            rho_blinding,
-            &account_comm_key.current_rho_gen(),
-        );
+        let initial_nullifier = account.initial_nullifier(account_comm_key);
+        let nullifier_gen = account_comm_key.current_rho_gen();
+        let init_null_protocol = Self::nullifier_proto(account.rho(), rho_blinding, &nullifier_gen);
         init_null_protocol.challenge_contribution(
-            &account_comm_key.current_rho_gen(),
+            &nullifier_gen,
             &initial_nullifier,
             &mut transcript_ref,
         )?;
 
         // Encryption protocols (if T is provided)
-        let mut enc_prep = if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
-            let (s_chunks, s_chunks_as_u64) =
-                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.randomness);
-            let encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
-                enc_gen.into_group(),
-                &s_chunks,
-            ));
-            let enc_rands = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let s_chunks_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let enc_rands_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let ciphertexts = (0..NUM_CHUNKS)
-                .map(|i| {
-                    Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen)
-                })
-                .collect::<Vec<_>>();
+        let mut enc_prep = if let Some((pk_t, enc_key_gen, enc_gen)) = &T {
+            let s_prep = Self::init_chunk_encryption_protocol(
+                rng,
+                account.randomness(),
+                pk_t,
+                enc_key_gen,
+                enc_gen,
+                transcript_ref,
+            )?;
+            let rho_prep = Self::init_chunk_encryption_protocol(
+                rng,
+                account.rho(),
+                pk_t,
+                enc_key_gen,
+                enc_gen,
+                transcript_ref,
+            )?;
 
-            let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
-            let mut enc_proto = Vec::with_capacity(NUM_CHUNKS);
-            for i in 0..NUM_CHUNKS {
-                eph_proto.push(PokDiscreteLogProtocol::init(
-                    enc_rands[i],
-                    enc_rands_blindings[i],
-                    enc_key_gen,
-                ));
-                eph_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-                enc_proto.push(PokPedersenCommitmentProtocol::init(
-                    enc_rands[i],
-                    enc_rands_blindings[i],
-                    pk_T,
-                    s_chunks[i],
-                    s_chunks_blindings[i],
-                    enc_gen,
-                ));
-                enc_proto[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-
-            let (rho_chunks, rho_chunks_as_u64) =
-                digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(account.rho);
-            let rho_encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
-                enc_gen.into_group(),
-                &rho_chunks,
-            ));
-            let rho_enc_rands = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let rho_chunks_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let rho_enc_rands_blindings = (0..NUM_CHUNKS)
-                .map(|_| G::ScalarField::rand(rng))
-                .collect::<Vec<_>>();
-            let rho_ciphertexts = (0..NUM_CHUNKS)
-                .map(|i| {
-                    Ciphertext::new_given_randomness(
-                        &rho_encs[i],
-                        &rho_enc_rands[i],
-                        pk_T,
-                        enc_key_gen,
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let mut rho_eph_proto = Vec::with_capacity(NUM_CHUNKS);
-            let mut rho_enc_proto = Vec::with_capacity(NUM_CHUNKS);
-            for i in 0..NUM_CHUNKS {
-                rho_eph_proto.push(PokDiscreteLogProtocol::init(
-                    rho_enc_rands[i],
-                    rho_enc_rands_blindings[i],
-                    enc_key_gen,
-                ));
-                rho_eph_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &rho_ciphertexts[i].eph_pk,
-                    &mut transcript_ref,
-                )?;
-                rho_enc_proto.push(PokPedersenCommitmentProtocol::init(
-                    rho_enc_rands[i],
-                    rho_enc_rands_blindings[i],
-                    pk_T,
-                    rho_chunks[i],
-                    rho_chunks_blindings[i],
-                    enc_gen,
-                ));
-                rho_enc_proto[i].challenge_contribution(
-                    pk_T,
-                    enc_gen,
-                    &rho_ciphertexts[i].encrypted,
-                    &mut transcript_ref,
-                )?;
-            }
-
-            Some((
-                s_chunks,
-                s_chunks_as_u64,
-                enc_rands,
-                ciphertexts,
-                s_chunks_blindings,
-                eph_proto,
-                enc_proto,
-                rho_chunks,
-                rho_chunks_as_u64,
-                rho_enc_rands,
-                rho_ciphertexts,
-                rho_chunks_blindings,
-                rho_eph_proto,
-                rho_enc_proto,
-            ))
+            Some((s_prep, rho_prep))
         } else {
             None
         };
@@ -380,17 +287,17 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let (comm_rho_bp, vars) = prover.commit_vec(
             &[
                 rho_randomness,
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
+                account.rho(),
+                account.current_rho(),
+                account.randomness(),
+                account.current_randomness(),
             ],
             com_rho_bp_blinding,
             &leaf_level_bp_gens,
         );
         RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::enforce_constraints(
             prover,
-            account.asset_id,
+            account.asset_id(),
             counter,
             vars,
             poseidon_config,
@@ -413,70 +320,43 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         );
 
         // Commit to all chunks of s and rho in a single vector commitment
-        let (comm_s_rho_chunks_bp, com_s_rho_bp_blinding) = if let Some((
-            s_chunks,
-            s_chunks_as_u64,
-            _,
-            _,
-            _,
-            _,
-            _,
-            rho_chunks,
-            rho_chunks_as_u64,
-            _,
-            _,
-            _,
-            _,
-            _,
-        )) = &mut enc_prep
-        {
-            let com_s_rho_bp_blinding = G::ScalarField::rand(rng);
-            let combined_chunks: Vec<G::ScalarField> =
-                s_chunks.iter().chain(rho_chunks.iter()).copied().collect();
-            let (comm_s_rho_bp, vars) =
-                prover.commit_vec(&combined_chunks, com_s_rho_bp_blinding, &leaf_level_bp_gens);
-            for (i, var) in vars.into_iter().enumerate() {
-                if i < NUM_CHUNKS {
-                    let chunk = mem::take(&mut s_chunks_as_u64[i]);
-                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
-                } else {
-                    let chunk = mem::take(&mut rho_chunks_as_u64[i - NUM_CHUNKS]);
-                    range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
+        let (comm_s_rho_chunks_bp, com_s_rho_bp_blinding) =
+            if let Some((s_prep, rho_prep)) = &mut enc_prep {
+                let com_s_rho_bp_blinding = G::ScalarField::rand(rng);
+                let combined_chunks: Vec<G::ScalarField> = s_prep
+                    .chunks
+                    .iter()
+                    .chain(rho_prep.chunks.iter())
+                    .copied()
+                    .collect();
+                let (comm_s_rho_bp, vars) =
+                    prover.commit_vec(&combined_chunks, com_s_rho_bp_blinding, &leaf_level_bp_gens);
+                for (i, var) in vars.into_iter().enumerate() {
+                    if i < NUM_CHUNKS {
+                        let chunk = mem::take(&mut s_prep.chunks_as_u64[i]);
+                        range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
+                    } else {
+                        let chunk = mem::take(&mut rho_prep.chunks_as_u64[i - NUM_CHUNKS]);
+                        range_proof(prover, var.into(), Some(chunk as u128), CHUNK_BITS)?;
+                    }
                 }
-            }
-            (Some(comm_s_rho_bp), Some(com_s_rho_bp_blinding))
-        } else {
-            (None, None)
-        };
+                (Some(comm_s_rho_bp), Some(com_s_rho_bp_blinding))
+            } else {
+                (None, None)
+            };
 
         let mut transcript_ref = prover.transcript();
         t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
 
         // Chunks commitment t-values and combined protos
-        let combined_enc_data = if let Some((
-            _,
-            _,
-            enc_rands,
-            _,
-            s_chunks_blindings,
-            _,
-            _,
-            _,
-            _,
-            rho_enc_rands,
-            _,
-            rho_chunks_blindings,
-            _,
-            _,
-        )) = &mut enc_prep
-        {
+        let combined_enc_data = if let Some((s_prep, rho_prep)) = &mut enc_prep {
             let mut blindings = vec![G::ScalarField::rand(rng)];
             for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut s_chunks_blindings[i]);
+                let b = mem::take(&mut s_prep.chunk_blindings[i]);
                 blindings.push(b);
             }
             for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut rho_chunks_blindings[i]);
+                let b = mem::take(&mut rho_prep.chunk_blindings[i]);
                 blindings.push(b);
             }
             let t_comm_s_rho_chunks_bp = SchnorrCommitment::new(
@@ -488,69 +368,32 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             );
             t_comm_s_rho_chunks_bp.challenge_contribution(&mut transcript_ref)?;
 
-            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let mut combined_enc_rand =
-                inner_product::<G::ScalarField>(enc_rands.as_slice(), &powers);
-            let pk_T = T.as_ref().unwrap().0;
+            let pk_t = T.as_ref().unwrap().0;
             let h = T.as_ref().unwrap().2;
-            let combined_s_commitment =
-                (pk_T * combined_enc_rand + h * account.randomness).into_affine();
-
-            for i in 0..NUM_CHUNKS {
-                let mut e = mem::take(&mut enc_rands[i]);
-                Zeroize::zeroize(&mut e);
-            }
-
-            let combined_s_proto = PokPedersenCommitmentProtocol::init(
-                combined_enc_rand,
-                G::ScalarField::rand(rng),
-                &pk_T,
-                account.randomness,
+            let combined_s_proto = Self::init_combined_scalar_proto(
+                rng,
+                account.randomness(),
                 s_blinding,
+                s_prep.enc_rands.as_mut_slice(),
+                &pk_t,
                 &h,
-            );
+                transcript_ref,
+            )?;
 
             s_blinding.zeroize();
             s_sq_blinding.zeroize();
-            combined_enc_rand.zeroize();
-
-            combined_s_proto.challenge_contribution(
-                &pk_T,
-                &h,
-                &combined_s_commitment,
-                &mut transcript_ref,
-            )?;
-
-            let rho_powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let mut combined_rho_enc_rand =
-                inner_product::<G::ScalarField>(rho_enc_rands.as_slice(), &rho_powers);
-            let combined_rho_commitment =
-                (pk_T * combined_rho_enc_rand + h * account.rho).into_affine();
-
-            for i in 0..NUM_CHUNKS {
-                let mut e = mem::take(&mut rho_enc_rands[i]);
-                Zeroize::zeroize(&mut e);
-            }
-
-            let combined_rho_proto = PokPedersenCommitmentProtocol::init(
-                combined_rho_enc_rand,
-                G::ScalarField::rand(rng),
-                &pk_T,
-                account.rho,
+            let combined_rho_proto = Self::init_combined_scalar_proto(
+                rng,
+                account.rho(),
                 rho_blinding,
+                rho_prep.enc_rands.as_mut_slice(),
+                &pk_t,
                 &h,
-            );
+                transcript_ref,
+            )?;
 
             rho_blinding.zeroize();
             rho_sq_blinding.zeroize();
-            combined_rho_enc_rand.zeroize();
-
-            combined_rho_proto.challenge_contribution(
-                &pk_T,
-                &h,
-                &combined_rho_commitment,
-                &mut transcript_ref,
-            )?;
 
             Some((t_comm_s_rho_chunks_bp, combined_s_proto, combined_rho_proto))
         } else {
@@ -560,32 +403,17 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // Now consume enc_prep to build the encryption state
         let enc_state = match (enc_prep, combined_enc_data) {
             (
-                Some((
-                    s_chunks,
-                    _,
-                    _,
-                    s_ciphertexts,
-                    _,
-                    s_eph_proto,
-                    s_enc_proto,
-                    rho_chunks,
-                    _,
-                    _,
-                    rho_ciphertexts,
-                    _,
-                    rho_eph_proto,
-                    rho_enc_proto,
-                )),
+                Some((s_prep, rho_prep)),
                 Some((t_comm_s_rho_chunks_bp, combined_s_proto, combined_rho_proto)),
             ) => Some(RegTxnEncryptionProtocolState {
-                s_eph_proto,
-                s_enc_proto,
-                s_ciphertexts,
-                s_chunks,
-                rho_eph_proto,
-                rho_enc_proto,
-                rho_ciphertexts,
-                rho_chunks,
+                s_eph_proto: s_prep.eph_proto,
+                s_enc_proto: s_prep.enc_proto,
+                s_ciphertexts: s_prep.ciphertexts,
+                s_chunks: s_prep.chunks,
+                rho_eph_proto: rho_prep.eph_proto,
+                rho_enc_proto: rho_prep.enc_proto,
+                rho_ciphertexts: rho_prep.ciphertexts,
+                rho_chunks: rho_prep.chunks,
                 t_comm_s_rho_chunks_bp,
                 combined_s_proto,
                 combined_rho_proto,
@@ -601,10 +429,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             t_comm_rho_bp,
             initial_nullifier,
             comm_rho_bp,
-            rho: account.rho,
-            current_rho: account.current_rho,
-            randomness: account.randomness,
-            current_randomness: account.current_randomness,
+            rho: account.rho(),
+            current_rho: account.current_rho(),
+            randomness: account.randomness(),
+            current_randomness: account.current_randomness(),
             com_rho_bp_blinding,
             rho_randomness,
             enc_state,
@@ -699,16 +527,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         })
     }
 
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<R: CryptoRngCore, CK: AccountCommitmentKeyTrait<G>>(
         rng: &mut R,
-        pk_aff: G,
-        pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         rho_randomness: G::ScalarField,
         counter: NullifierSkGenCounter,
         nonce: &[u8],
-        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        account_comm_key: &CK,
         leaf_level_pc_gens: &PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
@@ -716,8 +542,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     ) -> Result<RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>> {
         let (proto, mut prover) = Self::init(
             rng,
-            pk_aff,
-            pk_enc,
             account,
             account_commitment,
             rho_randomness,
@@ -741,16 +565,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         Ok(partial)
     }
 
-    pub fn init<'a, R: CryptoRngCore>(
+    pub fn init<'a, R: CryptoRngCore, CK: AccountCommitmentKeyTrait<G>>(
         rng: &mut R,
-        pk_aff: G,
-        pk_enc: G,
         account: &AccountState<G>,
         account_commitment: AccountStateCommitment<G>,
         rho_randomness: G::ScalarField,
         counter: NullifierSkGenCounter,
         nonce: &[u8],
-        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+        account_comm_key: &CK,
         leaf_level_pc_gens: &'a PedersenGens<G>,
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
@@ -761,8 +583,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let proto = Self::init_with_given_prover(
             rng,
-            pk_aff,
-            pk_enc,
             account,
             account_commitment,
             rho_randomness,
@@ -777,6 +597,118 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         )?;
 
         Ok((proto, prover))
+    }
+
+    fn init_chunk_encryption_protocol<R: CryptoRngCore>(
+        rng: &mut R,
+        scalar: G::ScalarField,
+        pk_T: &G,
+        enc_key_gen: &G,
+        enc_gen: &G,
+        transcript_ref: &mut MerlinTranscript,
+    ) -> Result<RegTxnEncryptedScalarPrep<G, NUM_CHUNKS>> {
+        let (chunks, chunks_as_u64) = digits::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>(scalar);
+        let encs = G::Group::normalize_batch(&multiply_field_elems_with_same_group_elem(
+            enc_gen.into_group(),
+            &chunks,
+        ));
+        let enc_rands = (0..NUM_CHUNKS)
+            .map(|_| G::ScalarField::rand(rng))
+            .collect::<Vec<_>>();
+        let chunk_blindings = (0..NUM_CHUNKS)
+            .map(|_| G::ScalarField::rand(rng))
+            .collect::<Vec<_>>();
+        let enc_rands_blindings = (0..NUM_CHUNKS)
+            .map(|_| G::ScalarField::rand(rng))
+            .collect::<Vec<_>>();
+        let ciphertexts = (0..NUM_CHUNKS)
+            .map(|i| Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen))
+            .collect::<Vec<_>>();
+
+        let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
+        let mut enc_proto = Vec::with_capacity(NUM_CHUNKS);
+        for i in 0..NUM_CHUNKS {
+            eph_proto.push(PokDiscreteLogProtocol::init(
+                enc_rands[i],
+                enc_rands_blindings[i],
+                enc_key_gen,
+            ));
+            eph_proto[i].challenge_contribution(
+                enc_key_gen,
+                &ciphertexts[i].eph_pk,
+                &mut *transcript_ref,
+            )?;
+            enc_proto.push(PokPedersenCommitmentProtocol::init(
+                enc_rands[i],
+                enc_rands_blindings[i],
+                pk_T,
+                chunks[i],
+                chunk_blindings[i],
+                enc_gen,
+            ));
+            enc_proto[i].challenge_contribution(
+                pk_T,
+                enc_gen,
+                &ciphertexts[i].encrypted,
+                &mut *transcript_ref,
+            )?;
+        }
+
+        Ok(RegTxnEncryptedScalarPrep {
+            chunks,
+            chunks_as_u64,
+            enc_rands,
+            ciphertexts,
+            chunk_blindings,
+            eph_proto,
+            enc_proto,
+        })
+    }
+
+    fn init_combined_scalar_proto<R: CryptoRngCore>(
+        rng: &mut R,
+        scalar: G::ScalarField,
+        scalar_blinding: G::ScalarField,
+        enc_rands: &mut [G::ScalarField],
+        pk_T: &G,
+        enc_gen: &G,
+        transcript_ref: &mut MerlinTranscript,
+    ) -> Result<PokPedersenCommitmentProtocol<G>> {
+        let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
+        let mut combined_enc_rand = inner_product::<G::ScalarField>(enc_rands, &powers);
+        let combined_commitment =
+            (pk_T.into_group() * combined_enc_rand + enc_gen.into_group() * scalar).into_affine();
+
+        for enc_rand in enc_rands.iter_mut() {
+            let mut e = mem::take(enc_rand);
+            e.zeroize();
+        }
+
+        let combined_proto = PokPedersenCommitmentProtocol::init(
+            combined_enc_rand,
+            G::ScalarField::rand(rng),
+            pk_T,
+            scalar,
+            scalar_blinding,
+            enc_gen,
+        );
+        combined_enc_rand.zeroize();
+
+        combined_proto.challenge_contribution(
+            pk_T,
+            enc_gen,
+            &combined_commitment,
+            transcript_ref,
+        )?;
+        Ok(combined_proto)
+    }
+
+    fn nullifier_proto(
+        rho: G::ScalarField,
+        rho_blinding: G::ScalarField,
+        nullifier_gen: &G,
+    ) -> PokDiscreteLogProtocol<G> {
+        PokDiscreteLogProtocol::init(rho, rho_blinding, nullifier_gen)
     }
 }
 
@@ -1249,8 +1181,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let pk_enc = account.pk_enc();
         let partial_proto = RegTxnWithoutSkProtocol::init_with_given_prover(
             rng,
-            pk_aff,
-            pk_enc,
             account,
             account_commitment,
             rho_randomness,
@@ -1327,14 +1257,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             rmc.as_deref_mut(),
         )?;
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
-                    .map_err(|e| e.into())
-            }
-            _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
-                .map_err(|e| e.into()),
-        }
+        handle_verification_tuple(tuple, leaf_level_pc_gens, leaf_level_bp_gens, rmc)
     }
 
     /// Create a new verifier and verify the given proof
@@ -1374,14 +1297,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             rmc.as_deref_mut(),
         )?;
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
-                    .map_err(|e| e.into())
-            }
-            _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
-                .map_err(|e| e.into()),
-        }
+        handle_verification_tuple(tuple, leaf_level_pc_gens, leaf_level_bp_gens, rmc)
     }
 
     /// Create a new verifier and verify the given proof
@@ -1728,8 +1644,8 @@ impl<
 
         // x_1 is rho
         // x_2 is randomness
-        debug_assert_eq!(account.rho, x_1);
-        debug_assert_eq!(account.randomness, x_2);
+        debug_assert_eq!(account.rho(), x_1);
+        debug_assert_eq!(account.randomness(), x_2);
 
         let mut transcript = MerlinTranscript::new(REG_TXN_LABEL);
 
@@ -1738,13 +1654,13 @@ impl<
             NONCE_LABEL,
             nonce,
             ASSET_ID_LABEL,
-            account.asset_id,
+            account.asset_id(),
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
             pk,
             ID_LABEL,
-            account.id,
+            account.id(),
             PK_T_LABEL,
             pk_T,
             PK_T_GEN_LABEL,
@@ -1763,15 +1679,15 @@ impl<
 
         // D = pk + g_k * asset_id + g_l * id
         let D = pk.into_group()
-            + (account_comm_key.asset_id_gen() * G0::ScalarField::from(account.asset_id))
-            + (account_comm_key.id_gen() * account.id);
+            + (account_comm_key.asset_id_gen() * G0::ScalarField::from(account.asset_id()))
+            + (account_comm_key.id_gen() * account.id());
 
         // For proving Comm - D - initial_nullifier = g_i * rho^2 + g_j * s
         let comm_protocol = PokPedersenCommitmentProtocol::init(
-            account.current_rho,
+            account.current_rho(),
             current_rho_blinding,
             &account_comm_key.current_rho_gen(),
-            account.randomness,
+            account.randomness(),
             x_2_blinding,
             &account_comm_key.randomness_gen(),
         );
@@ -1786,7 +1702,7 @@ impl<
 
         // For proving initial_nullifier
         let init_null_protocol =
-            PokDiscreteLogProtocol::init(account.rho, x_1_blinding, &account_comm_key.rho_gen());
+            PokDiscreteLogProtocol::init(account.rho(), x_1_blinding, &account_comm_key.rho_gen());
         init_null_protocol.challenge_contribution(
             &account_comm_key.rho_gen(),
             &initial_nullifier,
@@ -1800,7 +1716,7 @@ impl<
 
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
         let (comm_bp, vars) = prover.commit_vec(
-            &[x_1, y_1, x_2, y_2, account.current_rho],
+            &[x_1, y_1, x_2, y_2, account.current_rho()],
             comm_bp_blinding,
             &leaf_level_bp_gens,
         );
@@ -1845,7 +1761,7 @@ impl<
         let resp_T_2 = T_2_protocol.gen_proof(&prover_challenge_g1);
 
         let resp_comm_bp = t_comm_bp.response(
-            &[comm_bp_blinding, x_1, y_1, x_2, y_2, account.current_rho],
+            &[comm_bp_blinding, x_1, y_1, x_2, y_2, account.current_rho()],
             &prover_challenge,
         )?;
         let resp_pk = t_pk.gen_proof(&prover_challenge);
@@ -2101,12 +2017,12 @@ fn ensure_correct_registration_state<G: AffineRepr>(account: &AccountState<G>) -
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        if account.rho.square() != account.current_rho {
+        if account.rho().square() != account.current_rho() {
             return Err(Error::RegistrationError(
                 "Rho relation not satisfied".to_string(),
             ));
         }
-        if account.randomness.square() != account.current_randomness {
+        if account.randomness().square() != account.current_randomness() {
             return Err(Error::RegistrationError(
                 "Randomness relation not satisfied".to_string(),
             ));
@@ -2242,7 +2158,9 @@ pub mod tests {
     use ark_std::UniformRand;
     use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
-    use bulletproofs::r1cs::{add_verification_tuples_to_rmc, batch_verify};
+    use bulletproofs::r1cs::{
+        add_verification_tuples_to_rmc, batch_verify, verify_given_verification_tuple,
+    };
     use curve_tree_relations::parameters::SelRerandProofParameters;
     use polymesh_dart_common::AssetId;
     use std::time::Instant;
@@ -2585,6 +2503,8 @@ pub mod tests {
 
         let prover_time = clock.elapsed();
 
+        assert!(reg_proof.partial.encryption_for_T.is_none());
+
         // Verify without RandomizedMultChecker
         let clock = Instant::now();
         reg_proof
@@ -2702,6 +2622,8 @@ pub mod tests {
 
         let prover_time = clock.elapsed();
 
+        assert!(reg_proof.partial.encryption_for_T.is_some());
+
         // Verify without RandomizedMultChecker
         let clock = Instant::now();
         reg_proof
@@ -2728,6 +2650,7 @@ pub mod tests {
         // Verify with RandomizedMultChecker
         let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
         let clock = Instant::now();
+        let account_comm_key_for_neg = account_comm_key.clone();
         reg_proof
             .verify(
                 &mut rng,
@@ -2767,6 +2690,8 @@ pub mod tests {
             verifier_time_regular, verifier_time_rmc
         );
 
+        let reg_proof_for_neg = reg_proof.clone();
+
         // This will take a long time to decrypt
         let clock = Instant::now();
         assert_eq!(
@@ -2780,15 +2705,92 @@ pub mod tests {
                 .unwrap()
         );
         println!("decryption time = {:?}", clock.elapsed());
+
+        let (_, pk_t_wrong) = keygen_enc(&mut rng, enc_key_gen);
+        assert!(
+            reg_proof_for_neg
+                .verify(
+                    &mut rng,
+                    id,
+                    pk.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key_for_neg.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t_wrong.0, enc_key_gen, enc_gen)),
+                    None,
+                )
+                .is_err()
+        );
+
+        let mut wrong_chunks_proof = reg_proof_for_neg.clone();
+        {
+            let enc = wrong_chunks_proof
+                .partial
+                .encryption_for_T
+                .as_mut()
+                .unwrap();
+            enc.encrypted_randomness.ciphertexts.swap(0, 1);
+        }
+        assert!(
+            wrong_chunks_proof
+                .verify(
+                    &mut rng,
+                    id,
+                    pk.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key_for_neg.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    None,
+                )
+                .is_err()
+        );
+
+        let mut mismatched_combined_proof = reg_proof_for_neg.clone();
+        {
+            let enc = mismatched_combined_proof
+                .partial
+                .encryption_for_T
+                .as_mut()
+                .unwrap();
+            enc.encrypted_randomness.ciphertexts[0] = enc.encrypted_rho.ciphertexts[0].clone();
+        }
+        assert!(
+            mismatched_combined_proof
+                .verify(
+                    &mut rng,
+                    id,
+                    pk.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key_for_neg,
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_T.0, enc_key_gen, enc_gen)),
+                    None,
+                )
+                .is_err()
+        );
     }
 
     #[test]
     fn registration_parallel_workflow() {
-        // W2 (Parallel): Host and Ledger each build their own independent transcript.
-        // Host derives challenge_h from REG_TXN_LABEL transcript + partial T-values (no auth).
-        // Ledger derives challenge_l from its own AUTH_TXN_LABEL transcript with nonce only.
-        // Verifier replicates each side's transcript independently.
-
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         let account_tree_params =
@@ -2813,100 +2815,98 @@ pub mod tests {
 
         let aff_key_gen = account_comm_key.sk_gen();
 
-        //  Host side: own REG_TXN_LABEL transcript, public inputs + partial T-values
-        let partial = RegTxnWithoutSkProtocol::<_, 48, 6>::new(
-            &mut rng,
-            pk_aff.0,
-            pk_enc.0,
-            &account,
-            account_comm.clone(),
-            rho_randomness,
-            nullifier_gen_counter,
-            nonce,
-            &account_comm_key,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
-            &poseidon_params,
-            None,
-        )
-        .unwrap();
+        let enc_gen_for_t = PallasA::rand(&mut rng);
+        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
 
-        //  Ledger side: own AUTH_TXN_LABEL transcript, independently
-        let auth_proof = AuthProofOnlySks::new(
-            &mut rng,
-            sk_aff.0,
-            sk_enc.0,
-            pk_aff.0,
-            pk_enc.0,
-            nonce,
-            &aff_key_gen,
-            &enc_key_gen,
-        )
-        .unwrap();
-
-        let reg_proof = RegTxnProof::<_, 48, 6> {
-            auth_proof,
-            partial,
-        };
-
-        //  verify each side with its own independent challenge
-        let mut verifier = reg_proof
-            .partial
-            .challenge_contribution(
-                id,
-                pk_aff.0,
-                pk_enc.0,
-                asset_id,
-                &account_comm,
+        let mut check = |T: Option<(PallasA, PallasA, PallasA)>| {
+            let partial = RegTxnWithoutSkProtocol::<_, 48, 6>::new(
+                &mut rng,
+                &account,
+                account_comm.clone(),
+                rho_randomness,
                 nullifier_gen_counter,
                 nonce,
                 &account_comm_key,
-                &poseidon_params,
-                None,
-            )
-            .unwrap();
-
-        // Verifier derives partial challenge from its own transcript (no auth T-values)
-        let challenge_h_v = verifier
-            .transcript()
-            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
-
-        reg_proof
-            .partial
-            .verify_with_challenge(
-                &challenge_h_v,
-                &account_comm_key,
-                pk_aff.0,
-                pk_enc.0,
-                id,
-                asset_id,
-                &account_comm,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
-                None,
-                None,
+                &poseidon_params,
+                T,
             )
             .unwrap();
 
-        // Verify auth proof using its own AUTH_TXN_LABEL transcript
-        reg_proof
-            .auth_proof
-            .verify(pk_aff.0, pk_enc.0, nonce, &aff_key_gen, &enc_key_gen, None)
+            let auth_proof = AuthProofOnlySks::new(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                pk_aff.0,
+                pk_enc.0,
+                nonce,
+                &aff_key_gen,
+                &enc_key_gen,
+            )
             .unwrap();
 
-        let proof = reg_proof.partial.proof.as_ref().unwrap();
-        let tuple = verifier
-            .verification_scalars_and_points_with_rng(proof, &mut rng)
-            .unwrap();
-        verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens).unwrap();
+            let reg_proof = RegTxnProof::<_, 48, 6> {
+                auth_proof,
+                partial,
+            };
+
+            let mut verifier = reg_proof
+                .partial
+                .challenge_contribution(
+                    id,
+                    pk_aff.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    &account_comm_key,
+                    &poseidon_params,
+                    T,
+                )
+                .unwrap();
+
+            let challenge_h_v = verifier
+                .transcript()
+                .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+            reg_proof
+                .partial
+                .verify_with_challenge(
+                    &challenge_h_v,
+                    &account_comm_key,
+                    pk_aff.0,
+                    pk_enc.0,
+                    id,
+                    asset_id,
+                    &account_comm,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    T,
+                    None,
+                )
+                .unwrap();
+
+            reg_proof
+                .auth_proof
+                .verify(pk_aff.0, pk_enc.0, nonce, &aff_key_gen, &enc_key_gen, None)
+                .unwrap();
+
+            let proof = reg_proof.partial.proof.as_ref().unwrap();
+            let tuple = verifier
+                .verification_scalars_and_points_with_rng(proof, &mut rng)
+                .unwrap();
+            verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
+                .unwrap();
+        };
+
+        check(None);
+        check(Some((pk_T.0, enc_key_gen, enc_gen_for_t)));
     }
 
     #[test]
     fn registration_sequential_workflow() {
-        // W3 (Sequential): Host derives partial challenge first, sends it to Ledger.
-        // Ledger uses ledger_nonce = [challenge_h_bytes || original_nonce] for its own AUTH_TXN_LABEL transcript.
-        // Verifier replicates: derive partial challenge, verify partial, recompute ledger nonce, verify auth.
-
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         let account_tree_params =
@@ -2931,152 +2931,152 @@ pub mod tests {
 
         let aff_key_gen = account_comm_key.sk_gen();
 
-        //  Host pre-challenge phase
-        let (protocol, mut prover) = RegTxnWithoutSkProtocol::<_, 48, 6>::init(
-            &mut rng,
-            pk_aff.0,
-            pk_enc.0,
-            &account,
-            account_comm.clone(),
-            rho_randomness,
-            nullifier_gen_counter,
-            nonce,
-            &account_comm_key,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
-            &poseidon_params,
-            None,
-        )
-        .unwrap();
+        let enc_gen_for_t = PallasA::rand(&mut rng);
+        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
 
-        let challenge_h = prover
-            .transcript()
-            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
-
-        //  Host sends challenge_h bytes to Ledger
-        let mut challenge_h_bytes = Vec::new();
-        challenge_h
-            .serialize_compressed(&mut challenge_h_bytes)
-            .unwrap();
-        let ledger_nonce: Vec<u8> = challenge_h_bytes
-            .iter()
-            .chain(nonce.iter())
-            .copied()
-            .collect();
-        let auth_proof = AuthProofOnlySks::new(
-            &mut rng,
-            sk_aff.0,
-            sk_enc.0,
-            pk_aff.0,
-            pk_enc.0,
-            &ledger_nonce,
-            &aff_key_gen,
-            &enc_key_gen,
-        )
-        .unwrap();
-
-        //  Host hashes auth_proof into the transcript to derive an updated challenge
-        let mut auth_proof_bytes = Vec::new();
-        auth_proof
-            .serialize_compressed(&mut auth_proof_bytes)
-            .unwrap();
-        prover
-            .transcript()
-            .append_message(b"auth-proof", &auth_proof_bytes);
-        let challenge_h_final = prover
-            .transcript()
-            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
-
-        //  Host post-challenge phase, host could create a new challenge by hashing the ledger proof into challenge_h
-        let mut partial = protocol.gen_proof(&challenge_h_final).unwrap();
-        let r1cs_proof = prover
-            .prove_with_rng(&leaf_level_bp_gens, &mut rng)
-            .unwrap();
-        partial.proof = Some(r1cs_proof);
-
-        let reg_proof = RegTxnProof::<_, 48, 6> {
-            auth_proof,
-            partial,
-        };
-
-        //  derive partial challenge, verify partial, recompute ledger nonce, verify auth
-        let mut verifier = reg_proof
-            .partial
-            .challenge_contribution(
-                id,
-                pk_aff.0,
-                pk_enc.0,
-                asset_id,
-                &account_comm,
+        let mut check = |T: Option<(PallasA, PallasA, PallasA)>| {
+            let (protocol, mut prover) = RegTxnWithoutSkProtocol::<_, 48, 6>::init(
+                &mut rng,
+                &account,
+                account_comm.clone(),
+                rho_randomness,
                 nullifier_gen_counter,
                 nonce,
                 &account_comm_key,
-                &poseidon_params,
-                None,
-            )
-            .unwrap();
-
-        let challenge_h_v = verifier
-            .transcript()
-            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
-
-        // Verifier recomputes ledger nonce from the partial challenge
-        let mut challenge_h_v_bytes = Vec::new();
-        challenge_h_v
-            .serialize_compressed(&mut challenge_h_v_bytes)
-            .unwrap();
-        let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
-            .iter()
-            .chain(nonce.iter())
-            .copied()
-            .collect();
-        reg_proof
-            .auth_proof
-            .verify(
-                pk_aff.0,
-                pk_enc.0,
-                &ledger_nonce_v,
-                &aff_key_gen,
-                &enc_key_gen,
-                None,
-            )
-            .unwrap();
-
-        // Verifier hashes auth_proof into the transcript to derive the updated challenge
-        let mut auth_proof_bytes_v = Vec::new();
-        reg_proof
-            .auth_proof
-            .serialize_compressed(&mut auth_proof_bytes_v)
-            .unwrap();
-        verifier
-            .transcript()
-            .append_message(b"auth-proof", &auth_proof_bytes_v);
-        let challenge_h_final_v = verifier
-            .transcript()
-            .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
-
-        reg_proof
-            .partial
-            .verify_with_challenge(
-                &challenge_h_final_v,
-                &account_comm_key,
-                pk_aff.0,
-                pk_enc.0,
-                id,
-                asset_id,
-                &account_comm,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
-                None,
-                None,
+                &poseidon_params,
+                T,
             )
             .unwrap();
 
-        let proof = reg_proof.partial.proof.as_ref().unwrap();
-        let tuple = verifier
-            .verification_scalars_and_points_with_rng(proof, &mut rng)
+            let challenge_h = prover
+                .transcript()
+                .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+            let mut challenge_h_bytes = Vec::new();
+            challenge_h
+                .serialize_compressed(&mut challenge_h_bytes)
+                .unwrap();
+            let ledger_nonce: Vec<u8> = challenge_h_bytes
+                .iter()
+                .chain(nonce.iter())
+                .copied()
+                .collect();
+            let auth_proof = AuthProofOnlySks::new(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                pk_aff.0,
+                pk_enc.0,
+                &ledger_nonce,
+                &aff_key_gen,
+                &enc_key_gen,
+            )
             .unwrap();
-        verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens).unwrap();
+
+            let mut auth_proof_bytes = Vec::new();
+            auth_proof
+                .serialize_compressed(&mut auth_proof_bytes)
+                .unwrap();
+            prover
+                .transcript()
+                .append_message(b"auth-proof", &auth_proof_bytes);
+            let challenge_h_final = prover
+                .transcript()
+                .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+            let mut partial = protocol.gen_proof(&challenge_h_final).unwrap();
+            let r1cs_proof = prover
+                .prove_with_rng(&leaf_level_bp_gens, &mut rng)
+                .unwrap();
+            partial.proof = Some(r1cs_proof);
+
+            let reg_proof = RegTxnProof::<_, 48, 6> {
+                auth_proof,
+                partial,
+            };
+
+            let mut verifier = reg_proof
+                .partial
+                .challenge_contribution(
+                    id,
+                    pk_aff.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    &account_comm_key,
+                    &poseidon_params,
+                    T,
+                )
+                .unwrap();
+
+            let challenge_h_v = verifier
+                .transcript()
+                .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+            let mut challenge_h_v_bytes = Vec::new();
+            challenge_h_v
+                .serialize_compressed(&mut challenge_h_v_bytes)
+                .unwrap();
+            let ledger_nonce_v: Vec<u8> = challenge_h_v_bytes
+                .iter()
+                .chain(nonce.iter())
+                .copied()
+                .collect();
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk_aff.0,
+                    pk_enc.0,
+                    &ledger_nonce_v,
+                    &aff_key_gen,
+                    &enc_key_gen,
+                    None,
+                )
+                .unwrap();
+
+            let mut auth_proof_bytes_v = Vec::new();
+            reg_proof
+                .auth_proof
+                .serialize_compressed(&mut auth_proof_bytes_v)
+                .unwrap();
+            verifier
+                .transcript()
+                .append_message(b"auth-proof", &auth_proof_bytes_v);
+            let challenge_h_final_v = verifier
+                .transcript()
+                .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+            reg_proof
+                .partial
+                .verify_with_challenge(
+                    &challenge_h_final_v,
+                    &account_comm_key,
+                    pk_aff.0,
+                    pk_enc.0,
+                    id,
+                    asset_id,
+                    &account_comm,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    T,
+                    None,
+                )
+                .unwrap();
+
+            let proof = reg_proof.partial.proof.as_ref().unwrap();
+            let tuple = verifier
+                .verification_scalars_and_points_with_rng(proof, &mut rng)
+                .unwrap();
+            verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
+                .unwrap();
+        };
+
+        check(None);
+        check(Some((pk_T.0, enc_key_gen, enc_gen_for_t)));
     }
 
     /*
@@ -3205,6 +3205,38 @@ pub mod tests {
                 reconstructed += d[i] * powers[i];
                 assert_eq!(d[i], Fr::from(u[i]))
             }
+            assert_eq!(reconstructed, val);
+        }
+    }
+
+    #[test]
+    fn test_digits_chunk_boundaries() {
+        const CHUNK_BITS: usize = 8;
+        const NUM_CHUNKS: usize = 4;
+        let powers = powers_of_base::<Fr, CHUNK_BITS, NUM_CHUNKS>();
+
+        for value in [
+            0u64,
+            1u64,
+            255u64,
+            256u64,
+            65_535u64,
+            65_536u64,
+            16_777_215u64,
+            16_777_216u64,
+        ] {
+            let val = Fr::from(value);
+            let (digits_vec, u64_digits) = digits::<Fr, CHUNK_BITS, NUM_CHUNKS>(val);
+
+            let mut reconstructed = Fr::zero();
+            for i in 0..NUM_CHUNKS {
+                reconstructed += digits_vec[i] * powers[i];
+                assert_eq!(digits_vec[i], Fr::from(u64_digits[i]));
+                if i < NUM_CHUNKS - 1 {
+                    assert!(u64_digits[i] < (1u64 << CHUNK_BITS));
+                }
+            }
+
             assert_eq!(reconstructed, val);
         }
     }
@@ -4078,7 +4110,7 @@ pub mod tests {
                         &account_comm,
                         nullifier_gen_counter,
                         nonce,
-                        account_comm_key,
+                        account_comm_key.clone(),
                         &account_tree_params.even_parameters.pc_gens(),
                         &account_tree_params.even_parameters.bp_gens(),
                         &poseidon_params,
@@ -4087,6 +4119,26 @@ pub mod tests {
                     )
                     .is_err()
             );
+
+            let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+            let verify_result = reg_proof.verify(
+                &mut rng,
+                id,
+                pk_i.0,
+                pk_enc.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nonce,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
+                &poseidon_params,
+                None,
+                Some(&mut rmc),
+            );
+            let rmc_result = rmc.verify();
+            assert!(verify_result.is_err() || rmc_result.is_err());
         }
 
         #[test]
@@ -4171,6 +4223,26 @@ pub mod tests {
                         )
                         .is_err()
                 );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
             }
 
             // Wrong encryption secret key in account state
@@ -4233,6 +4305,26 @@ pub mod tests {
                         )
                         .is_err()
                 );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
             }
 
             // Encryption secret key used directly (not inverted)
@@ -4295,6 +4387,558 @@ pub mod tests {
                         )
                         .is_err()
                 );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    None,
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
+            }
+        }
+
+        #[test]
+        fn registration_with_wrong_rho_relation() {
+            // Account where current_rho != rho^2 (violates ensure_correct_registration_state).
+            // With ignore_prover_input_sanitation, proof creation succeeds;
+            // verification must fail.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+
+            let account_tree_params =
+                SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                    NUM_GENS as u32,
+                    NUM_GENS as u32,
+                )
+                .unwrap();
+
+            let account_comm_key = setup_comm_key(b"testing");
+            let asset_id = 1;
+
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let id = Fr::rand(&mut rng);
+            let enc_key_gen = account_comm_key.sk_enc_gen();
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+
+            let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+                new_account(&mut rng, asset_id, pk_i, pk_enc, id.clone());
+
+            // Break the rho-squaring relation: current_rho should equal rho^2, set it to zero.
+            account.current_rho = Fr::from(0u64);
+
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let nonce = b"test-nonce-4";
+
+            // Proof creation must succeed with the feature flag.
+            let reg_proof = RegTxnProof::<_, 48, 6>::new(
+                &mut rng,
+                sk_i.0,
+                sk_enc.0,
+                &account,
+                account_comm.clone(),
+                rho_randomness,
+                nullifier_gen_counter,
+                nonce,
+                account_comm_key.clone(),
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
+                &poseidon_params,
+                None,
+            )
+            .unwrap();
+
+            assert!(
+                reg_proof
+                    .verify(
+                        &mut rng,
+                        id,
+                        pk_i.0,
+                        pk_enc.0,
+                        asset_id,
+                        &account_comm,
+                        nullifier_gen_counter,
+                        nonce,
+                        account_comm_key.clone(),
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
+                        &poseidon_params,
+                        None,
+                        None,
+                    )
+                    .is_err()
+            );
+
+            let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+            let verify_result = reg_proof.verify(
+                &mut rng,
+                id,
+                pk_i.0,
+                pk_enc.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nonce,
+                account_comm_key,
+                &account_tree_params.even_parameters.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
+                &poseidon_params,
+                None,
+                Some(&mut rmc),
+            );
+            let rmc_result = rmc.verify();
+            assert!(verify_result.is_err() || rmc_result.is_err());
+        }
+
+        // one approach is to make provers take an impl AccountWitnesses where methods like initial_nullifier, nullifier, current_rho, randomness, etc are defined on trait AccountWitnesses. AccountState implements AccountWitnesses. MaliciousAccountState struct would look like
+        //
+        // struct MaliciousAccountState {
+        //     honest: AccountState,
+        //     malicious: AccountState
+        // }
+        //
+        // impl MaliciousAccountState {
+        //     fn randomness() {
+        //         return malicious.randomness
+        //     }
+        //
+        //     fn commitment() {
+        //         return honest.commitment  // this is public
+        //     }
+        // }
+        //
+        // This has flexibility because i can change any witness like balance, sk, etc
+        //
+        // But this means i have to change argument of each of the prover functions to take impl AccountWitnesses
+        // Still cant mock functions
+
+        #[cfg(feature = "nightly_mocking_tests")]
+        mod mocking_tests {
+            use super::*;
+            use mocktopus::mocking::{MockResult, Mockable};
+
+            const CHUNK_BITS: usize = 48;
+            const NUM_CHUNKS: usize = 6;
+
+            fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
+                AccountState::<PallasA>::initial_nullifier::<CK>.clear_mock();
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::nullifier_proto
+                    .clear_mock();
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_chunk_encryption_protocol::<rand::rngs::ThreadRng>
+                    .clear_mock();
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_combined_scalar_proto::<rand::rngs::ThreadRng>
+                    .clear_mock();
+            }
+
+            #[test]
+            fn registration_with_pk_t_and_mocked_rho_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 12;
+                const CHUNK_BITS: usize = 48;
+                const NUM_CHUNKS: usize = 6;
+
+                let account_tree_params = SelRerandProofParameters::<
+                    PallasParameters,
+                    VestaParameters,
+                >::new(NUM_GENS as u32, NUM_GENS as u32)
+                .unwrap();
+
+                fn mock_initial_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
+                    _comm_key: &CK,
+                    expected_initial_nullifier: PallasA,
+                ) {
+                    AccountState::<PallasA>::initial_nullifier::<CK>
+                        .mock_safe(move |_, _| MockResult::Return(expected_initial_nullifier));
+                }
+
+                let account_comm_key = setup_comm_key(b"mocktopus-registration-testing");
+                let asset_id = 1;
+
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let id = Fr::rand(&mut rng);
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let (_, pk_t) = keygen_enc(&mut rng, enc_key_gen);
+                let enc_gen = PallasA::rand(&mut rng);
+
+                let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+                    new_account(&mut rng, asset_id, pk_i, pk_enc, id);
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce";
+
+                let mocked_rho = Fr::rand(&mut rng);
+                let expected_mocked_initial_nullifier =
+                    (account_comm_key.current_rho_gen() * mocked_rho).into_affine();
+
+                mock_initial_nullifier_for_ck(&account_comm_key, expected_mocked_initial_nullifier);
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::nullifier_proto
+                    .mock_safe(move |_, rho_blinding, nullifier_gen| {
+                        MockResult::Return(PokDiscreteLogProtocol::init(
+                            mocked_rho,
+                            rho_blinding,
+                            nullifier_gen,
+                        ))
+                    });
+
+                let reg_proof = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
+                    &mut rng,
+                    sk_i.0,
+                    sk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    rho_randomness,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                )
+                .unwrap();
+
+                assert_eq!(
+                    reg_proof.partial.initial_nullifier,
+                    expected_mocked_initial_nullifier
+                );
+
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            Some((pk_t.0, enc_key_gen, enc_gen)),
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn registration_with_pk_t_and_mocked_randomness_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 12;
+                const CHUNK_BITS: usize = 48;
+                const NUM_CHUNKS: usize = 6;
+
+                let account_tree_params = SelRerandProofParameters::<
+                    PallasParameters,
+                    VestaParameters,
+                >::new(NUM_GENS as u32, NUM_GENS as u32)
+                .unwrap();
+
+                let account_comm_key = setup_comm_key(b"mocktopus-registration-testing");
+                let asset_id = 1;
+
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let id = Fr::rand(&mut rng);
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let (_, pk_t) = keygen_enc(&mut rng, enc_key_gen);
+                let enc_gen = PallasA::rand(&mut rng);
+
+                let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+                    new_account(&mut rng, asset_id, pk_i, pk_enc, id);
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce";
+
+                let honest_randomness = account.randomness();
+                let honest_rho = account.rho();
+                let mocked_randomness = Fr::rand(&mut rng);
+                let mocked_rho = Fr::rand(&mut rng);
+
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_chunk_encryption_protocol::<rand::rngs::ThreadRng>
+                    .mock_safe(
+                        move |rng, scalar, pk_t, enc_key_gen, enc_gen, transcript_ref| {
+                            let replaced_scalar = if scalar == honest_randomness {
+                                mocked_randomness
+                            } else if scalar == honest_rho {
+                                mocked_rho
+                            } else {
+                                scalar
+                            };
+                            MockResult::Continue((
+                                rng,
+                                replaced_scalar,
+                                pk_t,
+                                enc_key_gen,
+                                enc_gen,
+                                transcript_ref,
+                            ))
+                        },
+                    );
+
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_combined_scalar_proto::<rand::rngs::ThreadRng>
+                    .mock_safe(
+                        move |
+                            rng,
+                            scalar,
+                            scalar_blinding,
+                            enc_rands,
+                            pk_t,
+                            enc_gen,
+                            transcript_ref,
+                        | {
+                            let replaced_scalar = if scalar == honest_randomness {
+                                mocked_randomness
+                            } else if scalar == honest_rho {
+                                mocked_rho
+                            } else {
+                                scalar
+                            };
+                            MockResult::Continue((
+                                rng,
+                                replaced_scalar,
+                                scalar_blinding,
+                                enc_rands,
+                                pk_t,
+                                enc_gen,
+                                transcript_ref,
+                            ))
+                        },
+                    );
+
+                let reg_proof = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
+                    &mut rng,
+                    sk_i.0,
+                    sk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    rho_randomness,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                )
+                .unwrap();
+
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            Some((pk_t.0, enc_key_gen, enc_gen)),
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn registration_with_pk_t_and_mocked_encryption_target_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 12;
+                const CHUNK_BITS: usize = 48;
+                const NUM_CHUNKS: usize = 6;
+
+                let account_tree_params = SelRerandProofParameters::<
+                    PallasParameters,
+                    VestaParameters,
+                >::new(NUM_GENS as u32, NUM_GENS as u32)
+                .unwrap();
+
+                let account_comm_key = setup_comm_key(b"mocktopus-registration-testing");
+                let asset_id = 1;
+
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let id = Fr::rand(&mut rng);
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let (_, pk_t) = keygen_enc(&mut rng, enc_key_gen);
+                let (_, wrong_pk_t) = keygen_enc(&mut rng, enc_key_gen);
+                assert_ne!(pk_t.0, wrong_pk_t.0);
+                let leaked_wrong_pk_t: &'static PallasA = Box::leak(Box::new(wrong_pk_t.0));
+
+                let enc_gen = PallasA::rand(&mut rng);
+
+                let (account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+                    new_account(&mut rng, asset_id, pk_i, pk_enc, id);
+                let account_comm = account.commit(account_comm_key.clone()).unwrap();
+                let nonce = b"test-nonce";
+
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_chunk_encryption_protocol::<rand::rngs::ThreadRng>
+                    .mock_safe(move |rng, scalar, _, enc_key_gen, enc_gen, transcript_ref| {
+                        MockResult::Continue((
+                            rng,
+                            scalar,
+                            leaked_wrong_pk_t,
+                            enc_key_gen,
+                            enc_gen,
+                            transcript_ref,
+                        ))
+                    });
+
+                RegTxnWithoutSkProtocol::<PallasA, CHUNK_BITS, NUM_CHUNKS>::
+                    init_combined_scalar_proto::<rand::rngs::ThreadRng>
+                    .mock_safe(
+                        move |
+                            rng,
+                            scalar,
+                            scalar_blinding,
+                            enc_rands,
+                            _,
+                            enc_gen,
+                            transcript_ref,
+                        | {
+                            MockResult::Continue((
+                                rng,
+                                scalar,
+                                scalar_blinding,
+                                enc_rands,
+                                leaked_wrong_pk_t,
+                                enc_gen,
+                                transcript_ref,
+                            ))
+                        },
+                    );
+
+                let reg_proof = RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS>::new(
+                    &mut rng,
+                    sk_i.0,
+                    sk_enc.0,
+                    &account,
+                    account_comm.clone(),
+                    rho_randomness,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                )
+                .unwrap();
+
+                assert!(
+                    reg_proof
+                        .verify(
+                            &mut rng,
+                            id,
+                            pk_i.0,
+                            pk_enc.0,
+                            asset_id,
+                            &account_comm,
+                            nullifier_gen_counter,
+                            nonce,
+                            account_comm_key.clone(),
+                            &account_tree_params.even_parameters.pc_gens(),
+                            &account_tree_params.even_parameters.bp_gens(),
+                            &poseidon_params,
+                            Some((pk_t.0, enc_key_gen, enc_gen)),
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+                let verify_result = reg_proof.verify(
+                    &mut rng,
+                    id,
+                    pk_i.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &account_tree_params.even_parameters.pc_gens(),
+                    &account_tree_params.even_parameters.bp_gens(),
+                    &poseidon_params,
+                    Some((pk_t.0, enc_key_gen, enc_gen)),
+                    Some(&mut rmc),
+                );
+                let rmc_result = rmc.verify();
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
             }
         }
     }

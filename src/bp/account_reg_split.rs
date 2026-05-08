@@ -39,8 +39,6 @@ impl AccountRegHostProtocol {
 
         let (protocol, mut prover) = BPRegTxnWithoutSkProtocol::init(
             rng,
-            pk_aff,
-            pk_enc,
             &account,
             commitment,
             rho_randomness,

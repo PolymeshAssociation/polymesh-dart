@@ -404,7 +404,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
     pub fn verify(
         &self,
-        legs_with_conf: Vec<LegVerifierConfig<G>>,
+        legs_conf: Vec<LegVerifierConfig<G>>,
         re_randomized_account_commitment: &G,
         updated_account_commitment: &G,
         nullifier: G,
@@ -417,7 +417,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
     ) -> error::Result<()> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         self.verify_with_given_transcript(
-            legs_with_conf,
+            legs_conf,
             re_randomized_account_commitment,
             updated_account_commitment,
             nullifier,
@@ -433,7 +433,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
     pub fn verify_with_given_transcript(
         &self,
-        legs_with_conf: Vec<LegVerifierConfig<G>>,
+        legs_conf: Vec<LegVerifierConfig<G>>,
         re_randomized_account_commitment: &G,
         updated_account_commitment: &G,
         nullifier: G,
@@ -457,7 +457,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             updated_account_commitment
         );
 
-        for conf in &legs_with_conf {
+        for conf in &legs_conf {
             add_to_transcript!(
                 transcript,
                 LEG_ENCRYPTION_LABEL,
@@ -476,16 +476,25 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         self.partial_updated_account_commitment
             .serialize_compressed(&mut transcript)?;
 
-        if legs_with_conf.len() != self.leg_links.len() {
+        if legs_conf.len() != self.leg_links.len() {
             return Err(Error::ProofVerificationError(format!(
                 "Needed {} leg proofs but got {}",
-                legs_with_conf.len(),
+                legs_conf.len(),
                 self.leg_links.len()
             )));
         }
 
+        let num_balance_decreases = LegVerifierConfig::num_balance_changes(&legs_conf);
+        if self.partial_ct_amounts.len() != num_balance_decreases {
+            return Err(Error::ProofVerificationError(format!(
+                "Invalid partial_ct_amounts length. Expected {}, got {}",
+                num_balance_decreases,
+                self.partial_ct_amounts.len()
+            )));
+        }
+
         let mut asset_id = None;
-        for (i, leg_conf) in legs_with_conf.iter().enumerate() {
+        for (i, leg_conf) in legs_conf.iter().enumerate() {
             if asset_id.is_none() {
                 asset_id = leg_conf.encryption.asset_id();
             } else if leg_conf.encryption.is_asset_id_revealed()
@@ -511,12 +520,25 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let is_asset_id_revealed = asset_id.is_some();
 
+        let num_hidden_asset_ids = if is_asset_id_revealed {
+            0
+        } else {
+            LegVerifierConfig::num_hidden_asset_ids(&legs_conf)
+        };
+        if self.partial_ct_asset_ids.len() != num_hidden_asset_ids {
+            return Err(Error::ProofVerificationError(format!(
+                "Invalid partial_ct_asset_ids length. Expected {}, got {}",
+                num_hidden_asset_ids,
+                self.partial_ct_asset_ids.len()
+            )));
+        }
+
         let h_at = asset_id.map(|a| enc_gen * G::ScalarField::from(a));
 
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
 
-        for (i, conf) in legs_with_conf.iter().enumerate() {
+        for (i, conf) in legs_conf.iter().enumerate() {
             let eph_pk_participant = conf.party_eph_pk.eph_pk_participant();
             self.leg_links[i].0.challenge_contribution(
                 &eph_pk_participant,
@@ -609,7 +631,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         for (i, (resp_participant, resp_amount, resp_asset_id)) in self.leg_links.iter().enumerate()
         {
-            let conf = &legs_with_conf[i];
+            let conf = &legs_conf[i];
             let eph_pk_participant = conf.party_eph_pk.eph_pk_participant();
 
             verify_or_rmc_3!(

@@ -115,7 +115,7 @@ impl<
 
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
         // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive
-        let points = Self::points(id, &enc_keys, &med_keys, params);
+        let points = Self::_points(id, &enc_keys, &med_keys, params);
         let x_coords = points
             .into_iter()
             .map(|p| (delta + p).into_affine().x)
@@ -130,13 +130,17 @@ impl<
         })
     }
 
+    pub fn points(&self, params: &AssetCommitmentParams<G0, G1>) -> Vec<Affine<G0>> {
+        Self::_points(self.id, &self.enc_keys, &self.med_keys, params)
+    }
+
     /// Return 1 point per key and role combined. The idea is to have 1 point per auditor/mediator and the
     /// point should encapsulate all info about that auditor/mediator
     /// Points are as list `[<asset_id * j_0, j_0 * role + en_1, j_0 * role + en_2, ..., j_0 * role + en_n, j_0 * role + j_1 * med_1_en + med_1, j_0 * role + j_1 * med_2_en + med_2, ..., j_0 * role + j_1 * med_m_en + med_m>]`
     /// where `en_i` are the encryption keys, `med_i` are the mediator affirmation keys, `role = 0` for encryption keys
     /// and `role = 1` for mediator keys and `med_i_en` refers to the index of encryption key help by `i`-th mediator. This index is
     /// in the list of encryption keys `en_i`
-    pub fn points(
+    fn _points(
         asset_id: AssetId,
         enc_keys: &[Affine<G0>],
         med_keys: &[(u8, Affine<G0>)],

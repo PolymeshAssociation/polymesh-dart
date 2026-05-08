@@ -172,13 +172,16 @@ impl<
         let mut account_proofs = Vec::with_capacity(num_accounts);
         let mut nullifiers = Vec::with_capacity(num_accounts);
 
-        for (i, builder) in account_builders.into_iter().enumerate() {
+        for (builder, (_, randomizer)) in account_builders
+            .into_iter()
+            .zip(rerandomized_leaves_and_randomizers)
+        {
             // Finalize with pre-computed rerandomized leaf
             // Note: nonce and updated_account_commitment are added to transcript inside finalize_with_given_prover_with_rerandomized_leaf
             let (proof, nullifier) = builder
                 .finalize_with_given_prover_with_rerandomized_leaf::<_, Parameters0, Parameters1>(
                     rng,
-                    rerandomized_leaves_and_randomizers[i].1, // Extract just the scalar randomization
+                    randomizer,
                     account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,

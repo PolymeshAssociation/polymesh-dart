@@ -69,9 +69,17 @@ This crate includes a feature flag intended solely for negative testing of verif
   - Purpose: ensure verifiers *reject* bad inputs cleanly (returning `Error::ProofVerificationError(...)`) rather than panicking.
   - Do **not** enable this feature in production builds. Release builds will fail to compile if this feature is enabled.
 
+- `nightly_mocking_tests` used to mock objects for testing. Needs nightly compiler.
+
 Example:
 ```bash
-cargo test -p polymesh-dart-bp --features ignore_prover_input_sanitation
+cargo +nightly nextest run -p polymesh-dart-bp --features ignore_prover_input_sanitation,nightly_mocking_tests input_sanitation_disabled mocking_tests
+```
+
+Or
+
+```bash
+cargo test -p polymesh-dart-bp --features ignore_prover_input_sanitation,nightly_mocking_tests input_sanitation_disabled mocking_tests
 ```
 
 ## 🔄 Continuous Integration

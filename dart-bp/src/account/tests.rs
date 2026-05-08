@@ -33,7 +33,10 @@ use crate::leg::{
     AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LegEncryption, LegEncryptionRandomness,
 };
 use crate::leg::{LEG_TXN_ODD_LABEL, LegEncConfig, MediatorTxnProof};
-use crate::leg::{Leg, PartyEphemeralPublicKey};
+use crate::leg::{
+    Leg, LegEncryptionCore, PartyEphemeralPublicKey, ReceiverEphemeralPublicKey,
+    SenderEphemeralPublicKey,
+};
 use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_given_verification_tuples, verify_rmc, verify_with_rng,
@@ -2467,6 +2470,7 @@ fn single_shot_settlement_asset_id_revealed() {
         .verify(
             &mut rng,
             leg_enc.clone(),
+            leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
             vec![],
             vec![],
@@ -2670,6 +2674,7 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
     leg_creation_proof
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
+            leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
             vec![],
             vec![],
@@ -2897,6 +2902,7 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
     leg_creation_proof
         .verify_sigma_protocols_and_enforce_constraints(
             leg_enc.clone(),
+            leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
             vec![],
             vec![],
@@ -3306,6 +3312,7 @@ fn single_shot_swap_asset_id_revealed() {
         .verify(
             &mut rng,
             leg_enc_1.clone(),
+            leg_enc_1.asset_id().unwrap(),
             vec![leg_1.enc_keys[0]],
             vec![],
             vec![],
@@ -3325,6 +3332,7 @@ fn single_shot_swap_asset_id_revealed() {
         .verify(
             &mut rng,
             leg_enc_2.clone(),
+            leg_enc_2.asset_id().unwrap(),
             vec![leg_2.enc_keys[0]],
             vec![],
             vec![],
@@ -3650,6 +3658,7 @@ fn swap_settlement_asset_id_revealed() {
         .verify(
             &mut rng,
             leg_enc_1.clone(),
+            leg_enc_1.asset_id().unwrap(),
             vec![leg_1.enc_keys[0]],
             vec![],
             vec![],
@@ -3669,6 +3678,7 @@ fn swap_settlement_asset_id_revealed() {
         .verify(
             &mut rng,
             leg_enc_2.clone(),
+            leg_enc_2.asset_id().unwrap(),
             vec![leg_2.enc_keys[0]],
             vec![],
             vec![],
@@ -11524,7 +11534,7 @@ fn single_shot_settlement_split_proof() {
 
         // asset_path is consumed by LegCreationProof::new; obtain fresh each time.
         let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-        // Clone the asset_data deterministically (same inputs → same commitment).
+        // Clone the asset_data deterministically (same inputs, same commitment).
         let asset_data = AssetData::new(
             asset_id,
             vec![pk_a_e.0],
@@ -11772,8 +11782,8 @@ fn single_shot_settlement_split_proof() {
 
         println!("tuples time: {:?}", start.elapsed());
 
-        // settlement_odd  = Pallas tuple → goes with Pallas-even account tuples
-        // settlement_even = Vesta  tuple → goes with Vesta-odd  account tuples
+        // settlement_odd  = Pallas tuple, goes with Pallas-even account tuples
+        // settlement_even = Vesta  tuple, goes with Vesta-odd  account tuples
         let even_tuples = vec![settlement_odd, sender_even, receiver_even];
         let odd_tuples = vec![settlement_even, sender_odd, receiver_odd];
 
@@ -12040,6 +12050,7 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         .verify(
             &mut rng,
             leg_enc.clone(),
+            leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
             vec![],
             vec![],
@@ -12115,6 +12126,1617 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
 
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
 
+/// Build a correct sender-affirmation split proof using `protocol` and `auth_proof`.
+/// Used by the W2/W3 consistency tests to avoid duplicating the proof assembly logic.
+fn make_sender_split_proof(
+    rng: &mut impl CryptoRngCore,
+    amount: Balance,
+    leg_enc_core: &LegEncryptionCore<PallasA>,
+    eph_pk: &SenderEphemeralPublicKey<PallasA>,
+    account: &AccountState<PallasA>,
+    updated_account: &AccountState<PallasA>,
+    updated_account_comm: AccountStateCommitment<PallasA>,
+    path: CurveTreeWitnessPath<64, PallasParameters, VestaParameters>,
+    root: &Root<64, 1, PallasParameters, VestaParameters>,
+    nonce: &[u8],
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    enc_gen: PallasA,
+    sk: PallasFr,
+    sk_e: PallasFr,
+) -> (
+    AffirmAsSenderSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    PallasA,
+) {
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+    let k_1 = PallasFr::rand(rng);
+    let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
+        64,
+        PallasFr,
+        VestaFr,
+        PallasParameters,
+        VestaParameters,
+    >::init::<_, PallasParams, VestaParams>(
+        rng,
+        amount,
+        (leg_enc_core.clone(), eph_pk.clone()),
+        account,
+        updated_account,
+        updated_account_comm,
+        path,
+        root,
+        nonce,
+        account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+        k_1,
+        None, // asset_id revealed
+    )
+    .unwrap();
+    let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+        extract_prover_challenge_and_data!(even_prover, protocol);
+    let auth_proof = AuthProofAffirmation::new(
+        rng,
+        sk,
+        sk_e,
+        auth_rerandomization,
+        auth_rand_new_comm,
+        vec![k_1],
+        vec![],
+        vec![LegProverConfig {
+            encryption: leg_enc_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+            has_balance_changed: true,
+        }],
+        &re_randomized_leaf,
+        &updated_account_comm.0,
+        nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+    )
+    .unwrap();
+    let (host, balance) = protocol
+        .gen_proof::<_, PallasParams, VestaParams>(
+            &challenge_h,
+            even_prover,
+            odd_prover,
+            account_tree_params,
+            rng,
+        )
+        .unwrap();
+    (
+        AffirmAsSenderSplitProof::assemble(host, balance, auth_proof),
+        nullifier,
+    )
+}
+
+/// Build a correct receiver-affirmation split proof. Asset-id is revealed.
+fn make_receiver_split_proof(
+    rng: &mut impl CryptoRngCore,
+    leg_enc_core: &LegEncryptionCore<PallasA>,
+    eph_pk: &ReceiverEphemeralPublicKey<PallasA>,
+    account: &AccountState<PallasA>,
+    updated_account: &AccountState<PallasA>,
+    updated_account_comm: AccountStateCommitment<PallasA>,
+    path: CurveTreeWitnessPath<64, PallasParameters, VestaParameters>,
+    root: &Root<64, 1, PallasParameters, VestaParameters>,
+    nonce: &[u8],
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
+    account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
+    enc_gen: PallasA,
+    sk: PallasFr,
+    sk_e: PallasFr,
+) -> (
+    AffirmAsReceiverSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    PallasA,
+) {
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+    let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
+        64,
+        PallasFr,
+        VestaFr,
+        PallasParameters,
+        VestaParameters,
+    >::init::<_, PallasParams, VestaParams>(
+        rng,
+        (leg_enc_core.clone(), eph_pk.clone()),
+        account,
+        updated_account,
+        updated_account_comm,
+        path,
+        root,
+        nonce,
+        account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+        None, // asset_id revealed
+    )
+    .unwrap();
+    let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+        extract_prover_challenge_and_data!(even_prover, protocol);
+    let auth_proof = AuthProofAffirmation::new(
+        rng,
+        sk,
+        sk_e,
+        auth_rerandomization,
+        auth_rand_new_comm,
+        vec![],
+        vec![],
+        vec![LegProverConfig {
+            encryption: leg_enc_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
+            has_balance_changed: false,
+        }],
+        &re_randomized_leaf,
+        &updated_account_comm.0,
+        nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+    )
+    .unwrap();
+    let host_data = protocol
+        .gen_proof::<_, PallasParams, VestaParams>(
+            &challenge_h,
+            even_prover,
+            odd_prover,
+            account_tree_params,
+            rng,
+        )
+        .unwrap();
+    (
+        AffirmAsReceiverSplitProof::assemble(host_data, auth_proof),
+        nullifier,
+    )
+}
+
+/// Verify a sender split proof (W2 path) using the given leg enc/eph_pk and nonce.
+/// Returns `Ok((even, odd))` on success or propagates the error.
+fn verify_sender_split(
+    rng: &mut impl CryptoRngCore,
+    proof: &AffirmAsSenderSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    leg_enc_core: &LegEncryptionCore<PallasA>,
+    eph_pk: &SenderEphemeralPublicKey<PallasA>,
+    updated_account_comm: AccountStateCommitment<PallasA>,
+    nullifier: PallasA,
+    root: &Root<64, 1, PallasParameters, VestaParameters>,
+    nonce: &[u8],
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
+    account_comm_key: &impl AccountCommitmentKeyTrait<PallasA>,
+    enc_gen: PallasA,
+) -> Result<()> {
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+    let mut verifier = proof
+        .challenge_contribution::<PallasParams, VestaParams>(
+            updated_account_comm,
+            nullifier,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            leg_enc_core,
+            eph_pk,
+        )
+        .unwrap();
+    let challenge_h_v = verifier
+        .even_verifier
+        .as_mut()
+        .unwrap()
+        .transcript()
+        .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+    let re_randomized_leaf_v = proof
+        .common
+        .partial
+        .re_randomized_path
+        .as_ref()
+        .unwrap()
+        .path
+        .get_rerandomized_leaf();
+    proof.common.auth_proof.verify(
+        vec![LegVerifierConfig {
+            encryption: leg_enc_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+            has_balance_decreased: Some(true),
+            has_counter_decreased: None,
+        }],
+        &re_randomized_leaf_v,
+        &updated_account_comm.0,
+        nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+        None,
+    )?;
+    let (even_tuple, odd_tuple) = proof
+        .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+            verifier,
+            &challenge_h_v,
+            updated_account_comm,
+            nullifier,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            rng,
+            None,
+        )
+        .unwrap();
+    verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+}
+
+/// Verify a receiver split proof (W2 path) using the given leg enc/eph_pk and nonce.
+fn verify_receiver_split(
+    rng: &mut impl CryptoRngCore,
+    proof: &AffirmAsReceiverSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+    leg_enc_core: &LegEncryptionCore<PallasA>,
+    eph_pk: &ReceiverEphemeralPublicKey<PallasA>,
+    updated_account_comm: AccountStateCommitment<PallasA>,
+    nullifier: PallasA,
+    root: &Root<64, 1, PallasParameters, VestaParameters>,
+    nonce: &[u8],
+    account_tree_params: &SelRerandProofParametersNew<
+        PallasParameters,
+        VestaParameters,
+        PallasParams,
+        VestaParams,
+    >,
+    account_comm_key: &impl AccountCommitmentKeyTrait<PallasA>,
+    enc_gen: PallasA,
+) -> Result<()> {
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+    let mut verifier = proof
+        .challenge_contribution::<PallasParams, VestaParams>(
+            updated_account_comm,
+            nullifier,
+            root,
+            nonce,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            leg_enc_core,
+            eph_pk,
+        )
+        .unwrap();
+    let challenge_h_v = verifier
+        .even_verifier
+        .as_mut()
+        .unwrap()
+        .transcript()
+        .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+    let re_randomized_leaf_v = proof
+        .common
+        .partial
+        .re_randomized_path
+        .as_ref()
+        .unwrap()
+        .path
+        .get_rerandomized_leaf();
+    proof.common.auth_proof.verify(
+        vec![LegVerifierConfig {
+            encryption: leg_enc_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
+            has_balance_decreased: None,
+            has_counter_decreased: None,
+        }],
+        &re_randomized_leaf_v,
+        &updated_account_comm.0,
+        nullifier,
+        nonce,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+        b_blinding,
+        enc_gen,
+        None,
+    )?;
+    let (even_tuple, odd_tuple) = proof
+        .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+            verifier,
+            &challenge_h_v,
+            updated_account_comm,
+            nullifier,
+            account_tree_params,
+            account_comm_key,
+            enc_gen,
+            rng,
+            None,
+        )
+        .unwrap();
+    verify_given_verification_tuples(even_tuple, odd_tuple, account_tree_params)
+}
+
+#[test]
+fn sender_affirmation_w2_consistency() {
+    // W2: If the verifier uses a different leg (ciphertexts / eph keys)
+    // than the device used when building the auth-proof, the transcript diverges and
+    // verification must fail. Same for a wrong updated-account-commitment or wrong nonce.
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+    account.balance = 200;
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let nonce = b"w2-sender-test-nonce";
+
+    let updated_account = account.get_state_for_send(amount).unwrap();
+    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+    // Build the leg that device and host agree on.
+    let (_, leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+
+    let (proof, nullifier) = make_sender_split_proof(
+        &mut rng,
+        amount,
+        &leg_enc_core,
+        &eph_pk,
+        &account,
+        &updated_account,
+        updated_account_comm,
+        path,
+        &root,
+        nonce,
+        &account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+        sk_s.0,
+        sk_s_e.0,
+    );
+
+    // Correct verification
+    verify_sender_split(
+        &mut rng,
+        &proof,
+        &leg_enc_core,
+        &eph_pk,
+        updated_account_comm,
+        nullifier,
+        &root,
+        nonce,
+        &account_tree_params,
+        &account_comm_key,
+        enc_gen,
+    )
+    .expect("correct W2 verification must succeed");
+
+    // Wrong leg (different ciphertexts / eph keys)
+    let (_, different_leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount + 1, // different amount, different ciphertexts
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (different_leg_enc_core, different_eph_pk) =
+        different_leg_enc.core_and_eph_keys_for_sender();
+    assert!(
+        verify_sender_split(
+            &mut rng,
+            &proof,
+            &different_leg_enc_core,
+            &different_eph_pk,
+            updated_account_comm,
+            nullifier,
+            &root,
+            nonce,
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong leg must cause verification failure"
+    );
+
+    // Wrong updated-account-commitment
+    let wrong_uac = AccountStateCommitment(PallasA::rand(&mut rng));
+    assert!(
+        verify_sender_split(
+            &mut rng,
+            &proof,
+            &leg_enc_core,
+            &eph_pk,
+            wrong_uac,
+            nullifier,
+            &root,
+            nonce,
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong updated_account_comm must cause verification failure"
+    );
+
+    // Wrong nonce
+    assert!(
+        verify_sender_split(
+            &mut rng,
+            &proof,
+            &leg_enc_core,
+            &eph_pk,
+            updated_account_comm,
+            nullifier,
+            &root,
+            b"wrong-nonce",
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong nonce must cause verification failure"
+    );
+}
+
+/// W2: Receiver-affirmation analogue of `sender_affirmation_w2_consistency`.
+#[test]
+fn receiver_affirmation_w2_consistency() {
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+    account.balance = 200;
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
+    let account_tree = get_tree_with_commitment::<64, _>(account_comm, &account_tree_params, 6);
+
+    let nonce = b"w2-receiver-test-nonce";
+
+    let updated_account = account.get_state_for_receive();
+    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+    let (_, leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+
+    let (proof, nullifier) = make_receiver_split_proof(
+        &mut rng,
+        &leg_enc_core,
+        &eph_pk,
+        &account,
+        &updated_account,
+        updated_account_comm,
+        path,
+        &root,
+        nonce,
+        &account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+        sk_r.0,
+        sk_r_e.0,
+    );
+
+    // Correct verification
+    verify_receiver_split(
+        &mut rng,
+        &proof,
+        &leg_enc_core,
+        &eph_pk,
+        updated_account_comm,
+        nullifier,
+        &root,
+        nonce,
+        &account_tree_params,
+        &account_comm_key,
+        enc_gen,
+    )
+    .expect("correct W2 receiver verification must succeed");
+
+    // Wrong leg
+    let (_, different_leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount + 1,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (different_leg_enc_core, different_eph_pk) =
+        different_leg_enc.core_and_eph_keys_for_receiver();
+    assert!(
+        verify_receiver_split(
+            &mut rng,
+            &proof,
+            &different_leg_enc_core,
+            &different_eph_pk,
+            updated_account_comm,
+            nullifier,
+            &root,
+            nonce,
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong leg must cause verification failure"
+    );
+
+    //  Wrong updated-account-commitment
+    let wrong_uac = AccountStateCommitment(PallasA::rand(&mut rng));
+    assert!(
+        verify_receiver_split(
+            &mut rng,
+            &proof,
+            &leg_enc_core,
+            &eph_pk,
+            wrong_uac,
+            nullifier,
+            &root,
+            nonce,
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong updated_account_comm must cause verification failure"
+    );
+
+    //  Wrong nonce
+    assert!(
+        verify_receiver_split(
+            &mut rng,
+            &proof,
+            &leg_enc_core,
+            &eph_pk,
+            updated_account_comm,
+            nullifier,
+            &root,
+            b"wrong-nonce",
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+        )
+        .is_err(),
+        "wrong nonce must cause verification failure"
+    );
+}
+
+#[test]
+fn sender_affirmation_w3_consistency() {
+    // W3 (sequential) sender: host emits `challenge_h` to the device; device derives
+    // `ledger_nonce = challenge_h || nonce`, produces auth_proof, then feeds its
+    // serialised auth_proof back into the host transcript before finalising `challenge_h_final`.
+    //
+    // Check:
+    // - wrong leg given to device, verification must fail.
+    // - wrong updated-account-comm given to device, fail.
+    // - host gives a different (wrong) challenge to the device, i.e. device builds
+    // auth_proof with `wrong_challenge || nonce` but host finalises with the real
+    // `challenge_h || auth_proof_bytes`, challenge mismatch, fail.
+    // - host does not hash device's auth_proof into its own transcript before
+    //    deriving `challenge_h_final`, decoupled challenges, fail.
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+    account.balance = 200;
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let nonce = b"w3-sender-test-nonce";
+
+    let updated_account = account.get_state_for_send(amount).unwrap();
+    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+    let (_, leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+
+    let path_factory = || account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+
+    // Helper: run the sequential (W3) prover and return (proof, nullifier).
+    // `device_challenge_h` is the challenge the host sends to the device (may be tampered).
+    // `host_feeds_auth_into_transcript` controls whether the host hashes the auth_proof.
+    let run_w3 = |device_challenge_h: PallasFr,
+                  host_feeds_auth: bool,
+                  device_leg_enc_core: &LegEncryptionCore<PallasA>,
+                  device_eph_pk: &SenderEphemeralPublicKey<PallasA>|
+     -> (
+        AffirmAsSenderSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+        PallasA,
+    ) {
+        let mut local_rng = rand::thread_rng();
+        let k_1 = PallasFr::rand(&mut local_rng);
+        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
+            64,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut local_rng,
+            amount,
+            (device_leg_enc_core.clone(), device_eph_pk.clone()),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path_factory(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1,
+            None,
+        )
+        .unwrap();
+
+        // Device builds ledger_nonce = device_challenge_h || nonce
+        let mut ch_bytes = Vec::new();
+        device_challenge_h
+            .serialize_compressed(&mut ch_bytes)
+            .unwrap();
+        let ledger_nonce: Vec<u8> = ch_bytes.iter().chain(nonce.iter()).copied().collect();
+
+        let re_randomized_leaf = protocol.rerandomized_leaf();
+        let auth_rerandomization = protocol.auth_rerandomization();
+        let auth_rand_new_comm = protocol.auth_rand_new_comm();
+
+        let auth_proof = AuthProofAffirmation::new(
+            &mut local_rng,
+            sk_s.0,
+            sk_s_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_1],
+            vec![],
+            vec![LegProverConfig {
+                encryption: device_leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(device_eph_pk.clone()),
+                has_balance_changed: true,
+            }],
+            &re_randomized_leaf,
+            &updated_account_comm.0,
+            nullifier,
+            &ledger_nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        // Host: optionally hash auth_proof into transcript before deriving final challenge
+        if host_feeds_auth {
+            let mut auth_bytes = Vec::new();
+            auth_proof.serialize_compressed(&mut auth_bytes).unwrap();
+            even_prover
+                .transcript()
+                .append_message(b"auth-proof", &auth_bytes);
+        }
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+
+        let (host, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                &account_tree_params,
+                &mut local_rng,
+            )
+            .unwrap();
+
+        (
+            AffirmAsSenderSplitProof::assemble(host, balance, auth_proof),
+            nullifier,
+        )
+    };
+
+    //  1. Correct W3 flow
+    {
+        let (split_proof, nullifier, _) = gen_split_proof!(
+            sequential; with_amount;
+            Protocol: AffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsSenderSplitProof,
+            party: Sender,
+            has_balance_changed: true,
+            rng: &mut rng,
+            amount: amount,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path_factory(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_s.0,
+            sk_e_scalar: sk_s_e.0,
+            b_blinding: b_blinding,
+            reveal_asset_id: true,
+        );
+        let (even, odd) = verify_split_proof!(
+            sequential;
+            proof: split_proof,
+            party: Sender,
+            has_balance_decreased: Some(true),
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even, odd, &account_tree_params)
+            .expect("correct W3 sender must verify");
+    }
+
+    // For the tampered cases we need the real challenge_h to pass to run_w3.
+    // Obtain it from a fresh host init.
+    let real_challenge_h = {
+        let k_1 = PallasFr::rand(&mut rng);
+        let (_, mut even_prover, _, _) = AffirmAsSenderSplitProtocol::<
+            64,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            (leg_enc_core.clone(), eph_pk.clone()),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path_factory(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1,
+            None,
+        )
+        .unwrap();
+        even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL)
+    };
+
+    //  2. Wrong leg given to device
+    {
+        let (_, different_leg_enc, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: true,
+            },
+            pk_a_e.0,
+            None,
+            amount + 1,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        let (diff_core, diff_eph) = different_leg_enc.core_and_eph_keys_for_sender();
+        let (proof, nullifier) = run_w3(real_challenge_h, true, &diff_core, &diff_eph);
+        // Use auth_proof verify directly (the device used diff_core but verifier uses leg_enc_core).
+        let ch_v = {
+            let k_1 = PallasFr::rand(&mut rng);
+            let (_, mut ep, _, _) = AffirmAsSenderSplitProtocol::<
+                64,
+                PallasFr,
+                VestaFr,
+                PallasParameters,
+                VestaParameters,
+            >::init::<_, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                (leg_enc_core.clone(), eph_pk.clone()),
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path_factory(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                k_1,
+                None,
+            )
+            .unwrap();
+            ep.transcript()
+                .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL)
+        };
+        let mut ch_v_bytes = Vec::new();
+        ch_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ledger_nonce_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        assert!(
+            proof
+                .common
+                .auth_proof
+                .verify(
+                    vec![LegVerifierConfig {
+                        encryption: leg_enc_core.clone(), // correct leg
+                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                        has_balance_decreased: Some(true),
+                        has_counter_decreased: None,
+                    }],
+                    &re_leaf,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &ledger_nonce_v,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "wrong leg in device auth_proof must fail auth verification"
+        );
+    }
+
+    //  3. Wrong updated-account-comm given to device
+    {
+        // Device uses wrong uac in auth_proof; but host_protocol was started with correct uac.
+        // We simulate this by building auth_proof with a random updated_account_comm.0,
+        // checking that auth_proof.verify rejects it on the verifier side.
+        let wrong_uac = AccountStateCommitment(PallasA::rand(&mut rng));
+        let k_1 = PallasFr::rand(&mut rng);
+        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
+            64,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            amount,
+            (leg_enc_core.clone(), eph_pk.clone()),
+            &account,
+            &updated_account,
+            updated_account_comm, // host uses correct uac
+            path_factory(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1,
+            None,
+        )
+        .unwrap();
+        let challenge_h = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_bytes = Vec::new();
+        challenge_h.serialize_compressed(&mut ch_bytes).unwrap();
+        let ledger_nonce: Vec<u8> = ch_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf = protocol.rerandomized_leaf();
+        let auth_rerandomization = protocol.auth_rerandomization();
+        let auth_rand_new_comm = protocol.auth_rand_new_comm();
+        // Device uses wrong_uac.0 in its auth_proof
+        let auth_proof_wrong_uac = AuthProofAffirmation::new(
+            &mut rng,
+            sk_s.0,
+            sk_s_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_1],
+            vec![],
+            vec![LegProverConfig {
+                encryption: leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                has_balance_changed: true,
+            }],
+            &re_leaf,
+            &wrong_uac.0, // device uses wrong uac
+            nullifier,
+            &ledger_nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+        let mut auth_bytes = Vec::new();
+        auth_proof_wrong_uac
+            .serialize_compressed(&mut auth_bytes)
+            .unwrap();
+        even_prover
+            .transcript()
+            .append_message(b"auth-proof", &auth_bytes);
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let (host, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                &account_tree_params,
+                &mut rng,
+            )
+            .unwrap();
+        let proof = AffirmAsSenderSplitProof::assemble(host, balance, auth_proof_wrong_uac);
+
+        // Verifier uses correct updated_account_comm, device's auth_proof was built with wrong uac
+        //, transcript diverges, auth_proof.verify must fail.
+        let mut verifier_state = proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )
+            .unwrap();
+        let challenge_h_v = verifier_state
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_v_bytes = Vec::new();
+        challenge_h_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ledger_nonce_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf_v = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        assert!(
+            proof
+                .common
+                .auth_proof
+                .verify(
+                    vec![LegVerifierConfig {
+                        encryption: leg_enc_core.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                        has_balance_decreased: Some(true),
+                        has_counter_decreased: None,
+                    }],
+                    &re_leaf_v,
+                    &updated_account_comm.0, // correct uac
+                    nullifier,
+                    &ledger_nonce_v,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "wrong updated_account_comm in device auth_proof must fail auth verification"
+        );
+    }
+
+    //  4. Host gives wrong challenge to device
+    // Device builds auth_proof with `wrong_challenge || nonce`; host's prover was
+    // initialised with a different state so its real challenge_h != wrong_challenge.
+    // The verifier derives the correct challenge_h_v; the ledger_nonce_v won't match.
+    {
+        let wrong_challenge = PallasFr::rand(&mut rng);
+        let (proof, nullifier) = run_w3(wrong_challenge, true, &leg_enc_core, &eph_pk);
+
+        // Reconstruct verifier challenge independently.
+        let mut verifier_state = proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )
+            .unwrap();
+        let challenge_h_v = verifier_state
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_v_bytes = Vec::new();
+        challenge_h_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ledger_nonce_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf_v = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        assert!(
+            proof
+                .common
+                .auth_proof
+                .verify(
+                    vec![LegVerifierConfig {
+                        encryption: leg_enc_core.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                        has_balance_decreased: Some(true),
+                        has_counter_decreased: None,
+                    }],
+                    &re_leaf_v,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &ledger_nonce_v,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "wrong host challenge to device must cause auth verification failure"
+        );
+    }
+
+    // 5. Host does NOT hash device's auth_proof into transcript
+    // challenge_h_final == challenge_h, so the host sigma responses are computed
+    // for challenge_h but the verifier expects them for challenge_h_final_v
+    // (derived after hashing the auth_proof). The BP proof will fail to verify.
+    {
+        let (proof, nullifier) = run_w3(
+            real_challenge_h,
+            false, /* no auth hash */
+            &leg_enc_core,
+            &eph_pk,
+        );
+        // The sequential verifier does hash auth_proof; its challenge_h_final_v ≠ challenge_h.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (even, odd) = verify_split_proof!(
+                sequential;
+                proof: proof,
+                party: Sender,
+                has_balance_decreased: Some(true),
+                updated_account_comm: updated_account_comm,
+                nullifier: nullifier,
+                root: &root,
+                nonce: nonce,
+                account_tree_params: &account_tree_params,
+                account_comm_key: &account_comm_key,
+                enc_gen: enc_gen,
+                leg_enc_core: &leg_enc_core,
+                eph_pk: &eph_pk,
+                b_blinding: b_blinding,
+                rng: &mut rng,
+            );
+            verify_given_verification_tuples(even, odd, &account_tree_params)
+        }));
+        // Should either panic (macro's .unwrap()) or return an Err
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "host skipping auth_proof hash must cause verification failure"
+        );
+    }
+}
+
+#[test]
+fn receiver_affirmation_w3_consistency() {
+    // W3 (sequential) receiver: analogous to `sender_affirmation_w3_consistency`
+    // but for the receiver side. Tests wrong leg and wrong updated-account-comm only
+    // (the challenge / auth-hash cases are symmetric and already covered by the sender test).
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+    let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+    let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id: AssetId = 1;
+    let amount: Balance = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+    account.balance = 200;
+    let account_comm = account.commit(account_comm_key.clone()).unwrap();
+    let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+    let nonce = b"w3-receiver-test-nonce";
+
+    let updated_account = account.get_state_for_receive();
+    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+    let (_, leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            parties_see_each_other: true,
+            reveal_asset_id: true,
+        },
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+
+    let path_factory = || account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+
+    // 1. Correct W3 flow
+    {
+        let (split_proof, nullifier, _) = gen_split_proof!(
+            sequential; no_amount;
+            Protocol: AffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+            Proof: AffirmAsReceiverSplitProof,
+            party: Receiver,
+            has_balance_changed: false,
+            rng: &mut rng,
+            leg_enc_core: leg_enc_core,
+            eph_pk: eph_pk,
+            old_account: account,
+            updated_account: updated_account,
+            updated_account_comm: updated_account_comm,
+            path: path_factory(),
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: account_comm_key,
+            enc_gen: enc_gen,
+            sk_scalar: sk_r.0,
+            sk_e_scalar: sk_r_e.0,
+            b_blinding: b_blinding,
+            reveal_asset_id: true,
+        );
+        let (even, odd) = verify_split_proof!(
+            sequential;
+            proof: split_proof,
+            party: Receiver,
+            has_balance_decreased: None,
+            updated_account_comm: updated_account_comm,
+            nullifier: nullifier,
+            root: &root,
+            nonce: nonce,
+            account_tree_params: &account_tree_params,
+            account_comm_key: &account_comm_key,
+            enc_gen: enc_gen,
+            leg_enc_core: &leg_enc_core,
+            eph_pk: &eph_pk,
+            b_blinding: b_blinding,
+            rng: &mut rng,
+        );
+        verify_given_verification_tuples(even, odd, &account_tree_params)
+            .expect("correct W3 receiver must verify");
+    }
+
+    // Derive a reference challenge_h for tampered cases.
+    let reference_challenge_h = {
+        let (_, mut ep, _, _) = AffirmAsReceiverSplitProtocol::<
+            64,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            (leg_enc_core.clone(), eph_pk.clone()),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path_factory(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            None,
+        )
+        .unwrap();
+        ep.transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL)
+    };
+
+    // Helper: build a W3 receiver proof with a given device-side leg and challenge.
+    let run_w3_recv = |device_challenge_h: PallasFr,
+                       host_feeds_auth: bool,
+                       dev_leg_enc_core: &LegEncryptionCore<PallasA>,
+                       dev_eph_pk: &ReceiverEphemeralPublicKey<PallasA>|
+     -> (
+        AffirmAsReceiverSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+        PallasA,
+    ) {
+        let mut local_rng = rand::thread_rng();
+        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
+            64,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut local_rng,
+            (dev_leg_enc_core.clone(), dev_eph_pk.clone()),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path_factory(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            None,
+        )
+        .unwrap();
+        let mut ch_bytes = Vec::new();
+        device_challenge_h
+            .serialize_compressed(&mut ch_bytes)
+            .unwrap();
+        let ledger_nonce: Vec<u8> = ch_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf = protocol.rerandomized_leaf();
+        let auth_rerandomization = protocol.auth_rerandomization();
+        let auth_rand_new_comm = protocol.auth_rand_new_comm();
+        let auth_proof = AuthProofAffirmation::new(
+            &mut local_rng,
+            sk_r.0,
+            sk_r_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![],
+            vec![],
+            vec![LegProverConfig {
+                encryption: dev_leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Receiver(dev_eph_pk.clone()),
+                has_balance_changed: false,
+            }],
+            &re_leaf,
+            &updated_account_comm.0,
+            nullifier,
+            &ledger_nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+        if host_feeds_auth {
+            let mut ab = Vec::new();
+            auth_proof.serialize_compressed(&mut ab).unwrap();
+            even_prover.transcript().append_message(b"auth-proof", &ab);
+        }
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let host_data = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                &account_tree_params,
+                &mut local_rng,
+            )
+            .unwrap();
+        (
+            AffirmAsReceiverSplitProof::assemble(host_data, auth_proof),
+            nullifier,
+        )
+    };
+
+    // 2. Wrong leg given to device
+    {
+        let (_, diff_leg_enc, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: true,
+            },
+            pk_a_e.0,
+            None,
+            amount + 1,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        let (diff_core, diff_eph) = diff_leg_enc.core_and_eph_keys_for_receiver();
+        let (proof, nullifier) = run_w3_recv(reference_challenge_h, true, &diff_core, &diff_eph);
+
+        let mut vs = proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )
+            .unwrap();
+        let ch_v = vs
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_v_bytes = Vec::new();
+        ch_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ln_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf_v = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        assert!(
+            proof
+                .common
+                .auth_proof
+                .verify(
+                    vec![LegVerifierConfig {
+                        encryption: leg_enc_core.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
+                        has_balance_decreased: None,
+                        has_counter_decreased: None,
+                    }],
+                    &re_leaf_v,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &ln_v,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "wrong leg in W3 receiver must fail auth verification"
+        );
+    }
+
+    // 3. Host gives wrong challenge to device
+    {
+        let wrong_challenge = PallasFr::rand(&mut rng);
+        let (proof, nullifier) = run_w3_recv(wrong_challenge, true, &leg_enc_core, &eph_pk);
+
+        let mut vs = proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )
+            .unwrap();
+        let ch_v = vs
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_v_bytes = Vec::new();
+        ch_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ln_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf_v = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf();
+        assert!(
+            proof
+                .common
+                .auth_proof
+                .verify(
+                    vec![LegVerifierConfig {
+                        encryption: leg_enc_core.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
+                        has_balance_decreased: None,
+                        has_counter_decreased: None,
+                    }],
+                    &re_leaf_v,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &ln_v,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "wrong host challenge to device must cause W3 receiver auth failure"
+        );
+    }
+
+    // 4. Host does NOT hash auth_proof into transcript
+    {
+        let (proof, nullifier) = run_w3_recv(reference_challenge_h, false, &leg_enc_core, &eph_pk);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (even, odd) = verify_split_proof!(
+                sequential;
+                proof: proof,
+                party: Receiver,
+                has_balance_decreased: None,
+                updated_account_comm: updated_account_comm,
+                nullifier: nullifier,
+                root: &root,
+                nonce: nonce,
+                account_tree_params: &account_tree_params,
+                account_comm_key: &account_comm_key,
+                enc_gen: enc_gen,
+                leg_enc_core: &leg_enc_core,
+                eph_pk: &eph_pk,
+                b_blinding: b_blinding,
+                rng: &mut rng,
+            );
+            verify_given_verification_tuples(even, odd, &account_tree_params)
+        }));
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "host skipping auth_proof hash must cause W3 receiver verification failure"
+        );
+    }
+}
+
 #[cfg(feature = "ignore_prover_input_sanitation")]
 mod input_sanitation_disabled {
     use super::*;
@@ -12123,12 +13745,58 @@ mod input_sanitation_disabled {
     use crate::account::{
         AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof, ClaimReceivedTxnProof,
         IrreversibleAffirmAsReceiverTxnProof, IrreversibleAffirmAsSenderTxnProof,
-        SenderCounterUpdateTxnProof, SenderReverseTxnProof,
+        ReceiverCounterUpdateTxnProof, SenderCounterUpdateTxnProof, SenderReverseTxnProof,
     };
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
+
+    macro_rules! assert_account_verify_fails_with_rmc {
+        (
+            $proof:expr,
+            $rng:expr,
+            $leg:expr,
+            $root:expr,
+            $updated_account_comm:expr,
+            $nullifier:expr,
+            $nonce:expr,
+            $account_tree_params:expr,
+            $account_comm_key:expr,
+            $enc_gen:expr $(,)?
+        ) => {{
+            let verify_without_rmc = $proof.verify(
+                $rng,
+                $leg,
+                $root,
+                $updated_account_comm,
+                $nullifier,
+                $nonce,
+                $account_tree_params,
+                $account_comm_key.clone(),
+                $enc_gen,
+                None,
+            );
+            assert!(verify_without_rmc.is_err());
+
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand($rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand($rng));
+            let verify_result = $proof.verify(
+                $rng,
+                $leg,
+                $root,
+                $updated_account_comm,
+                $nullifier,
+                $nonce,
+                $account_tree_params,
+                $account_comm_key.clone(),
+                $enc_gen,
+                Some((&mut rmc_0, &mut rmc_1)),
+            );
+            let rmc_result = verify_rmc(rmc_0, rmc_1);
+            assert!(verify_result.is_err() || rmc_result.is_err());
+        }};
+    }
 
     #[test]
     fn keep_balance_same_in_send_txn() {
@@ -12210,21 +13878,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Create an updated account that instead increases the balance
@@ -12251,21 +13915,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
     }
 
@@ -12348,21 +14008,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_receiver(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
     }
 
@@ -12447,21 +14103,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_receiver(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Update account with counter decreased by 1 more than it should be
@@ -12488,21 +14140,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_receiver(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
     }
 
@@ -12585,21 +14233,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Update account with counter decreased by 1 more than it should be
@@ -12625,21 +14269,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
     }
 
@@ -12723,21 +14363,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Update account with counter decreased by 1 more than it should be
@@ -12764,21 +14400,17 @@ mod input_sanitation_disabled {
         )
         .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &root,
-                    updated_account_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
     }
 
@@ -12876,21 +14508,17 @@ mod input_sanitation_disabled {
             )
             .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &account_tree_root,
-                    malicious_sender_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &account_tree_root,
+            malicious_sender_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Receiver trying to increase balance more than amount
@@ -12923,21 +14551,17 @@ mod input_sanitation_disabled {
             )
             .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_receiver(),
-                    &account_tree_root,
-                    malicious_receiver_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &account_tree_root,
+            malicious_receiver_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Sender trying to decrease counter
@@ -12969,21 +14593,17 @@ mod input_sanitation_disabled {
             )
             .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_sender(),
-                    &account_tree_root,
-                    malicious_sender_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &account_tree_root,
+            malicious_sender_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
 
         // Receiver trying to decrease counter
@@ -13015,22 +14635,723 @@ mod input_sanitation_disabled {
             )
             .unwrap();
 
-        assert!(
-            proof
-                .verify(
-                    &mut rng,
-                    leg_enc.core_and_eph_keys_for_receiver(),
-                    &account_tree_root,
-                    malicious_receiver_comm,
-                    nullifier,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &account_tree_root,
+            malicious_receiver_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
         );
+    }
+
+    #[test]
+    fn incorrect_updates_in_receiver_counter_update() {
+        // A receiver account sends ReceiverCounterUpdateTxnProof but makes incorrect updates.
+        // These proofs should fail verification.
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"testing");
+        let (
+            ((_sk_s, _pk_s), (_sk_s_e, pk_s_e)),
+            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+        ) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+
+        let asset_id = 1;
+        let amount = 100;
+
+        let (_, leg_enc, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+
+        // Receiver account with counter > 0 from previous receive affirmations.
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+        account.balance = 200;
+        account.counter = 2;
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        // ReceiverCounterUpdate should NOT change balance; force it to increase.
+        let mut updated_account = account.get_state_for_decreasing_counter(None).unwrap();
+        updated_account.balance = account.balance + 50;
+        let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+        let (proof, nullifier) =
+            ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
+                &account,
+                &updated_account,
+                updated_comm,
+                path.clone(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_account_verify_fails_with_rmc!(
+            proof,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &root,
+            updated_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
+        );
+
+        // Counter decreased by 2 instead of 1 (too much).
+        let mut updated_account2 = account.get_state_for_decreasing_counter(None).unwrap();
+        updated_account2.counter = account.counter - 2; // should be counter - 1
+        let updated_comm2 = updated_account2.commit(account_comm_key.clone()).unwrap();
+
+        let (proof2, nullifier2) =
+            ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
+                &account,
+                &updated_account2,
+                updated_comm2,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_account_verify_fails_with_rmc!(
+            proof2,
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &root,
+            updated_comm2,
+            nullifier2,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
+        );
+    }
+
+    #[cfg(feature = "nightly_mocking_tests")]
+    mod mocking_tests {
+        use super::*;
+        use crate::account::state::NUM_GENERATORS;
+        use crate::util::{
+            create_bp_and_null_t_values, enforce_balance_change_prover,
+            generate_schnorr_responses_for_balance_change,
+            generate_sigma_t_values_for_balance_change,
+        };
+        use mocktopus::mocking::{MockResult, Mockable};
+
+        struct MockGuard {
+            clear_fn: fn(),
+        }
+
+        impl MockGuard {
+            fn new(clear_fn: fn()) -> Self {
+                Self { clear_fn }
+            }
+        }
+
+        impl Drop for MockGuard {
+            fn drop(&mut self) {
+                (self.clear_fn)();
+            }
+        }
+
+        fn clear_create_bp_and_null_t_values_mock() {
+            create_bp_and_null_t_values::<
+                rand::rngs::ThreadRng,
+                PallasFr,
+                PallasParameters,
+                [PallasA; NUM_GENERATORS],
+            >
+                .clear_mock();
+        }
+
+        fn clear_balance_change_amount_mocks() {
+            enforce_balance_change_prover::<rand::rngs::ThreadRng, PallasFr, PallasParameters>
+                .clear_mock();
+            generate_sigma_t_values_for_balance_change::<
+                rand::rngs::ThreadRng,
+                PallasFr,
+                PallasParameters,
+            >
+                .clear_mock();
+            generate_schnorr_responses_for_balance_change::<PallasFr, PallasParameters>
+                .clear_mock();
+        }
+
+        fn mock_balance_change_amount(amount: Balance) {
+            enforce_balance_change_prover::<rand::rngs::ThreadRng, PallasFr, PallasParameters>
+                .mock_safe(
+                    move |rng,
+                          old_bal,
+                          new_bal,
+                          existing_amount,
+                          has_balance_decreased,
+                          even_prover,
+                          bp_gens| {
+                        let malicious_amounts = vec![amount; existing_amount.len()];
+                        MockResult::Continue((
+                            rng,
+                            old_bal,
+                            new_bal,
+                            malicious_amounts,
+                            has_balance_decreased,
+                            even_prover,
+                            bp_gens,
+                        ))
+                    },
+                );
+
+            generate_sigma_t_values_for_balance_change::<
+                rand::rngs::ThreadRng,
+                PallasFr,
+                PallasParameters,
+            >
+                .mock_safe(
+                    move |rng,
+                          existing_amount,
+                          ct_amount,
+                          old_balance_blinding,
+                          new_balance_blinding,
+                          amount_blinding,
+                          sk_enc_inv,
+                          sk_enc_inv_blinding,
+                          eph_pk_amount,
+                          pc_gens,
+                          bp_gens,
+                          enc_gen,
+                          prover_transcript| {
+                        let malicious_amounts = vec![amount; existing_amount.len()];
+                        MockResult::Continue((
+                            rng,
+                            malicious_amounts,
+                            ct_amount,
+                            old_balance_blinding,
+                            new_balance_blinding,
+                            amount_blinding,
+                            sk_enc_inv,
+                            sk_enc_inv_blinding,
+                            eph_pk_amount,
+                            pc_gens,
+                            bp_gens,
+                            enc_gen,
+                            prover_transcript,
+                        ))
+                    },
+                );
+
+            generate_schnorr_responses_for_balance_change::<PallasFr, PallasParameters>.mock_safe(
+                move |existing_amount,
+                      comm_bp_bal_blinding,
+                      t_comm_bp_bal,
+                      t_leg_amount,
+                      prover_challenge| {
+                    let malicious_amounts = vec![amount; existing_amount.len()];
+                    MockResult::Continue((
+                        malicious_amounts,
+                        comm_bp_bal_blinding,
+                        t_comm_bp_bal,
+                        t_leg_amount,
+                        prover_challenge,
+                    ))
+                },
+            );
+        }
+
+        // All sender/receiver actions use the shared logic so following tests should cover for other txns as well (to an extent)
+
+        #[test]
+        fn sender_affirmations_with_mocked_old_rho_fails_verification() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"mocked-old-rho-in-create-bp-and-null-t-values");
+
+            let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let amount = 100;
+            let (_, leg_enc, _) = setup_leg(
+                &mut rng,
+                pk_a_e.0,
+                None,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+            account.balance = 200;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let updated_account = account.get_state_for_send(amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            create_bp_and_null_t_values::<
+                rand::rngs::ThreadRng,
+                PallasFr,
+                PallasParameters,
+                [PallasA; NUM_GENERATORS],
+            >
+                .mock_safe(
+                    move |rng,
+                          include_sk,
+                          initial_rho,
+                          old_rho,
+                          new_rho,
+                          initial_randomness,
+                          old_randomness,
+                          new_randomness,
+                          initial_rho_blinding,
+                          old_rho_blinding,
+                          new_rho_blinding,
+                          initial_randomness_blinding,
+                          old_randomness_blinding,
+                          new_randomness_blinding,
+                          sk_enc,
+                          sk_enc_blinding,
+                          sk_enc_inv_blinding,
+                          prover,
+                          account_comm_key,
+                          pc_gens,
+                          bp_gens| {
+                        MockResult::Continue((
+                            rng,
+                            include_sk,
+                            initial_rho,
+                            old_rho + PallasFr::from(1u64),
+                            new_rho,
+                            initial_randomness,
+                            old_randomness,
+                            new_randomness,
+                            initial_rho_blinding,
+                            old_rho_blinding,
+                            new_rho_blinding,
+                            initial_randomness_blinding,
+                            old_randomness_blinding,
+                            new_randomness_blinding,
+                            sk_enc,
+                            sk_enc_blinding,
+                            sk_enc_inv_blinding,
+                            prover,
+                            account_comm_key,
+                            pc_gens,
+                            bp_gens,
+                        ))
+                    },
+                );
+            let _ = &MockGuard::new(clear_create_bp_and_null_t_values_mock);
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.core_and_eph_keys_for_sender(),
+                sk_s.0,
+                sk_s_e.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_sender(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
+
+        #[test]
+        fn sender_affirmations_with_mocked_new_rho_and_randomness_fails_verification() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(
+                b"mocked-new-rho-randomness-in-create-bp-and-null-t-values",
+            );
+
+            let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let amount = 100;
+            let (_, leg_enc, _) = setup_leg(
+                &mut rng,
+                pk_a_e.0,
+                None,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+            account.balance = 200;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let updated_account = account.get_state_for_send(amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            let mocked_new_rho = PallasFr::rand(&mut rng);
+            let mocked_new_randomness = PallasFr::rand(&mut rng);
+
+            create_bp_and_null_t_values::<
+                rand::rngs::ThreadRng,
+                PallasFr,
+                PallasParameters,
+                [PallasA; NUM_GENERATORS],
+            >
+                .mock_safe(
+                    move |rng,
+                          include_sk,
+                          initial_rho,
+                          old_rho,
+                          _new_rho,
+                          initial_randomness,
+                          old_randomness,
+                          _new_randomness,
+                          initial_rho_blinding,
+                          old_rho_blinding,
+                          new_rho_blinding,
+                          initial_randomness_blinding,
+                          old_randomness_blinding,
+                          new_randomness_blinding,
+                          sk_enc,
+                          sk_enc_blinding,
+                          sk_enc_inv_blinding,
+                          prover,
+                          account_comm_key,
+                          pc_gens,
+                          bp_gens| {
+                        MockResult::Continue((
+                            rng,
+                            include_sk,
+                            initial_rho,
+                            old_rho,
+                            mocked_new_rho,
+                            initial_randomness,
+                            old_randomness,
+                            mocked_new_randomness,
+                            initial_rho_blinding,
+                            old_rho_blinding,
+                            new_rho_blinding,
+                            initial_randomness_blinding,
+                            old_randomness_blinding,
+                            new_randomness_blinding,
+                            sk_enc,
+                            sk_enc_blinding,
+                            sk_enc_inv_blinding,
+                            prover,
+                            account_comm_key,
+                            pc_gens,
+                            bp_gens,
+                        ))
+                    },
+                );
+            let _ = &MockGuard::new(clear_create_bp_and_null_t_values_mock);
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                amount,
+                leg_enc.core_and_eph_keys_for_sender(),
+                sk_s.0,
+                sk_s_e.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_sender(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
+
+        #[test]
+        fn sender_affirmation_with_mocked_smaller_amount_fails_verification() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"mocked-smaller-balance-change-amount-sender");
+
+            let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let honest_amount = 100u64;
+            let malicious_amount = 60u64;
+            let (_, leg_enc, _) = setup_leg(
+                &mut rng,
+                pk_a_e.0,
+                None,
+                honest_amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+            account.balance = 200;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let updated_account = account.get_state_for_send(malicious_amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            mock_balance_change_amount(malicious_amount);
+            let _ = &MockGuard::new(clear_balance_change_amount_mocks);
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                honest_amount,
+                leg_enc.core_and_eph_keys_for_sender(),
+                sk_s.0,
+                sk_s_e.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_sender(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
+
+        #[test]
+        fn claim_received_with_mocked_larger_amount_fails_verification() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"mocked-larger-balance-change-amount-claim");
+
+            let (
+                ((_sk_s, _pk_s), (_sk_s_e, pk_s_e)),
+                ((sk_r, pk_r), (sk_r_e, pk_r_e)),
+                ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+            ) = setup_keys(
+                &mut rng,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+            );
+
+            let asset_id = 1;
+            let honest_amount = 100u64;
+            let malicious_amount = 140u64;
+            let (_, leg_enc, _) = setup_leg(
+                &mut rng,
+                pk_a_e.0,
+                None,
+                honest_amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+            account.balance = 200;
+            account.counter += 2;
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let updated_account = account
+                .get_state_for_claiming_received(malicious_amount)
+                .unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            mock_balance_change_amount(malicious_amount);
+            let _ = &MockGuard::new(clear_balance_change_amount_mocks);
+
+            let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                honest_amount,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                sk_r.0,
+                sk_r_e.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
     }
 
     // More tests can be added like secret key mismatch, incorrect rho or randomness creation, etc.

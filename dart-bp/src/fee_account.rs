@@ -76,6 +76,10 @@ pub struct FeeAccountState<G: AffineRepr> {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<G: AffineRepr> FeeAccountState<G> {
     pub fn new<R: CryptoRngCore>(rng: &mut R, pk: G, balance: Balance, asset_id: AssetId) -> Self {
         let rho = G::ScalarField::rand(rng);
@@ -92,12 +96,34 @@ impl<G: AffineRepr> FeeAccountState<G> {
         }
     }
 
-    pub fn commit(
+    pub fn commit<CK: AccountCommitmentKeyTrait<G>>(
         &self,
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        account_comm_key: &CK,
     ) -> Result<FeeAccountStateCommitment<G>> {
-        let comm = self.comm(account_comm_key)?;
+        let comm = self.comm_without_sk(account_comm_key)?;
         Ok(FeeAccountStateCommitment((comm + self.pk).into_affine()))
+    }
+
+    fn comm_without_sk<CK: AccountCommitmentKeyTrait<G>>(
+        &self,
+        account_comm_key: &CK,
+    ) -> Result<G::Group> {
+        let comm = G::Group::msm(
+            &[
+                account_comm_key.balance_gen(),
+                account_comm_key.asset_id_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.randomness_gen(),
+            ],
+            &[
+                G::ScalarField::from(self.balance),
+                G::ScalarField::from(self.asset_id),
+                self.rho,
+                self.randomness,
+            ],
+        )
+        .map_err(Error::size_mismatch)?;
+        Ok(comm)
     }
 
     pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
@@ -132,31 +158,28 @@ impl<G: AffineRepr> FeeAccountState<G> {
         self.randomness *= self.initial_randomness;
     }
 
-    pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
-        (comm_key.rho_gen() * self.rho).into()
+    pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
+        (comm_key.rho_gen() * self.rho()).into()
     }
 
+    #[inline]
     pub fn asset_id(&self) -> AssetId {
         self.asset_id
     }
 
-    pub fn comm(&self, account_comm_key: impl AccountCommitmentKeyTrait<G>) -> Result<G::Group> {
-        let comm = G::Group::msm(
-            &[
-                account_comm_key.balance_gen(),
-                account_comm_key.asset_id_gen(),
-                account_comm_key.rho_gen(),
-                account_comm_key.randomness_gen(),
-            ],
-            &[
-                G::ScalarField::from(self.balance),
-                G::ScalarField::from(self.asset_id),
-                self.rho,
-                self.randomness,
-            ],
-        )
-        .map_err(Error::size_mismatch)?;
-        Ok(comm)
+    #[inline]
+    pub fn balance(&self) -> Balance {
+        self.balance
+    }
+
+    #[inline]
+    pub fn rho(&self) -> G::ScalarField {
+        self.rho
+    }
+
+    #[inline]
+    pub fn randomness(&self) -> G::ScalarField {
+        self.randomness
     }
 }
 
@@ -186,7 +209,6 @@ pub struct RegTxnProof<G: AffineRepr> {
 impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
         account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
@@ -195,7 +217,6 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
         let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         Self::init_with_given_transcript(
             rng,
-            pk,
             account,
             account_commitment,
             nonce,
@@ -207,13 +228,13 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     /// Initial sigma protocol and add to transcript
     pub fn init_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
         account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
+        let pk = account.pk;
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -228,7 +249,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
 
         // D = pk + g_balance * balance + g_asset_id * asset_id
         let D = pk.into_group()
-            + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance))
+            + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance()))
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id()));
 
         let mut rho_blinding = G::ScalarField::rand(rng);
@@ -236,10 +257,10 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
 
         // For proving Comm - D = g_rho * rho + g_randomness * randomness
         let comm_protocol = PokPedersenCommitmentProtocol::init(
-            account.rho,
+            account.rho(),
             rho_blinding,
             &account_comm_key.rho_gen(),
-            account.randomness,
+            account.randomness(),
             randomness_blinding,
             &account_comm_key.randomness_gen(),
         );
@@ -265,7 +286,6 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
 
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
-        pk: G,
         account: &FeeAccountState<G>,
         account_commitment: FeeAccountStateCommitment<G>,
         nonce: &[u8],
@@ -274,7 +294,6 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
         let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         let proto = Self::init_with_given_transcript(
             rng,
-            pk,
             account,
             account_commitment,
             nonce,
@@ -380,7 +399,6 @@ impl<G: AffineRepr> RegTxnProof<G> {
         let sk_gen = account_comm_key.sk_gen();
         let partial = RegTxnProofWithoutSkProtocol::init_with_given_transcript(
             rng,
-            pk,
             account,
             account_commitment,
             nonce,
@@ -542,6 +560,10 @@ pub struct FeeAccountTopupTxnWithoutSkProtocol<
     new_account_state: FeeAccountState<Affine<G0>>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<
     const L: usize,
     F0: PrimeField,
@@ -555,9 +577,9 @@ impl<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
+        CK: AccountCommitmentKeyTrait<Affine<G0>>,
     >(
         rng: &mut R,
-        pk: &Affine<G0>,
         increase_bal_by: Balance,
         account: FeeAccountState<Affine<G0>>,
         updated_account: FeeAccountState<Affine<G0>>,
@@ -566,15 +588,14 @@ impl<
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        account_comm_key: CK,
     ) -> Result<(
         FeeAccountTopupTxnWithoutSkProof<L, F0, F1, G0, G1>,
         Affine<G0>,
     )> {
         let (proto, mut even_prover, odd_prover, nullifier) =
-            Self::init::<_, Parameters0, Parameters1>(
+            Self::init::<_, Parameters0, Parameters1, _>(
                 rng,
-                pk,
                 increase_bal_by,
                 account,
                 updated_account,
@@ -611,9 +632,9 @@ impl<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
+        CK: AccountCommitmentKeyTrait<Affine<G0>>,
     >(
         rng: &mut R,
-        pk: &Affine<G0>,
         increase_bal_by: Balance,
         account: FeeAccountState<Affine<G0>>,
         updated_account: FeeAccountState<Affine<G0>>,
@@ -622,7 +643,7 @@ impl<
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        account_comm_key: CK,
     ) -> Result<(
         Self,
         Prover<'a, MerlinTranscript, Affine<G0>>,
@@ -640,9 +661,8 @@ impl<
             odd_transcript,
         );
 
-        let (proto, nullifier) = Self::init_with_given_prover::<_, Parameters0, Parameters1>(
+        let (proto, nullifier) = Self::init_with_given_prover::<_, Parameters0, Parameters1, _>(
             rng,
-            pk,
             increase_bal_by,
             account,
             updated_account,
@@ -663,9 +683,9 @@ impl<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
+        CK: AccountCommitmentKeyTrait<Affine<G0>>,
     >(
         rng: &mut R,
-        pk: &Affine<G0>,
         increase_bal_by: Balance,
         account: FeeAccountState<Affine<G0>>,
         updated_account: FeeAccountState<Affine<G0>>,
@@ -674,10 +694,11 @@ impl<
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        account_comm_key: CK,
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        let pk = &account.pk;
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
@@ -715,12 +736,9 @@ impl<
         let acc_comm =
             AccountCommitmentsWithoutSkProtocol::init(rng, account_comm_key.clone(), b_blinding);
 
-        let mut comm_bp_blinding = F0::rand(rng);
-
         let nullifier_gen = account_comm_key.rho_gen();
-        let nullifier = (nullifier_gen * account.rho).into_affine();
-
-        let new_balance = F0::from(updated_account.balance);
+        let nullifier = account.nullifier(&account_comm_key);
+        let new_balance = F0::from(updated_account.balance());
 
         acc_comm.t_acc_old.challenge_contribution(&mut transcript)?;
         acc_comm.t_acc_new.challenge_contribution(&mut transcript)?;
@@ -729,15 +747,19 @@ impl<
             &acc_old_gens_without_sk(&account_comm_key, b_blinding),
             &[
                 new_balance,
-                account.rho,
-                account.randomness,
+                account.rho(),
+                account.randomness(),
                 rerandomization,
             ],
         )
         .into_affine();
         let acc_new = <Projective<G0> as VariableBaseMSM>::msm_unchecked(
             &acc_new_gens_without_sk(&account_comm_key),
-            &[new_balance, updated_account.rho, updated_account.randomness],
+            &[
+                new_balance,
+                updated_account.rho(),
+                updated_account.randomness(),
+            ],
         )
         .into_affine();
 
@@ -745,35 +767,24 @@ impl<
         acc_new.serialize_compressed(&mut transcript)?;
 
         let t_null =
-            PokDiscreteLogProtocol::init(account.rho, acc_comm.old_rho_blinding, &nullifier_gen);
+            Self::nullifier_proto(account.rho(), acc_comm.old_rho_blinding, &nullifier_gen);
         t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
 
-        // Range proof on new balance to ensure it's non-negative.
-        let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
-        range_proof(
-            even_prover,
-            new_bal_var.into(),
-            Some(updated_account.balance as u128),
-            FEE_BALANCE_BITS.into(),
-        )?;
-
-        let t_bp = PokPedersenCommitmentProtocol::init(
-            new_balance,
+        let (comm_new_bal, t_bp) = Self::enforce_range_and_init_proto(
+            rng,
+            updated_account.balance(),
             acc_comm.new_balance_blinding,
+            even_prover,
             &account_tree_params.even_parameters.sl_params.pc_gens().B,
-            comm_bp_blinding,
-            F0::rand(rng),
             &account_tree_params
                 .even_parameters
                 .sl_params
                 .pc_gens()
                 .B_blinding,
-        );
-
-        comm_bp_blinding.zeroize();
+        )?;
 
         let mut transcript = even_prover.transcript();
 
@@ -801,6 +812,48 @@ impl<
             },
             nullifier,
         ))
+    }
+
+    fn nullifier_proto(
+        rho: F0,
+        rho_blinding: F0,
+        nullifier_gen: &Affine<G0>,
+    ) -> PokDiscreteLogProtocol<Affine<G0>> {
+        PokDiscreteLogProtocol::init(rho, rho_blinding, nullifier_gen)
+    }
+
+    fn enforce_range_and_init_proto<R: CryptoRngCore>(
+        rng: &mut R,
+        balance: Balance,
+        new_balance_blinding: F0,
+        even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
+        b: &Affine<G0>,
+        b_blinding: &Affine<G0>,
+    ) -> Result<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)> {
+        let mut new_balance = F0::from(balance);
+        let mut comm_bp_blinding = F0::rand(rng);
+
+        // Range proof on new balance to ensure it's non-negative.
+        let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
+        range_proof(
+            even_prover,
+            new_bal_var.into(),
+            Some(balance as u128),
+            FEE_BALANCE_BITS.into(),
+        )?;
+
+        let t_bp = PokPedersenCommitmentProtocol::init(
+            new_balance,
+            new_balance_blinding,
+            b,
+            comm_bp_blinding,
+            F0::rand(rng),
+            b_blinding,
+        );
+
+        new_balance.zeroize();
+        comm_bp_blinding.zeroize();
+        Ok((comm_new_bal, t_bp))
     }
 
     pub fn gen_proof(
@@ -1323,9 +1376,9 @@ impl<
                 _,
                 Parameters0,
                 Parameters1,
+                _,
             >(
                 rng,
-                &account.pk,
                 increase_bal_by,
                 account.clone(),
                 updated_account.clone(),
@@ -1946,6 +1999,10 @@ pub struct FeePaymentWithoutCommitmentsProtocol<
     pub new_account_state: FeeAccountState<Affine<G0>>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<
     const L: usize,
     F0: PrimeField,
@@ -1960,6 +2017,7 @@ impl<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
+        CK: AccountCommitmentKeyTrait<Affine<G0>>,
     >(
         rng: &mut R,
         fee_amount: Balance,
@@ -1970,7 +2028,7 @@ impl<
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        account_comm_key: CK,
     ) -> Result<(
         FeePaymentWithoutCommitmentsProof<L, F0, F1, G0, G1>,
         Affine<G0>,
@@ -1990,7 +2048,7 @@ impl<
         let mut new_balance_blinding = F0::rand(rng);
         let mut old_rho_blinding = F0::rand(rng);
 
-        let (proto, nullifier) = Self::init_with_given_prover::<_, Parameters0, Parameters1>(
+        let (proto, nullifier) = Self::init_with_given_prover::<_, Parameters0, Parameters1, _>(
             rng,
             fee_amount,
             account,
@@ -2036,6 +2094,7 @@ impl<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
+        CK: AccountCommitmentKeyTrait<Affine<G0>>,
     >(
         rng: &mut R,
         fee_amount: Balance,
@@ -2046,7 +2105,7 @@ impl<
         root: &Root<L, 1, G0, G1>,
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
+        account_comm_key: CK,
         new_balance_blinding: F0,
         old_rho_blinding: F0,
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
@@ -2085,40 +2144,20 @@ impl<
         // 2. Old balance = new balance + fee_amount
         // 3. Range proof on new balance
 
-        let mut comm_bp_blinding = F0::rand(rng);
-
         let nullifier_gen = account_comm_key.rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
 
-        let new_balance = F0::from(updated_account.balance);
-
         // Schnorr commitment for proving correctness of nullifier.
         // Uses old_rho_blinding shared with the account commitment proof so the rho response matches.
-        let t_null = PokDiscreteLogProtocol::init(account.rho, old_rho_blinding, &nullifier_gen);
+        let t_null = Self::nullifier_proto(account.rho(), old_rho_blinding, &nullifier_gen);
 
         t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
 
-        // Range proof on new balance to ensure it's non-negative. We need the range proof even when the fee_amount is public
-        // since the balance has be in a given range.
-        let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
-        range_proof(
-            even_prover,
-            new_bal_var.into(),
-            Some(updated_account.balance as u128),
-            FEE_BALANCE_BITS.into(),
-        )?;
-
-        // Sigma protocol linking the BP commitment to the balance in the account commitment.
-        // Uses new_balance_blinding shared with the account commitment proof so the balance response matches.
-        let t_bp = PokPedersenCommitmentProtocol::init(
-            new_balance,
-            new_balance_blinding,
+        let (b, b_blinding) = (
             &account_tree_params.even_parameters.sl_params.pc_gens().B,
-            comm_bp_blinding,
-            F0::rand(rng),
             &account_tree_params
                 .even_parameters
                 .sl_params
@@ -2126,20 +2165,18 @@ impl<
                 .B_blinding,
         );
 
-        comm_bp_blinding.zeroize();
+        let (comm_new_bal, t_bp) = Self::enforce_range_and_init_proto(
+            rng,
+            updated_account.balance(),
+            new_balance_blinding,
+            even_prover,
+            b,
+            b_blinding,
+        )?;
 
         let mut transcript = even_prover.transcript();
 
-        t_bp.challenge_contribution(
-            &account_tree_params.even_parameters.sl_params.pc_gens().B,
-            &account_tree_params
-                .even_parameters
-                .sl_params
-                .pc_gens()
-                .B_blinding,
-            &comm_new_bal,
-            &mut transcript,
-        )?;
+        t_bp.challenge_contribution(b, b_blinding, &comm_new_bal, &mut transcript)?;
 
         Ok((
             Self {
@@ -2168,6 +2205,50 @@ impl<
             r1cs_proof: None,
             comm_new_bal: self.comm_new_bal,
         }
+    }
+
+    fn nullifier_proto(
+        rho: F0,
+        rho_blinding: F0,
+        nullifier_gen: &Affine<G0>,
+    ) -> PokDiscreteLogProtocol<Affine<G0>> {
+        PokDiscreteLogProtocol::init(rho, rho_blinding, nullifier_gen)
+    }
+
+    fn enforce_range_and_init_proto<R: CryptoRngCore>(
+        rng: &mut R,
+        balance: Balance,
+        new_balance_blinding: F0,
+        even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
+        b: &Affine<G0>,
+        b_blinding: &Affine<G0>,
+    ) -> Result<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)> {
+        // Range proof on new balance to ensure it's non-negative. We need the range proof even when the fee_amount is public
+        // since the balance has be in a given range.
+        let mut new_balance = F0::from(balance);
+        let mut comm_bp_blinding = F0::rand(rng);
+        let (comm_new_bal, new_bal_var) = even_prover.commit(new_balance, comm_bp_blinding);
+        range_proof(
+            even_prover,
+            new_bal_var.into(),
+            Some(balance as u128),
+            FEE_BALANCE_BITS.into(),
+        )?;
+
+        // Sigma protocol linking the BP commitment to the balance in the account commitment.
+        // Uses new_balance_blinding shared with the account commitment proof so the balance response matches.
+        let t_bp = PokPedersenCommitmentProtocol::init(
+            new_balance,
+            new_balance_blinding,
+            b,
+            comm_bp_blinding,
+            F0::rand(rng),
+            b_blinding,
+        );
+
+        new_balance.zeroize();
+        comm_bp_blinding.zeroize();
+        Ok((comm_new_bal, t_bp))
     }
 }
 
@@ -2402,6 +2483,7 @@ impl<
                 _,
                 Parameters0,
                 Parameters1,
+                _,
             >(
                 rng,
                 fee_amount,
@@ -2709,6 +2791,7 @@ impl<
                 _,
                 Parameters0,
                 Parameters1,
+                _,
             >(
                 rng,
                 fee_amount,
@@ -3525,7 +3608,7 @@ pub fn ensure_same_accounts_without_sk<G: AffineRepr>(
     }
 }
 
-pub fn ensure_same_sk<G: AffineRepr>(
+pub fn ensure_same_pk<G: AffineRepr>(
     old_state: &FeeAccountState<G>,
     new_state: &FeeAccountState<G>,
 ) -> Result<()> {
@@ -3605,6 +3688,7 @@ pub mod tests {
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use curve_tree_relations::curve_tree::CurveTree;
+    use polymesh_dart_common::MAX_FEE_BALANCE;
     use std::time::Instant;
 
     type PallasParameters = ark_pallas::PallasConfig;
@@ -3638,7 +3722,7 @@ pub mod tests {
         assert_eq!(fee_account.balance, balance);
         assert_eq!(fee_account.pk, pk_i.0);
 
-        fee_account.commit(account_comm_key).unwrap();
+        fee_account.commit(&account_comm_key).unwrap();
     }
 
     #[test]
@@ -3653,7 +3737,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
-        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
+        let fee_account_comm = fee_account.commit(&account_comm_key).unwrap();
 
         let nonce = b"test-nonce";
 
@@ -3693,13 +3777,12 @@ pub mod tests {
         let balance = 1000;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
+        let fee_account_comm = fee_account.commit(&account_comm_key).unwrap();
         let nonce = b"test-nonce";
 
         //  Host side: own transcript, public inputs + partial T-values
         let partial = RegTxnProofWithoutSkProtocol::new(
             &mut rng,
-            pk.0,
             &fee_account,
             fee_account_comm.clone(),
             nonce,
@@ -3763,14 +3846,13 @@ pub mod tests {
         let balance = 1000;
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let fee_account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-        let fee_account_comm = fee_account.commit(account_comm_key.clone()).unwrap();
+        let fee_account_comm = fee_account.commit(&account_comm_key).unwrap();
         let nonce = b"test-nonce";
 
         //  Host builds its partial partial protocol, derives partial challenge
         let mut host_transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         let partial_proto = RegTxnProofWithoutSkProtocol::init_with_given_transcript(
             &mut rng,
-            pk.0,
             &fee_account,
             fee_account_comm.clone(),
             nonce,
@@ -3877,7 +3959,7 @@ pub mod tests {
 
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         // Add fee account commitment in curve tree
         // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
@@ -3896,7 +3978,7 @@ pub mod tests {
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
         assert_eq!(updated_account.balance, account.balance + increase_bal_by);
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
@@ -4022,7 +4104,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4035,16 +4117,15 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
         //  Host side: creates transcripts/provers internally, derives challenge_h
         let pk_gen = account_comm_key.sk_gen();
         let (partial, nullifier) =
-            FeeAccountTopupTxnWithoutSkProtocol::new::<_, PallasParams, VestaParams>(
+            FeeAccountTopupTxnWithoutSkProtocol::new::<_, PallasParams, VestaParams, _>(
                 &mut rng,
-                &pk_i.0,
                 increase_bal_by,
                 account.clone(),
                 updated_account.clone(),
@@ -4114,7 +4195,7 @@ pub mod tests {
         let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4127,16 +4208,15 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
         //  Host pre-challenge phase
         let pk_gen = account_comm_key.sk_gen();
         let (protocol, mut even_prover, odd_prover, nullifier) =
-            FeeAccountTopupTxnWithoutSkProtocol::init::<_, PallasParams, VestaParams>(
+            FeeAccountTopupTxnWithoutSkProtocol::init::<_, PallasParams, VestaParams, _>(
                 &mut rng,
-                &pk_i.0,
                 increase_bal_by,
                 account.clone(),
                 updated_account.clone(),
@@ -4288,7 +4368,7 @@ pub mod tests {
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
         let set = vec![account_comm.0];
@@ -4307,7 +4387,7 @@ pub mod tests {
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
         assert_eq!(updated_account.balance, account.balance - fee_amount);
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
 
@@ -4452,7 +4532,7 @@ pub mod tests {
             let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let balance = 1000;
             let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_comm = account.commit(&account_comm_key).unwrap();
             sks.push(sk);
             accounts.push(account);
             account_comms.push(account_comm);
@@ -4470,7 +4550,7 @@ pub mod tests {
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_payment(fee_amount).unwrap();
             assert_eq!(updated_account.balance, accounts[i].balance - fee_amount);
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
             let path = account_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
             updated_accounts.push(updated_account);
             updated_account_comms.push(updated_account_comm);
@@ -4636,7 +4716,7 @@ pub mod tests {
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4649,7 +4729,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4753,7 +4833,7 @@ pub mod tests {
         let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
         let balance = 1000;
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         let set = vec![account_comm.0];
         let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -4766,7 +4846,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
@@ -4930,6 +5010,44 @@ pub mod tests {
         handle_verification_tuples(even_tuple, odd_tuple, &account_tree_params, None).unwrap();
     }
 
+    #[test]
+    fn fee_account_state_transition_invariants() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+        let (_sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let account = new_fee_account::<_, PallasA>(&mut rng, 1, pk, 1000);
+
+        let topped_up = account.get_state_for_topup(25).unwrap();
+        assert_eq!(topped_up.balance, account.balance + 25);
+        assert_eq!(topped_up.asset_id(), account.asset_id());
+        assert_eq!(topped_up.pk, account.pk);
+        assert_ne!(topped_up.rho, account.rho);
+        assert_ne!(topped_up.randomness, account.randomness);
+
+        let paid = topped_up.get_state_for_payment(10).unwrap();
+        assert_eq!(paid.balance, topped_up.balance - 10);
+        assert_eq!(paid.asset_id(), topped_up.asset_id());
+        assert_eq!(paid.pk, topped_up.pk);
+        assert_ne!(paid.rho, topped_up.rho);
+        assert_ne!(paid.randomness, topped_up.randomness);
+    }
+
+    #[test]
+    fn fee_account_state_transition_bounds() {
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+        let (_sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let account_at_max = new_fee_account::<_, PallasA>(&mut rng, 1, pk, MAX_FEE_BALANCE);
+        assert!(account_at_max.get_state_for_topup(1).is_err());
+
+        let account_small = new_fee_account::<_, PallasA>(&mut rng, 1, pk, 5);
+        assert!(account_small.get_state_for_payment(6).is_err());
+    }
+
     #[cfg(feature = "ignore_prover_input_sanitation")]
     mod input_sanitation_disabled {
         use super::*;
@@ -4951,7 +5069,7 @@ pub mod tests {
 
             let balance = 1000;
             let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
-            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_comm = account.commit(&account_comm_key).unwrap();
 
             // Add fee account commitment in curve tree
             let set = vec![account_comm.0];
@@ -4969,7 +5087,7 @@ pub mod tests {
             let mut updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
             updated_account.balance = account.balance + 50; // Add extra on top of the actual increase amount
 
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
@@ -5006,6 +5124,24 @@ pub mod tests {
                     )
                     .is_err()
             );
+
+            let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+            let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+            let verify_result = proof.verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some((&mut rmc_0, &mut rmc_1)),
+            );
+            let rmc_result = verify_rmc(rmc_0, rmc_1);
+            assert!(verify_result.is_err() || rmc_result.is_err());
         }
 
         #[test]
@@ -5024,7 +5160,7 @@ pub mod tests {
             let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let balance = 1000;
             let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
-            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_comm = account.commit(&account_comm_key).unwrap();
 
             let set = vec![account_comm.0];
             let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -5040,7 +5176,7 @@ pub mod tests {
             let mut updated_account = account.get_state_for_payment(fee_amount).unwrap();
             updated_account.balance = account.balance + 5; // Decrease by 5 less than the actual fee amount
 
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
@@ -5076,6 +5212,513 @@ pub mod tests {
                     )
                     .is_err()
             );
+
+            let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+            let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+            let verify_result = proof.verify(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some((&mut rmc_0, &mut rmc_1)),
+            );
+            let rmc_result = verify_rmc(rmc_0, rmc_1);
+            assert!(verify_result.is_err() || rmc_result.is_err());
+        }
+
+        #[cfg(feature = "nightly_mocking_tests")]
+        mod mocking_tests {
+            use super::*;
+            use mocktopus::mocking::{MockResult, Mockable};
+
+            const L: usize = 64;
+
+            fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
+                FeeAccountState::<PallasA>::nullifier::<CK>.clear_mock();
+
+                FeeAccountTopupTxnWithoutSkProtocol::<
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                    L,
+                >::nullifier_proto
+                    .clear_mock();
+                FeeAccountTopupTxnWithoutSkProtocol::<
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                    L,
+                >::enforce_range_and_init_proto::<rand::rngs::ThreadRng>
+                    .clear_mock();
+
+                FeePaymentWithoutCommitmentsProtocol::<
+                    L,
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                >::nullifier_proto
+                    .clear_mock();
+                FeePaymentWithoutCommitmentsProtocol::<
+                    L,
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                >::enforce_range_and_init_proto::<rand::rngs::ThreadRng>
+                    .clear_mock();
+            }
+
+            fn mock_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
+                _: &CK,
+                expected_nullifier: PallasA,
+            ) {
+                FeeAccountState::<PallasA>::nullifier::<CK>
+                    .mock_safe(move |_, _| MockResult::Return(expected_nullifier));
+            }
+
+            #[test]
+            fn fee_account_topup_txn_with_mocked_rho_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 13;
+                const L: usize = 64;
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let asset_id = 1;
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+                let balance = 1000;
+                let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
+                let account_comm = account.commit(&account_comm_key).unwrap();
+
+                let set = vec![account_comm.0];
+                let account_tree =
+                    CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                        &set,
+                        &account_tree_params,
+                        Some(3),
+                    );
+
+                let increase_bal_by = 10;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let mocked_rho = F0::rand(&mut rng);
+                let expected_mocked_nullifier =
+                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+
+                mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
+                FeeAccountTopupTxnWithoutSkProtocol::<
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                    L,
+                >::nullifier_proto
+                    .mock_safe(move |_, rho_blinding, nullifier_gen| {
+                        MockResult::Return(PokDiscreteLogProtocol::init(
+                            mocked_rho,
+                            rho_blinding,
+                            nullifier_gen,
+                        ))
+                    });
+
+                let (proof, nullifier) =
+                    FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        sk_i.0,
+                        increase_bal_by,
+                        &account,
+                        &updated_account,
+                        updated_account_comm,
+                        path,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                    )
+                    .unwrap();
+
+                assert_eq!(nullifier, expected_mocked_nullifier);
+                assert_ne!(nullifier, honest_nullifier);
+
+                assert!(
+                    proof
+                        .verify(
+                            pk_i.0,
+                            asset_id,
+                            increase_bal_by,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn fee_account_topup_txn_with_mocked_balance_for_range_proof_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 13;
+                const L: usize = 64;
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let asset_id = 1;
+                let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+                let balance = 1000;
+                let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
+                let account_comm = account.commit(&account_comm_key).unwrap();
+
+                let set = vec![account_comm.0];
+                let account_tree =
+                    CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                        &set,
+                        &account_tree_params,
+                        Some(3),
+                    );
+
+                let increase_bal_by = 10;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let honest_new_balance = updated_account.balance();
+                let mocked_new_balance = honest_new_balance + 1;
+
+                FeeAccountTopupTxnWithoutSkProtocol::<
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                    L,
+                >::enforce_range_and_init_proto::<rand::rngs::ThreadRng>
+                    .mock_safe(move |rng, _balance, new_balance_blinding, even_prover, b, b_blinding| {
+                        MockResult::Continue((
+                            rng,
+                            mocked_new_balance,
+                            new_balance_blinding,
+                            even_prover,
+                            b,
+                            b_blinding,
+                        ))
+                    });
+
+                let (proof, nullifier) =
+                    FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        sk_i.0,
+                        increase_bal_by,
+                        &account,
+                        &updated_account,
+                        updated_account_comm,
+                        path,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                    )
+                    .unwrap();
+
+                assert!(
+                    proof
+                        .verify(
+                            pk_i.0,
+                            asset_id,
+                            increase_bal_by,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn fee_payment_proof_with_mocked_rho_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 13;
+                const L: usize = 64;
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let asset_id = 1;
+                let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+                let balance = 1000;
+                let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+                let account_comm = account.commit(&account_comm_key).unwrap();
+
+                let set = vec![account_comm.0];
+                let account_tree =
+                    CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                        &set,
+                        &account_tree_params,
+                        Some(3),
+                    );
+
+                let fee_amount = 10;
+                let nonce = b"a_txn_id,a_payee_id";
+
+                let updated_account = account.get_state_for_payment(fee_amount).unwrap();
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let mocked_rho = F0::rand(&mut rng);
+                let expected_mocked_nullifier =
+                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+
+                mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
+                FeePaymentWithoutCommitmentsProtocol::<
+                    L,
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                >::nullifier_proto
+                    .mock_safe(move |_, rho_blinding, nullifier_gen| {
+                        MockResult::Return(PokDiscreteLogProtocol::init(
+                            mocked_rho,
+                            rho_blinding,
+                            nullifier_gen,
+                        ))
+                    });
+
+                let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    fee_amount,
+                    sk.0,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+
+                assert_eq!(nullifier, expected_mocked_nullifier);
+                assert_ne!(nullifier, honest_nullifier);
+
+                assert!(
+                    proof
+                        .verify(
+                            asset_id,
+                            fee_amount,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn fee_payment_proof_with_mocked_balance_for_range_proof_fails_verification() {
+                let mut rng = rand::thread_rng();
+
+                const NUM_GENS: usize = 1 << 13;
+                const L: usize = 64;
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let asset_id = 1;
+                let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+                let balance = 1000;
+                let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+                let account_comm = account.commit(&account_comm_key).unwrap();
+
+                let set = vec![account_comm.0];
+                let account_tree =
+                    CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                        &set,
+                        &account_tree_params,
+                        Some(3),
+                    );
+
+                let fee_amount = 10;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_payment(fee_amount).unwrap();
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let honest_new_balance = updated_account.balance();
+                let mocked_new_balance = honest_new_balance + 1;
+
+                FeePaymentWithoutCommitmentsProtocol::<
+                    L,
+                    F0,
+                    F1,
+                    PallasParameters,
+                    VestaParameters,
+                >::enforce_range_and_init_proto::<rand::rngs::ThreadRng>
+                    .mock_safe(move |rng, _balance, new_balance_blinding, even_prover, b, b_blinding| {
+                        MockResult::Continue((
+                            rng,
+                            mocked_new_balance,
+                            new_balance_blinding,
+                            even_prover,
+                            b,
+                            b_blinding,
+                        ))
+                    });
+
+                let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    fee_amount,
+                    sk.0,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+
+                assert!(
+                    proof
+                        .verify(
+                            asset_id,
+                            fee_amount,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
         }
     }
 }
