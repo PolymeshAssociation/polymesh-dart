@@ -45,12 +45,19 @@ pub mod init {
             set_asset_commitment_parameters, set_pallas_layer_parameters,
             set_vesta_layer_parameters,
         },
-        dart_gens, poseidon_params, reset_dart_gens, reset_poseidon_params, set_dart_gens,
-        set_poseidon_params,
+        dart_gens, loaded_dart_gens, poseidon_params, reset_dart_gens, reset_poseidon_params,
+        set_dart_gens, set_poseidon_params,
     };
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use ark_std::vec::Vec;
 
+    /// Checks if the parameters have been loaded.
+    pub fn check_params_loaded() -> bool {
+        // We just check if one of the parameters is loaded, since they are all loaded and unloaded together.
+        loaded_dart_gens()
+    }
+
+    /// Initialize the parameters by generating them if they haven't already been generated.
     pub fn init_params() -> Result<usize, Error> {
         let mut total_size = 0;
 
@@ -75,6 +82,7 @@ pub mod init {
         Ok(total_size)
     }
 
+    /// Save the parameters to a buffer. This can be used to save the parameters to disk or to send them over the network.
     pub fn save_params(mut buffer: &mut Vec<u8>) -> Result<usize, Error> {
         // Save the curve tree parameters.
         let pallas_params = get_pallas_layer_parameters();
@@ -95,6 +103,7 @@ pub mod init {
         Ok(buffer.len())
     }
 
+    /// Load the parameters from a buffer. This can be used to load the parameters from disk or to receive them over the network.
     pub fn load_params(mut buffer: &[u8]) -> Result<(), Error> {
         // Load the curve tree parameters.
         set_pallas_layer_parameters(CanonicalDeserialize::deserialize_uncompressed_unchecked(
@@ -120,6 +129,7 @@ pub mod init {
         Ok(())
     }
 
+    /// Unload the parameters from memory. This is mainly used for benchmarking.
     pub fn unload_params() {
         // Load the curve tree parameters.
         reset_pallas_layer_parameters();

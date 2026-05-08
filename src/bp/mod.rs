@@ -204,6 +204,12 @@ pub fn set_dart_gens(_gens: DartBPGenerators) {}
 pub fn reset_dart_gens() {}
 
 #[cfg(feature = "std")]
+pub fn loaded_dart_gens() -> bool {
+    // We can't check if the lazy_static generators have been loaded yet without causing the to be loaded, so we just return
+    true
+}
+
+#[cfg(feature = "std")]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
@@ -225,6 +231,12 @@ pub fn reset_dart_gens() {
     unsafe {
         DART_GENS = None;
     }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn loaded_dart_gens() -> bool {
+    unsafe { DART_GENS.is_some() }
 }
 
 #[cfg(not(feature = "std"))]
