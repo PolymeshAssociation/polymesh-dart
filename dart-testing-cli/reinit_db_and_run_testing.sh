@@ -66,11 +66,11 @@ run mediator-affirm -w mediator-reject-proof.dat -s mediator --settlement 1 --le
 run mediator-affirm -r mediator-reject-proof.dat -s mediator --settlement 1 --leg 0
 
 # TODO:
-#run receiver-counter-update -s investor-0 --settlement 1 --leg 0
+#run receiver-revert-affirmation -s investor-0 --settlement 1 --leg 0
 
-#run sender-reversal -s issuer1-0 --settlement 1 --leg 0
-run sender-reversal -w sender-reversal-proof.dat -s issuer1-0 --settlement 1 --leg 0
-run sender-reversal -r sender-reversal-proof.dat -s issuer1-0 --settlement 1 --leg 0
+#run sender-revert-affirmation -s issuer1-0 --settlement 1 --leg 0
+run sender-revert-affirmation -w sender-revert-affirmation-proof.dat -s issuer1-0 --settlement 1 --leg 0
+run sender-revert-affirmation -r sender-revert-affirmation-proof.dat -s issuer1-0 --settlement 1 --leg 0
 
 run end-block
 

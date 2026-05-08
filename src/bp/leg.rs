@@ -9,12 +9,13 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
+    collections::BTreeSet,
     format,
     string::{String, ToString},
     vec,
     vec::Vec,
 };
-use bulletproofs::r1cs::VerificationTuple;
+use bulletproofs::r1cs::{VerificationTuple, batch_verify_with_rng};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
 
@@ -398,6 +399,7 @@ impl LegBuilder {
 
     pub fn encrypt_and_prove<
         R: RngCore + CryptoRng,
+        T: DartLimits,
         C: CurveTreeConfig<
                 F0 = <VestaParameters as CurveConfig>::ScalarField,
                 F1 = <PallasParameters as CurveConfig>::ScalarField,
@@ -409,7 +411,7 @@ impl LegBuilder {
         rng: &mut R,
         ctx: &[u8],
         asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
-    ) -> Result<AnySettlementLegProof<C>, Error> {
+    ) -> Result<AnySettlementLegProof<T, C>, Error> {
         let asset_id = self.asset.asset_id;
         let leg = Leg::new(
             self.sender.enc,
@@ -459,27 +461,35 @@ impl LegBuilder {
 /// When the asset-id is hidden, the proof includes a curve tree membership proof.
 /// When the asset-id is revealed, a simpler proof (`PublicAssetLegCreationProof`) is used instead.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub enum AnySettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub enum AnySettlementLegProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeConfig> {
     /// Asset ID is hidden; uses `SettlementLegProof` with curve-tree membership.
-    HiddenAssetId(SettlementLegProof<C>),
+    HiddenAssetId(SettlementLegProof<T, C>),
     /// Asset ID is publicly revealed; uses `SettlementLegProofRevealedAssetId`.
-    RevealedAssetId(SettlementLegProofRevealedAssetId),
+    RevealedAssetId(SettlementLegProofRevealedAssetId<T>),
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
             F1 = <PallasParameters as CurveConfig>::ScalarField,
             P0 = VestaParameters,
             P1 = PallasParameters,
         >,
-> AnySettlementLegProof<C>
+> AnySettlementLegProof<T, C>
 {
     pub fn leg_enc(&self) -> &LegEncrypted {
         match self {
             Self::HiddenAssetId(p) => &p.leg_enc,
             Self::RevealedAssetId(p) => &p.leg_enc,
+        }
+    }
+
+    pub fn revealed_asset_id(&self) -> Option<AssetId> {
+        match self {
+            Self::HiddenAssetId(_) => None,
+            Self::RevealedAssetId(p) => Some(p.asset_id),
         }
     }
 
@@ -658,7 +668,7 @@ pub struct SettlementProof<T: DartLimits = (), C: CurveTreeConfig = AssetTreeCon
     pub memo: BoundedVec<u8, T::MaxSettlementMemoLength>,
     pub root_block: BlockNumber,
 
-    pub legs: BoundedVec<AnySettlementLegProof<C>, T::MaxSettlementLegs>,
+    pub legs: BoundedVec<AnySettlementLegProof<T, C>, T::MaxSettlementLegs>,
 }
 
 impl<
@@ -691,6 +701,17 @@ impl<
             receiver_count: leg_count,
             mediator_count,
         })
+    }
+
+    /// Get the set of revealed asset IDs in the settlement proof.
+    pub fn revealed_asset_ids(&self) -> BTreeSet<AssetId> {
+        let mut asset_ids = BTreeSet::new();
+        for leg_proof in &self.legs {
+            if let Some(asset_id) = leg_proof.revealed_asset_id() {
+                asset_ids.insert(asset_id);
+            }
+        }
+        asset_ids
     }
 
     #[cfg(feature = "parallel")]
@@ -780,20 +801,16 @@ impl<
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
         for (even, odd) in tuples {
-            even_tuples.push(even);
-            odd_tuples.push(odd);
+            // If any tuple is empty which can happen when asset id is revealed
+            if !even.proof_independent_scalars.is_empty() {
+                even_tuples.push(even);
+            }
+            if !odd.proof_independent_scalars.is_empty() {
+                odd_tuples.push(odd);
+            }
         }
 
-        let params = C::parameters();
-        batch_verify_bp_with_rng(
-            even_tuples,
-            odd_tuples,
-            params.even_parameters.pc_gens(),
-            params.odd_parameters.pc_gens(),
-            params.even_parameters.bp_gens(),
-            params.odd_parameters.bp_gens(),
-            rng,
-        )?;
+        Self::batch_verify_tuples(even_tuples, odd_tuples, rng)?;
 
         Ok(())
     }
@@ -824,21 +841,52 @@ impl<
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = (&self.memo, idx as u8).encode();
             let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng)?;
-            even_tuples.push(even);
-            odd_tuples.push(odd);
+            // If any tuple is empty which can happen when asset id is revealed
+            if !even.proof_independent_scalars.is_empty() {
+                even_tuples.push(even);
+            }
+            if !odd.proof_independent_scalars.is_empty() {
+                odd_tuples.push(odd);
+            }
         }
 
-        let params = C::parameters();
-        batch_verify_bp_with_rng(
-            even_tuples,
-            odd_tuples,
-            params.even_parameters.pc_gens(),
-            params.odd_parameters.pc_gens(),
-            params.even_parameters.bp_gens(),
-            params.odd_parameters.bp_gens(),
-            rng,
-        )?;
+        Self::batch_verify_tuples(even_tuples, odd_tuples, rng)?;
 
+        Ok(())
+    }
+
+    fn batch_verify_tuples<R: RngCore + CryptoRng>(
+        even_tuples: Vec<VerificationTuple<Affine<C::P0>>>,
+        odd_tuples: Vec<VerificationTuple<Affine<C::P1>>>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        // This could be moved to helper but i want helpers to do minimum error handling
+        let params = C::parameters();
+        if !even_tuples.is_empty() && !odd_tuples.is_empty() {
+            batch_verify_bp_with_rng(
+                even_tuples,
+                odd_tuples,
+                params.even_parameters.pc_gens(),
+                params.odd_parameters.pc_gens(),
+                params.even_parameters.bp_gens(),
+                params.odd_parameters.bp_gens(),
+                rng,
+            )?;
+        } else if !even_tuples.is_empty() {
+            batch_verify_with_rng(
+                even_tuples,
+                params.even_parameters.pc_gens(),
+                params.even_parameters.bp_gens(),
+                rng,
+            )?
+        } else {
+            batch_verify_with_rng(
+                odd_tuples,
+                params.odd_parameters.pc_gens(),
+                params.odd_parameters.bp_gens(),
+                rng,
+            )?
+        }
         Ok(())
     }
 }
@@ -856,23 +904,24 @@ type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
 /// This is to prove that the leg includes the correct encryption of the leg details and
 /// that the correct auditor/mediator for the asset is included in the leg.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-#[scale_info(skip_type_params(C))]
-pub struct SettlementLegProof<C: CurveTreeConfig = AssetTreeConfig> {
+#[scale_info(skip_type_params(T, C))]
+pub struct SettlementLegProof<T: DartLimits, C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: WrappedCanonical<BPSettlementTxnProof<C>>,
+    inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
+    T: DartLimits,
     C: CurveTreeConfig<
             F0 = <VestaParameters as CurveConfig>::ScalarField,
             F1 = <PallasParameters as CurveConfig>::ScalarField,
             P0 = VestaParameters,
             P1 = PallasParameters,
         >,
-> SettlementLegProof<C>
+> SettlementLegProof<T, C>
 {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
@@ -907,7 +956,7 @@ impl<
             leg_enc,
             public_enc_keys,
 
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 
@@ -1000,31 +1049,33 @@ impl<
 ///
 /// Returns the leaf-level PedersenGens for the Pallas curve, used by
 /// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
-fn get_leaf_level_pc_gens() -> PedersenGens<PallasA> {
-    get_pallas_layer_parameters().pc_gens().clone()
+fn get_leaf_level_pc_gens<'a>() -> &'a PedersenGens<PallasA> {
+    get_pallas_layer_parameters().pc_gens()
 }
 
 /// Returns the leaf-level BulletproofGens for the Pallas curve, used by
 /// [`SettlementLegProofRevealedAssetId`] which operates on [`PallasParameters`].
-fn get_leaf_level_bp_gens() -> BulletproofGens<PallasA> {
-    get_pallas_layer_parameters().bp_gens().clone()
+fn get_leaf_level_bp_gens<'a>() -> &'a BulletproofGens<PallasA> {
+    get_pallas_layer_parameters().bp_gens()
 }
 
 /// This is used when the asset ID is revealed to the verifier, so there is no curve tree proof.
 /// The auditor and mediator public keys are also known to the verifier.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-pub struct SettlementLegProofRevealedAssetId {
+#[scale_info(skip_type_params(T))]
+pub struct SettlementLegProofRevealedAssetId<T: DartLimits> {
     pub asset_id: AssetId,
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: WrappedCanonical<
+    inner: BoundedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
+        T::MaxInnerProofSize,
     >,
 }
 
-impl SettlementLegProofRevealedAssetId {
+impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg: bp_leg::Leg<PallasA>,
@@ -1043,8 +1094,8 @@ impl SettlementLegProofRevealedAssetId {
             leg_enc.decode()?,
             leg_enc_rand.decode()?,
             ctx,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
@@ -1053,7 +1104,7 @@ impl SettlementLegProofRevealedAssetId {
             asset_id,
             leg_enc,
             public_enc_keys,
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 
@@ -1071,10 +1122,14 @@ impl SettlementLegProofRevealedAssetId {
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let leg_enc = self.leg_enc.decode()?;
+        if leg_enc.asset_id() != Some(self.asset_id) {
+            return Err(Error::CryptoError("Asset ID mismatch".to_string()));
+        }
+
         let (enc_keys, med_keys) = asset_lookup.get_keys(self.asset_id)?;
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
         let leaf_level_bp_gens = get_leaf_level_bp_gens();
-        let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
         let proof = self.inner.decode()?;
 
@@ -1092,8 +1147,8 @@ impl SettlementLegProofRevealedAssetId {
                 med_keys,
                 public_enc_keys,
                 ctx,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
                 dart_gens().enc_key_gen(),
                 dart_gens().leg_asset_value_gen(),
                 Some(rmc),
@@ -1128,8 +1183,8 @@ impl SettlementLegProofRevealedAssetId {
             med_keys,
             public_enc_keys,
             ctx,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rng,

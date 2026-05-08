@@ -25,7 +25,7 @@ pub fn gen_fee_account_topup_proof() {
     let mut rng = default_rng();
     let keys = alice_keys();
     let (fee_tree, mut fee_state) = alice_fee_tree(&keys);
-    let proof = FeeAccountTopupProof::new(
+    let proof = FeeAccountTopupProof::<()>::new(
         &mut rng,
         &keys.acct,
         &mut fee_state,
@@ -41,7 +41,7 @@ pub fn gen_fee_account_payment_proof() {
     let mut rng = default_rng();
     let keys = alice_keys();
     let (mut fee_tree, mut fee_state) = alice_fee_tree(&keys);
-    let topup_proof = FeeAccountTopupProof::new(
+    let topup_proof = FeeAccountTopupProof::<()>::new(
         &mut rng,
         &keys.acct,
         &mut fee_state,
@@ -57,7 +57,7 @@ pub fn gen_fee_account_payment_proof() {
         .unwrap();
     fee_tree.insert(updated_leaf).unwrap();
     fee_tree.store_root().unwrap();
-    let proof = FeeAccountPaymentProof::new(
+    let proof = FeeAccountPaymentProof::<()>::new(
         &mut rng,
         &keys.acct,
         IDENTITY,
@@ -72,7 +72,7 @@ pub fn gen_fee_account_payment_proof() {
 fn fee_tree_after_topup(keys: &AccountKeys) -> FeeProverTree {
     let mut rng = default_rng();
     let (mut fee_tree, mut fee_state) = alice_fee_tree(keys);
-    let topup_proof = FeeAccountTopupProof::new(
+    let topup_proof = FeeAccountTopupProof::<()>::new(
         &mut rng,
         &keys.acct,
         &mut fee_state,

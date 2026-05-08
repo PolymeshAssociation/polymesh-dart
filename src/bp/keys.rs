@@ -203,13 +203,6 @@ impl AccountPublicKey {
 )]
 pub struct AccountSecretKey(pub(crate) bp_keys::SigKey<PallasA>);
 
-impl AccountSecretKey {
-    /// Gets the inner signing key.
-    pub fn inner(&self) -> &bp_keys::SigKey<PallasA> {
-        &self.0
-    }
-}
-
 /// The account key pair, consisting of the public and secret keys.
 #[derive(
     Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, Zeroize, ZeroizeOnDrop,
@@ -398,7 +391,7 @@ impl AccountKeys {
 pub struct AccountRegistrationProof<T: DartLimits = ()> {
     pub accounts: BoundedVec<AccountPublicKeys, T::MaxKeysPerRegProof>,
 
-    inner: WrappedCanonical<bp_keys::InvestorKeyRegProof<PallasA>>,
+    inner: BoundedCanonical<bp_keys::InvestorKeyRegProof<PallasA>, T::MaxInnerProofSize>,
 }
 
 impl<T: DartLimits> AccountRegistrationProof<T> {
@@ -414,7 +407,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
         for account in accounts {
             bounded_accounts
                 .try_push(account.public_keys())
-                .map_err(|_| Error::TooManyKeysInRegProof)?;
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
 
             let acc_pub = account.acct.public.get_affine()?;
             let acc_sec = account.acct.secret.0.0;
@@ -433,7 +426,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 
         Ok(Self {
             accounts: bounded_accounts,
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 
@@ -468,7 +461,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
 pub struct EncryptionKeyRegistrationProof<T: DartLimits = ()> {
     pub keys: BoundedVec<EncryptionPublicKey, T::MaxKeysPerRegProof>,
 
-    inner: WrappedCanonical<bp_keys::AudMedRegProof<PallasA>>,
+    inner: BoundedCanonical<bp_keys::AudMedRegProof<PallasA>, T::MaxInnerProofSize>,
 }
 
 impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
@@ -484,7 +477,7 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
         for key in keys {
             bounded_keys
                 .try_push(key.public)
-                .map_err(|_| Error::TooManyKeysInRegProof)?;
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
             let pub_key = key.public.get_affine()?;
             let sec_key = key.secret.0.0;
             key_pairs.push((pub_key, sec_key));
@@ -495,7 +488,7 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
 
         Ok(Self {
             keys: bounded_keys,
-            inner: WrappedCanonical::wrap(&proof)?,
+            inner: BoundedCanonical::wrap(&proof)?,
         })
     }
 

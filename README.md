@@ -66,7 +66,7 @@ Run code coverage as
 cargo llvm-cov -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
 ```
 
-To get report in HTML, install `lcov` and run run
+To get report in HTML, install `lcov` and run
 ```
 genhtml -o target/coverage/html target/coverage/lcov.info
 ```

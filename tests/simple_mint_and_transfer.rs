@@ -987,7 +987,7 @@ fn test_reject_after_sender_affirms() -> Result<()> {
     );
 
     // Step 7: The sender reverts their affirmation.
-    issuer_acct.sender_revert(
+    issuer_acct.sender_revert_affirmation(
         &mut rng,
         &mut chain,
         account_tree.prover_account_tree(),

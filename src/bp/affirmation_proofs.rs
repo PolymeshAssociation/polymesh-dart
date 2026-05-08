@@ -84,7 +84,6 @@ macro_rules! with_balance {
             nullifier: PallasA,
             updated_commitment: AccountStateCommitment,
             leg_ref: LegRef,
-            amount: Balance,
             root_block: BlockNumber,
             _marker: core::marker::PhantomData<C>,
         }
@@ -182,7 +181,6 @@ macro_rules! with_balance {
                         nullifier,
                         updated_commitment,
                         leg_ref: leg_ref.clone(),
-                        amount,
                         root_block,
                         _marker: core::marker::PhantomData,
                     },
@@ -190,11 +188,11 @@ macro_rules! with_balance {
                 ))
             }
 
-            pub fn finish<R: RngCore + CryptoRng>(
+            pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
                 mut self,
                 rng: &mut R,
                 device_response: &AffirmationDeviceResponse,
-            ) -> Result<$SplitProof<C>, Error> {
+            ) -> Result<$SplitProof<T, C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
                 let challenge_h_final = append_auth_proof_and_get_challenge(
@@ -219,21 +217,19 @@ macro_rules! with_balance {
                     root_block: self.root_block,
                     updated_account_state_commitment: self.updated_commitment,
                     nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
-                    amount: self.amount,
-                    inner: WrappedCanonical::wrap(&bp_proof)?,
+                    inner: BoundedCanonical::wrap(&bp_proof)?,
                 })
             }
         }
 
         #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-        #[scale_info(skip_type_params(C))]
-        pub struct $SplitProof<C: CurveTreeConfig = AccountTreeConfig> {
+        #[scale_info(skip_type_params(T, C))]
+        pub struct $SplitProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
             pub leg_ref: LegRef,
             pub root_block: BlockNumber,
             pub updated_account_state_commitment: AccountStateCommitment,
             pub nullifier: AccountStateNullifier,
-            pub amount: Balance,
-            pub(crate) inner: WrappedCanonical<
+            pub(crate) inner: BoundedCanonical<
                 bp_account::$BPProof<
                     ACCOUNT_TREE_L,
                     <C as CurveTreeConfig>::F0,
@@ -241,17 +237,19 @@ macro_rules! with_balance {
                     <C as CurveTreeConfig>::P0,
                     <C as CurveTreeConfig>::P1,
                 >,
+                T::MaxInnerProofSize,
             >,
         }
 
         impl<
+            T: DartLimits,
             C: CurveTreeConfig<
                     F0 = <PallasParameters as CurveConfig>::ScalarField,
                     F1 = <VestaParameters as CurveConfig>::ScalarField,
                     P0 = PallasParameters,
                     P1 = VestaParameters,
                 >,
-        > $SplitProof<C>
+        > $SplitProof<T, C>
         {
             pub fn new<R: RngCore + CryptoRng>(
                 rng: &mut R,
@@ -270,8 +268,7 @@ macro_rules! with_balance {
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
-                    keys.acct.secret.0.0,
-                    keys.enc.secret.0.0,
+                    keys,
                     &device_request,
                     gens.account_comm_key().sk_gen(),
                     gens.enc_key_gen(),
@@ -408,7 +405,7 @@ macro_rules! with_balance {
             }
         }
 
-        impl<C: CurveTreeConfig> AccountStateUpdate for $SplitProof<C> {
+        impl<T: DartLimits, C: CurveTreeConfig> AccountStateUpdate for $SplitProof<T, C> {
             fn account_state_commitment(&self) -> AccountStateCommitment {
                 self.updated_account_state_commitment
             }
@@ -543,11 +540,11 @@ macro_rules! no_balance {
                 ))
             }
 
-            pub fn finish<R: RngCore + CryptoRng>(
+            pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
                 mut self,
                 rng: &mut R,
                 device_response: &AffirmationDeviceResponse,
-            ) -> Result<$SplitProof<C>, Error> {
+            ) -> Result<$SplitProof<T, C>, Error> {
                 let auth_proof = device_response.0.decode()?;
 
                 let challenge_h_final = append_auth_proof_and_get_challenge(
@@ -572,19 +569,19 @@ macro_rules! no_balance {
                     root_block: self.root_block,
                     updated_account_state_commitment: self.updated_commitment,
                     nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
-                    inner: WrappedCanonical::wrap(&bp_proof)?,
+                    inner: BoundedCanonical::wrap(&bp_proof)?,
                 })
             }
         }
 
         #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
-        #[scale_info(skip_type_params(C))]
-        pub struct $SplitProof<C: CurveTreeConfig = AccountTreeConfig> {
+        #[scale_info(skip_type_params(T, C))]
+        pub struct $SplitProof<T: DartLimits = (), C: CurveTreeConfig = AccountTreeConfig> {
             pub leg_ref: LegRef,
             pub root_block: BlockNumber,
             pub updated_account_state_commitment: AccountStateCommitment,
             pub nullifier: AccountStateNullifier,
-            pub(crate) inner: WrappedCanonical<
+            pub(crate) inner: BoundedCanonical<
                 bp_account::$BPProof<
                     ACCOUNT_TREE_L,
                     <C as CurveTreeConfig>::F0,
@@ -592,17 +589,19 @@ macro_rules! no_balance {
                     <C as CurveTreeConfig>::P0,
                     <C as CurveTreeConfig>::P1,
                 >,
+                T::MaxInnerProofSize,
             >,
         }
 
         impl<
+            T: DartLimits,
             C: CurveTreeConfig<
                     F0 = <PallasParameters as CurveConfig>::ScalarField,
                     F1 = <VestaParameters as CurveConfig>::ScalarField,
                     P0 = PallasParameters,
                     P1 = VestaParameters,
                 >,
-        > $SplitProof<C>
+        > $SplitProof<T, C>
         {
             pub fn new<R: RngCore + CryptoRng>(
                 rng: &mut R,
@@ -620,8 +619,7 @@ macro_rules! no_balance {
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
-                    keys.acct.secret.0.0,
-                    keys.enc.secret.0.0,
+                    keys,
                     &device_request,
                     gens.account_comm_key().sk_gen(),
                     gens.enc_key_gen(),
@@ -758,7 +756,7 @@ macro_rules! no_balance {
             }
         }
 
-        impl<C: CurveTreeConfig> AccountStateUpdate for $SplitProof<C> {
+        impl<T: DartLimits, C: CurveTreeConfig> AccountStateUpdate for $SplitProof<T, C> {
             fn account_state_commitment(&self) -> AccountStateCommitment {
                 self.updated_account_state_commitment
             }
@@ -796,7 +794,7 @@ no_balance! {
 }
 
 with_balance! {
-    host_protocol: ClaimReceivedHostProtocol,
+    host_protocol: ReceiverClaimHostProtocol,
     split_proof: ReceiverClaimProof,
     bp_protocol: ClaimReceivedSplitProtocol,
     bp_proof: ClaimReceivedSplitProof,
@@ -808,8 +806,8 @@ with_balance! {
 }
 
 with_balance! {
-    host_protocol: SenderReverseHostProtocol,
-    split_proof: SenderReversalProof,
+    host_protocol: SenderRevertAffirmationHostProtocol,
+    split_proof: SenderRevertAffirmationProof,
     bp_protocol: SenderReverseSplitProtocol,
     bp_proof: SenderReverseSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_sender,
@@ -831,8 +829,8 @@ no_balance! {
 }
 
 no_balance! {
-    host_protocol: ReceiverCounterUpdateHostProtocol,
-    split_proof: ReceiverCounterUpdateProof,
+    host_protocol: ReceiverRevertAffirmationHostProtocol,
+    split_proof: ReceiverRevertAffirmationProof,
     bp_protocol: ReceiverCounterUpdateSplitProtocol,
     bp_proof: ReceiverCounterUpdateSplitProof,
     eph_pk_extractor: core_and_eph_keys_for_receiver,

@@ -140,7 +140,7 @@ fn setup_trees() -> (
     let params = full_tree.params().clone();
     let mut storage_tree = CurveTreeWithBackend::<L, 1, AssetTreeConfig>::new(HEIGHT)
         .expect("Failed to create storage tree");
-    assert!(storage_tree.height() == HEIGHT);
+    assert!(storage_tree.height(None).unwrap() == HEIGHT);
 
     // Insert a leaf into both trees to avoid empty tree edge cases
     let leaf = create_test_leaf(u32::MAX as usize);

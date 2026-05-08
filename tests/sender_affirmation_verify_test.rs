@@ -74,7 +74,7 @@ fn test_sender_affirmation_verify() {
         .unwrap();
     let mut issuer_asset_state = issuer_acct.get_account_asset_state(asset_id).unwrap();
 
-    let proof = SenderAffirmationProof::new(
+    let proof = SenderAffirmationProof::<()>::new(
         &mut rng,
         &issuer_acct.keys(),
         &leg_ref,

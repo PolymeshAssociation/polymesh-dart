@@ -25,7 +25,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate FeeAccountRegistrationProof.
     c.bench_function("FeeAccountRegistrationProof generate", |b| {
         b.iter(|| {
-            let (_proof, _account_state) = FeeAccountRegistrationProof::new(
+            let (_proof, _account_state) = FeeAccountRegistrationProof::<()>::new(
                 &mut rng,
                 black_box(&account_keys.acct),
                 asset_id,
@@ -37,7 +37,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a registration proof for verification benchmark.
-    let (reg_proof, mut fee_account_state) = FeeAccountRegistrationProof::new(
+    let (reg_proof, mut fee_account_state) = FeeAccountRegistrationProof::<()>::new(
         &mut rng,
         &account_keys.acct,
         asset_id,
@@ -77,7 +77,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate FeeAccountTopupProof.
     c.bench_function("FeeAccountTopupProof generate", |b| {
         b.iter(|| {
-            let _proof = FeeAccountTopupProof::new(
+            let _proof = FeeAccountTopupProof::<()>::new(
                 &mut rng,
                 black_box(&account_keys.acct),
                 &mut fee_account_state.clone(),
@@ -90,7 +90,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a topup proof for verification benchmark.
-    let topup_proof = FeeAccountTopupProof::new(
+    let topup_proof = FeeAccountTopupProof::<()>::new(
         &mut rng,
         &account_keys.acct,
         &mut fee_account_state,
@@ -129,7 +129,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate FeeAccountPaymentProof.
     c.bench_function("FeeAccountPaymentProof generate", |b| {
         b.iter(|| {
-            let _proof = FeeAccountPaymentProof::new(
+            let _proof = FeeAccountPaymentProof::<()>::new(
                 &mut rng,
                 black_box(&account_keys.acct),
                 ctx,
@@ -142,7 +142,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a payment proof for verification benchmark.
-    let payment_proof = FeeAccountPaymentProof::new(
+    let payment_proof = FeeAccountPaymentProof::<()>::new(
         &mut rng,
         &account_keys.acct,
         ctx,

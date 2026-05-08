@@ -27,7 +27,7 @@ fn setup_trees() -> (
 ) {
     let mut storage_tree = CurveTreeWithBackend::<L, 1, AccountTreeConfig>::new(HEIGHT)
         .expect("Failed to create storage tree");
-    assert!(storage_tree.height() == HEIGHT);
+    assert!(storage_tree.height(None).unwrap() == HEIGHT);
 
     let mut lean_root = CompressedCurveTreeRoot::new(HEIGHT);
     let mut lean_tree = LeanCurveTree::<L, 1, AccountTreeConfig>::new(HEIGHT, &mut lean_root)
