@@ -40,7 +40,8 @@ pub mod init {
         Error,
         curve_tree::{
             get_asset_commitment_parameters, get_pallas_layer_parameters,
-            get_vesta_layer_parameters, reset_asset_commitment_parameters,
+            get_vesta_layer_parameters, reset_account_curve_tree_parameters,
+            reset_asset_commitment_parameters, reset_asset_curve_tree_parameters,
             reset_pallas_layer_parameters, reset_vesta_layer_parameters,
             set_asset_commitment_parameters, set_pallas_layer_parameters,
             set_vesta_layer_parameters,
@@ -131,15 +132,17 @@ pub mod init {
 
     /// Unload the parameters from memory. This is mainly used for benchmarking.
     pub fn unload_params() {
-        // Load the curve tree parameters.
+        // Unload the curve tree parameters.
         reset_pallas_layer_parameters();
         reset_vesta_layer_parameters();
+        reset_asset_curve_tree_parameters();
         reset_asset_commitment_parameters();
+        reset_account_curve_tree_parameters();
 
-        // Load the Dart BP parameters.
+        // Unload the Dart BP parameters.
         reset_dart_gens();
 
-        // Load the Poseidon2 parameters.
+        // Unload the Poseidon2 parameters.
         reset_poseidon_params();
     }
 }

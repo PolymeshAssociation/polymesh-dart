@@ -106,6 +106,9 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 }
 
 #[cfg(feature = "std")]
+pub fn reset_asset_curve_tree_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
     &ASSET_COMMITMENT_PARAMETERS
 }
@@ -120,6 +123,9 @@ pub fn reset_asset_commitment_parameters() {}
 pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<AccountTreeConfig> {
     &ACCOUNT_CURVE_TREE_PARAMETERS
 }
+
+#[cfg(feature = "std")]
+pub fn reset_account_curve_tree_parameters() {}
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
@@ -209,6 +215,14 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
+pub fn reset_asset_curve_tree_parameters() {
+    unsafe {
+        ASSET_CURVE_TREE_PARAMETERS = None;
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
 pub fn set_asset_commitment_parameters(parameters: AssetCommitmentParameters<AssetTreeConfig>) {
     unsafe {
         ASSET_COMMITMENT_PARAMETERS = Some(parameters);
@@ -249,6 +263,14 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
             ACCOUNT_CURVE_TREE_PARAMETERS = Some(parameters);
         }
         ACCOUNT_CURVE_TREE_PARAMETERS.as_ref().unwrap()
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_account_curve_tree_parameters() {
+    unsafe {
+        ACCOUNT_CURVE_TREE_PARAMETERS = None;
     }
 }
 
