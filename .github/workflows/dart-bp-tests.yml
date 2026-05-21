@@ -42,20 +42,23 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
           
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+          
     - name: Check formatting
       run: cargo fmt --package polymesh-dart-bp -- --check
       
     - name: Run tests
-      run: cargo test --release --package polymesh-dart-bp
+      run: cargo nextest run --release --package polymesh-dart-bp
       
     - name: Run tests with ignore_prover_input_sanitation feature
-      run: cargo test --package polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
+      run: cargo nextest run --package polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
 
     - name: Check formatting for polymesh-dart crate
       run: cargo fmt --package polymesh-dart -- --check
 
     - name: Run tests for polymesh-dart crate
-      run: cargo test --release --package polymesh-dart
+      run: cargo nextest run --release --package polymesh-dart
       
   test-wasm:
     name: Build dart-bp for WASM target

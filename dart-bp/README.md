@@ -71,7 +71,13 @@ This crate includes a feature flag intended solely for negative testing of verif
 
 Example:
 ```bash
-cargo test -p polymesh-dart-bp --features ignore_prover_input_sanitation
+cargo nextest run -p polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
+```
+
+Or
+
+```bash
+cargo test -p polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
 ```
 
 ## 🔄 Continuous Integration

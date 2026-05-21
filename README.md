@@ -49,14 +49,20 @@ The library provides several feature flags:
 
 ## Testing
 
+`cargo nextest` is preferred for running tests. To run all tests, use
+
+```
+cargo nextest run -r
+```
+
 Tests that check against serialized data to detect breaking changes are run as
 ```
-cargo test -r --test serialized_objects_test
+cargo nextest run -r --test serialized_objects_test
 ```
 
 To create the serialized data, run
 ```
-cargo test -r --test serialized_objects_test generate_v1_serialized_objects -- --ignored
+cargo nextest run -r --test serialized_objects_test --run-ignored only
 ```
 
 ## Code coverage
