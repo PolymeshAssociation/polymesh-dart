@@ -72,10 +72,8 @@ impl<
         let root = root.root_node()?;
 
         let (protocol, mut even_prover, odd_prover, nullifier) =
-            BPMintTxnProofPartialProtocol::init::<_, C::DLogParams0, C::DLogParams1>(
+            BPMintTxnProofPartialProtocol::init::<_, C::DLogParams0, C::DLogParams1, _>(
                 rng,
-                pk_aff,
-                pk_enc,
                 amount,
                 &state_change.current_state,
                 &state_change.new_state,

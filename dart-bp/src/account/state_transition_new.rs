@@ -268,8 +268,8 @@ impl<
             Some(BalanceSplitProver::init(
                 rng,
                 &balance_changes,
-                self.host.account.balance,
-                self.host.updated_account.balance,
+                self.host.account.balance(),
+                self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
                 enc_gen,
@@ -359,8 +359,8 @@ impl<
             Some(BalanceSplitProver::init(
                 rng,
                 &balance_changes,
-                self.host.account.balance,
-                self.host.updated_account.balance,
+                self.host.account.balance(),
+                self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
                 enc_gen,
@@ -488,11 +488,7 @@ impl<
             ));
         }
 
-        let num_balance_decreases = self
-            .legs
-            .iter()
-            .filter(|l| l.has_balance_decreased.is_some())
-            .count();
+        let num_balance_decreases = LegVerifierConfig::num_balance_changes(&self.legs);
 
         let num_hidden_asset_ids = LegVerifierConfig::num_hidden_asset_ids(&self.legs);
 
@@ -798,7 +794,11 @@ impl<
         let challenge = verifier
             .even_verifier
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "Missing even_verifier for split challenge derivation".to_string(),
+                )
+            })?
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         self.verify_split_and_return_tuples::<_, Parameters0, Parameters1>(
@@ -1009,8 +1009,11 @@ impl<
         let mut protocols = Vec::with_capacity(num_accounts);
         let mut nullifiers = Vec::with_capacity(num_accounts);
 
-        for (i, builder) in account_builders.into_iter().enumerate() {
-            let (_leaf, randomizer) = rerandomized_leaves_and_randomizers[i];
+        for (i, (builder, (_, randomizer))) in account_builders
+            .into_iter()
+            .zip(rerandomized_leaves_and_randomizers)
+            .enumerate()
+        {
             let (protocol, nullifier) = builder
                 .finalize_with_given_prover_with_rerandomized_leaf::<_, Parameters0, Parameters1>(
                     rng,
@@ -2441,7 +2444,7 @@ mod tests {
                 vec![k_asset_id_bob_2]
             };
 
-            // ── Alice's split multi-asset proof ──────────────────────────────
+            //  Alice's split multi-asset proof
 
             let mut alice_split_builder_1 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2596,7 +2599,7 @@ mod tests {
                 alice_split_proof.compressed_size()
             );
 
-            // ── Bob's split multi-asset proof ────────────────────────────────
+            //  Bob's split multi-asset proof
 
             let mut bob_split_builder_1 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2751,7 +2754,7 @@ mod tests {
                 bob_split_proof.compressed_size()
             );
 
-            // ── Verify Alice's proof ─────────────────────────────────────────
+            //  Verify Alice's proof ─
 
             let start = Instant::now();
 
@@ -2886,7 +2889,7 @@ mod tests {
                 alice_verification_time
             );
 
-            // ── Verify Bob's proof ───────────────────────────────────────────
+            //  Verify Bob's proof ─
 
             let start = Instant::now();
 

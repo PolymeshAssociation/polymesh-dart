@@ -78,7 +78,6 @@ impl FeeRegHostProtocol {
         let mut transcript = MerlinTranscript::new(bp_fee_account::FEE_REG_TXN_LABEL);
         let protocol = BPRegTxnProofWithoutSkProtocol::init_with_given_transcript(
             rng,
-            pk_affine,
             &account,
             commitment,
             nonce,
@@ -170,9 +169,8 @@ impl<
         let root = root.root_node()?;
 
         let (protocol, mut even_prover, odd_prover, nullifier) =
-            BPFeeAccountTopupTxnWithoutSkProtocol::init::<_, C::DLogParams0, C::DLogParams1>(
+            BPFeeAccountTopupTxnWithoutSkProtocol::init::<_, C::DLogParams0, C::DLogParams1, _>(
                 rng,
-                &pk_affine,
                 amount,
                 state_change.current_state,
                 state_change.new_state,

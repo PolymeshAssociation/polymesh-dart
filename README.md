@@ -62,14 +62,14 @@ cargo nextest run -r --test serialized_objects_test
 
 To create the serialized data, run
 ```
-cargo nextest run -r --test serialized_objects_test --run-ignored only
+cargo nextest run -r --test serialized_objects_test --run-ignored ignored
 ```
 
 ## Code coverage
 
 Run code coverage as 
 ```
-cargo llvm-cov -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
+cargo llvm-cov nextest -p polymesh-dart -p polymesh-dart-bp --release --lcov --output-path target/coverage/lcov.info --no-clean
 ```
 
 To get report in HTML, install `lcov` and run

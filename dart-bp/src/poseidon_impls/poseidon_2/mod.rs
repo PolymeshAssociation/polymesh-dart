@@ -283,6 +283,9 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
 ) -> Result<()> {
     let width = params.state_size;
     if input.len() != width {
+        return Err(Error::UnequalInputSizeAndStateSize(input.len(), width));
+    }
+    if output.len() != width {
         return Err(Error::UnequalInputSizeAndStateSize(output.len(), width));
     }
 

@@ -2,13 +2,12 @@ use crate::account_registration::{ENC_PK_LABEL, digits, powers_of_base};
 use crate::add_to_transcript;
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
-use crate::util::bp_gens_for_vec_commitment;
+use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{UniformRand, format, vec, vec::Vec};
-use bulletproofs::r1cs::add_verification_tuple_to_rmc;
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::range_proof::range_proof;
@@ -394,22 +393,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &self.resp_combined_sk.response2,
         );
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                let tuple = verifier.verification_scalars_and_points_with_rng(&self.proof, rng)?;
-                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
-                    .map_err(|e| Error::from(e))
-            }
-            None => {
-                verifier.verify_with_rng(
-                    &self.proof,
-                    leaf_level_pc_gens,
-                    &leaf_level_bp_gens,
-                    rng,
-                )?;
-                Ok(())
-            }
-        }
+        let tuple = verifier.verification_scalars_and_points_with_rng(&self.proof, rng)?;
+        handle_verification_tuple(tuple, leaf_level_pc_gens, leaf_level_bp_gens, rmc)
     }
 
     pub fn decrypt(
@@ -618,5 +603,109 @@ mod tests {
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             verifier_time_3_regular, verifier_time_3_rmc
         );
+    }
+
+    #[test]
+    fn key_distribution_proof_binds_nonce_and_recipient_order() {
+        let mut rng = rand::thread_rng();
+
+        const CHUNK_BITS: usize = 48;
+        const NUM_CHUNKS: usize = 6;
+
+        let sk = PallasFr::from(u32::rand(&mut rng) as u64 + u16::rand(&mut rng) as u64);
+
+        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_gen = PallasA::rand(&mut rng);
+        let pk = (enc_key_gen * sk).into_affine();
+
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(512, 1);
+
+        let nonce = b"test_nonce_1";
+
+        let mut recipient_sks = Vec::new();
+        let mut recipient_pks = Vec::new();
+        for _ in 0..3 {
+            let recipient_sk = PallasFr::rand(&mut rng);
+            recipient_sks.push(recipient_sk);
+            recipient_pks.push((enc_key_gen * recipient_sk).into_affine());
+        }
+
+        let proof = KeyDistributionProof::<PallasA, CHUNK_BITS, NUM_CHUNKS>::new(
+            &mut rng,
+            sk,
+            pk,
+            &recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+        )
+        .unwrap();
+
+        proof
+            .verify(
+                &mut rng,
+                &pk,
+                &recipient_pks,
+                enc_key_gen,
+                enc_gen,
+                nonce,
+                &pc_gens,
+                &bp_gens,
+                None,
+            )
+            .unwrap();
+
+        let wrong_nonce = b"test_nonce_2";
+        let result = proof.verify(
+            &mut rng,
+            &pk,
+            &recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            wrong_nonce,
+            &pc_gens,
+            &bp_gens,
+            None,
+        );
+        assert!(result.is_err());
+
+        let mut reordered_recipient_pks = recipient_pks.clone();
+        reordered_recipient_pks.swap(0, 1);
+        let result = proof.verify(
+            &mut rng,
+            &pk,
+            &reordered_recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+            None,
+        );
+        assert!(result.is_err());
+
+        let dropped_recipient_pks = recipient_pks[..2].to_vec();
+        let result = proof.verify(
+            &mut rng,
+            &pk,
+            &dropped_recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+            None,
+        );
+        assert!(result.is_err());
+
+        for (i, recipient_sk) in recipient_sks.iter().enumerate() {
+            let decrypted = proof
+                .decrypt(i, &recipient_sk.inverse().unwrap(), enc_gen.into_group())
+                .unwrap();
+            assert_eq!(sk, decrypted);
+        }
     }
 }

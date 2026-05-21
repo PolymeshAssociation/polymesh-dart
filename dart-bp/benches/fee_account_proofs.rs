@@ -77,7 +77,7 @@ fn create_fee_account_and_tree<R: CryptoRngCore>(
     CurveTree<64, 1, PallasParameters, VestaParameters>,
 ) {
     let account = new_fee_account(rng, asset_id, pk, balance);
-    let account_comm = account.commit(account_comm_key.clone()).unwrap();
+    let account_comm = account.commit(account_comm_key).unwrap();
 
     // This tree size can be chosen independently of the one used for regular accounts and will likely be bigger
     let set = vec![account_comm.0];
@@ -113,7 +113,7 @@ fn bench_fee_account_topup_verification(c: &mut Criterion) {
 
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+    let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
@@ -177,7 +177,7 @@ fn bench_fee_account_topup_verification_with_rmc(c: &mut Criterion) {
 
     let nonce = b"test-nonce";
     let updated_account = account.get_state_for_topup(increase_bal_by).unwrap();
-    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+    let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
@@ -246,7 +246,7 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     // Or could be hash(a_txn_id, a_payee_id)
     let nonce = b"a_txn_id,a_payee_id";
     let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+    let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 
@@ -310,7 +310,7 @@ fn bench_fee_payment_verification_with_rmc(c: &mut Criterion) {
     // Or could be hash(a_txn_id, a_payee_id)
     let nonce = b"a_txn_id,a_payee_id";
     let updated_account = account.get_state_for_payment(fee_amount).unwrap();
-    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+    let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
     let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
     let root = account_tree.root_node();
 

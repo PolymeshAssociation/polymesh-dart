@@ -213,6 +213,10 @@ pub fn initialize_curve_tree_verifier_with_given_transcripts<
 }
 
 /// Enforce that balance has correctly changed. If `has_balance_decreased` is true, then `old_bal - new_bal = amount` else `new_bal - old_bal = amount`
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 pub fn enforce_balance_change_prover<
     R: RngCore,
     F0: PrimeField,
@@ -288,6 +292,10 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
 }
 
 /// Generate responses (Schnorr step 3) for state change just related to amount and balances
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 pub fn generate_schnorr_responses_for_balance_change<
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0>,
@@ -856,10 +864,15 @@ pub(crate) fn create_account_commitment_t_values<
 /// (8 variables) and enforces both `sk_enc * sk_enc_inv = 1` and randomness relation constraints.
 /// When `include_sk` is false (W2/W3 host mode), the BP commitment has only 6 variables
 /// (rho/randomness relations) and enforces only randomness relation constraints.
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 pub(crate) fn create_bp_and_null_t_values<
     R: RngCore,
     F0: PrimeField,
     G0: SWCurveConfig<ScalarField = F0> + Copy,
+    CK: AccountCommitmentKeyTrait<Affine<G0>>,
 >(
     rng: &mut R,
     include_sk: bool,
@@ -881,7 +894,7 @@ pub(crate) fn create_bp_and_null_t_values<
     sk_enc_blinding: Option<F0>,
     sk_enc_inv_blinding: Option<F0>,
     prover: &mut Prover<MerlinTranscript, Affine<G0>>,
-    account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+    account_comm_key: &CK,
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
 ) -> Result<(
@@ -1314,6 +1327,10 @@ pub(crate) fn add_leg_amount_challenge_contributions<
 }
 
 /// Generate commitment to randomness (Sigma protocol step 1) for state change just related to amount and balances
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 pub(crate) fn generate_sigma_t_values_for_balance_change<
     R: RngCore,
     F0: PrimeField,
@@ -2468,6 +2485,20 @@ pub fn handle_verification_tuples<
             add_verification_tuples_to_rmc(even_tuple, odd_tuple, tree_params, rmc_0, rmc_1)
         }
         None => verify_given_verification_tuples(even_tuple, odd_tuple, tree_params),
+    }
+}
+
+pub fn handle_verification_tuple<G: AffineRepr>(
+    tuple: VerificationTuple<G>,
+    pc_gens: &PedersenGens<G>,
+    bp_gens: &BulletproofGens<G>,
+    mut rmc: Option<&mut RandomizedMultChecker<G>>,
+) -> Result<()> {
+    match rmc.as_mut() {
+        Some(rmc) => {
+            add_verification_tuple_to_rmc(tuple, pc_gens, bp_gens, rmc).map_err(|e| e.into())
+        }
+        _ => verify_given_verification_tuple(tuple, pc_gens, bp_gens).map_err(|e| e.into()),
     }
 }
 

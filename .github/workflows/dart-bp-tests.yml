@@ -23,66 +23,69 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt
-        
-    - name: Cache cargo registry
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
-          
-    - name: Install cargo-nextest
-      uses: taiki-e/install-action@nextest
-          
-    - name: Check formatting
-      run: cargo fmt --package polymesh-dart-bp -- --check
-      
-    - name: Run tests
-      run: cargo nextest run --release --package polymesh-dart-bp
-      
-    - name: Run tests with ignore_prover_input_sanitation feature
-      run: cargo nextest run --package polymesh-dart-bp --features ignore_prover_input_sanitation input_sanitation_disabled
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Check formatting for polymesh-dart crate
-      run: cargo fmt --package polymesh-dart -- --check
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
-    - name: Run tests for polymesh-dart crate
-      run: cargo nextest run --release --package polymesh-dart
-      
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Check formatting
+        run: cargo fmt --package polymesh-dart-bp -- --check
+
+      - name: Run tests
+        run: cargo nextest run --release --package polymesh-dart-bp
+
+      - name: Check formatting for polymesh-dart crate
+        run: cargo fmt --package polymesh-dart -- --check
+
+      - name: Run tests for polymesh-dart crate
+        run: cargo nextest run --release --package polymesh-dart
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Run negative tests by disabling prover's input sanitation and mocking features
+        run: cargo +nightly nextest run --package polymesh-dart-bp --features ignore_prover_input_sanitation,nightly_mocking_tests input_sanitation_disabled
+
   test-wasm:
     name: Build dart-bp for WASM target
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: wasm32-unknown-unknown
-        
-    - name: Cache cargo registry
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
-          
-    - name: Build for WASM
-      run: cargo build --package polymesh-dart-bp --target wasm32-unknown-unknown --no-default-features
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build for WASM
+        run: cargo build --package polymesh-dart-bp --target wasm32-unknown-unknown --no-default-features

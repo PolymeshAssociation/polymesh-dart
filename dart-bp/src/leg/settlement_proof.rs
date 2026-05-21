@@ -551,8 +551,14 @@ impl<
                         )));
                     }
 
+                    let revealed_asset_id = leg_encs[i].asset_id().ok_or_else(|| {
+                        Error::ProofVerificationError(
+                            "Revealed asset-id leg must have a public asset_id".to_string(),
+                        )
+                    })?;
                     proof.verify_sigma_protocols_and_enforce_constraints_inner(
                         leg_encs[i].clone(),
+                        revealed_asset_id,
                         enc_keys[revealed_asset_idx].clone(),
                         med_keys[revealed_asset_idx].clone(),
                         leg_public_enc_keys,

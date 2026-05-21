@@ -359,6 +359,46 @@ pub mod tests {
     }
 
     #[test]
+    fn investor_key_reg_proof_order() {
+        let mut rng = rand::thread_rng();
+        let nonce = b"test_nonce_1";
+
+        for _ in 0..5 {
+            let num_investors = 6;
+            let sig_key_gen = PallasA::rand(&mut rng);
+            let enc_key_gen = PallasA::rand(&mut rng);
+
+            let mut keypairs = Vec::with_capacity(num_investors);
+            let mut pub_keys = Vec::with_capacity(num_investors);
+
+            for _ in 0..num_investors {
+                let (sig_sk, sig_pk) = keygen_sig(&mut rng, sig_key_gen);
+                let (enc_sk, enc_pk) = keygen_enc(&mut rng, enc_key_gen);
+                keypairs.push(((sig_pk.0, sig_sk.0), (enc_pk.0, enc_sk.0)));
+                pub_keys.push((sig_pk.0, enc_pk.0));
+            }
+
+            let proof =
+                InvestorKeyRegProof::new(&mut rng, keypairs, nonce, sig_key_gen, enc_key_gen)
+                    .unwrap();
+
+            proof
+                .verify(pub_keys.clone(), nonce, sig_key_gen, enc_key_gen)
+                .unwrap();
+
+            let mut swapped_public_keys = pub_keys.clone();
+            swapped_public_keys.swap(1, 2);
+            let result = proof.verify(swapped_public_keys, nonce, sig_key_gen, enc_key_gen);
+            assert!(result.is_err());
+
+            let mut duplicated_public_keys = pub_keys;
+            duplicated_public_keys[1] = duplicated_public_keys[0];
+            let result = proof.verify(duplicated_public_keys, nonce, sig_key_gen, enc_key_gen);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
     fn aud_med_key_reg_proof() {
         let mut rng = rand::thread_rng();
 
@@ -396,5 +436,39 @@ pub mod tests {
         let wrong_enc_gen = PallasA::rand(&mut rng);
         let result = proof.verify(pub_keys, nonce, wrong_enc_gen);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn aud_med_key_reg_proof_order() {
+        let mut rng = rand::thread_rng();
+        let nonce = b"test_nonce_3";
+
+        for _ in 0..5 {
+            let num_aud_med = 6;
+            let enc_key_gen = PallasA::rand(&mut rng);
+
+            let mut keypairs = Vec::with_capacity(num_aud_med);
+            let mut pub_keys = Vec::with_capacity(num_aud_med);
+
+            for _ in 0..num_aud_med {
+                let (enc_sk, enc_pk) = keygen_enc(&mut rng, enc_key_gen);
+                keypairs.push((enc_pk.0, enc_sk.0));
+                pub_keys.push(enc_pk.0);
+            }
+
+            let proof = AudMedRegProof::new(&mut rng, keypairs, nonce, enc_key_gen).unwrap();
+
+            proof.verify(pub_keys.clone(), nonce, enc_key_gen).unwrap();
+
+            let mut swapped_public_keys = pub_keys.clone();
+            swapped_public_keys.swap(1, 2);
+            let result = proof.verify(swapped_public_keys, nonce, enc_key_gen);
+            assert!(result.is_err());
+
+            let mut duplicated_public_keys = pub_keys;
+            duplicated_public_keys[1] = duplicated_public_keys[0];
+            let result = proof.verify(duplicated_public_keys, nonce, enc_key_gen);
+            assert!(result.is_err());
+        }
     }
 }

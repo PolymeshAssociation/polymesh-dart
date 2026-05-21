@@ -339,7 +339,7 @@ pub mod tests {
         );
 
         let account = new_fee_account(&mut rng, asset_id, pk_s.clone(), 100);
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_comm = account.commit(&account_comm_key).unwrap();
 
         let leaf_blinding = Fr::rand(&mut rng);
         // Curve tree proof will also randomize it this way
@@ -348,7 +348,7 @@ pub mod tests {
             .into_affine();
 
         let updated_account = account.get_state_for_payment(10).unwrap();
-        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
         // Only hardware (Ledger) knows these
         let rand_1_old = Fr::rand(&mut rng);
@@ -410,6 +410,69 @@ pub mod tests {
         assert_eq!(
             host_commitment_new + proof.partial_updated_account_commitment,
             updated_account_comm.0
+        );
+
+        let wrong_nullifier = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    wrong_nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    b"wrong-nonce",
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_re_rand = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &wrong_re_rand,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_updated_comm = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &wrong_updated_comm,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
         );
     }
 
@@ -499,6 +562,75 @@ pub mod tests {
         assert_eq!(
             host_commitment_new + proof.partial_updated_account_commitment,
             updated_account_comm.0
+        );
+
+        // Wrong public values: verification must fail in every case because they are
+        // committed into the transcript, binding the sigma responses to them.
+        let wrong_nullifier = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    wrong_nullifier,
+                    &auditor_pubkeys,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &auditor_pubkeys,
+                    b"wrong-nonce",
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_re_rand = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &wrong_re_rand,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &auditor_pubkeys,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_updated_comm = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &wrong_updated_comm,
+                    nullifier,
+                    &auditor_pubkeys,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    None,
+                )
+                .is_err()
         );
 
         // Verify decryption works
@@ -602,7 +734,7 @@ pub mod tests {
 
         proof
             .verify(
-                legs_verifier,
+                legs_verifier.clone(),
                 &re_randomized_account_commitment,
                 &updated_account_comm.0,
                 nullifier,
@@ -630,6 +762,181 @@ pub mod tests {
         assert_eq!(
             host_commitment_new + proof.partial_updated_account_commitment,
             updated_account_comm.0
+        );
+
+        let wrong_nullifier = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    legs_verifier.clone(),
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    wrong_nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    legs_verifier.clone(),
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    b"wrong-nonce",
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_re_rand = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    legs_verifier.clone(),
+                    &wrong_re_rand,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_updated_comm = PallasA::rand(&mut rng);
+        assert!(
+            proof
+                .verify(
+                    legs_verifier.clone(),
+                    &re_randomized_account_commitment,
+                    &wrong_updated_comm,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let wrong_legs_verifier = vec![LegVerifierConfig {
+            encryption: legs_verifier[0].encryption.clone(),
+            party_eph_pk: legs_verifier[0].party_eph_pk.clone(),
+            has_balance_decreased: None,
+            has_counter_decreased: None,
+        }];
+        assert!(
+            proof
+                .verify(
+                    wrong_legs_verifier,
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        // Test: verifier uses a different leg encryption than what the prover used.
+        // The leg encryption is added to the prover transcript, so a different encryption
+        // causes the challenge to diverge and sigma responses to fail verification.
+        let (_, different_leg_enc, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            pk_enc.0,
+            None,
+            amount + 1, // different amount → different ciphertexts
+            asset_id,
+            pk_enc.0,
+            pk_r_e.0,
+            enc_key_gen,
+            enc_gen,
+        );
+        let (different_leg_enc_core, different_eph_pk) =
+            different_leg_enc.core_and_eph_keys_for_sender();
+        let wrong_encryption_legs = vec![LegVerifierConfig {
+            encryption: different_leg_enc_core,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(different_eph_pk),
+            has_balance_decreased: Some(true),
+            has_counter_decreased: None,
+        }];
+        assert!(
+            proof
+                .verify(
+                    wrong_encryption_legs,
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let mut truncated_amount_proof = proof.clone();
+        truncated_amount_proof.partial_ct_amounts.clear();
+        assert!(
+            truncated_amount_proof
+                .verify(
+                    legs_verifier.clone(),
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let mut truncated_asset_id_proof = proof.clone();
+        truncated_asset_id_proof.partial_ct_asset_ids.clear();
+        assert!(
+            truncated_asset_id_proof
+                .verify(
+                    legs_verifier,
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
         );
     }
 }

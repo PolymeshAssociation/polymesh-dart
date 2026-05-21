@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::leg::leg_proof::{ensure_leg_encryption_consistent, ensure_sender_receiver_not_same};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
-use crate::util::bp_gens_for_vec_commitment;
+use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
 use ark_ec::CurveGroup;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -13,13 +13,13 @@ use ark_std::string::ToString;
 use ark_std::{format, vec, vec::Vec};
 use bulletproofs::r1cs::{
     ConstraintSystem, LinearCombination, Prover, R1CSProof, Variable, VerificationTuple, Verifier,
-    add_verification_tuple_to_rmc, verify_given_verification_tuple,
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use dock_crypto_utils::transcript::Transcript;
+use polymesh_dart_common::AssetId;
 use polymesh_dart_common::{BALANCE_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
@@ -69,6 +69,10 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G>>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
@@ -212,13 +216,13 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         );
 
         // For proving ct_amount = enc_key_gen * r_3 + enc_gen * amount
-        let ct_amount_proto = PokPedersenCommitmentProtocol::init(
+        let ct_amount_proto = Self::amount_ciphertext_proto(
             r_3,
             r_3_blinding,
-            &enc_key_gen,
             amount,
             amount_blinding,
-            &enc_gen,
+            enc_key_gen,
+            enc_gen,
         );
 
         // For proving S[2] = S[0] * r_3/r_1
@@ -299,6 +303,37 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
 
         let mut comm_r_i_blinding = G::ScalarField::rand(rng);
+        let mut t_comm_r_i_amount_blinding = G::ScalarField::rand(rng);
+        let (comm_r_i_amount, t_comm_r_i_amount) = Self::amount_and_randomness_commitment(
+            amount,
+            leg.core.amount,
+            amount_blinding,
+            r_1,
+            r_2,
+            r_3,
+            r_1_inv,
+            r_2_inv,
+            r_3_r_1_inv,
+            r_3_r_2_inv,
+            r_2_r_1_inv,
+            r_1_r_2_inv,
+            r_1_blinding,
+            r_2_blinding,
+            r_3_blinding,
+            r_1_inv_blinding,
+            r_2_inv_blinding,
+            r_3_r_1_inv_blinding,
+            r_3_r_2_inv_blinding,
+            r_2_r_1_inv_blinding,
+            r_1_r_2_inv_blinding,
+            comm_r_i_blinding,
+            t_comm_r_i_amount_blinding,
+            parties_see_each_other,
+            leaf_level_pc_gens,
+            leaf_level_bp_gens,
+            prover,
+        )?;
+
         let mut wits = vec![
             amount,
             r_1,
@@ -309,48 +344,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_3_r_1_inv,
             r_3_r_2_inv,
         ];
-        // If S[1] and R[0] are present, then knowledge of r_2 / r_1 and r_1 / r_2 needs to be proven as well
         if parties_see_each_other {
             wits.push(r_2_r_1_inv.unwrap());
             wits.push(r_1_r_2_inv.unwrap());
         }
-
-        // Commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2]`. And this list might additionally
-        // have `r_2/r_1, r_1/r_2` as well if senders and receivers are allowed to see each other
-        let (comm_r_i_amount, vars) =
-            prover.commit_vec(&wits, comm_r_i_blinding, leaf_level_bp_gens);
-
-        Self::enforce_constraints(
-            &mut *prover,
-            Some(leg.core.amount),
-            vars,
-            parties_see_each_other,
-        )?;
-
-        // Sigma protocol for proving knowledge of `comm_r_i_amount`
-        let mut blindings = vec![
-            G::ScalarField::rand(rng),
-            amount_blinding,
-            r_1_blinding,
-            r_2_blinding,
-            r_3_blinding,
-            r_1_inv_blinding,
-            r_2_inv_blinding,
-            r_3_r_1_inv_blinding,
-            r_3_r_2_inv_blinding,
-        ];
-        if parties_see_each_other {
-            blindings.push(r_2_r_1_inv_blinding.unwrap());
-            blindings.push(r_1_r_2_inv_blinding.unwrap());
-        }
-        let t_comm_r_i_amount = SchnorrCommitment::new(
-            &Self::bp_gens(
-                parties_see_each_other,
-                leaf_level_pc_gens,
-                leaf_level_bp_gens,
-            ),
-            blindings,
-        );
 
         Zeroize::zeroize(&mut amount);
         Zeroize::zeroize(&mut r_1);
@@ -368,6 +365,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Zeroize::zeroize(&mut r_2_inv_blinding);
         Zeroize::zeroize(&mut r_3_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_3_r_2_inv_blinding);
+        Zeroize::zeroize(&mut t_comm_r_i_amount_blinding);
         Zeroize::zeroize(&mut r_2_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_1_r_2_inv_blinding);
 
@@ -571,10 +569,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and
     /// are always known to the verifier
+    /// `asset_id` is the public asset-id (must match the revealed asset-id in `leg_enc`).
     pub fn verify<R: CryptoRngCore>(
         &self,
         rng: &mut R,
         leg_enc: LegEncryption<Affine<G>>,
+        asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
@@ -587,6 +587,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     ) -> Result<()> {
         let tuple = self.verify_and_return_tuples(
             leg_enc,
+            asset_id,
             enc_keys,
             med_keys,
             public_enc_keys,
@@ -599,23 +600,18 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc.as_deref_mut(),
         )?;
 
-        match rmc.as_mut() {
-            Some(rmc) => {
-                add_verification_tuple_to_rmc(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens, rmc)
-                    .map_err(|e| e.into())
-            }
-            _ => verify_given_verification_tuple(tuple, &leaf_level_pc_gens, &leaf_level_bp_gens)
-                .map_err(|e| e.into()),
-        }
+        handle_verification_tuple(tuple, leaf_level_pc_gens, leaf_level_bp_gens, rmc)
     }
 
     /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
     /// specified by leg creator and are always known to the verifier
+    /// `asset_id` is the public asset-id (must match the revealed asset-id in `leg_enc`).
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
         leg_enc: LegEncryption<Affine<G>>,
+        asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
@@ -631,6 +627,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut verifier = Verifier::new(verifier_transcript);
         self.verify_sigma_protocols_and_enforce_constraints(
             leg_enc,
+            asset_id,
             enc_keys,
             med_keys,
             public_enc_keys,
@@ -655,9 +652,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
     /// specified by leg creator and are always known to the verifier
+    /// `asset_id` is the public asset-id (must match the revealed asset-id in `leg_enc`).
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
         leg_enc: LegEncryption<Affine<G>>,
+        asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
@@ -681,6 +680,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
         self.verify_sigma_protocols_and_enforce_constraints_inner(
             leg_enc,
+            asset_id,
             enc_keys,
             med_keys,
             public_enc_keys,
@@ -696,6 +696,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     pub(crate) fn verify_sigma_protocols_and_enforce_constraints_inner(
         &self,
         leg_enc: LegEncryption<Affine<G>>,
+        asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
         med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
@@ -710,6 +711,13 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             return Err(Error::ProofVerificationError(
                 "asset-id is hidden in leg encryption".to_string(),
             ));
+        }
+        if leg_enc.asset_id().unwrap() != asset_id {
+            return Err(Error::ProofVerificationError(format!(
+                "asset_id mismatch: leg_enc has {:?} but verify was called with {}",
+                leg_enc.asset_id(),
+                asset_id
+            )));
         }
 
         if self.resp_eph_pk_enc.len() != enc_keys.len() {
@@ -1256,6 +1264,109 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
         gens
     }
+
+    fn amount_ciphertext_proto(
+        r_3: G::ScalarField,
+        r_3_blinding: G::ScalarField,
+        amount: G::ScalarField,
+        amount_blinding: G::ScalarField,
+        enc_key_gen: Affine<G>,
+        enc_gen: Affine<G>,
+    ) -> PokPedersenCommitmentProtocol<Affine<G>> {
+        PokPedersenCommitmentProtocol::init(
+            r_3,
+            r_3_blinding,
+            &enc_key_gen,
+            amount,
+            amount_blinding,
+            &enc_gen,
+        )
+    }
+
+    fn amount_and_randomness_commitment(
+        amount: G::ScalarField,
+        amount_as_balance: Balance,
+        amount_blinding: G::ScalarField,
+        r_1: G::ScalarField,
+        r_2: G::ScalarField,
+        r_3: G::ScalarField,
+        r_1_inv: G::ScalarField,
+        r_2_inv: G::ScalarField,
+        r_3_r_1_inv: G::ScalarField,
+        r_3_r_2_inv: G::ScalarField,
+        r_2_r_1_inv: Option<G::ScalarField>,
+        r_1_r_2_inv: Option<G::ScalarField>,
+        r_1_blinding: G::ScalarField,
+        r_2_blinding: G::ScalarField,
+        r_3_blinding: G::ScalarField,
+        r_1_inv_blinding: G::ScalarField,
+        r_2_inv_blinding: G::ScalarField,
+        r_3_r_1_inv_blinding: G::ScalarField,
+        r_3_r_2_inv_blinding: G::ScalarField,
+        r_2_r_1_inv_blinding: Option<G::ScalarField>,
+        r_1_r_2_inv_blinding: Option<G::ScalarField>,
+        comm_r_i_blinding: G::ScalarField,
+        t_comm_r_i_amount_blinding: G::ScalarField,
+        parties_see_each_other: bool,
+        leaf_level_pc_gens: &PedersenGens<Affine<G>>,
+        leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
+        prover: &mut Prover<MerlinTranscript, Affine<G>>,
+    ) -> Result<(Affine<G>, SchnorrCommitment<Affine<G>>)> {
+        let mut wits = vec![
+            amount,
+            r_1,
+            r_2,
+            r_3,
+            r_1_inv,
+            r_2_inv,
+            r_3_r_1_inv,
+            r_3_r_2_inv,
+        ];
+        // If S[1] and R[0] are present, then knowledge of r_2 / r_1 and r_1 / r_2 needs to be proven as well
+        if parties_see_each_other {
+            wits.push(r_2_r_1_inv.unwrap());
+            wits.push(r_1_r_2_inv.unwrap());
+        }
+
+        // Commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2]`. And this list might additionally
+        // have `r_2/r_1, r_1/r_2` as well if senders and receivers are allowed to see each other
+        let (comm_r_i_amount, vars) =
+            prover.commit_vec(&wits, comm_r_i_blinding, leaf_level_bp_gens);
+
+        Self::enforce_constraints(
+            &mut *prover,
+            Some(amount_as_balance),
+            vars,
+            parties_see_each_other,
+        )?;
+
+        // Sigma protocol for proving knowledge of `comm_r_i_amount`
+        let mut blindings = vec![
+            t_comm_r_i_amount_blinding,
+            amount_blinding,
+            r_1_blinding,
+            r_2_blinding,
+            r_3_blinding,
+            r_1_inv_blinding,
+            r_2_inv_blinding,
+            r_3_r_1_inv_blinding,
+            r_3_r_2_inv_blinding,
+        ];
+        if parties_see_each_other {
+            blindings.push(r_2_r_1_inv_blinding.unwrap());
+            blindings.push(r_1_r_2_inv_blinding.unwrap());
+        }
+        let t_comm_r_i_amount = SchnorrCommitment::new(
+            &Self::bp_gens(
+                parties_see_each_other,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+            ),
+            blindings,
+        );
+
+        Ok((comm_r_i_amount, t_comm_r_i_amount))
+    }
 }
 
 #[cfg(test)]
@@ -1268,6 +1379,7 @@ mod tests {
     use ark_pallas::PallasConfig;
     use ark_serialize::CanonicalSerialize;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use bulletproofs::r1cs::{add_verification_tuple_to_rmc, verify_given_verification_tuple};
     use std::time::Instant;
 
     type Fr = ark_pallas::Fr;
@@ -1363,6 +1475,7 @@ mod tests {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                asset_id,
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
@@ -1382,6 +1495,7 @@ mod tests {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                asset_id,
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
@@ -1439,6 +1553,7 @@ mod tests {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                asset_id,
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
@@ -1458,6 +1573,7 @@ mod tests {
             .verify(
                 &mut rng,
                 leg_enc.clone(),
+                asset_id,
                 enc_keys.clone(),
                 med_keys.clone(),
                 public_enc_keys.clone(),
@@ -1583,6 +1699,7 @@ mod tests {
                 .verify(
                     &mut rng,
                     leg_encs[i].clone(),
+                    leg_encs[i].asset_id().unwrap(),
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
@@ -1606,6 +1723,7 @@ mod tests {
             let tuple = proofs[i]
                 .verify_and_return_tuples(
                     leg_encs[i].clone(),
+                    leg_encs[i].asset_id().unwrap(),
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
@@ -1762,6 +1880,7 @@ mod tests {
             proofs[i]
                 .verify_sigma_protocols_and_enforce_constraints(
                     leg_encs[i].clone(),
+                    asset_id,
                     enc_keys.clone(),
                     med_keys.clone(),
                     public_enc_keys.clone(),
@@ -1790,5 +1909,765 @@ mod tests {
         );
         println!("total prover time (combined) = {:?}", combined_prove_time);
         println!("verifier time (combined) = {:?}", combined_verify_time);
+    }
+
+    #[cfg(feature = "nightly_mocking_tests")]
+    mod mocking_tests {
+        use super::*;
+        use crate::keys::{keygen_enc, keygen_sig};
+        use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+        use mocktopus::mocking::{MockResult, Mockable};
+
+        struct MockGuard {
+            clear_fn: fn(),
+        }
+
+        impl MockGuard {
+            fn new(clear_fn: fn()) -> Self {
+                Self { clear_fn }
+            }
+        }
+
+        impl Drop for MockGuard {
+            fn drop(&mut self) {
+                (self.clear_fn)();
+            }
+        }
+
+        fn clear_amount_ciphertext_proto_mock() {
+            PublicAssetLegCreationProof::<PallasConfig>::amount_ciphertext_proto.clear_mock();
+        }
+
+        fn clear_amount_and_randomness_commitment_mock() {
+            PublicAssetLegCreationProof::<PallasConfig>::amount_and_randomness_commitment
+                .clear_mock();
+        }
+
+        fn setup_public_asset_leg_fixture(
+            rng: &mut rand::rngs::ThreadRng,
+        ) -> (
+            Leg<Affine<PallasConfig>>,
+            LegEncryption<Affine<PallasConfig>>,
+            LegEncryptionRandomness<ark_pallas::Fr>,
+            Vec<Affine<PallasConfig>>,
+            Vec<(u8, Affine<PallasConfig>)>,
+            Vec<Affine<PallasConfig>>,
+            PedersenGens<Affine<PallasConfig>>,
+            BulletproofGens<Affine<PallasConfig>>,
+            Affine<PallasConfig>,
+            Affine<PallasConfig>,
+        ) {
+            const NUM_GENS: usize = 1 << 13;
+
+            let label = b"pub-asset-mocking";
+            let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into();
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into();
+            let enc_gen = hash_to_pallas(label, b"enc-key-h").into();
+
+            let leaf_level_pc_gens = PedersenGens::<Affine<PallasConfig>>::default();
+            let leaf_level_bp_gens =
+                BulletproofGens::<Affine<PallasConfig>>::new(NUM_GENS as u32, 1);
+
+            let (_, pk_s_e) = keygen_enc(rng, enc_key_gen);
+            let (_, pk_r_e) = keygen_enc(rng, enc_key_gen);
+
+            let num_enc_keys = 2;
+            let num_mediators = 1;
+            let num_public_enc_keys = 1;
+
+            let keys_enc = (0..num_enc_keys)
+                .map(|_| keygen_enc(rng, enc_key_gen))
+                .collect::<Vec<_>>();
+            let keys_mediator = (0..num_mediators)
+                .map(|_| keygen_sig(rng, sig_key_gen))
+                .collect::<Vec<_>>();
+            let keys_public_enc = (0..num_public_enc_keys)
+                .map(|_| keygen_enc(rng, enc_key_gen))
+                .collect::<Vec<_>>();
+
+            let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
+            let med_keys: Vec<_> = keys_mediator
+                .iter()
+                .enumerate()
+                .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
+                .collect();
+            let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
+
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                100,
+                1,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+            )
+            .unwrap();
+
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt(
+                    rng,
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+
+            (
+                leg,
+                leg_enc,
+                leg_enc_rand,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            )
+        }
+
+        fn assert_public_asset_leg_verify_fails_with_rmc(
+            proof: &PublicAssetLegCreationProof<PallasConfig>,
+            rng: &mut impl CryptoRngCore,
+            leg_enc: LegEncryption<Affine<PallasConfig>>,
+            asset_id: AssetId,
+            enc_keys: Vec<Affine<PallasConfig>>,
+            med_keys: Vec<(u8, Affine<PallasConfig>)>,
+            public_enc_keys: Vec<Affine<PallasConfig>>,
+            nonce: &[u8],
+            leaf_level_pc_gens: &PedersenGens<Affine<PallasConfig>>,
+            leaf_level_bp_gens: &BulletproofGens<Affine<PallasConfig>>,
+            enc_key_gen: Affine<PallasConfig>,
+            enc_gen: Affine<PallasConfig>,
+        ) {
+            let verify_without_rmc = proof.verify(
+                rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+                nonce,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+                None,
+            );
+
+            let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(rng));
+            let verify_result = proof.verify(
+                rng,
+                leg_enc,
+                asset_id,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                nonce,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+                Some(&mut rmc),
+            );
+            let rmc_result = rmc.verify();
+            assert!(verify_without_rmc.is_err() || verify_result.is_err() || rmc_result.is_err());
+        }
+
+        #[test]
+        fn public_asset_leg_with_mocked_amount_ciphertext_fails_verification() {
+            let mut rng = rand::thread_rng();
+            let nonce = b"test-nonce";
+
+            let (
+                leg,
+                leg_enc,
+                leg_enc_rand,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            ) = setup_public_asset_leg_fixture(&mut rng);
+            let asset_id = leg_enc.asset_id().unwrap();
+
+            let mocked_amount_u64 = (leg.core.amount + 1) as u64;
+            let mocked_amount = ark_pallas::Fr::from(mocked_amount_u64);
+
+            PublicAssetLegCreationProof::<PallasConfig>::amount_ciphertext_proto.mock_safe(
+                move |r_3, r_3_blinding, _amount, amount_blinding, enc_key_gen, enc_gen| {
+                    MockResult::Return(PokPedersenCommitmentProtocol::init(
+                        r_3,
+                        r_3_blinding,
+                        &enc_key_gen,
+                        mocked_amount,
+                        amount_blinding,
+                        &enc_gen,
+                    ))
+                },
+            );
+            PublicAssetLegCreationProof::<PallasConfig>::amount_and_randomness_commitment
+                .mock_safe(
+                    move |_,
+                          _,
+                          amount_blinding,
+                          r_1,
+                          r_2,
+                          r_3,
+                          r_1_inv,
+                          r_2_inv,
+                          r_3_r_1_inv,
+                          r_3_r_2_inv,
+                          r_2_r_1_inv,
+                          r_1_r_2_inv,
+                          r_1_blinding,
+                          r_2_blinding,
+                          r_3_blinding,
+                          r_1_inv_blinding,
+                          r_2_inv_blinding,
+                          r_3_r_1_inv_blinding,
+                          r_3_r_2_inv_blinding,
+                          r_2_r_1_inv_blinding,
+                          r_1_r_2_inv_blinding,
+                          comm_r_i_blinding,
+                          t_comm_r_i_amount_blinding,
+                          parties_see_each_other,
+                          leaf_level_pc_gens,
+                          leaf_level_bp_gens,
+                          prover| {
+                        let mut wits = vec![
+                            mocked_amount,
+                            r_1,
+                            r_2,
+                            r_3,
+                            r_1_inv,
+                            r_2_inv,
+                            r_3_r_1_inv,
+                            r_3_r_2_inv,
+                        ];
+                        if parties_see_each_other {
+                            wits.push(r_2_r_1_inv.unwrap());
+                            wits.push(r_1_r_2_inv.unwrap());
+                        }
+
+                        let (comm_r_i_amount, vars) =
+                            prover.commit_vec(&wits, comm_r_i_blinding, leaf_level_bp_gens);
+
+                        if let Err(e) =
+                            PublicAssetLegCreationProof::<PallasConfig>::enforce_constraints(
+                                prover,
+                                Some(mocked_amount_u64),
+                                vars,
+                                parties_see_each_other,
+                            )
+                        {
+                            return MockResult::Return(Err(e));
+                        }
+
+                        let mut blindings = vec![
+                            t_comm_r_i_amount_blinding,
+                            amount_blinding,
+                            r_1_blinding,
+                            r_2_blinding,
+                            r_3_blinding,
+                            r_1_inv_blinding,
+                            r_2_inv_blinding,
+                            r_3_r_1_inv_blinding,
+                            r_3_r_2_inv_blinding,
+                        ];
+                        if parties_see_each_other {
+                            blindings.push(r_2_r_1_inv_blinding.unwrap());
+                            blindings.push(r_1_r_2_inv_blinding.unwrap());
+                        }
+
+                        let t_comm_r_i_amount = SchnorrCommitment::new(
+                            &PublicAssetLegCreationProof::<PallasConfig>::bp_gens(
+                                parties_see_each_other,
+                                leaf_level_pc_gens,
+                                leaf_level_bp_gens,
+                            ),
+                            blindings,
+                        );
+
+                        MockResult::Return(Ok((comm_r_i_amount, t_comm_r_i_amount)))
+                    },
+                );
+
+            // Using & to prevent dropping immediately and clearing the mock
+            let _ = &MockGuard::new(clear_amount_ciphertext_proto_mock);
+            let _ = &MockGuard::new(clear_amount_and_randomness_commitment_mock);
+
+            let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc,
+                asset_id,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+        }
+    }
+
+    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
+
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
+        use super::*;
+        use crate::keys::{keygen_enc, keygen_sig};
+
+        fn assert_public_asset_leg_verify_fails_with_rmc(
+            proof: &PublicAssetLegCreationProof<PallasConfig>,
+            rng: &mut impl CryptoRngCore,
+            leg_enc: LegEncryption<Affine<PallasConfig>>,
+            asset_id: AssetId,
+            enc_keys: Vec<Affine<PallasConfig>>,
+            med_keys: Vec<(u8, Affine<PallasConfig>)>,
+            public_enc_keys: Vec<Affine<PallasConfig>>,
+            nonce: &[u8],
+            leaf_level_pc_gens: &PedersenGens<Affine<PallasConfig>>,
+            leaf_level_bp_gens: &BulletproofGens<Affine<PallasConfig>>,
+            enc_key_gen: Affine<PallasConfig>,
+            enc_gen: Affine<PallasConfig>,
+        ) {
+            let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(rng));
+            let verify_result = proof.verify(
+                rng,
+                leg_enc,
+                asset_id,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
+                nonce,
+                leaf_level_pc_gens,
+                leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+                Some(&mut rmc),
+            );
+            let rmc_result = rmc.verify();
+            assert!(verify_result.is_err() || rmc_result.is_err());
+        }
+
+        #[test]
+        fn public_asset_leg_proof_verifier_error_paths() {
+            let mut rng = rand::thread_rng();
+            const NUM_GENS: usize = 1 << 13;
+
+            let label = b"pub-asset-errors";
+            let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into();
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into();
+            let enc_gen = hash_to_pallas(label, b"enc-key-h").into();
+
+            let leaf_level_pc_gens = PedersenGens::<Affine<PallasConfig>>::default();
+            let leaf_level_bp_gens =
+                BulletproofGens::<Affine<PallasConfig>>::new(NUM_GENS as u32, 1);
+
+            let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+            let num_enc_keys = 2;
+            let num_mediators = 1;
+            let num_public_enc_keys = 1;
+
+            let keys_enc = (0..num_enc_keys)
+                .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                .collect::<Vec<_>>();
+            let keys_mediator = (0..num_mediators)
+                .map(|_| keygen_sig(&mut rng, sig_key_gen))
+                .collect::<Vec<_>>();
+            let keys_public_enc = (0..num_public_enc_keys)
+                .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                .collect::<Vec<_>>();
+
+            let amount = 100;
+            let asset_id = 1;
+            let nonce = b"test-nonce";
+
+            let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
+            let med_keys: Vec<_> = keys_mediator
+                .iter()
+                .enumerate()
+                .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
+                .collect();
+            let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
+
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+            )
+            .unwrap();
+
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: true,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+
+            let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_enc_rand,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+            proof
+                .verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+
+            let (leg_enc_hidden, _) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        parties_see_each_other: true,
+                        reveal_asset_id: false,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc_hidden.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc_hidden,
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let mut wrong_enc_keys = enc_keys.clone();
+            wrong_enc_keys.pop();
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        wrong_enc_keys.clone(),
+                        med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                wrong_enc_keys,
+                med_keys.clone(),
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let mut wrong_med_keys = med_keys.clone();
+            wrong_med_keys.pop();
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        wrong_med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                wrong_med_keys,
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let wrong_public_enc_keys: Vec<_> = vec![];
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        wrong_public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                wrong_public_enc_keys,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let mut bad_med_key_idx = med_keys.clone();
+            bad_med_key_idx[0].0 = num_enc_keys as u8;
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        bad_med_key_idx.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                bad_med_key_idx,
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let mut missing_cross_pk_proof = proof.clone();
+            missing_cross_pk_proof.resp_eph_pk_s_r = None;
+            assert!(
+                missing_cross_pk_proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &missing_cross_pk_proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let extra_cross_pk_proof = proof.clone();
+            let (leg_enc_no_cross, _) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        parties_see_each_other: false,
+                        reveal_asset_id: true,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            assert!(
+                extra_cross_pk_proof
+                    .verify(
+                        &mut rng,
+                        leg_enc_no_cross.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &extra_cross_pk_proof,
+                &mut rng,
+                leg_enc_no_cross.clone(),
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+
+            let mut short_resp_proof = proof.clone();
+            short_resp_proof.resp_comm_r_i_amount.0.pop();
+            short_resp_proof.resp_comm_r_i_amount.0.pop();
+            short_resp_proof.resp_comm_r_i_amount.0.pop();
+            assert!(
+                short_resp_proof
+                    .verify(
+                        &mut rng,
+                        leg_enc.clone(),
+                        asset_id,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+            assert_public_asset_leg_verify_fails_with_rmc(
+                &short_resp_proof,
+                &mut rng,
+                leg_enc.clone(),
+                asset_id,
+                enc_keys.clone(),
+                med_keys,
+                public_enc_keys,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            );
+        }
     }
 }

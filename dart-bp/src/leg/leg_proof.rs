@@ -63,7 +63,9 @@ pub struct LegCreationProof<
     pub resp_amount_enc: PartialPokPedersenCommitment<Affine<G0>>,
     /// Commitment to randomness and response for proving asset-id in twisted Elgamal encryption of asset-id.
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
+    /// For proving `ct_asset_id = enc_key_gen * r_4 + enc_gen * asset_id`
     pub resp_asset_id_enc: PartialPokPedersenCommitment<Affine<G0>>,
+    /// Proving correctness of asset-id in the re-randomized point whose x-coordinate is in the leaf
     pub resp_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub re_randomized_points: ReRandomizedPoints<G0>,
     /// Bulletproof vector commitment to the following list
@@ -74,17 +76,17 @@ pub struct LegCreationProof<
     pub t_comm_r_i_amount: Affine<G0>,
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
     pub ped_comms: Vec<DivisorComms<Affine<G1>>>,
-    /// Response for proving ct_s = enc_key_gen * r_1 + S[0] * r_1^{-1}
+    /// Response for proving `ct_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
     pub resp_ct_s: PartialPokPedersenCommitment<Affine<G0>>,
-    /// Response for proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
+    /// Response for proving `ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}`
     pub resp_ct_r: PartialPokPedersenCommitment<Affine<G0>>,
-    /// Response for proving S[2] = S[0] * r_3/r_1
+    /// Response for proving `S[2] = S[0] * r_3/r_1`
     pub resp_eph_pk_s_v: PartialPokDiscreteLog<Affine<G0>>,
-    /// Response for proving S[3] = S[0] * r_4/r_1
+    /// Response for proving `S[3] = S[0] * r_4/r_1`
     pub resp_eph_pk_s_at: PartialPokDiscreteLog<Affine<G0>>,
-    /// Response for proving R[2] = R[1] * r_3/r_2
+    /// Response for proving `R[2] = R[1] * r_3/r_2`
     pub resp_eph_pk_r_v: PartialPokDiscreteLog<Affine<G0>>,
-    /// Response for proving R[3] = R[1] * r_4/r_2
+    /// Response for proving `R[3] = R[1] * r_4/r_2`
     pub resp_eph_pk_r_at: PartialPokDiscreteLog<Affine<G0>>,
     /// Responses for proving encryption key relations
     pub resp_eph_pk_enc: Vec<(
@@ -100,9 +102,9 @@ pub struct LegCreationProof<
         PartialPokDiscreteLog<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
     )>,
-    /// Response for proving S[1] = S[0] * r_2/r_1 (only when sender_receiver_decryption_needed)
+    /// Response for proving `S[1] = S[0] * r_2/r_1` (only when sender_receiver_decryption_needed)
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G0>>>,
-    /// Response for proving R[0] = R[1] * r_1/r_2 (only when sender_receiver_decryption_needed)
+    /// Response for proving `R[0] = R[1] * r_1/r_2` (only when sender_receiver_decryption_needed)
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G0>>>,
     /// Responses for proving public encryption key relations
     pub resp_eph_pk_public_enc: Vec<(
@@ -112,6 +114,10 @@ pub struct LegCreationProof<
     )>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<
     const L: usize,
     F0: PrimeField,
@@ -268,6 +274,12 @@ impl<
                     "asset-id is revealed in leg encryption".to_string(),
                 ));
             }
+
+            if leg.core.asset_id != asset_data.id {
+                return Err(Error::ProofGenerationError(
+                    "asset-id is different in leg and asset_data".to_string(),
+                ));
+            }
         }
 
         ensure_leg_encryption_consistent(&leg, &leg_enc)?;
@@ -275,14 +287,7 @@ impl<
         let mut at = F0::from(leg.core.asset_id);
         let mut amount = F0::from(leg.core.amount);
 
-        let num_asset_data_keys = asset_data.num_total_keys();
-
-        let asset_data_points = AssetData::points(
-            leg.core.asset_id,
-            &asset_data.enc_keys,
-            &asset_data.med_keys,
-            &asset_comm_params,
-        );
+        let asset_data_points = asset_data.points(&asset_comm_params);
 
         let num_asset_data_points = asset_data_points.len();
 
@@ -335,16 +340,18 @@ impl<
 
         Zeroize::zeroize(&mut re_randomization_of_leaf);
 
+        let b_base = tree_parameters.odd_parameters.pc_gens().B;
+        let b_blinding_base = tree_parameters.odd_parameters.pc_gens().B_blinding;
+        let neg_blinding_base = -b_blinding_base.into_group().into_affine();
+
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if cfg!(debug_assertions) {
             assert_eq!(
                 re_randomized_points.re_randomized_points[0].into_group(),
-                (asset_comm_params.j_0 * at)
-                    + (tree_parameters.odd_parameters.pc_gens().B_blinding
-                        * blindings_for_points[0])
+                (asset_comm_params.j_0 * at) + (b_blinding_base * blindings_for_points[0])
             );
 
-            for i in 0..num_asset_data_keys {
+            for i in 0..asset_data.num_total_keys() {
                 let k = if i < num_enc_keys {
                     asset_data.enc_keys[i]
                 } else {
@@ -355,13 +362,12 @@ impl<
                 };
                 assert_eq!(
                     re_randomized_points.re_randomized_points[i + 1].into_group(),
-                    k + (tree_parameters.odd_parameters.pc_gens().B_blinding
-                        * blindings_for_points[i + 1])
+                    k + (b_blinding_base * blindings_for_points[i + 1])
                 );
 
                 assert_eq!(
                     re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
-                    tree_parameters.odd_parameters.pc_gens().B * blindings_for_points[i + 1]
+                    b_base * blindings_for_points[i + 1]
                 );
             }
         }
@@ -522,28 +528,6 @@ impl<
 
         let mut transcript = odd_prover.transcript();
 
-        // In the following comments, S and R are the ephemeral public keys of sender and receiver respectively
-
-        // For proving ct_s = enc_key_gen * r_1 + S[0] * r_1^{-1}
-        let ct_s_proto = PokPedersenCommitmentProtocol::init(
-            r_1,
-            r_1_blinding,
-            &enc_key_gen,
-            r_1_inv,
-            r_1_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-        );
-
-        // For proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
-        let ct_r_proto = PokPedersenCommitmentProtocol::init(
-            r_2,
-            r_2_blinding,
-            &enc_key_gen,
-            r_2_inv,
-            r_2_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-        );
-
         // For proving ct_amount = enc_key_gen * r_3 + enc_gen * amount
         let ct_amount_proto = PokPedersenCommitmentProtocol::init(
             r_3,
@@ -554,42 +538,45 @@ impl<
             &enc_gen,
         );
 
-        // For proving ct_asset_id = enc_key_gen * r_4 + enc_gen * asset_id
-        let ct_asset_id_proto = PokPedersenCommitmentProtocol::init(
+        let (ct_asset_id_proto, t_asset_id) = Self::asset_id_protos(
             r_4,
             r_4_blinding,
-            &enc_key_gen,
             at,
             asset_id_blinding,
-            &enc_gen,
+            blindings_for_points[0],
+            F0::rand(rng),
+            enc_key_gen,
+            enc_gen,
+            asset_comm_params.j_0,
+            b_blinding_base,
         );
 
-        // For proving S[2] = S[0] * r_3/r_1
-        let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
+        // In the following comments, S and R are the ephemeral public keys of sender and receiver respectively
+
+        let (ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto) = Self::sender_key_protos(
+            r_1,
+            r_1_blinding,
+            enc_key_gen,
+            r_1_inv,
+            r_1_inv_blinding,
             r_3_r_1_inv,
             r_3_r_1_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-        );
-
-        // For proving S[3] = S[0] * r_4/r_1
-        let eph_pk_s_at_proto = PokDiscreteLogProtocol::init(
             r_4_r_1_inv,
             r_4_r_1_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc,
         );
 
-        // For proving R[2] = R[1] * r_3/r_2
-        let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
+        let (ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto) = Self::receiver_key_protos(
+            r_2,
+            r_2_blinding,
+            enc_key_gen,
+            r_2_inv,
+            r_2_inv_blinding,
             r_3_r_2_inv,
             r_3_r_2_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-        );
-
-        // For proving R[3] = R[1] * r_4/r_2
-        let eph_pk_r_at_proto = PokDiscreteLogProtocol::init(
             r_4_r_2_inv,
             r_4_r_2_inv_blinding,
-            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc,
         );
 
         // If parties_see_each_other is true, then S[1] and R[0] is present in leg encryption
@@ -611,80 +598,39 @@ impl<
             (None, None)
         };
 
-        let blinding_base = -tree_parameters
-            .odd_parameters
-            .pc_gens()
-            .B_blinding
-            .into_group()
-            .into_affine();
-        let b_base = tree_parameters.odd_parameters.pc_gens().B;
+        let pk_en_proto = Self::enc_key_protos(
+            &l,
+            &l_r_1,
+            &l_blindings,
+            &l_r_1_blindings,
+            r_1,
+            r_1_blinding,
+            r_2_r_1_inv,
+            r_2_r_1_inv_blinding,
+            r_3_r_1_inv,
+            r_3_r_1_inv_blinding,
+            r_4_r_1_inv,
+            r_4_r_1_inv_blinding,
+            b_base,
+            neg_blinding_base,
+            &re_randomized_points,
+            &leg_enc,
+        );
 
-        let mut pk_en_proto = Vec::with_capacity(l.len());
-        for i in 0..l.len() {
-            // Since role=0 for encryption keys, no effect on base and thus its re_randomized_points[i + 1].0
-            // For proving relation `A_i[0] = pk_{{en,i}_r} * r_1 + blinding_base * l_i * r_1`
-            let t_1 = PokPedersenCommitmentProtocol::init(
-                r_1,
-                r_1_blinding,
-                &re_randomized_points.re_randomized_points[i + 1],
-                l_r_1[i],
-                l_r_1_blindings[i],
-                &blinding_base,
-            );
-
-            debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
-                b_base * l[i]
-            );
-
-            // For proving relation `re_randomized_points[i + 1].1 = B * l_i`
-            let t_1_1 = PokDiscreteLogProtocol::init(l[i], l_blindings[i], &b_base);
-
-            let base = &leg_enc.eph_pk_enc_keys[i].r1;
-            // unwrap is fine since its created in this proof and guaranteed to be not None if l is non-empty
-
-            // For proving relation `A_i[1] = A_i[0] * r_2/r_1`
-            let t_2 = PokDiscreteLogProtocol::init(
-                r_2_r_1_inv.unwrap(),
-                r_2_r_1_inv_blinding.unwrap(),
-                base,
-            );
-            // For proving relation `A_i[2] = A_i[0] * r_3/r_1`
-            let t_3 = PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, base);
-            // For proving relation `A_i[3] = A_i[0] * r_4/r_1`
-            let t_4 = PokDiscreteLogProtocol::init(r_4_r_1_inv, r_4_r_1_inv_blinding, base);
-
-            pk_en_proto.push((t_1, t_1_1, t_2, t_3, t_4));
-        }
-
-        let mut pk_m_proto = Vec::with_capacity(r_meds.len());
-        for i in 0..r_meds.len() {
-            // role=1 for mediator keys
-            // For proving relation `ct_m[i] + j_0 + j_1 * index - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
-            let t_m = PokPedersenCommitmentProtocol::init(
-                r_meds[i],
-                m_blindings[i],
-                &enc_key_gen,
-                k[i],
-                k_blindings[i],
-                &blinding_base,
-            );
-
-            debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(1 + num_enc_keys + i)]
-                    .into_group(),
-                b_base * k[i]
-            );
-
-            // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
-            let t_k = PokDiscreteLogProtocol::init(k[i], k_blindings[i], &b_base);
-
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
-
-            // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
-            let t_eph_m = PokDiscreteLogProtocol::init(m_r_1_inv[i], m_r_1_inv_blindings[i], base);
-            pk_m_proto.push((t_m, t_k, t_eph_m));
-        }
+        let pk_m_proto = Self::mediator_key_protos(
+            &r_meds,
+            &m_blindings,
+            &k,
+            &k_blindings,
+            &m_r_1_inv,
+            &m_r_1_inv_blindings,
+            num_enc_keys,
+            enc_key_gen,
+            b_base,
+            neg_blinding_base,
+            &re_randomized_points,
+            &leg_enc,
+        );
 
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg.public_enc_keys.len());
         for i in 0..leg.public_enc_keys.len() {
@@ -695,16 +641,6 @@ impl<
                 PokDiscreteLogProtocol::init(r_3, r_3_blinding, &leg.public_enc_keys[i]),
             ));
         }
-
-        // Proving correctness of asset-id in the point
-        let t_asset_id = PokPedersenCommitmentProtocol::init(
-            at,
-            asset_id_blinding,
-            &asset_comm_params.j_0,
-            blindings_for_points[0],
-            F0::rand(rng),
-            &tree_parameters.odd_parameters.pc_gens().B_blinding,
-        );
 
         Zeroize::zeroize(&mut r_1_blinding);
         Zeroize::zeroize(&mut r_2_blinding);
@@ -821,7 +757,7 @@ impl<
         for i in 0..l.len() {
             pk_en_proto[i].0.challenge_contribution(
                 &re_randomized_points.re_randomized_points[i + 1],
-                &blinding_base,
+                &neg_blinding_base,
                 &leg_enc.eph_pk_enc_keys[i].r1,
                 &mut transcript,
             )?;
@@ -854,7 +790,7 @@ impl<
                 - re_randomized_points.re_randomized_points[l.len() + i + 1];
             pk_m_proto[i].0.challenge_contribution(
                 &enc_key_gen,
-                &blinding_base,
+                &neg_blinding_base,
                 &y.into_affine(),
                 &mut transcript,
             )?;
@@ -893,7 +829,7 @@ impl<
 
         t_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
-            &tree_parameters.odd_parameters.pc_gens().B_blinding,
+            &b_blinding_base,
             &re_randomized_points.re_randomized_points[0],
             &mut transcript,
         )?;
@@ -1320,14 +1256,9 @@ impl<
 
         let mut transcript = odd_verifier.transcript();
 
-        let blinding_base = -tree_parameters
-            .odd_parameters
-            .pc_gens()
-            .B_blinding
-            .into_group()
-            .into_affine();
-
         let b_base = tree_parameters.odd_parameters.pc_gens().B;
+        let b_blinding_base = tree_parameters.odd_parameters.pc_gens().B_blinding;
+        let neg_blinding_base = -b_blinding_base.into_group().into_affine();
 
         self.t_comm_r_i_amount
             .serialize_compressed(&mut transcript)?;
@@ -1436,7 +1367,7 @@ impl<
             let (p_0, p_1, p_2, p_3, p_4) = &self.resp_eph_pk_enc[i];
             p_0.challenge_contribution(
                 &self.re_randomized_points.re_randomized_points[i + 1],
-                &blinding_base,
+                &neg_blinding_base,
                 &leg_enc.eph_pk_enc_keys[i].r1,
                 &mut transcript,
             )?;
@@ -1474,7 +1405,7 @@ impl<
                 - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
             p_0.challenge_contribution(
                 &enc_key_gen,
-                &blinding_base,
+                &neg_blinding_base,
                 &y.into_affine(),
                 &mut transcript,
             )?;
@@ -1514,7 +1445,7 @@ impl<
 
         self.resp_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
-            &tree_parameters.odd_parameters.pc_gens().B_blinding,
+            &b_blinding_base,
             &self.re_randomized_points.re_randomized_points[0],
             &mut transcript,
         )?;
@@ -1563,7 +1494,7 @@ impl<
             "resp_asset_id verification failed",
             self.re_randomized_points.re_randomized_points[0],
             asset_comm_params.j_0,
-            tree_parameters.odd_parameters.pc_gens().B_blinding,
+            b_blinding_base,
             &challenge,
         );
 
@@ -1685,7 +1616,7 @@ impl<
                 format!("resp_eph_pk_enc[{}].0 verification failed", i),
                 leg_enc.eph_pk_enc_keys[i].r1,
                 self.re_randomized_points.re_randomized_points[i + 1],
-                blinding_base,
+                neg_blinding_base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
                 &self.resp_comm_r_i_amount.0[14 + (2 * i) + 1],
@@ -1753,7 +1684,7 @@ impl<
                 format!("resp_eph_pk_meds[{}].0 verification failed", i),
                 y.into_affine(),
                 enc_key_gen,
-                blinding_base,
+                neg_blinding_base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i)],
             );
@@ -1955,6 +1886,247 @@ impl<
         }
         gens
     }
+
+    fn sender_key_protos(
+        r_1: F0,
+        r_1_blinding: F0,
+        enc_key_gen: Affine<G0>,
+        r_1_inv: F0,
+        r_1_inv_blinding: F0,
+        r_3_r_1_inv: F0,
+        r_3_r_1_inv_blinding: F0,
+        r_4_r_1_inv: F0,
+        r_4_r_1_inv_blinding: F0,
+        leg_enc: &LegEncryption<Affine<G0>>,
+    ) -> (
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+    ) {
+        // For proving ct_s = enc_key_gen * r_1 + S[0] * r_1^{-1}
+        let ct_s_proto = PokPedersenCommitmentProtocol::init(
+            r_1,
+            r_1_blinding,
+            &enc_key_gen,
+            r_1_inv,
+            r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
+
+        // For proving S[2] = S[0] * r_3/r_1
+        let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_1_inv,
+            r_3_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
+
+        // For proving S[3] = S[0] * r_4/r_1
+        let eph_pk_s_at_proto = PokDiscreteLogProtocol::init(
+            r_4_r_1_inv,
+            r_4_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
+
+        (ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto)
+    }
+
+    fn receiver_key_protos(
+        r_2: F0,
+        r_2_blinding: F0,
+        enc_key_gen: Affine<G0>,
+        r_2_inv: F0,
+        r_2_inv_blinding: F0,
+        r_3_r_2_inv: F0,
+        r_3_r_2_inv_blinding: F0,
+        r_4_r_2_inv: F0,
+        r_4_r_2_inv_blinding: F0,
+        leg_enc: &LegEncryption<Affine<G0>>,
+    ) -> (
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+    ) {
+        // For proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
+        let ct_r_proto = PokPedersenCommitmentProtocol::init(
+            r_2,
+            r_2_blinding,
+            &enc_key_gen,
+            r_2_inv,
+            r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
+
+        // For proving R[2] = R[1] * r_3/r_2
+        let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
+            r_3_r_2_inv,
+            r_3_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
+
+        // For proving R[3] = R[1] * r_4/r_2
+        let eph_pk_r_at_proto = PokDiscreteLogProtocol::init(
+            r_4_r_2_inv,
+            r_4_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
+
+        (ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto)
+    }
+
+    fn enc_key_protos(
+        l: &[F0],
+        l_r_1: &[F0],
+        l_blindings: &[F0],
+        l_r_1_blindings: &[F0],
+        r_1: F0,
+        r_1_blinding: F0,
+        r_2_r_1_inv: Option<F0>,
+        r_2_r_1_inv_blinding: Option<F0>,
+        r_3_r_1_inv: F0,
+        r_3_r_1_inv_blinding: F0,
+        r_4_r_1_inv: F0,
+        r_4_r_1_inv_blinding: F0,
+        b_base: Affine<G0>,
+        neg_blinding_base: Affine<G0>,
+        re_randomized_points: &ReRandomizedPoints<G0>,
+        leg_enc: &LegEncryption<Affine<G0>>,
+    ) -> Vec<(
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+    )> {
+        let mut pk_en_proto = Vec::with_capacity(l.len());
+        for i in 0..l.len() {
+            // Since role=0 for encryption keys, no effect on base and thus its re_randomized_points[i + 1]
+            // For proving relation `A_i[0] = pk_{{en,i}_r} * r_1 + blinding_base * l_i * r_1`
+            let t_1 = PokPedersenCommitmentProtocol::init(
+                r_1,
+                r_1_blinding,
+                &re_randomized_points.re_randomized_points[i + 1],
+                l_r_1[i],
+                l_r_1_blindings[i],
+                &neg_blinding_base,
+            );
+
+            #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+            debug_assert_eq!(
+                re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
+                b_base * l[i]
+            );
+
+            // For proving relation `re_randomized_points[i + 1] = B * l_i`
+            let t_1_1 = PokDiscreteLogProtocol::init(l[i], l_blindings[i], &b_base);
+
+            let base = &leg_enc.eph_pk_enc_keys[i].r1;
+
+            // For proving relation `A_i[1] = A_i[0] * r_2/r_1`
+            let t_2 = PokDiscreteLogProtocol::init(
+                r_2_r_1_inv.unwrap(),
+                r_2_r_1_inv_blinding.unwrap(),
+                base,
+            );
+            // For proving relation `A_i[2] = A_i[0] * r_3/r_1`
+            let t_3 = PokDiscreteLogProtocol::init(r_3_r_1_inv, r_3_r_1_inv_blinding, base);
+            // For proving relation `A_i[3] = A_i[0] * r_4/r_1`
+            let t_4 = PokDiscreteLogProtocol::init(r_4_r_1_inv, r_4_r_1_inv_blinding, base);
+
+            pk_en_proto.push((t_1, t_1_1, t_2, t_3, t_4));
+        }
+        pk_en_proto
+    }
+
+    fn mediator_key_protos(
+        r_meds: &[F0],
+        m_blindings: &[F0],
+        k: &[F0],
+        k_blindings: &[F0],
+        m_r_1_inv: &[F0],
+        m_r_1_inv_blindings: &[F0],
+        num_enc_keys: usize,
+        enc_key_gen: Affine<G0>,
+        b_base: Affine<G0>,
+        neg_blinding_base: Affine<G0>,
+        re_randomized_points: &ReRandomizedPoints<G0>,
+        leg_enc: &LegEncryption<Affine<G0>>,
+    ) -> Vec<(
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+    )> {
+        #[cfg(feature = "ignore_prover_input_sanitation")]
+        let _ = (num_enc_keys, re_randomized_points);
+
+        let mut pk_m_proto = Vec::with_capacity(r_meds.len());
+        for i in 0..r_meds.len() {
+            // role=1 for mediator keys
+            // For proving relation `ct_m[i] + j_0 + j_1 * index - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
+            let t_m = PokPedersenCommitmentProtocol::init(
+                r_meds[i],
+                m_blindings[i],
+                &enc_key_gen,
+                k[i],
+                k_blindings[i],
+                &neg_blinding_base,
+            );
+
+            #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+            debug_assert_eq!(
+                re_randomized_points.blindings_with_different_gen[&(1 + num_enc_keys + i)]
+                    .into_group(),
+                b_base * k[i]
+            );
+
+            // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
+            let t_k = PokDiscreteLogProtocol::init(k[i], k_blindings[i], &b_base);
+
+            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
+
+            // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
+            let t_eph_m = PokDiscreteLogProtocol::init(m_r_1_inv[i], m_r_1_inv_blindings[i], base);
+            pk_m_proto.push((t_m, t_k, t_eph_m));
+        }
+        pk_m_proto
+    }
+
+    fn asset_id_protos(
+        r_4: F0,
+        r_4_blinding: F0,
+        at: F0,
+        asset_id_blinding: F0,
+        point_blinding: F0,
+        point_blinding_rand: F0,
+        enc_key_gen: Affine<G0>,
+        enc_gen: Affine<G0>,
+        asset_comm_j_0: Affine<G0>,
+        b_blinding_base: Affine<G0>,
+    ) -> (
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokPedersenCommitmentProtocol<Affine<G0>>,
+    ) {
+        // For proving ct_asset_id = enc_key_gen * r_4 + enc_gen * asset_id
+        let ct_asset_id_proto = PokPedersenCommitmentProtocol::init(
+            r_4,
+            r_4_blinding,
+            &enc_key_gen,
+            at,
+            asset_id_blinding,
+            &enc_gen,
+        );
+
+        // Proving correctness of asset-id in the point
+        let t_asset_id = PokPedersenCommitmentProtocol::init(
+            at,
+            asset_id_blinding,
+            &asset_comm_j_0,
+            point_blinding,
+            point_blinding_rand,
+            &b_blinding_base,
+        );
+
+        (ct_asset_id_proto, t_asset_id)
+    }
 }
 
 pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
@@ -2035,4 +2207,908 @@ pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
         ));
     }
     Ok(())
+}
+
+#[cfg(all(
+    test,
+    feature = "nightly_mocking_tests",
+    feature = "ignore_prover_input_sanitation"
+))]
+mod mocking_tests {
+    use super::*;
+    use crate::keys::{keygen_enc, keygen_sig};
+    use crate::leg::LegEncConfig;
+    use crate::util::verify_rmc;
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
+    use ark_ff::Field;
+    use ark_pallas::{Affine as PallasA, Fq as PallasBase, Fr as PallasScalar, PallasConfig};
+    use ark_std::UniformRand;
+    use ark_vesta::VestaConfig;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use curve_tree_relations::curve_tree::{CurveTree, Root};
+    use curve_tree_relations::parameters::SelRerandProofParametersNew;
+    use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+    use mocktopus::mocking::{MockResult, Mockable};
+
+    type PallasParameters = PallasConfig;
+    type VestaParameters = VestaConfig;
+    type PallasF = PallasScalar;
+    type VestaF = PallasBase;
+
+    struct MockGuard {
+        clear_fn: fn(),
+    }
+
+    impl MockGuard {
+        fn new(clear_fn: fn()) -> Self {
+            Self { clear_fn }
+        }
+    }
+
+    impl Drop for MockGuard {
+        fn drop(&mut self) {
+            (self.clear_fn)();
+        }
+    }
+
+    fn clear_asset_id_protos_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::asset_id_protos
+            .clear_mock();
+    }
+
+    fn clear_sender_key_protos_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::sender_key_protos
+            .clear_mock();
+    }
+
+    fn clear_receiver_key_protos_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::receiver_key_protos
+            .clear_mock();
+    }
+
+    fn clear_enc_key_protos_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::enc_key_protos
+            .clear_mock();
+    }
+
+    fn clear_mediator_key_protos_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::
+            mediator_key_protos
+            .clear_mock();
+    }
+
+    fn assert_leg_verify_fails_with_rmc(
+        proof: &LegCreationProof<64, PallasF, VestaF, PallasParameters, VestaParameters>,
+        rng: &mut impl CryptoRngCore,
+        leg_enc: LegEncryption<PallasA>,
+        root: &Root<64, 1, VestaParameters, PallasParameters>,
+        nonce: &[u8],
+        asset_tree_params: &SelRerandProofParametersNew<
+            VestaParameters,
+            PallasParameters,
+            VestaParams,
+            PallasParams,
+        >,
+        asset_comm_params: &AssetCommitmentParams<PallasParameters, VestaParameters>,
+        enc_key_gen: PallasA,
+        enc_gen: PallasA,
+    ) {
+        assert!(
+            proof
+                .verify::<_, PallasParams, VestaParams>(
+                    rng,
+                    leg_enc.clone(),
+                    root,
+                    vec![],
+                    nonce,
+                    asset_tree_params,
+                    asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        let mut rmc_1 = RandomizedMultChecker::new(VestaF::rand(rng));
+        let mut rmc_0 = RandomizedMultChecker::new(PallasF::rand(rng));
+        let verify_with_rmc = proof.verify::<_, PallasParams, VestaParams>(
+            rng,
+            leg_enc,
+            root,
+            vec![],
+            nonce,
+            asset_tree_params,
+            asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            Some((&mut rmc_1, &mut rmc_0)),
+        );
+        let rmc_result = verify_rmc(rmc_0, rmc_1);
+        assert!(verify_with_rmc.is_err() || rmc_result.is_err());
+    }
+
+    #[test]
+    fn leg_proof_with_mocked_asset_id_fails_verification() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mocked-leg-asset-id";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 0u8;
+        let asset_id_1 = 1u32;
+        let asset_id_2 = 2u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .collect::<Vec<_>>();
+
+        let asset_data_2 = AssetData::new(
+            asset_id_2,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data_2.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id_1,
+            enc_keys.clone(),
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let mocked_asset_id = PallasF::from(asset_id_2);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::asset_id_protos
+            .mock_safe(
+                move |r_4,
+                      r_4_blinding,
+                      at,
+                      asset_id_blinding,
+                      point_blinding,
+                      point_blinding_rand,
+                      enc_key_gen,
+                      enc_gen,
+                      asset_comm_j_0,
+                      b_blinding_base| {
+                    // Malicious prover uses asset_id_2 in t_asset_id (randomized commitment to asset-id from leaf), while leg/ct_asset_id use asset_id_1.
+                    let ct_asset_id_proto = PokPedersenCommitmentProtocol::init(
+                        r_4,
+                        r_4_blinding,
+                        &enc_key_gen,
+                        at,
+                        asset_id_blinding,
+                        &enc_gen,
+                    );
+                    let t_asset_id = PokPedersenCommitmentProtocol::init(
+                        mocked_asset_id,
+                        asset_id_blinding,
+                        &asset_comm_j_0,
+                        point_blinding,
+                        point_blinding_rand,
+                        &b_blinding_base,
+                    );
+                    MockResult::Return((ct_asset_id_proto, t_asset_id))
+                },
+            );
+        let _ = &MockGuard::new(clear_asset_id_protos_mock);
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data_2,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &proof,
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
+
+    #[test]
+    fn leg_proof_with_mocked_sender_and_receiver_key_fails_verification() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mocked-leg-sender-receiver-protos";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 0u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce_sender = b"mocked-leg-sender-key-proto-nonce";
+        let nonce_receiver = b"mocked-leg-receiver-key-proto-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc_sender, leg_enc_rand_sender) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let sender_key_protos_mock_guard = MockGuard::new(clear_sender_key_protos_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::sender_key_protos
+            .mock_safe(
+                move |_r_1,
+                      _r_1_blinding,
+                      enc_key_gen,
+                      _r_1_inv,
+                      _r_1_inv_blinding,
+                      _r_3_r_1_inv,
+                      _r_3_r_1_inv_blinding,
+                      _r_4_r_1_inv,
+                      _r_4_r_1_inv_blinding,
+                      leg_enc| {
+                    let mocked_r_1 = PallasF::from(7u64);
+                    let mocked_r_1_blinding = PallasF::from(11u64);
+                    let mocked_r_1_inv = PallasF::from(13u64);
+                    let mocked_r_1_inv_blinding = PallasF::from(17u64);
+                    let mocked_r_3_r_1_inv = PallasF::from(19u64);
+                    let mocked_r_3_r_1_inv_blinding = PallasF::from(23u64);
+                    let mocked_r_4_r_1_inv = PallasF::from(29u64);
+                    let mocked_r_4_r_1_inv_blinding = PallasF::from(31u64);
+
+                    let ct_s_proto = PokPedersenCommitmentProtocol::init(
+                        mocked_r_1,
+                        mocked_r_1_blinding,
+                        &enc_key_gen,
+                        mocked_r_1_inv,
+                        mocked_r_1_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                    );
+                    let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_3_r_1_inv,
+                        mocked_r_3_r_1_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                    );
+                    let eph_pk_s_at_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_4_r_1_inv,
+                        mocked_r_4_r_1_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                    );
+
+                    MockResult::Return((ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto))
+                },
+            );
+
+        let sender_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let sender_proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg.clone(),
+                leg_enc_sender.clone(),
+                leg_enc_rand_sender,
+                sender_path,
+                asset_data.clone(),
+                &root,
+                nonce_sender,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &sender_proof,
+            &mut rng,
+            leg_enc_sender,
+            &root,
+            nonce_sender,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+        drop(sender_key_protos_mock_guard);
+
+        let (leg_enc_receiver, leg_enc_rand_receiver) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let _ = &MockGuard::new(clear_receiver_key_protos_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::receiver_key_protos
+            .mock_safe(
+                move |_r_2,
+                      _r_2_blinding,
+                      enc_key_gen,
+                      _r_2_inv,
+                      _r_2_inv_blinding,
+                      _r_3_r_2_inv,
+                      _r_3_r_2_inv_blinding,
+                      _r_4_r_2_inv,
+                      _r_4_r_2_inv_blinding,
+                      leg_enc| {
+                    let mocked_r_2 = PallasF::from(37u64);
+                    let mocked_r_2_blinding = PallasF::from(41u64);
+                    let mocked_r_2_inv = PallasF::from(43u64);
+                    let mocked_r_2_inv_blinding = PallasF::from(47u64);
+                    let mocked_r_3_r_2_inv = PallasF::from(53u64);
+                    let mocked_r_3_r_2_inv_blinding = PallasF::from(59u64);
+                    let mocked_r_4_r_2_inv = PallasF::from(61u64);
+                    let mocked_r_4_r_2_inv_blinding = PallasF::from(67u64);
+
+                    let ct_r_proto = PokPedersenCommitmentProtocol::init(
+                        mocked_r_2,
+                        mocked_r_2_blinding,
+                        &enc_key_gen,
+                        mocked_r_2_inv,
+                        mocked_r_2_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                    );
+                    let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_3_r_2_inv,
+                        mocked_r_3_r_2_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                    );
+                    let eph_pk_r_at_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_4_r_2_inv,
+                        mocked_r_4_r_2_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                    );
+
+                    MockResult::Return((ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto))
+                },
+            );
+
+        let receiver_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let receiver_proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg.clone(),
+                leg_enc_receiver.clone(),
+                leg_enc_rand_receiver,
+                receiver_path,
+                asset_data,
+                &root,
+                nonce_receiver,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &receiver_proof,
+            &mut rng,
+            leg_enc_receiver,
+            &root,
+            nonce_receiver,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
+
+    #[test]
+    fn leg_proof_with_mocked_enc_key_fails_verification() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mocked-leg-enc-key-proto";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 0u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let _ = &MockGuard::new(clear_enc_key_protos_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::enc_key_protos
+            .mock_safe(
+                move |_l,
+                      _l_r_1,
+                      _l_blindings,
+                      _l_r_1_blindings,
+                      _r_1,
+                      _r_1_blinding,
+                      _r_2_r_1_inv,
+                      _r_2_r_1_inv_blinding,
+                      _r_3_r_1_inv,
+                      _r_3_r_1_inv_blinding,
+                      _r_4_r_1_inv,
+                      _r_4_r_1_inv_blinding,
+                      b_base,
+                      neg_blinding_base,
+                      re_randomized_points,
+                      leg_enc| {
+                    let mut pk_en_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
+                    let mocked_r_1 = PallasF::from(7u64);
+                    let mocked_r_1_blinding = PallasF::from(11u64);
+                    let mocked_r_2 = PallasF::from(13u64);
+                    let mocked_r_2_r_1_inv = mocked_r_2 * mocked_r_1.inverse().unwrap();
+                    let mocked_r_2_r_1_inv_blinding = PallasF::from(17u64);
+                    let mocked_r_3 = PallasF::from(19u64);
+                    let mocked_r_3_r_1_inv = mocked_r_3 * mocked_r_1.inverse().unwrap();
+                    let mocked_r_3_r_1_inv_blinding = PallasF::from(23u64);
+                    let mocked_r_4 = PallasF::from(29u64);
+                    let mocked_r_4_r_1_inv = mocked_r_4 * mocked_r_1.inverse().unwrap();
+                    let mocked_r_4_r_1_inv_blinding = PallasF::from(31u64);
+
+                    for i in 0..leg_enc.eph_pk_enc_keys.len() {
+                        let mocked_l_i = PallasF::from((i as u64) + 37u64);
+                        let mocked_l_blinding_i = PallasF::from((i as u64) + 41u64);
+                        let mocked_l_r_1 = mocked_l_i * mocked_r_1;
+                        let mocked_l_r_1_blinding = PallasF::from((i as u64) + 43u64);
+
+                        let t_1 = PokPedersenCommitmentProtocol::init(
+                            mocked_r_1,
+                            mocked_r_1_blinding,
+                            &re_randomized_points.re_randomized_points[i + 1],
+                            mocked_l_r_1,
+                            mocked_l_r_1_blinding,
+                            &neg_blinding_base,
+                        );
+                        let t_1_1 =
+                            PokDiscreteLogProtocol::init(mocked_l_i, mocked_l_blinding_i, &b_base);
+                        let base = &leg_enc.eph_pk_enc_keys[i].r1;
+                        let t_2 = PokDiscreteLogProtocol::init(
+                            mocked_r_2_r_1_inv,
+                            mocked_r_2_r_1_inv_blinding,
+                            base,
+                        );
+                        let t_3 = PokDiscreteLogProtocol::init(
+                            mocked_r_3_r_1_inv,
+                            mocked_r_3_r_1_inv_blinding,
+                            base,
+                        );
+                        let t_4 = PokDiscreteLogProtocol::init(
+                            mocked_r_4_r_1_inv,
+                            mocked_r_4_r_1_inv_blinding,
+                            base,
+                        );
+                        pk_en_proto.push((t_1, t_1_1, t_2, t_3, t_4));
+                    }
+
+                    MockResult::Return(pk_en_proto)
+                },
+            );
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &proof,
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
+
+    #[test]
+    fn leg_proof_with_mocked_mediator_key_fails_verification() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mocked-leg-mediator-key-proto";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 1u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let _ = &MockGuard::new(clear_mediator_key_protos_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::
+            mediator_key_protos
+            .mock_safe(
+                move |_r_meds,
+                      _m_blindings,
+                      _k,
+                      _k_blindings,
+                      _m_r_1_inv,
+                      _m_r_1_inv_blindings,
+                      num_enc_keys,
+                      enc_key_gen,
+                      b_base,
+                      neg_blinding_base,
+                      _re_randomized_points,
+                      leg_enc| {
+                    let mut pk_m_proto = Vec::with_capacity(leg_enc.mediators.len());
+                    let mocked_r_1 = PallasF::from(7u64);
+
+                    for i in 0..leg_enc.mediators.len() {
+                        let mocked_r_med = PallasF::from((i as u64) + 11u64);
+                        let mocked_m_blinding = PallasF::from((i as u64) + 13u64);
+                        let mocked_k = PallasF::from((i as u64) + 17u64);
+                        let mocked_k_blinding = PallasF::from((i as u64) + 19u64);
+                        let mocked_m_r_1_inv = mocked_r_med * mocked_r_1.inverse().unwrap();
+                        let mocked_m_r_1_inv_blinding = PallasF::from((i as u64) + 23u64);
+
+                        let t_m = PokPedersenCommitmentProtocol::init(
+                            mocked_r_med,
+                            mocked_m_blinding,
+                            &enc_key_gen,
+                            mocked_k,
+                            mocked_k_blinding,
+                            &neg_blinding_base,
+                        );
+                        let t_k = PokDiscreteLogProtocol::init(mocked_k, mocked_k_blinding, &b_base);
+                        let base =
+                            &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
+                        let t_eph_m = PokDiscreteLogProtocol::init(
+                            mocked_m_r_1_inv,
+                            mocked_m_r_1_inv_blinding,
+                            base,
+                        );
+                        pk_m_proto.push((t_m, t_k, t_eph_m));
+                    }
+
+                    assert_eq!(num_enc_keys, leg_enc.eph_pk_enc_keys.len());
+                    MockResult::Return(pk_m_proto)
+                },
+            );
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &proof,
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
 }

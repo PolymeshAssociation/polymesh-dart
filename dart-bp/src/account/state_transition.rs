@@ -297,11 +297,12 @@ impl<
             }
 
             let expected_counter =
-                (self.account.counter as i64 + self.net_counter_change as i64) as u64;
-            if self.updated_account.counter != expected_counter {
+                (self.account.counter() as i64 + self.net_counter_change as i64) as u64;
+            if self.updated_account.counter() != expected_counter {
                 return Err(Error::ProofGenerationError(format!(
                     "Counter mismatch: expected {}, got {}",
-                    expected_counter, self.updated_account.counter
+                    expected_counter,
+                    self.updated_account.counter()
                 )));
             }
             Ok(())
@@ -1010,11 +1011,7 @@ impl<
             ));
         }
 
-        let num_legs_with_balance_change = self
-            .legs
-            .iter()
-            .filter(|l| l.has_balance_decreased.is_some())
-            .count();
+        let num_legs_with_balance_change = LegVerifierConfig::num_balance_changes(&self.legs);
         if num_legs_with_balance_change > 0 {
             if let Some(balance_proof) = &proof.balance_proof {
                 if balance_proof.resp_leg_amount.len() != num_legs_with_balance_change {
@@ -1040,7 +1037,7 @@ mod tests {
 
     use super::*;
     use crate::account::AccountStateBuilder;
-    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new};
+    use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, LegEncConfig};
@@ -2637,6 +2634,333 @@ mod tests {
         println!(
             "5 legs (2 send [1 revealed, 1 hidden], 3 receive [1 revealed, 2 hidden]): Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
             proving_time, verification_time, verification_time_rmc, proof_size
+        );
+    }
+
+    #[test]
+    fn host_builder_pre_finalize_rejects_empty_legs() {
+        // pre_finalize_checks must fail when no legs have been added to the builder.
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (_, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (((_, pk_s), (_, pk_s_e)), _, _) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+        let id = PallasFr::rand(&mut rng);
+        let (account, _, _, _) = new_account(&mut rng, 1, pk_s, pk_s_e, id);
+        let updated_account = account.get_state_for_receive();
+        let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+        let builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                PallasFr::rand(&mut rng),
+                PallasFr::rand(&mut rng),
+                account,
+                updated_account,
+                updated_comm,
+                b"test_nonce",
+            );
+
+        // No legs added → pre_finalize_checks must error.
+        assert!(builder.pre_finalize_checks().is_err());
+    }
+
+    #[test]
+    fn host_builder_pre_finalize_rejects_counter_mismatch() {
+        // pre_finalize_checks must reject a builder whose updated_account counter does not
+        // match account.counter + net_counter_change.
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (_, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+        let (((_, pk_s), (_, pk_s_e)), (_, (_, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+
+        let asset_id = 1;
+        let amount = 50u64;
+        let (_, leg_enc, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+        account.balance = 100;
+        account.counter = 5;
+
+        // add_send_affirmation sets net_counter_change = +1 → expected new counter = 6.
+        // Set new counter to 5 (no change) → pre_finalize_checks must fail.
+        let mut wrong_updated = account.get_state_for_send(amount).unwrap();
+        wrong_updated.counter = 5;
+        let wrong_comm = wrong_updated.commit(account_comm_key.clone()).unwrap();
+
+        let mut builder_wrong =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                PallasFr::rand(&mut rng),
+                PallasFr::rand(&mut rng),
+                account.clone(),
+                wrong_updated,
+                wrong_comm,
+                b"test_nonce",
+            );
+        builder_wrong.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
+        assert!(builder_wrong.pre_finalize_checks().is_err());
+
+        // With the correct counter (6) the check must pass.
+        let correct_updated = account.get_state_for_send(amount).unwrap();
+        let correct_comm = correct_updated.commit(account_comm_key.clone()).unwrap();
+        let mut builder_ok =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                PallasFr::rand(&mut rng),
+                PallasFr::rand(&mut rng),
+                account,
+                correct_updated,
+                correct_comm,
+                b"test_nonce",
+            );
+        builder_ok.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
+        assert!(builder_ok.pre_finalize_checks().is_ok());
+    }
+
+    #[test]
+    fn verifier_wrong_add_method_fails() {
+        // Building a proof with add_send_affirmation and then verifying with
+        // add_receive_affirmation (wrong method) must fail.
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"testing");
+        let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+
+        let asset_id = 1;
+        let amount = 100u64;
+        let nonce = b"test_nonce";
+        let (_, leg_enc, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+        account.balance = 200;
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let updated_account = account.get_state_for_send(amount).unwrap();
+        let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        let mut builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_s.0,
+                sk_s_e.0,
+                account,
+                updated_account,
+                updated_comm,
+                nonce,
+            );
+        builder.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
+
+        let (proof, nullifier) = builder
+            .finalize::<_, PallasParams, VestaParams>(
+                &mut rng,
+                path,
+                &root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        // Correct verifier: add_send_affirmation must succeed.
+        let mut correct_verifier = AccountStateTransitionProofVerifier::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::init(updated_comm, nullifier, nonce);
+        correct_verifier.add_send_affirmation(leg_enc.core_and_eph_keys_for_sender());
+        assert!(
+            correct_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &proof,
+                    &root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_ok()
+        );
+
+        // Wrong verifier: add_receive_affirmation on a sender proof must fail.
+        let mut wrong_verifier = AccountStateTransitionProofVerifier::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::init(updated_comm, nullifier, nonce);
+        wrong_verifier.add_receive_affirmation(leg_enc.core_and_eph_keys_for_receiver());
+        assert!(
+            wrong_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &proof,
+                    &root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_missing_balance_proof_for_one_leg() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"testing");
+        let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+
+        let asset_id = 1;
+        let amount_1 = 80;
+        let amount_2 = 50;
+        let nonce = b"test_nonce";
+
+        let (_, leg_enc_1, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount_1,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        let (_, leg_enc_2, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount_2,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+        account.balance = 500;
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let mut account_builder = AccountStateBuilder::init(account.clone());
+        account_builder.update_for_send(amount_1).unwrap();
+        account_builder.update_for_send(amount_2).unwrap();
+        let updated_account = account_builder.finalize();
+        let updated_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        let mut builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                sk_s.0,
+                sk_s_e.0,
+                account,
+                updated_account,
+                updated_comm,
+                nonce,
+            );
+        builder.add_send_affirmation(amount_1, leg_enc_1.core_and_eph_keys_for_sender());
+        builder.add_send_affirmation(amount_2, leg_enc_2.core_and_eph_keys_for_sender());
+
+        let (proof, nullifier) = builder
+            .finalize::<_, PallasParams, VestaParams>(
+                &mut rng,
+                path,
+                &root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut tampered_proof = proof.clone();
+        let balance_proof = tampered_proof.balance_proof.as_mut().unwrap();
+        assert_eq!(balance_proof.resp_leg_amount.len(), 2);
+        balance_proof.resp_leg_amount.pop();
+        assert_eq!(balance_proof.resp_leg_amount.len(), 1);
+
+        let mut verifier = AccountStateTransitionProofVerifier::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::init(updated_comm, nullifier, nonce);
+        verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
+        verifier.add_send_affirmation(leg_enc_2.core_and_eph_keys_for_sender());
+
+        assert!(
+            verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &tampered_proof,
+                    &root,
+                    &account_tree_params,
+                    account_comm_key,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
         );
     }
 }

@@ -364,6 +364,10 @@ pub struct AccountState<G: AffineRepr> {
 
 // TODO: Add an account state batch abstraction that prevents manual update of field done in tests
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<G> AccountState<G>
 where
     G: AffineRepr,
@@ -426,71 +430,62 @@ where
         })
     }
 
-    pub fn commit(
-        &self,
-        account_comm_key: impl AccountCommitmentKeyTrait<G>,
-    ) -> Result<AccountStateCommitment<G>> {
-        let comm = G::Group::msm(
-            &account_comm_key.as_gens_without_sk()[..],
-            &[
-                G::ScalarField::from(self.balance),
-                G::ScalarField::from(self.counter),
-                G::ScalarField::from(self.asset_id),
-                self.rho,
-                self.current_rho,
-                self.randomness,
-                self.current_randomness,
-                self.id,
-            ],
-        )
-        .map_err(Error::size_mismatch)?
-            + self.pk_aff
-            + self.pk_enc;
-        Ok(AccountStateCommitment(comm.into_affine()))
-    }
-
+    #[inline]
     pub fn asset_id(&self) -> AssetId {
         self.asset_id
     }
 
+    #[inline]
     pub fn balance(&self) -> Balance {
         self.balance
     }
 
+    #[inline]
     pub fn counter(&self) -> PendingTxnCounter {
         self.counter
     }
 
+    #[inline]
     pub fn pk_aff(&self) -> G {
         self.pk_aff
     }
 
+    #[inline]
     pub fn pk_enc(&self) -> G {
         self.pk_enc
     }
 
+    #[inline]
     pub fn rho(&self) -> G::ScalarField {
         self.rho
     }
 
+    #[inline]
     pub fn current_rho(&self) -> G::ScalarField {
         self.current_rho
     }
 
+    #[inline]
     pub fn randomness(&self) -> G::ScalarField {
         self.randomness
     }
 
+    #[inline]
     pub fn current_randomness(&self) -> G::ScalarField {
         self.current_randomness
     }
 
+    #[inline]
     pub fn id(&self) -> G::ScalarField {
         self.id
     }
 
-    pub fn nullifier(&self, comm_key: &impl AccountCommitmentKeyTrait<G>) -> G {
-        (comm_key.current_rho_gen() * self.current_rho).into()
+    pub fn initial_nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
+        (comm_key.current_rho_gen() * self.rho()).into()
+    }
+
+    pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
+        (comm_key.current_rho_gen() * self.current_rho()).into()
     }
 
     /// Set rho and commitment randomness to new values. Used as each update to the account state
@@ -627,5 +622,204 @@ where
     }
 }
 
+impl<G> AccountState<G>
+where
+    G: AffineRepr,
+{
+    pub fn commit(
+        &self,
+        account_comm_key: impl AccountCommitmentKeyTrait<G>,
+    ) -> Result<AccountStateCommitment<G>> {
+        let comm = G::Group::msm(
+            &account_comm_key.as_gens_without_sk()[..],
+            &[
+                G::ScalarField::from(self.balance),
+                G::ScalarField::from(self.counter),
+                G::ScalarField::from(self.asset_id),
+                self.rho,
+                self.current_rho,
+                self.randomness,
+                self.current_randomness,
+                self.id,
+            ],
+        )
+        .map_err(Error::size_mismatch)?
+            + self.pk_aff
+            + self.pk_enc;
+        Ok(AccountStateCommitment(comm.into_affine()))
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_ff::Field;
+    use ark_pallas::{Affine as PallasA, Fr as PallasFr};
+    use ark_std::UniformRand;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+
+    const TXN_KINDS: [u8; 7] = [0, 1, 2, 3, 4, 5, 6];
+
+    fn test_account_state(balance: Balance, counter: PendingTxnCounter) -> AccountState<PallasA> {
+        let mut rng = rand::thread_rng();
+        let rho = PallasFr::rand(&mut rng);
+        let randomness = PallasFr::rand(&mut rng);
+
+        AccountState {
+            pk_aff: PallasA::rand(&mut rng),
+            pk_enc: PallasA::rand(&mut rng),
+            id: PallasFr::rand(&mut rng),
+            balance,
+            counter,
+            asset_id: 1,
+            rho,
+            current_rho: rho.square(),
+            randomness,
+            current_randomness: randomness.square(),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_account_state_transaction_type_matrix(
+            balance in 10..1000 as Balance,
+            amount in 10..1000 as Balance,
+            counter in 0..100 as PendingTxnCounter,
+            txn_kind in select(TXN_KINDS.to_vec()),
+        ) {
+            prop_assume!(amount <= balance);
+            let state = test_account_state(balance, counter);
+
+            match txn_kind {
+                0 => {
+                    let s = state.get_state_for_send(amount).unwrap();
+                    assert_eq!(s.balance(), balance - amount);
+                    assert_eq!(s.counter(), counter + 1);
+                }
+                1 => {
+                    let s = state.get_state_for_receive();
+                    assert_eq!(s.balance(), balance);
+                    assert_eq!(s.counter(), counter + 1);
+                }
+                2 => {
+                    if counter == 0 {
+                        assert!(state.get_state_for_claiming_received(amount).is_err());
+                    } else {
+                        let s = state.get_state_for_claiming_received(amount).unwrap();
+                        assert_eq!(s.balance(), balance + amount);
+                        assert_eq!(s.counter(), counter - 1);
+                    }
+                }
+                3 => {
+                    if state.counter < counter {
+                        assert!(state.get_state_for_decreasing_counter(Some(counter)).is_err());
+                    } else {
+                        let s = state.get_state_for_decreasing_counter(Some(counter)).unwrap();
+                        assert_eq!(s.balance(), balance);
+                        assert_eq!(s.counter(), state.counter - counter);
+                    }
+                }
+                4 => {
+                    if counter == 0 {
+                        assert!(state.get_state_for_reversing_send(amount).is_err());
+                    } else {
+                        let s = state.get_state_for_reversing_send(amount).unwrap();
+                        assert_eq!(s.balance(), balance + amount);
+                        assert_eq!(s.counter(), counter - 1);
+                    }
+                }
+                5 => {
+                    let s = state.get_state_for_irreversible_send(amount).unwrap();
+                    assert_eq!(s.balance(), balance - amount);
+                    assert_eq!(s.counter(), counter);
+                }
+                6 => {
+                    let s = state.get_state_for_irreversible_receive(amount).unwrap();
+                    assert_eq!(s.balance(), balance + amount);
+                    assert_eq!(s.counter(), counter);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        #[test]
+        fn prop_account_state_builder_transaction_type_matrix(
+            balance in 10..1000 as Balance,
+            amount in 10..1000 as Balance,
+            counter in 0..100 as PendingTxnCounter,
+            txn_kind in select(TXN_KINDS.to_vec())
+        ) {
+            prop_assume!(amount <= balance);
+            let state = test_account_state(balance, counter);
+
+            match txn_kind {
+                0 => {
+                    let mut b = AccountStateBuilder::init(state);
+                    b.update_for_send(amount).unwrap();
+                    let s = b.finalize();
+                    assert_eq!(s.balance(), balance - amount);
+                    assert_eq!(s.counter(), counter + 1);
+                }
+                1 => {
+                    let mut b = AccountStateBuilder::init(state);
+                    b.update_for_receive();
+                    let s = b.finalize();
+                    assert_eq!(s.balance(), balance);
+                    assert_eq!(s.counter(), counter + 1);
+                }
+                2 => {
+                    let mut b = AccountStateBuilder::init(state.clone());
+                    if counter == 0 {
+                        assert!(b.update_for_claiming_received(amount).is_err());
+                    } else {
+                        b.update_for_claiming_received(amount).unwrap();
+                        let s = b.finalize();
+                        assert_eq!(s.balance(), balance + amount);
+                        assert_eq!(s.counter(), counter - 1);
+                    }
+                }
+                3 => {
+                    let mut b = AccountStateBuilder::init(state.clone());
+                    if state.counter < counter {
+                        assert!(b.update_for_decreasing_counter(Some(counter)).is_err());
+                    } else {
+                        b.update_for_decreasing_counter(Some(counter)).unwrap();
+                        let s = b.finalize();
+                        assert_eq!(s.balance(), balance);
+                        assert_eq!(s.counter(), state.counter - counter);
+                    }
+                }
+                4 => {
+                    let mut b = AccountStateBuilder::init(state.clone());
+                    if counter == 0 {
+                        assert!(b.update_for_reversing_send(amount).is_err());
+                    } else {
+                        b.update_for_reversing_send(amount).unwrap();
+                        let s = b.finalize();
+                        assert_eq!(s.balance(), balance + amount);
+                        assert_eq!(s.counter(), counter - 1);
+                    }
+                }
+                5 => {
+                    let mut b = AccountStateBuilder::init(state);
+                    b.update_for_irreversible_send(amount).unwrap();
+                    let s = b.finalize();
+                    assert_eq!(s.balance(), balance - amount);
+                    assert_eq!(s.counter(), counter);
+                }
+                6 => {
+                    let mut b = AccountStateBuilder::init(state);
+                    b.update_for_irreversible_receive(amount).unwrap();
+                    let s = b.finalize();
+                    assert_eq!(s.balance(), balance + amount);
+                    assert_eq!(s.counter(), counter);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}

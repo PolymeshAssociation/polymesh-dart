@@ -125,7 +125,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             ],
         );
         let t_null =
-            PokDiscreteLogProtocol::init(account.current_rho, current_rho_blinding, &null_gen);
+            PokDiscreteLogProtocol::init(account.current_rho(), current_rho_blinding, &null_gen);
 
         let t_pk = PokDiscreteLogProtocol::init(sk_aff.clone(), G::ScalarField::rand(rng), &pk_gen);
 
@@ -141,10 +141,10 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 
         let resp_acc = t_acc.response(
             &[
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
+                account.rho(),
+                account.current_rho(),
+                account.randomness(),
+                account.current_randomness(),
             ],
             &challenge,
         )?;
@@ -437,7 +437,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             ],
         );
         let t_null = PokDiscreteLogProtocol::init(
-            account.current_rho,
+            account.current_rho(),
             current_rho_blinding,
             &account_comm_key.current_rho_gen(),
         );
@@ -542,7 +542,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             &mut transcript,
         )?;
 
-        let minus_h_at = enc_gen.into_group().neg() * G::ScalarField::from(account.asset_id);
+        let minus_h_at = enc_gen.into_group().neg() * G::ScalarField::from(account.asset_id());
         let pk_enc_proj = pk_enc.into_group();
 
         for i in 0..num_pending_txns {
@@ -584,10 +584,10 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         let resp_acc = t_acc.response(
             &[
-                account.rho,
-                account.current_rho,
-                account.randomness,
-                account.current_randomness,
+                account.rho(),
+                account.current_rho(),
+                account.randomness(),
+                account.current_randomness(),
             ],
             &challenge,
         )?;

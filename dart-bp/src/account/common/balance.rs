@@ -120,8 +120,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
             rng,
-            account.balance,
-            updated_account.balance,
+            account.balance(),
+            updated_account.balance(),
             amounts.clone(),
             has_balance_decreased,
             &mut even_prover,
@@ -155,8 +155,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         Ok(Self {
             amount: amounts,
-            old_balance: account.balance,
-            new_balance: updated_account.balance,
+            old_balance: account.balance(),
+            new_balance: updated_account.balance(),
             comm_bp_bal_blinding,
             comm_bp_bal,
             t_comm_bp_bal,
@@ -198,13 +198,13 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
         if has_balance_decreased {
-            if new_state.balance != old_state.balance - amount {
+            if new_state.balance() != old_state.balance() - amount {
                 return Err(Error::ProofGenerationError(
                     "Balance decrease incorrect".to_string(),
                 ));
             }
         } else {
-            if new_state.balance != old_state.balance + amount {
+            if new_state.balance() != old_state.balance() + amount {
                 return Err(Error::ProofGenerationError(
                     "Balance increase incorrect".to_string(),
                 ));

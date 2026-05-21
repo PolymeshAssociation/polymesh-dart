@@ -67,7 +67,7 @@ impl FeeAccountState {
             rho: self.rho.decode()?,
             randomness: self.randomness.decode()?,
         };
-        let commitment = state.commit(dart_gens().account_comm_key())?;
+        let commitment = state.commit(&dart_gens().account_comm_key())?;
         Ok((state, commitment))
     }
 
@@ -257,7 +257,7 @@ impl FeeAccountAssetState {
 
         // Update the state.
         let new_state = update(&current_state)?;
-        let new_commitment = new_state.commit(dart_gens().account_comm_key())?;
+        let new_commitment = new_state.commit(&dart_gens().account_comm_key())?;
 
         // Set the pending state.
         self.pending_state = Some(new_state.clone().try_into()?);
