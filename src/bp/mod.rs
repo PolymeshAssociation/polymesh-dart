@@ -201,6 +201,15 @@ lazy_static::lazy_static! {
 pub fn set_dart_gens(_gens: DartBPGenerators) {}
 
 #[cfg(feature = "std")]
+pub fn reset_dart_gens() {}
+
+#[cfg(feature = "std")]
+pub fn loaded_dart_gens() -> bool {
+    // We can't check if the lazy_static generators have been loaded yet without causing the to be loaded, so we just return
+    true
+}
+
+#[cfg(feature = "std")]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
@@ -218,6 +227,20 @@ pub fn set_dart_gens(gens: DartBPGenerators) {
 
 #[cfg(not(feature = "std"))]
 #[allow(static_mut_refs)]
+pub fn reset_dart_gens() {
+    unsafe {
+        DART_GENS = None;
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn loaded_dart_gens() -> bool {
+    unsafe { DART_GENS.is_some() }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
 pub fn dart_gens() -> &'static DartBPGenerators {
     unsafe {
         if DART_GENS.is_none() {
@@ -229,6 +252,9 @@ pub fn dart_gens() -> &'static DartBPGenerators {
 
 #[cfg(feature = "std")]
 pub fn set_poseidon_params(_params: PoseidonParameters) {}
+
+#[cfg(feature = "std")]
+pub fn reset_poseidon_params() {}
 
 #[cfg(feature = "std")]
 pub fn poseidon_params() -> &'static PoseidonParameters {
@@ -243,6 +269,14 @@ static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 pub fn set_poseidon_params(params: PoseidonParameters) {
     unsafe {
         POSEIDON_PARAMS = Some(params);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn reset_poseidon_params() {
+    unsafe {
+        POSEIDON_PARAMS = None;
     }
 }
 
