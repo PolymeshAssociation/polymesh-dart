@@ -808,7 +808,6 @@ impl<
 > MintTxnProof<L, F0, F1, G0, G1>
 {
     /// `issuer_pk` has the same secret key as the one in `account`
-    // TODO: Since AccountState now has issuer_aff_sk and issuer_aff_sk, dont pass them as args. There are few more places that needs this fixing
     pub fn new<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,

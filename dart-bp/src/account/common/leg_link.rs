@@ -4,7 +4,7 @@ use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialPokPedersenCommitment};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// For proving the leg-account linking relation:
 /// There are 3 cases depending on whether the asset-id is revealed in this leg or elsewhere:
@@ -40,7 +40,7 @@ pub enum LegAccountLink<G0: SWCurveConfig> {
     },
 }
 
-#[derive(Clone, Debug, Zeroize)]
+#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub enum LegAccountLinkProtocol<G0: SWCurveConfig> {
     AssetIdHidden {
         t_participant: PokPedersenCommitmentProtocol<Affine<G0>>,
@@ -78,37 +78,25 @@ impl<G0: SWCurveConfig> LegAccountLinkProtocol<G0> {
         }
     }
 
-    pub fn gen_proof(self) -> LegAccountLink<G0> {
-        // zeroize doesn't affect public fields and that's all which is needed here
-        match self {
+    pub fn gen_proof(&self) -> LegAccountLink<G0> {
+        match &self {
             Self::AssetIdHidden {
-                mut t_participant,
-                mut t_asset_id,
-            } => {
-                t_participant.zeroize();
-                t_asset_id.zeroize();
-                LegAccountLink::AssetIdHidden {
-                    resp_participant: t_participant.gen_partial_proof(),
-                    resp_asset_id: t_asset_id.gen_partial_proof(),
-                }
-            }
-            Self::AssetIdRevealed { mut t_participant } => {
-                t_participant.zeroize();
-                LegAccountLink::AssetIdRevealed {
-                    resp_participant: t_participant.gen_partial_proof(),
-                }
-            }
+                t_participant,
+                t_asset_id,
+            } => LegAccountLink::AssetIdHidden {
+                resp_participant: t_participant.clone().gen_partial_proof(),
+                resp_asset_id: t_asset_id.clone().gen_partial_proof(),
+            },
+            Self::AssetIdRevealed { t_participant } => LegAccountLink::AssetIdRevealed {
+                resp_participant: t_participant.clone().gen_partial_proof(),
+            },
             Self::AssetIdRevealedElsewhere {
-                mut t_participant,
-                mut t_asset_id,
-            } => {
-                t_participant.zeroize();
-                t_asset_id.zeroize();
-                LegAccountLink::AssetIdRevealedElsewhere {
-                    resp_participant: t_participant.gen_partial_proof(),
-                    resp_asset_id: t_asset_id.gen_partial_proof(),
-                }
-            }
+                t_participant,
+                t_asset_id,
+            } => LegAccountLink::AssetIdRevealedElsewhere {
+                resp_participant: t_participant.clone().gen_partial_proof(),
+                resp_asset_id: t_asset_id.clone().gen_partial_proof(),
+            },
         }
     }
 }

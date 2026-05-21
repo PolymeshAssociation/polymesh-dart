@@ -129,8 +129,6 @@ pub struct CommonStateChangeProver<
     pub t_acc_old: SchnorrCommitment<Affine<G0>>,
     pub t_acc_new: SchnorrCommitment<Affine<G0>>,
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
-    // This zeroizes itself
-    #[zeroize(skip)]
     pub t_leg_link: Vec<LegAccountLinkProtocol<G0>>,
     #[zeroize(skip)]
     pub comm_bp_randomness_relations: Affine<G0>,
