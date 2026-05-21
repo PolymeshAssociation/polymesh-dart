@@ -116,13 +116,13 @@ impl<
         ))
     }
 
-    pub fn finish<R: RngCore + CryptoRng>(
+    pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
         device_response: &TwoSksDeviceResponse,
         root_block: BlockNumber,
         tree_params: &CurveTreeParameters<C>,
-    ) -> Result<AssetMintingProof<C>, Error> {
+    ) -> Result<AssetMintingProof<T, C>, Error> {
         let auth_proof = device_response.0.decode()?;
 
         let challenge_h_final =
@@ -156,7 +156,7 @@ impl<
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment: self.updated_commitment,
             nullifier: AccountStateNullifier::from_affine(self.nullifier)?,
-            inner: WrappedCanonical::wrap(&bp_proof)?,
+            inner: BoundedCanonical::wrap(&bp_proof)?,
         })
     }
 }

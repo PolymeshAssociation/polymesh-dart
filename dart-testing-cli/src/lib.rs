@@ -450,6 +450,7 @@ impl DartTestingDb {
             "CREATE TABLE IF NOT EXISTS asset_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 block_number INTEGER NOT NULL,
+                height INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],
@@ -460,6 +461,7 @@ impl DartTestingDb {
             "CREATE TABLE IF NOT EXISTS account_root_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 block_number INTEGER NOT NULL,
+                height INTEGER NOT NULL,
                 root_data BLOB NOT NULL
             )",
             [],
@@ -860,8 +862,14 @@ impl DartTestingDb {
             (proof, asset_state)
         } else {
             // Create registration proof and initial state.
-            let (proof, asset_state) =
-                AccountAssetRegistrationProof::new(rng, &account_keys, asset_id, 0, &did, params)?;
+            let (proof, asset_state) = AccountAssetRegistrationProof::<()>::new(
+                rng,
+                &account_keys,
+                asset_id,
+                0,
+                &did,
+                params,
+            )?;
 
             // Update the account state with the pending state change.
             self.update_account_asset_state(&account_info, &asset_state)?;
@@ -941,7 +949,7 @@ impl DartTestingDb {
         } else {
             let account_keys = account_info.account_keys()?;
             // Create minting proof
-            let proof = AssetMintingProof::new(
+            let proof = AssetMintingProof::<()>::new(
                 rng,
                 &account_keys,
                 &did,
@@ -1076,7 +1084,10 @@ impl DartTestingDb {
                 receiver: receiver_keys,
                 asset: asset_state,
                 amount,
-                config: LegConfig::default(),
+                config: LegConfig {
+                    reveal_asset_id: true,
+                    ..Default::default()
+                },
                 public_enc_keys: vec![],
             });
         }
@@ -1098,22 +1109,13 @@ impl DartTestingDb {
         settlement: SettlementProof<()>,
     ) -> Result<SettlementId> {
         let mut asset_lookup = AssetKeysLookup::new();
-        for leg_proof in settlement.legs.iter() {
-            if let AnySettlementLegProof::RevealedAssetId(_) = leg_proof {
-                let leg_enc = leg_proof
-                    .leg_enc()
-                    .decode()
-                    .map_err(|e| anyhow!("{:?}", e))?;
-                if let polymesh_dart_bp::leg::AssetIdEncryption::Revealed(asset_id) =
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_asset_id
-                {
-                    if !asset_lookup.contains_key(&asset_id) {
-                        let asset_info = self.get_asset_by_id(asset_id)?;
-                        let mediators = asset_info.mediators()?;
-                        let auditors = asset_info.auditors()?;
-                        asset_lookup.add(AssetState::new::<()>(asset_id, &mediators, &auditors)?);
-                    }
-                }
+        let revealed_assets = settlement.revealed_asset_ids();
+        for asset_id in revealed_assets {
+            if !asset_lookup.contains_key(&asset_id) {
+                let asset_info = self.get_asset_by_id(asset_id)?;
+                let mediators = asset_info.mediators()?;
+                let auditors = asset_info.auditors()?;
+                asset_lookup.add(AssetState::new::<()>(asset_id, &mediators, &auditors)?);
             }
         }
 
@@ -1199,7 +1201,7 @@ impl DartTestingDb {
                 }
 
                 // Generate sender affirmation proof
-                Ok(SenderAffirmationProof::new(
+                Ok(SenderAffirmationProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
@@ -1261,7 +1263,7 @@ impl DartTestingDb {
             proof_action,
             |account_keys, leg_ref, leg_enc, _leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
-                Ok(SenderCounterUpdateProof::new(
+                Ok(SenderCounterUpdateProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
@@ -1322,7 +1324,7 @@ impl DartTestingDb {
             |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 let amount = leg.amount();
                 // Create sender reversal proof
-                Ok(SenderReversalProof::new(
+                Ok(SenderRevertAffirmationProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
@@ -1392,7 +1394,7 @@ impl DartTestingDb {
                 }
 
                 // Create receiver affirmation proof
-                Ok(ReceiverAffirmationProof::new(
+                Ok(ReceiverAffirmationProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
@@ -1463,7 +1465,7 @@ impl DartTestingDb {
             let _leg = encrypted_leg.decrypt(LegRole::mediator(0), &account_keys)?;
 
             // Create mediator affirmation proof
-            MediatorAffirmationProof::new(rng, &leg_ref, &med_enc, &account_keys, 0, accept)?
+            MediatorAffirmationProof::<()>::new(rng, &leg_ref, &med_enc, &account_keys, 0, accept)?
         };
 
         // If proof action is to generate only, save proof and return
@@ -1527,7 +1529,7 @@ impl DartTestingDb {
             proof_action,
             |account_keys, leg_ref, leg_enc, leg, asset_state, account_tree, rng| {
                 // Create receiver claim proof
-                Ok(ReceiverClaimProof::new(
+                Ok(ReceiverClaimProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,

@@ -271,7 +271,7 @@ enum Commands {
     },
 
     /// Reverse sender affirmation for rejected settlement
-    SenderReversal {
+    SenderRevertAffirmation {
         /// Signer and account in format signer-account (account optional, will find by asset_id)
         #[arg(short, long)]
         signer_account: String,
@@ -652,7 +652,7 @@ fn main() -> Result<()> {
             );
         }
 
-        Commands::SenderReversal {
+        Commands::SenderRevertAffirmation {
             signer_account,
             settlement_id,
             leg_index,

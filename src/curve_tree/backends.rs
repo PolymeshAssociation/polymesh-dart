@@ -197,7 +197,7 @@ pub trait CurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConfig>: 
         block_number: Option<BlockNumber>,
     ) -> Result<CompressedCurveTreeRoot<L, M, C>, Self::Error>;
 
-    fn height(&self) -> NodeLevel;
+    fn height(&self, block_number: Option<BlockNumber>) -> Result<NodeLevel, Self::Error>;
 
     fn set_height(&mut self, _height: NodeLevel) -> Result<(), Self::Error> {
         Err(Error::CurveTreeBackendReadOnly.into())
@@ -302,7 +302,10 @@ pub trait AsyncCurveTreeBackend<const L: usize, const M: usize, C: CurveTreeConf
         block_number: Option<BlockNumber>,
     ) -> impl Future<Output = Result<CompressedCurveTreeRoot<L, M, C>, Self::Error>> + Send;
 
-    fn height(&self) -> impl Future<Output = NodeLevel> + Send;
+    fn height(
+        &self,
+        block_number: Option<BlockNumber>,
+    ) -> impl Future<Output = Result<NodeLevel, Self::Error>> + Send;
 
     fn set_height(
         &mut self,
@@ -473,8 +476,8 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeBackend<L, M, 
             .ok_or(Error::CurveTreeRootNotFound)
     }
 
-    fn height(&self) -> NodeLevel {
-        self.height
+    fn height(&self, _block_number: Option<BlockNumber>) -> Result<NodeLevel, Self::Error> {
+        Ok(self.height)
     }
 
     fn set_height(&mut self, height: NodeLevel) -> Result<(), Error> {
@@ -588,8 +591,8 @@ where
         CurveTreeBackend::fetch_root(self, block_number)
     }
 
-    async fn height(&self) -> NodeLevel {
-        CurveTreeBackend::height(self)
+    async fn height(&self, block_number: Option<BlockNumber>) -> Result<NodeLevel, Self::Error> {
+        CurveTreeBackend::height(self, block_number)
     }
 
     async fn set_height(&mut self, height: NodeLevel) -> Result<(), Error> {

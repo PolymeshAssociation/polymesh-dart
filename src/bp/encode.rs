@@ -1,3 +1,4 @@
+use bounded_collections::{BoundedVec, Get};
 use codec::{
     Decode, DecodeWithMemTracking, Encode, EncodeAsRef, EncodeLike, Error as CodecError, Input,
     MaxEncodedLen, Output,
@@ -380,7 +381,10 @@ impl TypeInfo for AccountCommitmentKey {
                     .field(|f| f.name("asset_id_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("rho_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("current_rho_gen").ty::<CompressedAffine>())
-                    .field(|f| f.name("randomness_gen").ty::<CompressedAffine>()),
+                    .field(|f| f.name("randomness_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("current_randomness_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("identity_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("sk_gen").ty::<CompressedAffine>()),
             )
     }
 }
@@ -487,6 +491,107 @@ impl<T: CanonicalDeserialize> Decode for WrappedCanonical<T> {
     fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
         Ok(Self {
             wrapped: <Vec<u8>>::decode(input)?,
+            _marker: core::marker::PhantomData,
+        })
+    }
+}
+
+/// A bounded wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(bound = ""))]
+pub struct BoundedCanonical<T, S: Get<u32>> {
+    #[cfg_attr(feature = "serde", serde(with = "human_hex"))]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary))]
+    wrapped: BoundedVec<u8, S>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    _marker: core::marker::PhantomData<T>,
+}
+
+impl<T, S: Get<u32>> PartialEq for BoundedCanonical<T, S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.wrapped.as_slice() == other.wrapped.as_slice()
+    }
+}
+
+impl<T, S: Get<u32>> Eq for BoundedCanonical<T, S> {}
+
+impl<T, S: Get<u32>> core::fmt::Debug for BoundedCanonical<T, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let len = self.wrapped.len().min(32);
+        write!(
+            f,
+            "BoundedCanonical<{}>({})",
+            core::any::type_name::<T>(),
+            hex::encode(&self.wrapped[..len])
+        )
+    }
+}
+
+impl<T: Clone + CanonicalSerialize + CanonicalDeserialize, S: Get<u32>> BoundedCanonical<T, S> {
+    /// Wraps a `T` value into a `BoundedCanonical` by serializing it into a compressed byte vector.
+    pub fn wrap(value: &T) -> Result<Self, Error> {
+        let mut buf = Vec::with_capacity(value.compressed_size());
+        value.serialize_compressed(&mut buf)?;
+        Ok(Self {
+            wrapped: buf.try_into().map_err(|_| Error::ValueExceedsBound)?,
+            _marker: core::marker::PhantomData,
+        })
+    }
+
+    /// Decodes the wrapped value back into its original type `T`.
+    pub fn decode(&self) -> Result<T, Error> {
+        Ok(T::deserialize_compressed(self.wrapped.as_slice())?)
+    }
+}
+
+impl<T: 'static, S: Get<u32> + 'static> TypeInfo for BoundedCanonical<T, S> {
+    type Identity = Self;
+
+    fn type_info() -> Type {
+        use core::any::type_name;
+
+        let mut ty_name = type_name::<T>();
+        // Strip any generic parameters if they exist.
+        if let Some(pos) = ty_name.find('<') {
+            ty_name = &ty_name[..pos];
+        }
+        // Strip the module path if it exists.
+        let (module_path, ident) = if let Some(pos) = ty_name.rfind("::") {
+            let module_path = &ty_name[..pos];
+            let ident = &ty_name[pos + 2..];
+            (module_path, ident)
+        } else {
+            ("", ty_name)
+        };
+
+        Type::builder()
+            .path(Path::new(ident, module_path))
+            .composite(Fields::unnamed().field(|f| f.ty::<BoundedVec<u8, S>>()))
+    }
+}
+
+impl<T: CanonicalSerialize, S: Get<u32>> EncodeLike for BoundedCanonical<T, S> {}
+
+impl<T: CanonicalSerialize, S: Get<u32>> Encode for BoundedCanonical<T, S> {
+    #[inline]
+    fn size_hint(&self) -> usize {
+        self.wrapped.size_hint()
+    }
+
+    fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
+        self.wrapped.encode_to(dest);
+    }
+}
+
+impl<T: CanonicalDeserialize, S: Get<u32>> codec::DecodeWithMemTracking for BoundedCanonical<T, S> {}
+
+impl<T: CanonicalDeserialize, S: Get<u32>> Decode for BoundedCanonical<T, S> {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        Ok(Self {
+            wrapped: BoundedVec::<u8, S>::decode(input)?,
             _marker: core::marker::PhantomData,
         })
     }

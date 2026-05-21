@@ -509,7 +509,7 @@ impl DartUserAccountInner {
         Ok(())
     }
 
-    pub fn sender_revert<R: RngCore + CryptoRng>(
+    pub fn sender_revert_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -530,7 +530,7 @@ impl DartUserAccountInner {
 
         // Create the sender reversal proof.
         log::info!("Sender generate reversal proof");
-        let proof = SenderReversalProof::new(
+        let proof = SenderRevertAffirmationProof::new(
             rng,
             &self.keys,
             leg_ref,
@@ -540,7 +540,7 @@ impl DartUserAccountInner {
             account_tree,
         )?;
         log::info!("Sender reverses");
-        chain.sender_revert(&self.address, proof)?;
+        chain.sender_revert_affirmation(&self.address, proof)?;
         asset_state.commit_pending_state()?;
         Ok(())
     }
@@ -770,7 +770,7 @@ impl DartUserAccount {
             .sender_counter_update(rng, chain, account_tree, leg_ref)
     }
 
-    pub fn sender_revert<R: RngCore + CryptoRng>(
+    pub fn sender_revert_affirmation<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         chain: &mut DartChainState,
@@ -780,7 +780,7 @@ impl DartUserAccount {
         self.0
             .write()
             .unwrap()
-            .sender_revert(rng, chain, account_tree, leg_ref)
+            .sender_revert_affirmation(rng, chain, account_tree, leg_ref)
     }
 }
 
@@ -969,6 +969,9 @@ impl DartSettlementLeg {
         (pending_affirms, pending_finals)
     }
 
+    /// Reject the leg.  This can be done by any party before the settlement is finalized.  Once rejected, the leg cannot be affirmed anymore, and the settlement will be rejected.
+    /// If the leg is already affirmed by some parties, they will be allowed to revert their affirmation to claim back their assets and/or update their counters, but they cannot affirm again.
+    /// The status of pending parties will be updated to finalized, since they cannot affirm or reject anymore.
     pub fn reject(&mut self) -> Result<()> {
         // If the leg is already finalized, we cannot reject it.
         if self.status == AffirmationStatus::Finalized {
@@ -994,12 +997,14 @@ impl DartSettlementLeg {
     /// When a settlement is rejected or affirmed (all legs are affirmed), then we can finalize the mediators.
     pub fn finalize_mediators(&mut self) {
         // Mark the mediator as finalized if it exists.  Since they cannot affirm or reject anymore.
-        for (_, mediator) in &mut self.mediators {
-            *mediator = AffirmationStatus::Finalized;
+        for (_, mediator_status) in &mut self.mediators {
+            *mediator_status = AffirmationStatus::Finalized;
         }
     }
 
     /// Verify a sender affirmation proof for this leg.
+    ///
+    /// The sender is only allowed to submit this proof if they have not affirmed and the settlement is still pending.
     pub fn sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderAffirmationProof,
@@ -1022,6 +1027,8 @@ impl DartSettlementLeg {
     }
 
     /// Verify a receiver affirmation proof for this leg.
+    ///
+    /// The receiver is only allowed to submit this proof if they have not affirmed and the settlement is still pending.
     pub fn receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverAffirmationProof,
@@ -1044,6 +1051,8 @@ impl DartSettlementLeg {
     }
 
     /// Verify an instant sender affirmation proof for this leg.
+    ///
+    /// The sender is only allowed to submit this proof as part of an instant settlement transaction.
     pub fn instant_sender_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &InstantSenderAffirmationProof,
@@ -1065,6 +1074,8 @@ impl DartSettlementLeg {
     }
 
     /// Verify an instant receiver affirmation proof for this leg.
+    ///
+    /// The receiver is only allowed to submit this proof as part of an instant settlement transaction or a settlement with only waiting for receiver affirmation.
     pub fn instant_receiver_affirmation<R: RngCore + CryptoRng>(
         &mut self,
         proof: &InstantReceiverAffirmationProof,
@@ -1086,18 +1097,31 @@ impl DartSettlementLeg {
     }
 
     /// Verify a mediator affirmation proof for this leg.
+    ///
+    /// The mediator is only allowed to submit this proof if the settlement has not been executed or rejected yet.
+    ///
+    /// Once the settlement is executed or rejected, the mediators are finalized and cannot affirm or reject anymore.
     pub fn mediator_affirmation(&mut self, proof: &MediatorAffirmationProof) -> Result<()> {
         if self.mediators.is_empty() {
             return Err(anyhow!("Leg does not require a mediator affirmation"));
         }
         let mediator_id = proof.key_index;
-        let mediator = self
+        let mediator_status = self
             .mediators
             .get_mut(&mediator_id)
             .ok_or_else(|| anyhow!("Invalid mediator key index for this leg"))?;
-        if *mediator != AffirmationStatus::Pending {
-            return Err(anyhow!("Mediator has already affirmed this leg"));
-        }
+        let new_status = match (proof.accept, *mediator_status) {
+            (true, AffirmationStatus::Pending) => AffirmationStatus::Affirmed,
+            (false, AffirmationStatus::Pending) => AffirmationStatus::Rejected,
+            (false, AffirmationStatus::Affirmed) => {
+                // We allow a mediator to reject after affirming, but not affirm after rejecting.
+                AffirmationStatus::Rejected
+            }
+            _ => {
+                return Err(anyhow!("Mediator has already affirmed this leg"));
+            }
+        };
+
         // verify the proof.
         let med_enc = self
             .enc
@@ -1108,18 +1132,17 @@ impl DartSettlementLeg {
             .context("Invalid mediator affirmation proof")?;
 
         // Update the leg's mediator status based on the proof.
-        if proof.accept {
-            *mediator = AffirmationStatus::Affirmed;
-        } else {
-            *mediator = AffirmationStatus::Rejected;
-        }
+        *mediator_status = new_status;
+
         self.update_status()?;
         Ok(())
     }
 
     /// Verify the sender's counter update proof for this leg.
     ///
-    /// The sender is only allowed to submit this proof if the settlement has been executed.
+    /// The sender is only allowed to submit this proof if the settlement has been executed and their status is still affirmed.
+    ///
+    /// This finalizes the sender's status for this leg in an executed settlement.
     pub fn sender_counter_update<R: RngCore + CryptoRng>(
         &mut self,
         proof: &SenderCounterUpdateProof,
@@ -1139,19 +1162,23 @@ impl DartSettlementLeg {
             .verify(&self.enc, tree_roots, rng)
             .context("Invalid sender counter update proof")?;
 
-        // Update the leg's status.
+        // Update the sender's status for this leg.
         self.sender = AffirmationStatus::Finalized;
         self.update_status()?;
 
         Ok(())
     }
 
-    /// Verify the sender's Revert proof for this leg.
+    /// Verify the sender's Revert affirmation proof for this leg.
     ///
-    /// The sender is only allowed to submit this proof if the settlement has been rejected.
-    pub fn sender_revert<R: RngCore + CryptoRng>(
+    /// The sender is only allowed to submit this proof if the settlement is pending or has been rejected and their status is affirmed.
+    ///
+    /// If the settlement is pending, this allows the sender to revert their affirmation to claim back their assets before the settlement is executed.
+    /// If the settlement is rejected, this allows the sender to claim back their assets if they had affirmed before the rejection.
+    /// If the settlement is executed, the sender is not allowed to revert their affirmation since the assets now belong to the receiver.
+    pub fn sender_revert_affirmation<R: RngCore + CryptoRng>(
         &mut self,
-        proof: &SenderReversalProof,
+        proof: &SenderRevertAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
@@ -1160,16 +1187,23 @@ impl DartSettlementLeg {
                 "The sender's status must still be in the affirmed state to reverse"
             ));
         }
-        if self.status != AffirmationStatus::Rejected {
-            return Err(anyhow!("Leg must be rejected before reversal"));
-        }
+        let new_status = match self.status {
+            AffirmationStatus::Pending => AffirmationStatus::Pending,
+            AffirmationStatus::Rejected => AffirmationStatus::Finalized,
+            _ => {
+                return Err(anyhow!(
+                    "Leg must be pending or rejected for the sender to revert"
+                ));
+            }
+        };
+
         // verify the proof.
         proof
             .verify(&self.enc, tree_roots, rng)
-            .context("Invalid sender reversal proof")?;
+            .context("Invalid sender revert affirmation proof")?;
 
-        // Update the leg's status.
-        self.sender = AffirmationStatus::Finalized;
+        // Update the sender's status for this leg.
+        self.sender = new_status;
         self.update_status()?;
 
         Ok(())
@@ -1177,7 +1211,8 @@ impl DartSettlementLeg {
 
     /// Verify the receiver's claim proof for this leg.
     ///
-    /// The receiver is only allowed to submit this proof if the settlement has been executed.
+    /// The receiver is only allowed to submit this proof if the settlement has been executed and their status is still affirmed.
+    /// If the settlement is rejected, the receiver is not allowed to claim the assets.
     pub fn receiver_claim<R: RngCore + CryptoRng>(
         &mut self,
         proof: &ReceiverClaimProof,
@@ -1192,13 +1227,54 @@ impl DartSettlementLeg {
         if self.status != AffirmationStatus::Affirmed {
             return Err(anyhow!("Leg must be affirmed before claim"));
         }
+
         // verify the proof.
         proof
             .verify(&self.enc, tree_roots, rng)
             .context("Invalid receiver claim proof")?;
 
-        // Update the leg's status.
+        // Update the receiver's status for this leg.
         self.receiver = AffirmationStatus::Finalized;
+        self.update_status()?;
+
+        Ok(())
+    }
+
+    /// Verify the receiver's revert affirmation proof for this leg.
+    ///
+    /// The receiver is only allowed to submit this proof if the settlement is pending or has been rejected and their status is affirmed.
+    ///
+    /// If the settlement is pending or rejected, this allows the receiver to revert their affirmation to decrease the `counter` in their account state to make proof of balance cheaper.
+    /// If the settlement is executed, the receiver is not allowed to revert their affirmation since the assets now belong to them and they are only allowed to claim the assets.
+    pub fn receiver_revert_affirmation<R: RngCore + CryptoRng>(
+        &mut self,
+        proof: &ReceiverRevertAffirmationProof,
+        tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        rng: &mut R,
+    ) -> Result<()> {
+        if self.receiver != AffirmationStatus::Affirmed {
+            return Err(anyhow!(
+                "The receiver's status must still be in the affirmed state to reverse"
+            ));
+        }
+        // If the settlement is pending, then the receiver will go back into the pending state, since the settlement has not been executed and the sender can still revert their affirmation as well.
+        let new_status = match self.status {
+            AffirmationStatus::Pending => AffirmationStatus::Pending,
+            AffirmationStatus::Rejected => AffirmationStatus::Finalized,
+            _ => {
+                return Err(anyhow!(
+                    "Leg must be pending or rejected for the receiver to revert"
+                ));
+            }
+        };
+
+        // verify the proof.
+        proof
+            .verify(&self.enc, tree_roots, rng)
+            .context("Invalid receiver reversal proof")?;
+
+        // Update the receiver's status for this leg.
+        self.receiver = new_status;
         self.update_status()?;
 
         Ok(())
@@ -1448,9 +1524,9 @@ impl DartSettlement {
     }
 
     /// Verify the sender's reversal proof for a specific leg in the settlement.
-    pub fn sender_revert<R: RngCore + CryptoRng>(
+    pub fn sender_revert_affirmation<R: RngCore + CryptoRng>(
         &mut self,
-        proof: &SenderReversalProof,
+        proof: &SenderRevertAffirmationProof,
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
         rng: &mut R,
     ) -> Result<()> {
@@ -1465,7 +1541,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.sender_revert(proof, tree_roots, rng)?;
+        leg.sender_revert_affirmation(proof, tree_roots, rng)?;
 
         // If the sender has finalized the leg, update the status of the settlement.
         self.check_for_updated_status()?;
@@ -1960,6 +2036,7 @@ impl DartChainState {
         Ok(())
     }
 
+    /// Asset issuer `caller` mints `amount` of asset `proof.asset_id` to the account specified in the proof, using the provided minting proof.
     pub fn mint_assets(&mut self, caller: &SignerAddress, proof: AssetMintingProof) -> Result<()> {
         self.ensure_caller(caller)?;
 
@@ -1996,6 +2073,7 @@ impl DartChainState {
         Ok(())
     }
 
+    /// Create a new settlement in the chain state using the provided settlement proof.
     pub fn create_settlement(
         &mut self,
         caller: &SignerAddress,
@@ -2005,6 +2083,12 @@ impl DartChainState {
 
         // Test SCALE encoding of the proof.
         let proof = scale_encode_and_decode_test(&proof)?;
+
+        // Ensure the settlement doesn't already exist.
+        let settlement_ref = proof.settlement_ref();
+        if self.settlements.contains_key(&settlement_ref) {
+            return Err(anyhow!("Settlement {:?} already exists", settlement_ref));
+        }
 
         // Ensure the settlement has a valid number of legs.
         if proof.legs.is_empty() || proof.legs.len() > SETTLEMENT_MAX_LEGS as usize {
@@ -2023,12 +2107,16 @@ impl DartChainState {
 
         // Save the settlement.
         let settlement = DartSettlement::from_proof(proof)?;
-        let settlement_ref = settlement.id;
         self.settlements.insert(settlement_ref, settlement);
 
         Ok(settlement_ref)
     }
 
+    /// Create, affirm and execute an instant settlement.
+    ///
+    /// Instant settlements must be fully affirmed in the same transaction as they are created, so this function verifies the settlement proof and all leg affirmations, then directly creates the settlement in a finalized state.
+    ///
+    /// TODO: Add a storage transaction support to allow reverting storage changes if the settlement doesn't finalize as expected.
     pub fn execute_instant_settlement(
         &mut self,
         caller: &SignerAddress,
@@ -2115,6 +2203,8 @@ impl DartChainState {
     }
 
     /// Verify a sender affirmation proof for a settlement leg.
+    ///
+    /// Only allowed if the settlement is in a pending state, and the leg has not already been affirmed by the sender.
     pub fn sender_affirmation(
         &mut self,
         caller: &SignerAddress,
@@ -2149,6 +2239,8 @@ impl DartChainState {
     }
 
     /// Verify a receiver affirmation proof for a settlement leg.
+    ///
+    /// Only allowed if the settlement is in a pending state, and the leg has not already been affirmed by the receiver.
     pub fn receiver_affirmation(
         &mut self,
         caller: &SignerAddress,
@@ -2183,7 +2275,9 @@ impl DartChainState {
     }
 
     /// Verify a instant sender affirmation proof for a settlement leg.
-    pub fn instant_sender_affirmation(
+    ///
+    /// Only allowed for instant settlements, and if the leg has not already been affirmed by the sender.
+    fn instant_sender_affirmation(
         &mut self,
         caller: &SignerAddress,
         proof: InstantSenderAffirmationProof,
@@ -2217,7 +2311,9 @@ impl DartChainState {
     }
 
     /// Verify a instant receiver affirmation proof for a settlement leg.
-    pub fn instant_receiver_affirmation(
+    ///
+    /// Only allowed for instant settlements, and if the leg has not already been affirmed by the receiver.
+    fn instant_receiver_affirmation(
         &mut self,
         caller: &SignerAddress,
         proof: InstantReceiverAffirmationProof,
@@ -2251,6 +2347,8 @@ impl DartChainState {
     }
 
     /// Verify a mediator affirmation proof for a specific leg in the settlement.
+    ///
+    /// Only allowed if the settlement is in a pending state, and the leg has not already been affirmed by the mediator.
     pub fn mediator_affirmation(
         &mut self,
         caller: &SignerAddress,
@@ -2314,10 +2412,10 @@ impl DartChainState {
     }
 
     /// Verify a sender reversal proof for a settlement leg.
-    pub fn sender_revert(
+    pub fn sender_revert_affirmation(
         &mut self,
         caller: &SignerAddress,
-        proof: SenderReversalProof,
+        proof: SenderRevertAffirmationProof,
     ) -> Result<()> {
         self.ensure_caller(caller)?;
 
@@ -2338,7 +2436,7 @@ impl DartChainState {
 
         let mut rng = new_rng();
         // Verify the sender reversal proof and update the settlement status.
-        settlement.sender_revert(&proof, &self.account_tree, &mut rng)?;
+        settlement.sender_revert_affirmation(&proof, &self.account_tree, &mut rng)?;
 
         // Add the new account state commitment to the account tree.
         self._add_account_commitment(proof.account_state_commitment())?;

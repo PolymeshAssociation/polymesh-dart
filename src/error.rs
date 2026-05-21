@@ -109,9 +109,13 @@ pub enum Error {
     #[error("Scale decode error")]
     DecodeError,
 
-    /// Too many keys in registration proof.
-    #[error("Too many keys in registration proof")]
-    TooManyKeysInRegProof,
+    /// Too many public inputs in proof.
+    #[error("Too many public inputs in proof")]
+    TooManyPublicInputsInProof,
+
+    /// Bounded Canonical value exceeds the specified bound.
+    #[error("Bounded Canonical value exceeds the specified bound")]
+    ValueExceedsBound,
 
     /// Too many account asset registration proofs in transaction.
     #[error("Too many account asset registration proofs in transaction")]

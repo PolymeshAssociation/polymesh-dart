@@ -105,10 +105,10 @@ impl FeeRegHostProtocol {
         ))
     }
 
-    pub fn finish(
+    pub fn finish<T: DartLimits>(
         mut self,
         device_response: &SingleSkDeviceResponse,
-    ) -> Result<FeeAccountRegistrationProof, Error> {
+    ) -> Result<FeeAccountRegistrationProof<T>, Error> {
         let auth_proof = device_response.0.decode()?;
 
         let challenge_h_final =
@@ -125,7 +125,7 @@ impl FeeRegHostProtocol {
             asset_id: self.account_state.asset_id,
             amount: self.account_state.balance,
             account_state_commitment: self.account_state.commitment()?,
-            inner: WrappedCanonical::wrap(&bp_proof)?,
+            inner: BoundedCanonical::wrap(&bp_proof)?,
         })
     }
 }
@@ -211,12 +211,12 @@ impl<
         ))
     }
 
-    pub fn finish<R: RngCore + CryptoRng>(
+    pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
         device_response: &SingleSkDeviceResponse,
         tree_params: &CurveTreeParameters<C>,
-    ) -> Result<FeeAccountTopupProof<C>, Error> {
+    ) -> Result<FeeAccountTopupProof<T, C>, Error> {
         let auth_proof = device_response.0.decode()?;
 
         let challenge_h_final =
@@ -248,7 +248,7 @@ impl<
             amount: self.amount,
             updated_account_state_commitment: self.updated_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(self.nullifier)?,
-            inner: WrappedCanonical::wrap(&bp_proof)?,
+            inner: BoundedCanonical::wrap(&bp_proof)?,
         })
     }
 }
@@ -332,13 +332,13 @@ impl<
         ))
     }
 
-    pub fn finish<R: RngCore + CryptoRng>(
+    pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
         device_response: &FeePaymentDeviceResponse,
         root_block: BlockNumber,
         tree_params: &CurveTreeParameters<C>,
-    ) -> Result<FeeAccountPaymentProof<C>, Error> {
+    ) -> Result<FeeAccountPaymentProof<T, C>, Error> {
         let auth_proof = device_response.0.decode()?;
 
         let challenge_h_final =
@@ -370,7 +370,7 @@ impl<
             root_block: try_block_number(root_block)?,
             updated_account_state_commitment: self.updated_commitment,
             nullifier: FeeAccountStateNullifier::from_affine(self.nullifier)?,
-            inner: WrappedCanonical::wrap(&bp_proof)?,
+            inner: BoundedCanonical::wrap(&bp_proof)?,
         })
     }
 }

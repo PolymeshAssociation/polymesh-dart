@@ -9,6 +9,7 @@ use ark_std::vec::Vec;
 use blake2::Blake2b512;
 use bounded_collections::Get;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use digest::Digest;
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
@@ -16,14 +17,15 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::{
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS,
     MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
-    MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
+use scale_info::TypeInfo;
 
 #[cfg(feature = "sqlx")]
 pub mod sqlx_impl;
 
 pub mod encode;
-pub use encode::{CompressedAffine, WrappedCanonical};
+pub use encode::{BoundedCanonical, CompressedAffine, WrappedCanonical};
 
 mod account;
 pub use account::*;
@@ -63,7 +65,10 @@ use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 
 /// Use `GetExtra` as the trait bounds for pallet `Config` parameters
 /// that will be used for bounded collections.
-pub trait GetExtra<T>: Get<T> + Clone + core::fmt::Debug + Default + PartialEq + Eq {}
+pub trait GetExtra<T>:
+    Get<T> + Clone + core::fmt::Debug + Default + PartialEq + Eq + Send + Sync + 'static
+{
+}
 
 /// ConstSize type wrapper.
 ///
@@ -79,7 +84,21 @@ impl<const T: u32> Get<u32> for ConstSize<T> {
 
 impl<const T: u32> GetExtra<u32> for ConstSize<T> {}
 
-pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
+pub trait DartLimits:
+    Clone
+    + Copy
+    + Sized
+    + PartialEq
+    + Eq
+    + core::fmt::Debug
+    + Encode
+    + Decode
+    + DecodeWithMemTracking
+    + TypeInfo
+    + Send
+    + Sync
+    + 'static
+{
     /// The maximum number of keys in an account registration proof.
     type MaxKeysPerRegProof: GetExtra<u32>;
 
@@ -109,6 +128,9 @@ pub trait DartLimits: Clone + core::fmt::Debug + PartialEq + Eq {
 
     /// The maximum number of asset encryption keys (for both auditors and mediators) in the asset state.
     type MaxAssetEncryptionKeys: GetExtra<u32>;
+
+    /// The maximum inner proof size.
+    type MaxInnerProofSize: GetExtra<u32>;
 }
 
 impl DartLimits for () {
@@ -122,12 +144,13 @@ impl DartLimits for () {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolymeshPrivateLimits;
+#[derive(Debug, Clone, Copy, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+pub struct PolymeshLimits;
 
-impl DartLimits for PolymeshPrivateLimits {
+impl DartLimits for PolymeshLimits {
     type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
     type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
@@ -138,6 +161,7 @@ impl DartLimits for PolymeshPrivateLimits {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
 pub type LeafIndex = u64;
@@ -177,6 +201,15 @@ lazy_static::lazy_static! {
 pub fn set_dart_gens(_gens: DartBPGenerators) {}
 
 #[cfg(feature = "std")]
+pub fn reset_dart_gens() {}
+
+#[cfg(feature = "std")]
+pub fn loaded_dart_gens() -> bool {
+    // We can't check if the lazy_static generators have been loaded yet without causing the to be loaded, so we just return
+    true
+}
+
+#[cfg(feature = "std")]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
@@ -194,6 +227,20 @@ pub fn set_dart_gens(gens: DartBPGenerators) {
 
 #[cfg(not(feature = "std"))]
 #[allow(static_mut_refs)]
+pub fn reset_dart_gens() {
+    unsafe {
+        DART_GENS = None;
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn loaded_dart_gens() -> bool {
+    unsafe { DART_GENS.is_some() }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
 pub fn dart_gens() -> &'static DartBPGenerators {
     unsafe {
         if DART_GENS.is_none() {
@@ -205,6 +252,9 @@ pub fn dart_gens() -> &'static DartBPGenerators {
 
 #[cfg(feature = "std")]
 pub fn set_poseidon_params(_params: PoseidonParameters) {}
+
+#[cfg(feature = "std")]
+pub fn reset_poseidon_params() {}
 
 #[cfg(feature = "std")]
 pub fn poseidon_params() -> &'static PoseidonParameters {
@@ -219,6 +269,14 @@ static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 pub fn set_poseidon_params(params: PoseidonParameters) {
     unsafe {
         POSEIDON_PARAMS = Some(params);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+#[allow(static_mut_refs)]
+pub fn reset_poseidon_params() {
+    unsafe {
+        POSEIDON_PARAMS = None;
     }
 }
 
@@ -392,10 +450,10 @@ mod tests {
     use super::*;
     use crate::account_reg_split::AccountRegHostProtocol;
     use crate::affirmation_proofs::{
-        ClaimReceivedHostProtocol, InstantReceiverAffirmationHostProtocol,
-        InstantSenderAffirmationHostProtocol, ReceiverAffirmationHostProtocol,
-        ReceiverCounterUpdateHostProtocol, SenderAffirmationHostProtocol,
-        SenderCounterUpdateHostProtocol, SenderReverseHostProtocol,
+        InstantReceiverAffirmationHostProtocol, InstantSenderAffirmationHostProtocol,
+        ReceiverAffirmationHostProtocol, ReceiverClaimHostProtocol,
+        ReceiverRevertAffirmationHostProtocol, SenderAffirmationHostProtocol,
+        SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
     };
     use crate::auth_proofs::{
         create_affirmation_auth_proof, create_fee_account_auth_proof,
@@ -436,16 +494,15 @@ mod tests {
         let (protocol, device_request) =
             FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, ctx).unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
         .unwrap();
 
-        let proof = protocol.finish(&device_response).unwrap();
+        let proof = protocol.finish::<()>(&device_response).unwrap();
 
         proof.verify(ctx).unwrap();
     }
@@ -487,10 +544,9 @@ mod tests {
         )
         .unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
@@ -498,7 +554,7 @@ mod tests {
 
         let tree_params = FeeAccountTreeConfig::parameters();
         let proof = protocol
-            .finish(&mut rng, &device_response, tree_params)
+            .finish::<_, ()>(&mut rng, &device_response, tree_params)
             .unwrap();
 
         let root = fee_tree.root().unwrap().root_node().unwrap();
@@ -533,7 +589,7 @@ mod tests {
         fee_tree.insert(leaf).unwrap();
         fee_tree.store_root().unwrap();
 
-        let topup_proof = FeeAccountTopupProof::new(
+        let topup_proof = FeeAccountTopupProof::<()>::new(
             &mut rng,
             &keys.acct,
             &mut fee_state,
@@ -560,7 +616,6 @@ mod tests {
         )
         .unwrap();
 
-        let sk = keys.acct.secret.0.0;
         let gens = dart_gens();
         let tree_params_for_gens = FeeAccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params_for_gens
@@ -570,7 +625,7 @@ mod tests {
             .B_blinding;
         let device_response = create_fee_payment_auth_proof(
             &mut rng,
-            sk,
+            &keys.acct,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().randomness_gen(),
@@ -582,7 +637,7 @@ mod tests {
         let root_block = fee_tree.get_block_number().unwrap();
         let tree_params = FeeAccountTreeConfig::parameters();
         let proof = protocol
-            .finish(&mut rng, &device_response, root_block, tree_params)
+            .finish::<_, ()>(&mut rng, &device_response, root_block, tree_params)
             .unwrap();
 
         proof.verify(&mut rng, ctx, root).unwrap();
@@ -607,19 +662,16 @@ mod tests {
                 .unwrap();
 
         let gens = dart_gens();
-        let sk = keys.acct.secret.0.0;
-        let sk_enc = keys.enc.secret.0.0;
         let device_response = create_registration_auth_proof(
             &mut rng,
-            sk,
-            sk_enc,
+            &keys,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
         )
         .unwrap();
 
-        let proof = protocol
+        let proof: AccountAssetRegistrationProof<()> = protocol
             .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
@@ -653,8 +705,7 @@ mod tests {
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
             &mut rng,
-            keys1.acct.secret.0.0,
-            keys1.enc.secret.0.0,
+            &keys1,
             &device_request1,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -662,8 +713,7 @@ mod tests {
         .unwrap();
         let device_response2 = create_registration_auth_proof(
             &mut rng,
-            keys2.acct.secret.0.0,
-            keys2.enc.secret.0.0,
+            &keys2,
             &device_request2,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -726,12 +776,9 @@ mod tests {
         .unwrap();
 
         let gens = dart_gens();
-        let sk = keys.acct.secret.0.0;
-        let sk_enc = keys.enc.secret.0.0;
         let device_response = create_registration_auth_proof(
             &mut rng,
-            sk,
-            sk_enc,
+            &keys,
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -741,7 +788,7 @@ mod tests {
         let root = account_tree.root().unwrap();
         let root_block = account_tree.get_block_number().unwrap();
         let tree_params = AccountTreeConfig::parameters();
-        let proof = protocol
+        let proof: AssetMintingProof<()> = protocol
             .finish(&mut rng, &device_response, root_block, tree_params)
             .unwrap();
 
@@ -757,8 +804,7 @@ mod tests {
         let gens = dart_gens();
         create_affirmation_auth_proof(
             rng,
-            keys.acct.secret.0.0,
-            keys.enc.secret.0.0,
+            keys,
             request,
             gens.account_comm_key().sk_gen(),
             gens.enc_key_gen(),
@@ -822,6 +868,111 @@ mod tests {
     }
 
     #[test]
+    fn test_settlement_revealed_asset_id() {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let asset_id_0: AssetId = 0;
+        let asset_id_1: AssetId = 1;
+        let amount_0: Balance = 300;
+        let amount_1: Balance = 175;
+
+        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let asset_state_0 = AssetState::new::<()>(asset_id_0, &[], &[]).unwrap();
+        let asset_state_1 = AssetState::new::<()>(asset_id_1, &[], &[]).unwrap();
+
+        let mut asset_tree =
+            ProverCurveTree::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(ASSET_TREE_HEIGHT)
+                .unwrap();
+        asset_tree
+            .insert(asset_state_0.commitment().unwrap())
+            .unwrap();
+        asset_tree
+            .insert(asset_state_1.commitment().unwrap())
+            .unwrap();
+        asset_tree.store_root().unwrap();
+
+        let mut asset_lookup = AssetKeysLookup::new();
+        asset_lookup.add(asset_state_0.clone());
+        asset_lookup.add(asset_state_1.clone());
+
+        let mut test_with_config = |reveal_0: bool, reveal_1: bool| {
+            let settlement = SettlementBuilder::<()>::new(b"test")
+                .leg(LegBuilder {
+                    sender: sender_keys.public_keys(),
+                    receiver: receiver_keys.public_keys(),
+                    asset: asset_state_0.clone(),
+                    amount: amount_0,
+                    config: LegConfig {
+                        reveal_asset_id: reveal_0,
+                        parties_see_each_other: true,
+                    },
+                    public_enc_keys: vec![],
+                })
+                .leg(LegBuilder {
+                    sender: receiver_keys.public_keys(),
+                    receiver: sender_keys.public_keys(),
+                    asset: asset_state_1.clone(),
+                    amount: amount_1,
+                    config: LegConfig {
+                        reveal_asset_id: reveal_1,
+                        parties_see_each_other: true,
+                    },
+                    public_enc_keys: vec![],
+                })
+                .encrypt_and_prove(&mut rng, &asset_tree)
+                .unwrap();
+
+            assert_eq!(settlement.legs.len(), 2);
+            if reveal_0 && reveal_1 {
+                assert_eq!(settlement.revealed_asset_ids().len(), 2);
+            } else if reveal_0 || reveal_1 {
+                assert_eq!(settlement.revealed_asset_ids().len(), 1);
+            } else {
+                assert_eq!(settlement.revealed_asset_ids().len(), 0);
+            }
+            if reveal_0 {
+                assert!(matches!(
+                    settlement.legs[0],
+                    AnySettlementLegProof::RevealedAssetId(_)
+                ));
+            } else {
+                assert!(matches!(
+                    settlement.legs[0],
+                    AnySettlementLegProof::HiddenAssetId(_)
+                ));
+            }
+            if reveal_1 {
+                assert!(matches!(
+                    settlement.legs[1],
+                    AnySettlementLegProof::RevealedAssetId(_)
+                ));
+            } else {
+                assert!(matches!(
+                    settlement.legs[1],
+                    AnySettlementLegProof::HiddenAssetId(_)
+                ));
+            }
+
+            settlement
+                .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+
+            settlement
+                .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+        };
+
+        // Both legs revealed
+        test_with_config(true, true);
+        // One hidden leg, one revealed
+        test_with_config(true, false);
+        test_with_config(false, true);
+        // Both legs hidden
+        test_with_config(false, false);
+    }
+
+    #[test]
     fn test_sender_affirmation_split() {
         let test_with_config = |reveal_asset_id: bool| {
             let mut rng = rand::thread_rng();
@@ -880,7 +1031,9 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let proof = protocol.finish(&mut rng, &device_response).unwrap();
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
 
             let root = account_tree.root().unwrap();
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -946,7 +1099,9 @@ mod tests {
                 comm_re_rand_gen,
             );
 
-            let proof = protocol.finish(&mut rng, &device_response).unwrap();
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
 
             let root = account_tree.root().unwrap();
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -982,7 +1137,7 @@ mod tests {
             leaf,
         );
 
-        let (protocol, device_request) = ClaimReceivedHostProtocol::<AccountTreeConfig>::init(
+        let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
             &mut rng,
             &mut receiver_state,
             &leg_ref,
@@ -1001,7 +1156,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1033,15 +1190,16 @@ mod tests {
             leaf,
         );
 
-        let (protocol, device_request) = SenderReverseHostProtocol::<AccountTreeConfig>::init(
-            &mut rng,
-            &mut sender_state,
-            &leg_ref,
-            &leg_enc,
-            reverse_amount,
-            &account_tree,
-        )
-        .unwrap();
+        let (protocol, device_request) =
+            SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+                &mut rng,
+                &mut sender_state,
+                &leg_ref,
+                &leg_enc,
+                reverse_amount,
+                &account_tree,
+            )
+            .unwrap();
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
@@ -1052,7 +1210,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1103,7 +1263,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1156,7 +1318,7 @@ mod tests {
         account_tree.store_root().unwrap();
 
         let (protocol, device_request) =
-            ReceiverCounterUpdateHostProtocol::<AccountTreeConfig>::init(
+            ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
                 &mut rng,
                 &mut receiver_state,
                 &leg_ref,
@@ -1174,7 +1336,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1226,7 +1390,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
@@ -1277,7 +1443,9 @@ mod tests {
             &device_request,
             comm_re_rand_gen,
         );
-        let proof = protocol.finish(&mut rng, &device_response).unwrap();
+        let proof = protocol
+            .finish::<_, ()>(&mut rng, &device_response)
+            .unwrap();
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();

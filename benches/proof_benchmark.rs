@@ -41,7 +41,7 @@ fn proof_benchmark(c: &mut Criterion) {
     // Benchmark: Generate account asset registration proof.
     c.bench_function("AccountAssetRegistrationProof generate", |b| {
         b.iter(|| {
-            let (_proof, mut _account_state) = AccountAssetRegistrationProof::new(
+            let (_proof, mut _account_state) = AccountAssetRegistrationProof::<()>::new(
                 &mut rng,
                 black_box(&issuer_keys),
                 asset_id,
@@ -54,7 +54,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let (proof, mut account_state) = AccountAssetRegistrationProof::new(
+    let (proof, mut account_state) = AccountAssetRegistrationProof::<()>::new(
         &mut rng,
         black_box(&issuer_keys),
         asset_id,
@@ -121,7 +121,7 @@ fn proof_benchmark(c: &mut Criterion) {
     }
 
     // Register the investor's account state.
-    let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::new(
+    let (_proof, mut investor_account_state) = AccountAssetRegistrationProof::<()>::new(
         &mut rng,
         &investor_keys,
         asset_id,
@@ -153,7 +153,7 @@ fn proof_benchmark(c: &mut Criterion) {
     let leg_amount = 500u64;
     c.bench_function("AssetMintingProof generate", |b| {
         b.iter(|| {
-            let _proof = AssetMintingProof::new(
+            let _proof = AssetMintingProof::<(), _>::new(
                 &mut rng,
                 &issuer_keys,
                 ctx,
@@ -166,7 +166,7 @@ fn proof_benchmark(c: &mut Criterion) {
     });
 
     // Generate a proof to benchmark verification.
-    let proof = AssetMintingProof::new(
+    let proof = AssetMintingProof::<(), _>::new(
         &mut rng,
         &issuer_keys,
         ctx,
@@ -289,7 +289,7 @@ fn proof_benchmark(c: &mut Criterion) {
         .map(|_| {
             let mut rng = rand::thread_rng();
             let mut account_state = account_state.clone();
-            SenderAffirmationProof::new(
+            SenderAffirmationProof::<()>::new(
                 &mut rng,
                 &issuer_keys,
                 &leg_ref,
@@ -425,7 +425,7 @@ fn proof_benchmark(c: &mut Criterion) {
             let med_enc = leg_enc
                 .mediator_encryption(0)
                 .expect("Failed to get mediator encryption for mediator affirmation proof");
-            let _proof = MediatorAffirmationProof::new(
+            let _proof = MediatorAffirmationProof::<()>::new(
                 &mut rng,
                 &leg_ref,
                 &med_enc,
@@ -442,7 +442,7 @@ fn proof_benchmark(c: &mut Criterion) {
         .mediator_encryption(0)
         .expect("Failed to get mediator encryption for mediator affirmation proof");
     let proof =
-        MediatorAffirmationProof::new(&mut rng, &leg_ref, &med_enc, &mediator_keys, 0, true)
+        MediatorAffirmationProof::<()>::new(&mut rng, &leg_ref, &med_enc, &mediator_keys, 0, true)
             .expect("Failed to generate mediator affirmation proof");
 
     // Benchmark: Verify mediator affirmation proof.

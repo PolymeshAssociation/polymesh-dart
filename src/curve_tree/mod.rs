@@ -77,6 +77,9 @@ pub fn set_pallas_layer_parameters(
 }
 
 #[cfg(feature = "std")]
+pub fn reset_pallas_layer_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_pallas_layer_parameters()
 -> &'static SingleLayerProofParametersNew<PallasParameters, VestaParams> {
     &CURVE_TREE_PARAMETERS_PALLAS
@@ -87,6 +90,9 @@ pub fn set_vesta_layer_parameters(
     _parameters: SingleLayerProofParametersNew<VestaParameters, PallasParams>,
 ) {
 }
+
+#[cfg(feature = "std")]
+pub fn reset_vesta_layer_parameters() {}
 
 #[cfg(feature = "std")]
 pub fn get_vesta_layer_parameters()
@@ -100,6 +106,9 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 }
 
 #[cfg(feature = "std")]
+pub fn reset_asset_curve_tree_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<AssetTreeConfig> {
     &ASSET_COMMITMENT_PARAMETERS
 }
@@ -108,9 +117,15 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
 pub fn set_asset_commitment_parameters(_parameters: AssetCommitmentParameters<AssetTreeConfig>) {}
 
 #[cfg(feature = "std")]
+pub fn reset_asset_commitment_parameters() {}
+
+#[cfg(feature = "std")]
 pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<AccountTreeConfig> {
     &ACCOUNT_CURVE_TREE_PARAMETERS
 }
+
+#[cfg(feature = "std")]
+pub fn reset_account_curve_tree_parameters() {}
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
@@ -119,6 +134,14 @@ pub fn set_pallas_layer_parameters(
 ) {
     unsafe {
         CURVE_TREE_PARAMETERS_PALLAS = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_pallas_layer_parameters() {
+    unsafe {
+        CURVE_TREE_PARAMETERS_PALLAS = None;
     }
 }
 
@@ -148,6 +171,14 @@ pub fn set_vesta_layer_parameters(
 ) {
     unsafe {
         CURVE_TREE_PARAMETERS_VESTA = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_vesta_layer_parameters() {
+    unsafe {
+        CURVE_TREE_PARAMETERS_VESTA = None;
     }
 }
 
@@ -184,9 +215,25 @@ pub fn get_asset_curve_tree_parameters() -> &'static CurveTreeParameters<AssetTr
 
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
+pub fn reset_asset_curve_tree_parameters() {
+    unsafe {
+        ASSET_CURVE_TREE_PARAMETERS = None;
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
 pub fn set_asset_commitment_parameters(parameters: AssetCommitmentParameters<AssetTreeConfig>) {
     unsafe {
         ASSET_COMMITMENT_PARAMETERS = Some(parameters);
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_asset_commitment_parameters() {
+    unsafe {
+        ASSET_COMMITMENT_PARAMETERS = None;
     }
 }
 
@@ -216,6 +263,14 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
             ACCOUNT_CURVE_TREE_PARAMETERS = Some(parameters);
         }
         ACCOUNT_CURVE_TREE_PARAMETERS.as_ref().unwrap()
+    }
+}
+
+#[allow(static_mut_refs)]
+#[cfg(not(feature = "std"))]
+pub fn reset_account_curve_tree_parameters() {
+    unsafe {
+        ACCOUNT_CURVE_TREE_PARAMETERS = None;
     }
 }
 
@@ -858,6 +913,14 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         })
     }
 
+    pub fn compressed_inner_node(&self) -> CompressedInner<M, C> {
+        CompressedInner {
+            is_even: self.is_even(),
+            commitments: self.commitments,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn is_even(&self) -> bool {
         self.height % 2 == 0
     }
@@ -1068,7 +1131,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
 
             // Start at the leaf's location.
             let mut location = NodeLocation::<L>::leaf(leaf_index_base + leaf_idx);
-            let mut is_root = location.is_root(self.height);
+            let mut is_root = false;
             let mut child_is_leaf = true;
 
             leaf_idx += 1;
@@ -1096,14 +1159,27 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig, U: CurveTreeUpdater<L, 
                     })
                     .or_insert_with(|| {
                         is_new_node = true;
-                        if location.is_even() {
-                            even_old_child = None;
-                            // Create a new even node with zero commitments.
-                            CompressedInner::default_even()
+                        if is_root {
+                            if let Err(err) = current_root.increase_height::<U>() {
+                                log::error!("Failed to increase root height: {:?}", err);
+                            }
+                            if location.is_even() {
+                                even_old_child = None;
+                            } else {
+                                odd_old_child = None;
+                            }
+                            // Return the new root as the current inner node.  Still need to add the new child to it.
+                            current_root.compressed_inner_node()
                         } else {
-                            odd_old_child = None;
-                            // Create a new odd node with zero commitments.
-                            CompressedInner::default_odd()
+                            if location.is_even() {
+                                even_old_child = None;
+                                // Create a new even node with zero commitments.
+                                CompressedInner::default_even()
+                            } else {
+                                odd_old_child = None;
+                                // Create a new odd node with zero commitments.
+                                CompressedInner::default_odd()
+                            }
                         }
                     });
 

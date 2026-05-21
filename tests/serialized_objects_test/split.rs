@@ -1,9 +1,9 @@
 use polymesh_dart::account_reg_split::AccountRegHostProtocol;
 use polymesh_dart::affirmation_proofs::{
-    ClaimReceivedHostProtocol, InstantReceiverAffirmationHostProtocol,
-    InstantSenderAffirmationHostProtocol, ReceiverAffirmationHostProtocol,
-    ReceiverCounterUpdateHostProtocol, SenderAffirmationHostProtocol,
-    SenderCounterUpdateHostProtocol, SenderReverseHostProtocol,
+    InstantReceiverAffirmationHostProtocol, InstantSenderAffirmationHostProtocol,
+    ReceiverAffirmationHostProtocol, ReceiverClaimHostProtocol,
+    ReceiverRevertAffirmationHostProtocol, SenderAffirmationHostProtocol,
+    SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
 };
 use polymesh_dart::auth_proofs::{
     create_affirmation_auth_proof, create_fee_account_auth_proof, create_fee_payment_auth_proof,
@@ -49,7 +49,7 @@ fn make_fee_state_and_tree_after_topup(
 ) -> (FeeProverTree, FeeAccountAssetState) {
     let mut rng = default_rng();
     let (mut tree, mut fee_state) = make_fee_state_and_tree(keys);
-    let topup_proof = FeeAccountTopupProof::new(
+    let topup_proof = FeeAccountTopupProof::<()>::new(
         &mut rng,
         &keys.acct,
         &mut fee_state,
@@ -111,8 +111,7 @@ fn make_affirmation_device_response(
     let comm_re_rand_gen = tree.params().even_parameters.pc_gens().B_blinding;
     create_affirmation_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
-        keys.enc.secret.inner().0,
+        keys,
         request,
         gens.account_comm_key().sk_gen(),
         gens.enc_key_gen(),
@@ -166,7 +165,7 @@ pub fn gen_fee_reg_split() {
     let req: FeeAccountDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
     let device_response = create_fee_account_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
+        &keys.acct,
         &req,
         dart_gens().account_comm_key().sk_gen(),
     )
@@ -175,7 +174,7 @@ pub fn gen_fee_reg_split() {
 
     // Host: receive response, finish proof.
     let res: SingleSkDeviceResponse = load_scale_v1(FEE_REG_SPLIT_RESPONSE);
-    let proof = protocol.finish(&res).unwrap();
+    let proof = protocol.finish::<()>(&res).unwrap();
     save_scale_v1(FEE_REG_SPLIT_PROOF, &proof);
 }
 
@@ -204,7 +203,7 @@ pub fn gen_fee_topup_split() {
     let req: FeeAccountDeviceRequest = load_scale_v1(FEE_TOPUP_SPLIT_REQUEST);
     let device_response = create_fee_account_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
+        &keys.acct,
         &req,
         dart_gens().account_comm_key().sk_gen(),
     )
@@ -213,7 +212,7 @@ pub fn gen_fee_topup_split() {
 
     let res: SingleSkDeviceResponse = load_scale_v1(FEE_TOPUP_SPLIT_RESPONSE);
     let proof = protocol
-        .finish(&mut rng, &res, FeeAccountTreeConfig::parameters())
+        .finish::<_, ()>(&mut rng, &res, FeeAccountTreeConfig::parameters())
         .unwrap();
     save_scale_v1(FEE_TOPUP_SPLIT_PROOF, &proof);
 }
@@ -248,7 +247,7 @@ pub fn gen_fee_payment_split() {
     let req: FeePaymentDeviceRequest = load_scale_v1(FEE_PAYMENT_SPLIT_REQUEST);
     let device_response = create_fee_payment_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
+        &keys.acct,
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().randomness_gen(),
@@ -260,7 +259,7 @@ pub fn gen_fee_payment_split() {
     let res: FeePaymentDeviceResponse = load_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
-        .finish(
+        .finish::<_, ()>(
             &mut rng,
             &res,
             root_block,
@@ -297,8 +296,7 @@ pub fn gen_account_reg_split() {
     let req: RegistrationDeviceRequest = load_scale_v1(ACCOUNT_REG_SPLIT_REQUEST);
     let device_response = create_registration_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
-        keys.enc.secret.inner().0,
+        &keys,
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().sk_enc_gen(),
@@ -308,7 +306,7 @@ pub fn gen_account_reg_split() {
 
     let res: TwoSksDeviceResponse = load_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE);
     let proof = protocol
-        .finish(&mut rng, &res, counter, AccountTreeConfig::parameters())
+        .finish::<_, ()>(&mut rng, &res, counter, AccountTreeConfig::parameters())
         .unwrap();
     save_scale_v1(ACCOUNT_REG_SPLIT_PROOF, &proof);
 }
@@ -347,8 +345,7 @@ pub fn gen_mint_split() {
     let req: RegistrationDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
     let device_response = create_registration_auth_proof(
         &mut rng,
-        keys.acct.secret.inner().0,
-        keys.enc.secret.inner().0,
+        &keys,
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().sk_enc_gen(),
@@ -359,7 +356,7 @@ pub fn gen_mint_split() {
     let res: TwoSksDeviceResponse = load_scale_v1(MINT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
-        .finish(&mut rng, &res, root_block, AccountTreeConfig::parameters())
+        .finish::<_, ()>(&mut rng, &res, root_block, AccountTreeConfig::parameters())
         .unwrap();
     save_scale_v1(MINT_SPLIT_PROOF, &proof);
 }
@@ -413,7 +410,7 @@ pub fn gen_sender_affirm_split() {
         device_request,
         &sender_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -473,7 +470,7 @@ pub fn gen_receiver_affirm_split() {
         device_request,
         &receiver_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -500,7 +497,7 @@ fn verify_v1_receiver_affirm_split() {
         .unwrap();
 }
 
-pub fn gen_receiver_counter_update_split() {
+pub fn gen_receiver_revert_affirmation_split() {
     let mut rng = default_rng();
     let counter: NullifierSkGenCounter = 0;
     let sender_keys = alice_keys();
@@ -517,27 +514,28 @@ pub fn gen_receiver_counter_update_split() {
         0,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = ReceiverCounterUpdateHostProtocol::<AccountTreeConfig>::init(
-        &mut rng,
-        &mut receiver_state,
-        &leg_ref,
-        &leg_enc,
-        &tree,
-    )
-    .unwrap();
+    let (protocol, device_request) =
+        ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+            &mut rng,
+            &mut receiver_state,
+            &leg_ref,
+            &leg_enc,
+            &tree,
+        )
+        .unwrap();
     run_affirmation_split_protocol(
-        RECEIVER_COUNTER_UPDATE_SPLIT_REQUEST,
-        RECEIVER_COUNTER_UPDATE_SPLIT_RESPONSE,
-        RECEIVER_COUNTER_UPDATE_SPLIT_PROOF,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_REQUEST,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_RESPONSE,
+        RECEIVER_REVERT_AFFIRMATION_SPLIT_PROOF,
         device_request,
         &receiver_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
 #[test]
-fn verify_v1_receiver_counter_update_split() {
+fn verify_v1_receiver_revert_affirmation_split() {
     let mut rng = default_rng();
     let counter: NullifierSkGenCounter = 0;
     let sender_keys = alice_keys();
@@ -554,7 +552,8 @@ fn verify_v1_receiver_counter_update_split() {
         0,
     );
     let tree = make_account_tree(leaf);
-    let proof: ReceiverCounterUpdateProof = load_scale_v1(RECEIVER_COUNTER_UPDATE_SPLIT_PROOF);
+    let proof: ReceiverRevertAffirmationProof =
+        load_scale_v1(RECEIVER_REVERT_AFFIRMATION_SPLIT_PROOF);
     proof
         .verify(&leg_enc, tree.root().unwrap(), &mut rng)
         .unwrap();
@@ -578,7 +577,7 @@ pub fn gen_claim_received_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = ClaimReceivedHostProtocol::<AccountTreeConfig>::init(
+    let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
         &mut rng,
         &mut receiver_state,
         &leg_ref,
@@ -594,7 +593,7 @@ pub fn gen_claim_received_split() {
         device_request,
         &receiver_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -639,15 +638,16 @@ pub fn gen_sender_reverse_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let (protocol, device_request) = SenderReverseHostProtocol::<AccountTreeConfig>::init(
-        &mut rng,
-        &mut sender_state,
-        &leg_ref,
-        &leg_enc,
-        SETTLEMENT_AMOUNT,
-        &tree,
-    )
-    .unwrap();
+    let (protocol, device_request) =
+        SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+            &mut rng,
+            &mut sender_state,
+            &leg_ref,
+            &leg_enc,
+            SETTLEMENT_AMOUNT,
+            &tree,
+        )
+        .unwrap();
     run_affirmation_split_protocol(
         SENDER_REVERSE_SPLIT_REQUEST,
         SENDER_REVERSE_SPLIT_RESPONSE,
@@ -655,7 +655,7 @@ pub fn gen_sender_reverse_split() {
         device_request,
         &sender_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -677,7 +677,7 @@ fn verify_v1_sender_reverse_split() {
         SETTLEMENT_AMOUNT,
     );
     let tree = make_account_tree(leaf);
-    let proof: SenderReversalProof = load_scale_v1(SENDER_REVERSE_SPLIT_PROOF);
+    let proof: SenderRevertAffirmationProof = load_scale_v1(SENDER_REVERSE_SPLIT_PROOF);
     proof
         .verify(&leg_enc, tree.root().unwrap(), &mut rng)
         .unwrap();
@@ -715,7 +715,7 @@ pub fn gen_sender_counter_update_split() {
         device_request,
         &sender_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -777,7 +777,7 @@ pub fn gen_instant_sender_affirm_split() {
         device_request,
         &sender_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
@@ -838,7 +838,7 @@ pub fn gen_instant_receiver_affirm_split() {
         device_request,
         &receiver_keys,
         &tree,
-        |res| protocol.finish(&mut rng, &res).unwrap(),
+        |res| protocol.finish::<_, ()>(&mut rng, &res).unwrap(),
     );
 }
 
