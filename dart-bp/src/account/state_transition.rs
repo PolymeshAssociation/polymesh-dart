@@ -1059,6 +1059,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_two_senders_one_receiver() {
+        // Two distinct senders (Alice, Bob) each pay the same receiver (Carol) in one batch; checks Carol's
+        // single state transition aggregating both receive affirmations (run with asset-id both revealed and hidden).
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1348,6 +1350,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_sender_and_receiver() {
+        // One party (Alice) is both sender on leg 1 (Alice->Bob) and receiver on leg 2 (Carol->Alice) in the same
+        // batch; checks her single state transition that mixes a send and a receive (asset-id revealed and hidden).
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1625,6 +1629,8 @@ mod tests {
 
     #[test]
     fn test_send_receive_and_reverse() {
+        // Alice's single proof over 4 ops at once: a send, a receive, a sender-side reversal (un-doing a send),
+        // and a counter decrease — checks balance/counter bookkeeping across all four reversible op kinds together.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1820,6 +1826,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_irreversible_operations() {
+        // Alice's single proof combining an irreversible send and an irreversible receive (one-shot ops that bump
+        // balance without leaving a reversible counter), vs the reversible send/receive used elsewhere.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -2005,6 +2013,8 @@ mod tests {
 
     #[test]
     fn test_combined_multi_asset_proofs() {
+        // Alice has two separate accounts (asset 1 and asset 2) as leaves of one shared tree; their two state-transition
+        // proofs share a single Bulletproofs prover/verifier so the range proofs are batched into one combined BP.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 14;
@@ -2664,8 +2674,12 @@ mod tests {
                 b"test_nonce",
             );
 
-        // No legs added → pre_finalize_checks must error.
-        assert!(builder.pre_finalize_checks().is_err());
+        // No legs added
+        assert_err!(
+            builder.pre_finalize_checks(),
+            Error::ProofGenerationError(_),
+            "No legs added"
+        );
     }
 
     #[test]
@@ -2717,7 +2731,11 @@ mod tests {
                 b"test_nonce",
             );
         builder_wrong.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
-        assert!(builder_wrong.pre_finalize_checks().is_err());
+        assert_err!(
+            builder_wrong.pre_finalize_checks(),
+            Error::ProofGenerationError(_),
+            "Counter mismatch"
+        );
 
         // With the correct counter (6) the check must pass.
         let correct_updated = account.get_state_for_send(amount).unwrap();
@@ -2852,6 +2870,8 @@ mod tests {
 
     #[test]
     fn verifier_rejects_missing_balance_proof_for_one_leg() {
+        // Builds a valid 2-send proof, then tampers it by popping one per-leg amount response from the balance proof
+        // (so only 1 of 2 legs is covered); the verifier must reject the under-specified balance proof.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         const L: usize = 64;

@@ -69,16 +69,16 @@ pub struct LegCreationProof<
     pub resp_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub re_randomized_points: ReRandomizedPoints<G0>,
     /// Bulletproof vector commitment to the following list
-    /// `[amount, r_1, r_2, r_3, r_4, 1/r_1, 1/r_2, r_2/r_1, r_3/r_1, r_3/r_2, r_4/r_1, r_4/r_2] || [r_2/r_1, r_1/r_2] || [l_0, l_0 * r_1, l_1, l_1 * r_1, ...,] || [m_0, m_0 / r_1, m_1, m_1 / r_1, ....]`
+    /// `[amount, r_1, r_2, r_3, r_4, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2, r_4/r_1, r_4/r_2] || [r_2/r_1, r_1/r_2] || [l_0, l_0 * r_1, l_1, l_1 * r_1, ...,] || [m_0, m_0 / r_1, m_1, m_1 / r_1, ....]`
     /// present only when sender and receiver decryption is needed.
     /// The third list is when asset has any encryption keys and fourth list when asset has mediators
     pub comm_r_i_amount: Affine<G0>,
     pub t_comm_r_i_amount: Affine<G0>,
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
     pub ped_comms: Vec<DivisorComms<Affine<G1>>>,
-    /// Response for proving `ct_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
+    /// Response for proving `ct_s = enc_key_gen * r_1 + pk_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
     pub resp_ct_s: PartialPokPedersenCommitment<Affine<G0>>,
-    /// Response for proving `ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}`
+    /// Response for proving `ct_r = enc_key_gen * r_2 + pk_r = enc_key_gen * r_2 + R[1] * r_2^{-1}`
     pub resp_ct_r: PartialPokPedersenCommitment<Affine<G0>>,
     /// Response for proving `S[2] = S[0] * r_3/r_1`
     pub resp_eph_pk_s_v: PartialPokDiscreteLog<Affine<G0>>,
@@ -108,6 +108,7 @@ pub struct LegCreationProof<
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G0>>>,
     /// Responses for proving public encryption key relations
     pub resp_eph_pk_public_enc: Vec<(
+        PartialPokDiscreteLog<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
@@ -315,7 +316,7 @@ impl<
             );
         }
 
-        let mut blindings_for_points = (0..num_asset_data_points)
+        let blindings_for_points = (0..num_asset_data_points)
             .map(|_| F0::rand(rng))
             .collect::<Vec<_>>();
 
@@ -326,7 +327,7 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        let (re_randomized_points, ped_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
+        let (re_randomized_points, divisor_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
             rng,
             even_prover,
             asset_data_points,
@@ -352,9 +353,11 @@ impl<
             );
 
             for i in 0..asset_data.num_total_keys() {
-                let k = if i < num_enc_keys {
+                let unblinded_point = if i < num_enc_keys {
+                    // For auditor
                     asset_data.enc_keys[i]
                 } else {
+                    // For mediator
                     (asset_comm_params.j_0
                         + asset_comm_params.j_1 * F0::from(asset_data.med_keys[i - num_enc_keys].0)
                         + asset_data.med_keys[i - num_enc_keys].1)
@@ -362,7 +365,7 @@ impl<
                 };
                 assert_eq!(
                     re_randomized_points.re_randomized_points[i + 1].into_group(),
-                    k + (b_blinding_base * blindings_for_points[i + 1])
+                    unblinded_point + (b_blinding_base * blindings_for_points[i + 1])
                 );
 
                 assert_eq!(
@@ -377,27 +380,18 @@ impl<
         let mut r_3 = leg_enc_rand.r3;
         let mut r_4 = leg_enc_rand.r4.unwrap();
 
-        // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m` and `M_i = pk_{e, j} * m_i`
+        // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m`.
+        // `M_i = pk_{e, j} * m_i` is the ephemeral public key so that mediator can get `enc_key_gen * m_i` to
+        // subtract from `ct_{m,i}` where `pk_{e, j}` is the encryption key corresponding to this mediator
         let r_meds = leg_enc_rand.r_meds.clone();
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
 
-        // Blindings used for encryption (auditor) keys, `pk_{{e,i}_r} = pk_{e,i} * l_i`. Skip first point since its for asset-id
-        let l = blindings_for_points
-            .iter()
-            .skip(1)
-            .take(num_enc_keys)
-            .map(|k| *k)
-            .collect::<Vec<_>>();
+        let (asset_id_point_blinding, l, k) =
+            Self::split_point_blindings(blindings_for_points, num_enc_keys);
 
-        // Blindings used for mediator keys, `pk_{{m,i}_r} = pk_{m,i} * k_i`. Skip first point since its for asset-id and then points for encryption keys
-        let k = blindings_for_points
-            .iter()
-            .skip(1 + num_enc_keys)
-            .take(num_med_keys)
-            .map(|k| *k)
-            .collect::<Vec<_>>();
-
+        debug_assert_eq!(l.len(), num_enc_keys);
+        debug_assert_eq!(k.len(), num_med_keys);
         debug_assert_eq!(l.len() + k.len() + 1, num_asset_data_points);
 
         // If ct_s and ct_r need to be decrypted.
@@ -543,7 +537,7 @@ impl<
             r_4_blinding,
             at,
             asset_id_blinding,
-            blindings_for_points[0],
+            asset_id_point_blinding,
             F0::rand(rng),
             enc_key_gen,
             enc_gen,
@@ -598,7 +592,7 @@ impl<
             (None, None)
         };
 
-        let pk_en_proto = Self::enc_key_protos(
+        let mut pk_en_proto = Self::enc_key_protos(
             &l,
             &l_r_1,
             &l_blindings,
@@ -617,7 +611,7 @@ impl<
             &leg_enc,
         );
 
-        let pk_m_proto = Self::mediator_key_protos(
+        let mut pk_m_proto = Self::mediator_key_protos(
             &r_meds,
             &m_blindings,
             &k,
@@ -633,12 +627,13 @@ impl<
         );
 
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg.public_enc_keys.len());
-        for i in 0..leg.public_enc_keys.len() {
-            // For proving A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
+        for pk in &leg.public_enc_keys {
+            // For proving A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3, A[i][3] = pk_en[i] * r_4
             eph_pk_public_enc_proto.push((
-                PokDiscreteLogProtocol::init(r_1, r_1_blinding, &leg.public_enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_2, r_2_blinding, &leg.public_enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_3, r_3_blinding, &leg.public_enc_keys[i]),
+                PokDiscreteLogProtocol::init(r_1, r_1_blinding, pk),
+                PokDiscreteLogProtocol::init(r_2, r_2_blinding, pk),
+                PokDiscreteLogProtocol::init(r_3, r_3_blinding, pk),
+                PokDiscreteLogProtocol::init(r_4, r_4_blinding, pk),
             ));
         }
 
@@ -659,7 +654,6 @@ impl<
 
         Zeroize::zeroize(&mut asset_id_blinding);
         Zeroize::zeroize(&mut at);
-        Zeroize::zeroize(&mut blindings_for_points);
 
         Zeroize::zeroize(&mut l_blindings);
         Zeroize::zeroize(&mut l_r_1_blindings);
@@ -754,75 +748,68 @@ impl<
             )?;
         }
 
-        for i in 0..l.len() {
-            pk_en_proto[i].0.challenge_contribution(
-                &re_randomized_points.re_randomized_points[i + 1],
+        for (i, ((p, re_rand_point), eph_pk_enc_key)) in pk_en_proto
+            .iter_mut()
+            .zip(re_randomized_points.re_randomized_points.iter().skip(1))
+            .zip(leg_enc.eph_pk_enc_keys.iter())
+            .enumerate()
+        {
+            p.0.challenge_contribution(
+                re_rand_point,
                 &neg_blinding_base,
-                &leg_enc.eph_pk_enc_keys[i].r1,
+                &eph_pk_enc_key.r1,
                 &mut transcript,
             )?;
-            pk_en_proto[i].1.challenge_contribution(
+            p.1.challenge_contribution(
                 &b_base,
                 &re_randomized_points.blindings_with_different_gen[&(i + 1)],
                 &mut transcript,
             )?;
-            pk_en_proto[i].2.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                &leg_enc.eph_pk_enc_keys[i].r2,
-                &mut transcript,
-            )?;
-            pk_en_proto[i].3.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                &leg_enc.eph_pk_enc_keys[i].r3,
-                &mut transcript,
-            )?;
-            pk_en_proto[i].4.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                leg_enc.eph_pk_enc_keys[i].r4.as_ref().unwrap(),
+            p.2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
+            p.3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
+            p.4.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                eph_pk_enc_key.r4.as_ref().unwrap(),
                 &mut transcript,
             )?;
         }
 
-        for i in 0..r_meds.len() {
-            let y = leg_enc.mediators[i].ct_med
+        for ((p, mediator), re_rand_point) in
+            pk_m_proto.iter_mut().zip(leg_enc.mediators.iter()).zip(
+                re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(l.len() + 1),
+            )
+        {
+            let y = mediator.ct_med
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators[i].enc_key_index))
-                - re_randomized_points.re_randomized_points[l.len() + i + 1];
-            pk_m_proto[i].0.challenge_contribution(
+                + (asset_comm_params.j_1 * F0::from(mediator.enc_key_index))
+                - re_rand_point;
+            p.0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
                 &y.into_affine(),
                 &mut transcript,
             )?;
 
-            pk_m_proto[i].1.challenge_contribution(
-                &b_base,
-                &re_randomized_points.re_randomized_points[1 + l.len() + i],
-                &mut transcript,
-            )?;
+            p.1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
-            pk_m_proto[i].2.challenge_contribution(
-                &base,
-                &leg_enc.mediators[i].eph_pk_med_key,
-                &mut transcript,
-            )?;
+            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
+            p.2.challenge_contribution(base, &mediator.eph_pk_med_key, &mut transcript)?;
         }
 
-        for i in 0..leg.public_enc_keys.len() {
-            eph_pk_public_enc_proto[i].0.challenge_contribution(
-                &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r1,
-                &mut transcript,
-            )?;
-            eph_pk_public_enc_proto[i].1.challenge_contribution(
-                &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r2,
-                &mut transcript,
-            )?;
-            eph_pk_public_enc_proto[i].2.challenge_contribution(
-                &leg.public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r3,
+        for ((p, pk), eph_pk_public_enc) in eph_pk_public_enc_proto
+            .iter_mut()
+            .zip(leg.public_enc_keys.iter())
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+        {
+            p.0.challenge_contribution(pk, &eph_pk_public_enc.r1, &mut transcript)?;
+            p.1.challenge_contribution(pk, &eph_pk_public_enc.r2, &mut transcript)?;
+            p.2.challenge_contribution(pk, &eph_pk_public_enc.r3, &mut transcript)?;
+            p.3.challenge_contribution(
+                pk,
+                eph_pk_public_enc.r4.as_ref().unwrap(),
                 &mut transcript,
             )?;
         }
@@ -880,11 +867,12 @@ impl<
         // Generate responses for public encryption key proofs
         let resp_eph_pk_public_enc = eph_pk_public_enc_proto
             .into_iter()
-            .map(|(p_0, p_1, p_2)| {
+            .map(|(p_0, p_1, p_2, p_3)| {
                 (
                     p_0.gen_partial_proof(),
                     p_1.gen_partial_proof(),
                     p_2.gen_partial_proof(),
+                    p_3.gen_partial_proof(),
                 )
             })
             .collect();
@@ -914,7 +902,7 @@ impl<
             resp_asset_id_enc,
             resp_asset_id,
             re_randomized_points,
-            ped_comms,
+            ped_comms: divisor_comms,
             comm_r_i_amount,
             t_comm_r_i_amount: t_comm_r_i_amount.t,
             resp_comm_r_i_amount,
@@ -1104,32 +1092,33 @@ impl<
                 self.re_randomized_points.len(),
             ));
         }
-        let num_enc_keys = self.resp_eph_pk_enc.len();
-        let num_med_keys = self.resp_eph_pk_meds.len();
+        let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
+        let num_med_keys = leg_enc.num_mediators();
+        let num_pub_enc_keys = public_enc_keys.len();
 
-        if leg_enc.eph_pk_enc_keys.len() != num_enc_keys {
+        if self.resp_eph_pk_enc.len() != num_enc_keys {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_enc_keys.len() != resp_eph_pk_enc.len() ({} != {})",
-                leg_enc.eph_pk_enc_keys.len(),
-                num_enc_keys
+                num_enc_keys,
+                self.resp_eph_pk_enc.len()
             )));
         }
-        if leg_enc.num_mediators() != num_med_keys {
+        if self.resp_eph_pk_meds.len() != num_med_keys {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.ct_meds.len() != resp_eph_pk_meds.len() ({} != {})",
                 leg_enc.num_mediators(),
-                num_med_keys
+                self.resp_eph_pk_meds.len()
             )));
         }
 
-        if self.resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() {
+        if leg_enc.eph_pk_public_enc_keys.len() != num_pub_enc_keys {
             return Err(Error::ProofVerificationError(format!(
-                "resp_eph_pk_public_enc.len() != leg_enc.eph_pk_public_enc_keys.len() ({} != {})",
-                self.resp_eph_pk_public_enc.len(),
+                "num_pub_enc_keys != leg_enc.eph_pk_public_enc_keys.len() ({} != {})",
+                num_pub_enc_keys,
                 leg_enc.eph_pk_public_enc_keys.len()
             )));
         }
-        if self.resp_eph_pk_public_enc.len() != public_enc_keys.len() {
+        if self.resp_eph_pk_public_enc.len() != num_pub_enc_keys {
             return Err(Error::ProofVerificationError(format!(
                 "resp_eph_pk_public_enc.len() != public_enc_keys.len() ({} != {})",
                 self.resp_eph_pk_public_enc.len(),
@@ -1188,16 +1177,29 @@ impl<
                 )
             })?;
 
-        for i in 0..num_enc_keys {
-            if leg_enc.eph_pk_enc_keys[i].r4.is_none() {
+        for (i, eph_pk_enc_key) in leg_enc.eph_pk_enc_keys.iter().enumerate() {
+            if eph_pk_enc_key.r4.is_none() {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                 )));
             }
         }
 
-        for i in 0..num_med_keys {
-            let idx = leg_enc.mediators[i].enc_key_index as usize;
+        for (i, (_, eph_pk_public_enc_key)) in self
+            .resp_eph_pk_public_enc
+            .iter()
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+            .enumerate()
+        {
+            if eph_pk_public_enc_key.r4.is_none() {
+                return Err(Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_public_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                )));
+            }
+        }
+
+        for mediator in &leg_enc.mediators {
+            let idx = mediator.enc_key_index as usize;
             if idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.mediators[i].enc_key_index is out of bounds for eph_pk_enc_keys ({} >= {})",
@@ -1207,6 +1209,8 @@ impl<
         }
 
         ensure_sender_receiver_not_same(&leg_enc)?;
+
+        ensure_eph_key_not_identity(&leg_enc)?;
 
         // If ct_s and ct_r need to be decrypted.
         let sender_receiver_decryption_needed = parties_see_each_other || num_enc_keys > 0;
@@ -1363,32 +1367,39 @@ impl<
             )?;
         }
 
-        for i in 0..num_enc_keys {
-            let (p_0, p_1, p_2, p_3, p_4) = &self.resp_eph_pk_enc[i];
+        for (i, (((p_0, p_1, p_2, p_3, p_4), re_rand_point), eph_pk_enc_key)) in self
+            .resp_eph_pk_enc
+            .iter()
+            .zip(
+                self.re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(1),
+            )
+            .zip(leg_enc.eph_pk_enc_keys.iter())
+            .enumerate()
+        {
             p_0.challenge_contribution(
-                &self.re_randomized_points.re_randomized_points[i + 1],
+                re_rand_point,
                 &neg_blinding_base,
-                &leg_enc.eph_pk_enc_keys[i].r1,
+                &eph_pk_enc_key.r1,
                 &mut transcript,
             )?;
             p_1.challenge_contribution(
                 &b_base,
-                &self.re_randomized_points.blindings_with_different_gen[&(i + 1)],
+                self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
+                        i + 1, i
+                    ))
+                })?,
                 &mut transcript,
             )?;
-            p_2.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                &leg_enc.eph_pk_enc_keys[i].r2,
-                &mut transcript,
-            )?;
-            p_3.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                &leg_enc.eph_pk_enc_keys[i].r3,
-                &mut transcript,
-            )?;
+            p_2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
+            p_3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
             p_4.challenge_contribution(
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                leg_enc.eph_pk_enc_keys[i].r4.as_ref().ok_or_else(|| {
+                &eph_pk_enc_key.r1,
+                eph_pk_enc_key.r4.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
@@ -1397,12 +1408,21 @@ impl<
             )?;
         }
 
-        for i in 0..num_med_keys {
-            let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let y = leg_enc.mediators[i].ct_med
+        for (((p_0, p_1, p_2), mediator), re_rand_point) in self
+            .resp_eph_pk_meds
+            .iter()
+            .zip(leg_enc.mediators.iter())
+            .zip(
+                self.re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(num_enc_keys + 1),
+            )
+        {
+            let y = mediator.ct_med
                 + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(leg_enc.mediators[i].enc_key_index))
-                - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
+                + (asset_comm_params.j_1 * F0::from(mediator.enc_key_index))
+                - re_rand_point;
             p_0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
@@ -1410,35 +1430,29 @@ impl<
                 &mut transcript,
             )?;
 
-            p_1.challenge_contribution(
-                &b_base,
-                &self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1],
-                &mut transcript,
-            )?;
+            p_1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
-            p_2.challenge_contribution(
-                &base,
-                &leg_enc.mediators[i].eph_pk_med_key,
-                &mut transcript,
-            )?;
+            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
+            p_2.challenge_contribution(base, &mediator.eph_pk_med_key, &mut transcript)?;
         }
 
-        for i in 0..self.resp_eph_pk_public_enc.len() {
-            let (p_0, p_1, p_2) = &self.resp_eph_pk_public_enc[i];
-            p_0.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r1,
-                &mut transcript,
-            )?;
-            p_1.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r2,
-                &mut transcript,
-            )?;
-            p_2.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r3,
+        for (i, (((p_0, p_1, p_2, p_3), pk), eph_pk_public_enc_key)) in self
+            .resp_eph_pk_public_enc
+            .iter()
+            .zip(public_enc_keys.iter())
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+            .enumerate()
+        {
+            p_0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript)?;
+            p_1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript)?;
+            p_2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript)?;
+            p_3.challenge_contribution(
+                pk,
+                eph_pk_public_enc_key.r4.as_ref().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "leg_enc.eph_pk_public_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                    ))
+                })?,
                 &mut transcript,
             )?;
         }
@@ -1608,14 +1622,24 @@ impl<
 
         // Dont need to offset any responses as following will only execute if sender_receiver_decryption_needed = true
 
-        for i in 0..num_enc_keys {
-            let (p_0, p_1, p_2, p_3, p_4) = &self.resp_eph_pk_enc[i];
+        for (i, (((p_0, p_1, p_2, p_3, p_4), re_rand_point), eph_pk_enc_key)) in self
+            .resp_eph_pk_enc
+            .iter()
+            .zip(
+                self.re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(1),
+            )
+            .zip(leg_enc.eph_pk_enc_keys.iter())
+            .enumerate()
+        {
             verify_or_rmc_3!(
                 rmc,
                 p_0,
                 format!("resp_eph_pk_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r1,
-                self.re_randomized_points.re_randomized_points[i + 1],
+                eph_pk_enc_key.r1,
+                *re_rand_point,
                 neg_blinding_base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
@@ -1625,7 +1649,12 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_enc[{}].1 verification failed", i),
-                self.re_randomized_points.blindings_with_different_gen[&(i + 1)],
+                *self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
+                        i + 1, i
+                    ))
+                })?,
                 b_base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + (2 * i)],
@@ -1634,8 +1663,8 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r2,
-                leg_enc.eph_pk_enc_keys[i].r1,
+                eph_pk_enc_key.r2,
+                eph_pk_enc_key.r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[12],
             );
@@ -1643,8 +1672,8 @@ impl<
                 rmc,
                 p_3,
                 format!("resp_eph_pk_enc[{}].3 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r3,
-                leg_enc.eph_pk_enc_keys[i].r1,
+                eph_pk_enc_key.r3,
+                eph_pk_enc_key.r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[8],
             );
@@ -1652,24 +1681,34 @@ impl<
                 rmc,
                 p_4,
                 format!("resp_eph_pk_enc[{}].4 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r4.clone().ok_or_else(|| {
+                eph_pk_enc_key.r4.clone().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
-                leg_enc.eph_pk_enc_keys[i].r1,
+                eph_pk_enc_key.r1,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[10],
             );
         }
 
-        for i in 0..num_med_keys {
-            let (p_0, p_1, p_2) = &self.resp_eph_pk_meds[i];
-            let med_key_idx = leg_enc.mediators[i].enc_key_index as usize;
-            let y = leg_enc.mediators[i].ct_med
+        for (i, (((p_0, p_1, p_2), mediator), re_rand_point)) in self
+            .resp_eph_pk_meds
+            .iter()
+            .zip(leg_enc.mediators.iter())
+            .zip(
+                self.re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(num_enc_keys + 1),
+            )
+            .enumerate()
+        {
+            let med_key_idx = mediator.enc_key_index as usize;
+            let y = mediator.ct_med
                 + asset_comm_params.j_0
                 + (asset_comm_params.j_1 * F0::from(med_key_idx as u64))
-                - self.re_randomized_points.re_randomized_points[num_enc_keys + i + 1];
+                - re_rand_point;
             if med_key_idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
@@ -1693,7 +1732,12 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_meds[{}].1 verification failed", i),
-                self.re_randomized_points.blindings_with_different_gen[&(num_enc_keys + i + 1)],
+                *self.re_randomized_points.blindings_with_different_gen.get(&(num_enc_keys + i + 1)).ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "re_randomized_points.blindings_with_different_gen missing key {} for med key {}",
+                        num_enc_keys + i + 1, i
+                    ))
+                })?,
                 b_base,
                 &challenge,
                 &p_0.response2,
@@ -1703,22 +1747,27 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_meds[{}].2 verification failed", i),
-                leg_enc.mediators[i].eph_pk_med_key,
+                mediator.eph_pk_med_key,
                 base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
             );
         }
 
-        // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
-        for i in 0..self.resp_eph_pk_public_enc.len() {
-            let (p_0, p_1, p_2) = &self.resp_eph_pk_public_enc[i];
+        // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3, A[i][3] = pk_en[i] * r_4
+        for (i, (((p_0, p_1, p_2, p_3), pk), eph_pk_public_enc_key)) in self
+            .resp_eph_pk_public_enc
+            .iter()
+            .zip(public_enc_keys.iter())
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+            .enumerate()
+        {
             verify_or_rmc_2!(
                 rmc,
                 p_0,
                 format!("resp_eph_pk_public_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r1,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r1,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
             );
@@ -1726,8 +1775,8 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_public_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r2,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r2,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
             );
@@ -1735,10 +1784,19 @@ impl<
                 rmc,
                 p_2,
                 format!("resp_eph_pk_public_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r3,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r3,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
+            );
+            verify_or_rmc_2!(
+                rmc,
+                p_3,
+                format!("resp_eph_pk_public_enc[{}].3 verification failed", i),
+                *eph_pk_public_enc_key.r4.as_ref().unwrap(),
+                *pk,
+                &challenge,
+                &self.resp_comm_r_i_amount.0[5],
             );
         }
 
@@ -1757,6 +1815,19 @@ impl<
         );
 
         Ok(())
+    }
+
+    /// Split the per-point re-randomization blindings into their 3 roles.
+    /// Returns (asset-id point blinding, encryption-key blindings, mediator-key blindings)
+    fn split_point_blindings(
+        mut blindings: Vec<F0>,
+        num_enc_keys: usize,
+    ) -> (F0, Vec<F0>, Vec<F0>) {
+        // First point since its for asset-id
+        let asset_id_point_blinding = blindings.remove(0);
+        let k = blindings.split_off(num_enc_keys);
+        let l = blindings;
+        (asset_id_point_blinding, l, k)
     }
 
     fn enforce_constraints<CS: ConstraintSystem<F0>>(
@@ -1998,15 +2069,24 @@ impl<
         PokDiscreteLogProtocol<Affine<G0>>,
     )> {
         let mut pk_en_proto = Vec::with_capacity(l.len());
-        for i in 0..l.len() {
+        for (i, (((re_rand_point, l_r_1_i), l_r_1_blinding), eph_pk_enc_key)) in
+            re_randomized_points
+                .re_randomized_points
+                .iter()
+                .skip(1)
+                .zip(l_r_1.iter())
+                .zip(l_r_1_blindings.iter())
+                .zip(leg_enc.eph_pk_enc_keys.iter())
+                .enumerate()
+        {
             // Since role=0 for encryption keys, no effect on base and thus its re_randomized_points[i + 1]
             // For proving relation `A_i[0] = pk_{{en,i}_r} * r_1 + blinding_base * l_i * r_1`
             let t_1 = PokPedersenCommitmentProtocol::init(
                 r_1,
                 r_1_blinding,
-                &re_randomized_points.re_randomized_points[i + 1],
-                l_r_1[i],
-                l_r_1_blindings[i],
+                re_rand_point,
+                *l_r_1_i,
+                *l_r_1_blinding,
                 &neg_blinding_base,
             );
 
@@ -2017,9 +2097,10 @@ impl<
             );
 
             // For proving relation `re_randomized_points[i + 1] = B * l_i`
+            // This is to ensure that prover cannot use a different `l_i` in `A_i[0]`
             let t_1_1 = PokDiscreteLogProtocol::init(l[i], l_blindings[i], &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[i].r1;
+            let base = &eph_pk_enc_key.r1;
 
             // For proving relation `A_i[1] = A_i[0] * r_2/r_1`
             let t_2 = PokDiscreteLogProtocol::init(
@@ -2059,15 +2140,29 @@ impl<
         let _ = (num_enc_keys, re_randomized_points);
 
         let mut pk_m_proto = Vec::with_capacity(r_meds.len());
-        for i in 0..r_meds.len() {
+        for (
+            i,
+            (
+                ((((r_med, m_blinding), k_i), k_blinding), mediator),
+                (m_r_1_inv_i, m_r_1_inv_blinding),
+            ),
+        ) in r_meds
+            .iter()
+            .zip(m_blindings.iter())
+            .zip(k.iter())
+            .zip(k_blindings.iter())
+            .zip(leg_enc.mediators.iter())
+            .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
+            .enumerate()
+        {
             // role=1 for mediator keys
             // For proving relation `ct_m[i] + j_0 + j_1 * index - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
             let t_m = PokPedersenCommitmentProtocol::init(
-                r_meds[i],
-                m_blindings[i],
+                *r_med,
+                *m_blinding,
                 &enc_key_gen,
-                k[i],
-                k_blindings[i],
+                *k_i,
+                *k_blinding,
                 &neg_blinding_base,
             );
 
@@ -2075,16 +2170,16 @@ impl<
             debug_assert_eq!(
                 re_randomized_points.blindings_with_different_gen[&(1 + num_enc_keys + i)]
                     .into_group(),
-                b_base * k[i]
+                b_base * *k_i
             );
 
             // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
-            let t_k = PokDiscreteLogProtocol::init(k[i], k_blindings[i], &b_base);
+            let t_k = PokDiscreteLogProtocol::init(*k_i, *k_blinding, &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
+            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
 
             // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
-            let t_eph_m = PokDiscreteLogProtocol::init(m_r_1_inv[i], m_r_1_inv_blindings[i], base);
+            let t_eph_m = PokDiscreteLogProtocol::init(*m_r_1_inv_i, *m_r_1_inv_blinding, base);
             pk_m_proto.push((t_m, t_k, t_eph_m));
         }
         pk_m_proto
@@ -2165,7 +2260,19 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
+        for (i, (idx, _)) in leg.med_keys.iter().enumerate() {
+            if (*idx as usize) >= leg.enc_keys.len() {
+                return Err(Error::ProofGenerationError(format!(
+                    "leg.med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
+                    *idx,
+                    leg.enc_keys.len()
+                )));
+            }
+        }
+
         ensure_sender_receiver_not_same(leg_enc)?;
+
+        ensure_eph_key_not_identity(leg_enc)?;
 
         Ok(())
     }
@@ -2207,6 +2314,28 @@ pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
+    leg_enc: &LegEncryption<Affine<G0>>,
+) -> Result<()> {
+    let s = &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s;
+    let r = &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r;
+    if s.r1.is_zero()
+        || (s.r2.is_some() && s.r2.as_ref().unwrap().is_zero())
+        || s.r3.is_zero()
+        || (s.r4.is_some() && s.r4.as_ref().unwrap().is_zero())
+        || r.r1.is_some() && r.r1.as_ref().unwrap().is_zero()
+        || r.r2.is_zero()
+        || r.r3.is_zero()       // this and next are redundant since leg creation proof ensures r_i are consistent
+        || (r.r4.is_some() && r.r4.as_ref().unwrap().is_zero())
+    {
+        Err(Error::ProofGenerationError(
+            "eph_pk_s or eph_pk_r is identity".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(all(
@@ -2277,6 +2406,12 @@ mod mocking_tests {
             .clear_mock();
     }
 
+    fn clear_split_point_blindings_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::
+            split_point_blindings
+            .clear_mock();
+    }
+
     fn assert_leg_verify_fails_with_rmc(
         proof: &LegCreationProof<64, PallasF, VestaF, PallasParameters, VestaParameters>,
         rng: &mut impl CryptoRngCore,
@@ -2293,21 +2428,20 @@ mod mocking_tests {
         enc_key_gen: PallasA,
         enc_gen: PallasA,
     ) {
-        assert!(
-            proof
-                .verify::<_, PallasParams, VestaParams>(
-                    rng,
-                    leg_enc.clone(),
-                    root,
-                    vec![],
-                    nonce,
-                    asset_tree_params,
-                    asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify::<_, PallasParams, VestaParams>(
+                rng,
+                leg_enc.clone(),
+                root,
+                vec![],
+                nonce,
+                asset_tree_params,
+                asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            ),
+            Error::ProofVerificationError(_)
         );
 
         let mut rmc_1 = RandomizedMultChecker::new(VestaF::rand(rng));
@@ -2325,11 +2459,15 @@ mod mocking_tests {
             Some((&mut rmc_1, &mut rmc_0)),
         );
         let rmc_result = verify_rmc(rmc_0, rmc_1);
-        assert!(verify_with_rmc.is_err() || rmc_result.is_err());
+        assert!(
+            matches!(verify_with_rmc, Err(Error::ProofVerificationError(_)))
+                || matches!(rmc_result, Err(Error::ProofVerificationError(_)))
+        );
     }
 
     #[test]
     fn leg_proof_with_mocked_asset_id_fails_verification() {
+        // Malicious prover mocks the asset-id proto so its leaf commitment opens to asset_id_2 while the leg ciphertext encrypts asset_id_1; verifier must reject the mismatch.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -2488,6 +2626,7 @@ mod mocking_tests {
 
     #[test]
     fn leg_proof_with_mocked_sender_and_receiver_key_fails_verification() {
+        // Prover mocks the sender-key (then separately the receiver-key) protos with bogus randomness that disagrees with the encrypted key ciphertext; each must fail verification.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -2748,6 +2887,7 @@ mod mocking_tests {
 
     #[test]
     fn leg_proof_with_mocked_enc_key_fails_verification() {
+        // Prover mocks the auditor encryption-key protos with bogus randomness inconsistent with the ephemeral enc-key ciphertexts; verifier must reject.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -2941,6 +3081,7 @@ mod mocking_tests {
 
     #[test]
     fn leg_proof_with_mocked_mediator_key_fails_verification() {
+        // Prover mocks the mediator-key protos with bogus randomness inconsistent with the mediator's enc-key ciphertext; verifier must reject.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -3028,7 +3169,7 @@ mod mocking_tests {
 
         let _ = &MockGuard::new(clear_mediator_key_protos_mock);
         LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::
-            mediator_key_protos
+        mediator_key_protos
             .mock_safe(
                 move |_r_meds,
                       _m_blindings,
@@ -3110,5 +3251,283 @@ mod mocking_tests {
             enc_key_gen,
             enc_gen,
         );
+    }
+
+    #[test]
+    fn malicious_creator_can_exclude_auditor_from_decryption() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"malicious-leg-exclude-auditor";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 2u8;
+        let num_mediators = 0u8;
+        let target = 0usize;
+        let other = 1usize;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys: Vec<(u8, PallasA)> = vec![];
+
+        // The asset leaf holds the *real* auditor keys.
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (mut leg_enc, leg_enc_rand) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        // Offset applied to the target auditor. Same `delta` is used to (a) corrupt the published
+        // ephemeral keys here and (b) offset the BP blinding `l_target` via the mock below.
+        let delta = PallasF::rand(&mut rng);
+        let b_blinding_base = asset_tree_params.odd_parameters.pc_gens().B_blinding;
+        let r1 = leg_enc_rand.r1;
+        let r2 = leg_enc_rand.r2;
+        let r3 = leg_enc_rand.r3;
+        let r4 = leg_enc_rand.r4.unwrap();
+
+        // Change ephemeral keys for `target`.
+        {
+            let eph = &mut leg_enc.eph_pk_enc_keys[target];
+            eph.r1 = (eph.r1 - b_blinding_base * (r1 * delta)).into_affine();
+            eph.r2 = (eph.r2 - b_blinding_base * (r2 * delta)).into_affine();
+            eph.r3 = (eph.r3 - b_blinding_base * (r3 * delta)).into_affine();
+            eph.r4 = Some((eph.r4.unwrap() - b_blinding_base * (r4 * delta)).into_affine());
+        }
+
+        let _guard = MockGuard::new(clear_split_point_blindings_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::split_point_blindings
+            .mock_safe(move |mut blindings: Vec<PallasF>, num_enc_keys: usize| {
+                // Index 0 is the asset-id blinding,
+                blindings[1 + target] += delta;
+                MockResult::Continue((blindings, num_enc_keys))
+            });
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let verify_res = proof.verify::<_, PallasParams, VestaParams>(
+            &mut rng,
+            leg_enc.clone(),
+            &root,
+            vec![],
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            None,
+        );
+        assert_err!(verify_res, Error::ProofVerificationError(_));
+
+        let sk_control = keys_auditor[other].0.0;
+        let (_, _, at_dec, amt_dec) = leg_enc
+            .decrypt_given_key(&sk_control, false, other, enc_gen)
+            .unwrap();
+        assert_eq!(at_dec, asset_id);
+        assert_eq!(amt_dec, amount);
+    }
+
+    #[test]
+    fn malicious_creator_can_exclude_mediator_from_decryption() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"malicious-leg-exclude-mediator";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 1u8;
+        let target = 0usize;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            (num_auditors + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (mut leg_enc, leg_enc_rand) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let delta = PallasF::rand(&mut rng);
+        let b_blinding_base = asset_tree_params.odd_parameters.pc_gens().B_blinding;
+        let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
+
+        // Change the mediator ciphertext: CT_{m_target} = correct - delta.B_blinding.
+        leg_enc.mediators[target].ct_med =
+            (leg_enc.mediators[target].ct_med - b_blinding_base * delta).into_affine();
+
+        let _guard = MockGuard::new(clear_split_point_blindings_mock);
+        let offset_index = 1 + num_enc_keys + target;
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::split_point_blindings
+            .mock_safe(move |mut blindings: Vec<PallasF>, num_enc_keys: usize| {
+                // Index 0 is the asset-id blinding, next num_enc_keys for encryption keys
+                blindings[offset_index] += delta;
+                MockResult::Continue((blindings, num_enc_keys))
+            });
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let verify_res = proof.verify::<_, PallasParams, VestaParams>(
+            &mut rng,
+            leg_enc.clone(),
+            &root,
+            vec![],
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            None,
+        );
+        assert_err!(verify_res, Error::ProofVerificationError(_));
     }
 }

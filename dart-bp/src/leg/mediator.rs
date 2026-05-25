@@ -152,6 +152,7 @@ mod tests {
 
     #[test]
     fn mediator_action() {
+        // Each mediator "accept"s its leg: build the MediatorTxnProof and check it verifies, via both the regular and RandomizedMultChecker paths.
         let mut rng = rand::thread_rng();
 
         let label = b"testing";

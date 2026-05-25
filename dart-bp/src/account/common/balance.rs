@@ -16,8 +16,10 @@ use bulletproofs::{BulletproofGens, PedersenGens};
 use dock_crypto_utils::transcript::MerlinTranscript;
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
-use schnorr_pok::partial::{PartialPokPedersenCommitment, PartialSchnorrResponse};
+use schnorr_pok::discrete_log::PokPedersenCommitmentProtocol;
+use schnorr_pok::partial::{
+    Partial2PokPedersenCommitment, PartialPokPedersenCommitment, PartialSchnorrResponse,
+};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -59,7 +61,8 @@ pub struct BalanceChangeSplitProof<
 > {
     pub partial: BalanceChangeProofPartial<F0, G0>,
     /// For relation `ct_amount_2 = enc_gen * amount + B_blinding * (-k)` for some randomness `k` which is used in auth proof as well.
-    pub resp_ct_amount: Vec<PokPedersenCommitment<Affine<G0>>>,
+    /// The amount is shared with the BP commitment
+    pub resp_ct_amount: Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -216,8 +219,10 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
 
 /// Balance change prover for the split (W2/W3) affirmation flow.
 /// Analogous to `BalanceChangeProver` for the non-split (solo) flow.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct BalanceSplitProver<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy> {
     comm_bp_bal_blinding: F0,
+    #[zeroize(skip)]
     comm_bp_bal: Affine<G0>,
     t_comm_bp_bal: SchnorrCommitment<Affine<G0>>,
     amounts: Vec<Balance>,
@@ -319,7 +324,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         challenge: &F0,
     ) -> Result<(
         BalanceChangeProofPartial<F0, G0>,
-        Vec<PokPedersenCommitment<Affine<G0>>>,
+        Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
     )> {
         let resp_comm_bp_bal = generate_host_sigma_responses_for_balance_change(
             &self.amounts,
@@ -329,8 +334,9 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         )?;
         let resp_ct_amount_2: Vec<_> = self
             .t_ct_amount
+            .clone()
             .into_iter()
-            .map(|(_, proto)| proto.gen_proof(challenge))
+            .map(|(_, proto)| proto.gen_partial2_proof(challenge))
             .collect();
         Ok((
             BalanceChangeProofPartial {

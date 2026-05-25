@@ -644,6 +644,7 @@ fn counter_update_txn_by_sender() {
 
 #[test]
 fn reverse_send_txn() {
+    // Sender rolls back a pending send: decrements its counter AND restores the locked amount back into balance.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
@@ -932,6 +933,8 @@ fn reverse_receive_txn() {
 
 #[test]
 fn single_shot_settlement() {
+    // One leg settled irreversibly in a single round: leg-creation + Irreversible sender + Irreversible receiver
+    // proofs all built and batch-verified together (no separate affirm-then-claim steps, no reversal possible).
     const NUM_GENS: usize = 1 << 13;
     const L: usize = 64;
 
@@ -1188,6 +1191,8 @@ fn single_shot_settlement() {
 
 #[test]
 fn single_shot_combined_create_and_send() {
+    // Folds leg-creation + Irreversible-sender into ONE shared prover/aggregated R1CS proof; the receiver proof
+    // is still built separately. Verified via shared verifier for the combined pair plus a tuple for the receiver.
     const NUM_GENS: usize = 1 << 16;
     const L: usize = 64;
 
@@ -1488,6 +1493,8 @@ fn single_shot_combined_create_and_send() {
 
 #[test]
 fn single_shot_combined_create_and_recv() {
+    // Mirror of combined_create_and_send: folds leg-creation + Irreversible-RECEIVER into one shared/aggregated
+    // proof, with the sender proof built separately.
     const NUM_GENS: usize = 1 << 14;
     const L: usize = 64;
 
@@ -1804,6 +1811,8 @@ fn single_shot_combined_create_and_recv() {
 
 #[test]
 fn single_shot_swap() {
+    // Atomic 2-leg swap done irreversibly in one shot: Alice sends asset1 to Bob, Bob sends asset2 to Alice; each
+    // party's two roles (one send, one receive, different assets) are folded into a single combined proof.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -2370,6 +2379,8 @@ fn single_shot_swap() {
 
 #[test]
 fn single_shot_settlement_asset_id_revealed() {
+    // Same single-shot irreversible settlement as single_shot_settlement, but the asset-id is public, so it uses
+    // PublicAssetLegCreationProof (no asset curve-tree / membership proof) instead of LegCreationProof.
     const NUM_GENS: usize = 1 << 13;
     const L: usize = 64;
 
@@ -2544,6 +2555,8 @@ fn single_shot_settlement_asset_id_revealed() {
 
 #[test]
 fn single_shot_combined_create_and_send_asset_id_revealed() {
+    // combined_create_and_send but with public asset-id: leg uses a single-curve PublicAssetLegCreationProof
+    // (own prover), folded with the Irreversible-sender's two-curve proof; receiver proof built separately.
     const NUM_GENS: usize = 1 << 16;
     const L: usize = 64;
 
@@ -2768,6 +2781,8 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
 
 #[test]
 fn single_shot_combined_create_and_recv_asset_id_revealed() {
+    // combined_create_and_recv but with public asset-id: single-curve PublicAssetLegCreationProof folded with the
+    // Irreversible-RECEIVER's two-curve proof; sender proof built separately.
     const NUM_GENS: usize = 1 << 14;
     const L: usize = 64;
 
@@ -2998,6 +3013,8 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
 
 #[test]
 fn single_shot_swap_asset_id_revealed() {
+    // single_shot_swap (atomic Alice<->Bob 2-asset swap, irreversible) but with public asset-ids: each leg uses a
+    // single-curve PublicAssetLegCreationProof, no asset curve tree.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -3487,6 +3504,8 @@ fn single_shot_swap_asset_id_revealed() {
 
 #[test]
 fn swap_settlement_asset_id_revealed() {
+    // swap_settlement (reversible Alice<->Bob 2-asset swap via ordinary affirm proofs, counters bumped) but with
+    // public asset-ids, so each leg uses a single-curve PublicAssetLegCreationProof.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -3971,6 +3990,8 @@ fn swap_settlement_asset_id_revealed() {
 
 #[test]
 fn reverse_settlement_asset_id_revealed() {
+    // reverse_settlement (both parties roll back a 2-leg settlement: sender un-sends, receiver decrements its
+    // pending counter) but with public asset-ids; no leg-creation proof, only the per-party reverse/counter proofs.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -4594,6 +4615,8 @@ fn batch_send_txn_proofs() {
 
 #[test]
 fn combined_send_txn_proofs() {
+    // 10 send proofs all SHARING one even/odd prover -> a single aggregated R1CS/Bulletproof for all of them
+    // (contrast batch_send_txn_proofs, where each proof stays independent and only the mult-check is batched).
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -4823,6 +4846,8 @@ fn combined_send_txn_proofs() {
 
 #[test]
 fn combined_create_and_send() {
+    // Folds two distinct ops -- leg/settlement-creation (LegCreationProof, hidden asset) + sender affirm -- into
+    // one shared prover producing a single aggregated proof (the reversible analogue of single_shot_combined_*).
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 16;
@@ -5307,6 +5332,7 @@ fn batch_receive_txn_proofs() {
 
 #[test]
 fn combined_receive_txn_proofs() {
+    // Receive analogue of combined_send_txn_proofs: several receive proofs share one prover -> one aggregated proof.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -5529,6 +5555,8 @@ fn combined_receive_txn_proofs() {
 
 #[test]
 fn swap_settlement() {
+    // Full reversible swap (hidden asset-ids): Alice<->Bob exchange two different assets via two legs, each with a
+    // LegCreationProof (asset curve-tree membership) + ordinary affirm proofs that bump counters.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -6853,6 +6881,8 @@ fn swap_settlement() {
 
 #[test]
 fn reverse_settlement() {
+    // Both parties roll back a previously-affirmed 2-leg swap (hidden asset-ids): each account starts with counter=1
+    // and the sender un-sends (restores balance) while the receiver just decrements its pending counter.
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -7381,6 +7411,8 @@ fn reverse_settlement() {
 
 #[test]
 fn multi_asset_settlement() {
+    // 10-leg settlement spanning several asset-ids: one SettlementCreationProof for all legs, and each party's many
+    // per-leg irreversible state transitions are batched into a single MultiAssetStateTransitionProof.
     const ASSET_TREE_M: usize = 4;
     const ACCOUNT_TREE_M: usize = 4;
     const NUM_GENS: usize = 1 << 17;
@@ -7758,6 +7790,8 @@ fn multi_asset_settlement() {
 
 #[test]
 fn multi_asset_combined_create_and_send() {
+    // multi_asset_settlement but the SettlementCreationProof is folded with the SENDER's MultiAssetStateTransition
+    // into one shared prover/aggregated proof; the receiver's multi-asset proof is built separately.
     const ASSET_TREE_M: usize = 4;
     const ACCOUNT_TREE_M: usize = 4;
     const NUM_GENS: usize = 1 << 17;
@@ -8163,6 +8197,8 @@ fn multi_asset_combined_create_and_send() {
 
 #[test]
 fn multi_asset_combined_create_and_recv() {
+    // Mirror of multi_asset_combined_create_and_send: folds SettlementCreationProof with the RECEIVER's
+    // MultiAssetStateTransition into one shared proof; the sender's multi-asset proof is built separately.
     const NUM_GENS: usize = 1 << 17;
     const L: usize = 64;
     const ASSET_TREE_M: usize = 4;
@@ -8570,6 +8606,8 @@ fn multi_asset_combined_create_and_recv() {
 
 #[test]
 fn multi_asset_state_transition_different_confs() {
+    // Runs the same multi-asset receive-affirmation proof under four (L, M) configs -- leaf width 64/128 and
+    // batched-path width 2/4 at differing tree heights -- to check it holds across curve-tree parameter choices.
     fn check<const L: usize, const M: usize>(
         num_legs: usize,
         height: usize,
@@ -10286,6 +10324,8 @@ macro_rules! verify_split_proof {
 
 #[test]
 fn send_txn_split_proof() {
+    // Sender's send proof produced jointly by a host (knows witnesses, not the secret key) and a secure device
+    // (holds sk); exercises both the parallel (W2) and sequential (W3) combine flows, hidden & revealed asset-id.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -10438,6 +10478,8 @@ fn send_txn_split_proof() {
 
 #[test]
 fn receive_txn_split_proof() {
+    // Receiver's receive affirmation built jointly by host + secure device (holds sk); covers both parallel (W2)
+    // and sequential (W3) combine flows and hidden/revealed asset-id.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -10588,6 +10630,8 @@ fn receive_txn_split_proof() {
 
 #[test]
 fn claim_received_funds_split_proof() {
+    // Receiver's claim (folds an affirmed amount into spendable balance, decrements counter) built jointly by
+    // host + secure device (holds sk); covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -10727,6 +10771,8 @@ fn claim_received_funds_split_proof() {
 
 #[test]
 fn counter_update_txn_by_sender_split_proof() {
+    // Sender's counter-decrement (balance unchanged) built jointly by host + secure device (holds sk); covers both
+    // parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -10864,6 +10910,8 @@ fn counter_update_txn_by_sender_split_proof() {
 
 #[test]
 fn reverse_send_txn_split_proof() {
+    // Sender's send-reversal (counter down + amount restored to balance) built jointly by host + secure device;
+    // covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -11003,6 +11051,8 @@ fn reverse_send_txn_split_proof() {
 
 #[test]
 fn reverse_receive_txn_split_proof() {
+    // Receiver's receive-reversal (just decrements the pending counter, balance unchanged) built jointly by host +
+    // secure device; covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -11140,6 +11190,8 @@ fn reverse_receive_txn_split_proof() {
 
 #[test]
 fn irreversible_send_txn_split_proof() {
+    // Sender's IRREVERSIBLE send (amount deducted immediately, no counter for later reversal) built jointly by host
+    // + secure device; covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -11278,6 +11330,8 @@ fn irreversible_send_txn_split_proof() {
 
 #[test]
 fn irreversible_receive_txn_split_proof() {
+    // Receiver's IRREVERSIBLE receive (amount credited immediately, no separate claim step) built jointly by host +
+    // secure device; covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -11416,6 +11470,8 @@ fn irreversible_receive_txn_split_proof() {
 
 #[test]
 fn single_shot_settlement_split_proof() {
+    // single_shot_settlement (irreversible 1-shot leg) but BOTH the sender and receiver irreversible affirmations
+    // are device/host split proofs; hidden asset-id (LegCreationProof + asset curve tree).
     const NUM_GENS: usize = 1 << 13;
     const L: usize = 64;
     let asset_tree_height = 4;
@@ -11816,6 +11872,8 @@ fn single_shot_settlement_split_proof() {
 
 #[test]
 fn single_shot_settlement_asset_id_revealed_split_proof() {
+    // single_shot_settlement_split_proof with public asset-id: device/host split sender+receiver affirmations, but
+    // the leg uses a single-curve PublicAssetLegCreationProof (no asset curve tree).
     const NUM_GENS: usize = 1 << 13;
     const L: usize = 64;
     let account_tree_height = 6;
@@ -12632,6 +12690,8 @@ fn sender_affirmation_w2_consistency() {
 /// W2: Receiver-affirmation analogue of `sender_affirmation_w2_consistency`.
 #[test]
 fn receiver_affirmation_w2_consistency() {
+    // W2 receiver analogue of sender_affirmation_w2_consistency: if the verifier uses a different leg / updated
+    // account-commitment / nonce than the device used to build the auth-proof, the transcript diverges -> must fail.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 12;
@@ -13740,6 +13800,7 @@ fn receiver_affirmation_w3_consistency() {
 #[cfg(feature = "ignore_prover_input_sanitation")]
 mod input_sanitation_disabled {
     use super::*;
+    use crate::Error;
     use crate::account::AccountCommitmentKeyTrait;
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account::{
@@ -14777,6 +14838,7 @@ mod input_sanitation_disabled {
     #[cfg(feature = "nightly_mocking_tests")]
     mod mocking_tests {
         use super::*;
+        use crate::account::common::CommonAffirmationSplitProtocol;
         use crate::account::state::NUM_GENERATORS;
         use crate::util::{
             create_bp_and_null_t_values, enforce_balance_change_prover,
@@ -14907,6 +14969,8 @@ mod input_sanitation_disabled {
 
         #[test]
         fn sender_affirmations_with_mocked_old_rho_fails_verification() {
+            // Malicious sender: a mock bumps the prover's old_rho by 1 so it no longer matches the committed
+            // account; the rho/nullifier-consistency constraint must make verification fail.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -15042,6 +15106,8 @@ mod input_sanitation_disabled {
 
         #[test]
         fn sender_affirmations_with_mocked_new_rho_and_randomness_fails_verification() {
+            // Malicious sender: a mock swaps the new account's rho AND randomness for fresh random values, so they
+            // don't match the committed updated-account; the consistency constraints must reject it.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -15181,6 +15247,8 @@ mod input_sanitation_disabled {
 
         #[test]
         fn sender_affirmation_with_mocked_smaller_amount_fails_verification() {
+            // Malicious sender: leg encrypts 100 but a mock makes the proof deduct only 60 from balance; the
+            // constraint binding the balance-change to the leg's encrypted amount must reject the mismatch.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -15265,6 +15333,8 @@ mod input_sanitation_disabled {
 
         #[test]
         fn claim_received_with_mocked_larger_amount_fails_verification() {
+            // Malicious receiver: leg amount is 100 but a mock makes the claim credit 140 into balance; the
+            // constraint binding the claimed balance-change to the leg's encrypted amount must reject the inflation.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -15351,6 +15421,380 @@ mod input_sanitation_disabled {
                 account_comm_key,
                 enc_gen,
             );
+        }
+
+        fn mock_ct_asset_id(forged_asset_id: AssetId) {
+            CommonAffirmationSplitProtocol::<
+                64,
+                PallasFr,
+                VestaFr,
+                PallasParameters,
+                VestaParameters,
+            >::asset_id_proto::<rand::rngs::ThreadRng>
+                .mock_safe(
+                    move |rng, _asset_id, asset_id_blinding, k_asset_ids, enc_gen, b_blinding| {
+                        MockResult::Continue((
+                            rng,
+                            PallasFr::from(forged_asset_id),
+                            asset_id_blinding,
+                            k_asset_ids,
+                            enc_gen,
+                            b_blinding,
+                        ))
+                    },
+                );
+        }
+
+        fn clear_ct_asset_id_mocks() {
+            CommonAffirmationSplitProtocol::<
+                64,
+                PallasFr,
+                VestaFr,
+                PallasParameters,
+                VestaParameters,
+            >::asset_id_proto::<rand::rngs::ThreadRng>
+                .clear_mock();
+        }
+
+        #[test]
+        fn split_sender_affirmation_wrong_amount_and_asset_id_fails_verification() {
+            // Malicious sender: leg amount is 100 but tries to reduce only 60
+            // In another case sender's asset id is does not match the leg
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"split-wrong-amount-assetid");
+            let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+            let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let account_asset_id: AssetId = 1;
+            let honest_amount: Balance = 100;
+            let malicious_amount: Balance = 60;
+            let forged_asset_id: AssetId = 2;
+            let nonce = b"split-wrong-binding-nonce";
+
+            let id = PallasFr::rand(&mut rng);
+            let sk_s_scalar = sk_s.0;
+            let sk_s_e_scalar = sk_s_e.0;
+            let (mut account, _, _, _) = new_account(&mut rng, account_asset_id, pk_s, pk_s_e, id);
+            account.balance = 200;
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_tree =
+                get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+            // Malicious sender uses wrong amount
+            {
+                let updated_account = account.get_state_for_send(malicious_amount).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+                    &mut rng,
+                    false,
+                    pk_a_e.0,
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    honest_amount,
+                    account_asset_id,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    updated_account_comm,
+                    &account_tree,
+                );
+                let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+
+                mock_balance_change_amount(malicious_amount);
+                let _guard = MockGuard::new(clear_balance_change_amount_mocks);
+
+                let (split_proof, nullifier, _) = gen_split_proof!(
+                    with_amount;
+                    Protocol: AffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+                    Proof: AffirmAsSenderSplitProof,
+                    party: Sender,
+                    has_balance_changed: true,
+                    rng: &mut rng,
+                    amount: honest_amount,
+                    leg_enc_core: leg_enc_core,
+                    eph_pk: eph_pk,
+                    old_account: account,
+                    updated_account: updated_account,
+                    updated_account_comm: updated_account_comm,
+                    path: path,
+                    root: &root,
+                    nonce: nonce,
+                    account_tree_params: &account_tree_params,
+                    account_comm_key: account_comm_key,
+                    enc_gen: enc_gen,
+                    sk_scalar: sk_s_scalar,
+                    sk_e_scalar: sk_s_e_scalar,
+                    b_blinding: b_blinding,
+                    reveal_asset_id: false,
+                );
+
+                assert!(
+                    split_proof
+                        .verify_with_tuples::<_, PallasParams, VestaParams>(
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            &account_comm_key,
+                            enc_gen,
+                            &leg_enc_core,
+                            &eph_pk,
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+
+            // Malicious sender uses wrong asset-id
+            {
+                let updated_account = account.get_state_for_send(honest_amount).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+                    &mut rng,
+                    false,
+                    pk_a_e.0,
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    honest_amount,
+                    forged_asset_id,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    updated_account_comm,
+                    &account_tree,
+                );
+                let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+
+                mock_ct_asset_id(forged_asset_id);
+                let _guard = MockGuard::new(clear_ct_asset_id_mocks);
+
+                let (split_proof, nullifier, _) = gen_split_proof!(
+                    with_amount;
+                    Protocol: AffirmAsSenderSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+                    Proof: AffirmAsSenderSplitProof,
+                    party: Sender,
+                    has_balance_changed: true,
+                    rng: &mut rng,
+                    amount: honest_amount,
+                    leg_enc_core: leg_enc_core,
+                    eph_pk: eph_pk,
+                    old_account: account,
+                    updated_account: updated_account,
+                    updated_account_comm: updated_account_comm,
+                    path: path,
+                    root: &root,
+                    nonce: nonce,
+                    account_tree_params: &account_tree_params,
+                    account_comm_key: account_comm_key,
+                    enc_gen: enc_gen,
+                    sk_scalar: sk_s_scalar,
+                    sk_e_scalar: sk_s_e_scalar,
+                    b_blinding: b_blinding,
+                    reveal_asset_id: false,
+                );
+
+                assert!(
+                    split_proof
+                        .verify_with_tuples::<_, PallasParams, VestaParams>(
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            &account_comm_key,
+                            enc_gen,
+                            &leg_enc_core,
+                            &eph_pk,
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+        }
+        #[test]
+        fn split_claim_received_wrong_amount_and_asset_id_fails_verification() {
+            // Malicious receiver: leg amount is 100 but tries to credit 140 into balance.
+            // In another case receiver's asset id does not match the leg
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"split-claim-wrong-amount-assetid");
+            let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+            let ((_, (_, pk_s_e)), ((sk_r, pk_r), (sk_r_e, pk_r_e)), (_, (_, pk_a_e))) = setup_keys(
+                &mut rng,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+            );
+
+            let account_asset_id: AssetId = 1;
+            let honest_amount: Balance = 100;
+            let malicious_amount: Balance = 140;
+            let forged_asset_id: AssetId = 2;
+            let nonce = b"split-claim-wrong-binding-nonce";
+
+            let id = PallasFr::rand(&mut rng);
+            let sk_r_scalar = sk_r.0;
+            let sk_r_e_scalar = sk_r_e.0;
+            let (mut account, _, _, _) = new_account(&mut rng, account_asset_id, pk_r, pk_r_e, id);
+            account.balance = 200;
+            account.counter += 1;
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_tree =
+                get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+            // Malicious receiver inflates the claimed amount
+            {
+                let updated_account = account
+                    .get_state_for_claiming_received(malicious_amount)
+                    .unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+                    &mut rng,
+                    false,
+                    pk_a_e.0,
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    honest_amount,
+                    account_asset_id,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    updated_account_comm,
+                    &account_tree,
+                );
+                let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+
+                mock_balance_change_amount(malicious_amount);
+                let _guard = MockGuard::new(clear_balance_change_amount_mocks);
+
+                let (split_proof, nullifier, _) = gen_split_proof!(
+                    with_amount;
+                    Protocol: ClaimReceivedSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+                    Proof: ClaimReceivedSplitProof,
+                    party: Receiver,
+                    has_balance_changed: true,
+                    rng: &mut rng,
+                    amount: honest_amount,
+                    leg_enc_core: leg_enc_core,
+                    eph_pk: eph_pk,
+                    old_account: account,
+                    updated_account: updated_account,
+                    updated_account_comm: updated_account_comm,
+                    path: path,
+                    root: &root,
+                    nonce: nonce,
+                    account_tree_params: &account_tree_params,
+                    account_comm_key: account_comm_key,
+                    enc_gen: enc_gen,
+                    sk_scalar: sk_r_scalar,
+                    sk_e_scalar: sk_r_e_scalar,
+                    b_blinding: b_blinding,
+                    reveal_asset_id: false,
+                );
+
+                assert!(
+                    split_proof
+                        .verify_with_tuples::<_, PallasParams, VestaParams>(
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            &account_comm_key,
+                            enc_gen,
+                            &leg_enc_core,
+                            &eph_pk,
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+
+            // Malicious receiver uses wrong asset-id
+            {
+                let updated_account = account
+                    .get_state_for_claiming_received(honest_amount)
+                    .unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+                    &mut rng,
+                    false,
+                    pk_a_e.0,
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    honest_amount,
+                    forged_asset_id,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    updated_account_comm,
+                    &account_tree,
+                );
+                let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+
+                mock_ct_asset_id(forged_asset_id);
+                let _guard = MockGuard::new(clear_ct_asset_id_mocks);
+
+                let (split_proof, nullifier, _) = gen_split_proof!(
+                    with_amount;
+                    Protocol: ClaimReceivedSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+                    Proof: ClaimReceivedSplitProof,
+                    party: Receiver,
+                    has_balance_changed: true,
+                    rng: &mut rng,
+                    amount: honest_amount,
+                    leg_enc_core: leg_enc_core,
+                    eph_pk: eph_pk,
+                    old_account: account,
+                    updated_account: updated_account,
+                    updated_account_comm: updated_account_comm,
+                    path: path,
+                    root: &root,
+                    nonce: nonce,
+                    account_tree_params: &account_tree_params,
+                    account_comm_key: account_comm_key,
+                    enc_gen: enc_gen,
+                    sk_scalar: sk_r_scalar,
+                    sk_e_scalar: sk_r_e_scalar,
+                    b_blinding: b_blinding,
+                    reveal_asset_id: false,
+                );
+
+                assert!(
+                    split_proof
+                        .verify_with_tuples::<_, PallasParams, VestaParams>(
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            &account_comm_key,
+                            enc_gen,
+                            &leg_enc_core,
+                            &eph_pk,
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+            }
         }
     }
 

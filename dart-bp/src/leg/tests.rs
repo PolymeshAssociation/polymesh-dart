@@ -9,7 +9,7 @@ use crate::util::{
     prove_with_rng, verify_rmc, verify_with_rng,
 };
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
-use ark_pallas::{Fq as PallasBase, Fr as PallasScalar, PallasConfig};
+use ark_pallas::{Affine as PallasA, Fr as PallasScalar, PallasConfig};
 use ark_serialize::CanonicalSerialize;
 use ark_std::UniformRand;
 use ark_vesta::{Fr as VestaScalar, VestaConfig};
@@ -19,13 +19,11 @@ use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
+use proptest::prelude::*;
 use std::time::Instant;
 
 type PallasParameters = PallasConfig;
 type VestaParameters = VestaConfig;
-type PallasF = PallasScalar;
-type VestaFr = PallasBase;
-type PallasFr = PallasScalar;
 
 /// Generate account signing and encryption keys for all sender, receiver, and auditor.
 /// This is just for testing and in practice, each party generates its own keys.
@@ -309,25 +307,26 @@ fn leg_verification() {
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = asset_tree.root_node();
 
-        let proof = LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new::<
-            _,
-            PallasParams,
-            VestaParams,
-        >(
-            &mut rng,
-            leg.clone(),
-            leg_enc.clone(),
-            leg_enc_rand.clone(),
-            path,
-            asset_data.clone(),
-            &root,
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
+        let proof =
+            LegCreationProof::<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                path,
+                asset_data.clone(),
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
         let prover_time = clock.elapsed();
 
@@ -534,26 +533,27 @@ fn batch_leg_verification() {
 
             let path = asset_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
 
-            let proof =
-                LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new::<
-                    _,
-                    PallasParams,
-                    VestaParams,
-                >(
-                    &mut rng,
-                    leg,
-                    leg_enc.clone(),
-                    leg_enc_rand,
-                    path,
-                    asset_data_vec[i].clone(),
-                    &root,
-                    &nonce,
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                )
-                .unwrap();
+            let proof = LegCreationProof::<
+                L,
+                PallasScalar,
+                VestaScalar,
+                PallasConfig,
+                VestaParameters,
+            >::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data_vec[i].clone(),
+                &root,
+                &nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
 
             proofs.push(proof);
             leg_encs.push(leg_enc);
@@ -688,6 +688,8 @@ fn batch_leg_verification() {
 
 #[test]
 fn combined_leg_verification() {
+    // Unlike batch_* (independent proofs, only the final mult-check batched), all leg proofs here share one
+    // prover/transcript and aggregate into a single R1CS/Bulletproof, verified via verify_with_rng (+ an RMC pass).
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 16;
@@ -713,246 +715,251 @@ fn combined_leg_verification() {
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
     let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
-    let mut test_with_config = |parties_see_each_other: bool,
-                                num_auditors: u8,
-                                num_mediators: u8| {
-        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
-            b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
-            &asset_tree_params.even_parameters.bp_gens(),
-        );
+    let mut test_with_config =
+        |parties_see_each_other: bool, num_auditors: u8, num_mediators: u8| {
+            let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+                b"asset-comm-params",
+                (num_auditors + num_mediators) as u32,
+                &asset_tree_params.even_parameters.bp_gens(),
+            );
 
-        let keys_auditor = (0..num_auditors)
-            .map(|_| keygen_enc(&mut rng, enc_key_gen))
-            .collect::<Vec<_>>();
-        let keys_mediator = (0..num_mediators)
-            .map(|_| keygen_sig(&mut rng, sig_key_gen))
-            .collect::<Vec<_>>();
+            let keys_auditor = (0..num_auditors)
+                .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                .collect::<Vec<_>>();
+            let keys_mediator = (0..num_mediators)
+                .map(|_| keygen_sig(&mut rng, sig_key_gen))
+                .collect::<Vec<_>>();
 
-        let keys_auditor = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        // Each mediator along with its index for encryption key
-        let keys_mediator = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| {
-                (
-                    if i < num_auditors as usize {
-                        i as u8
-                    } else {
-                        num_auditors.saturating_sub(1)
-                    },
-                    k.0,
+            let keys_auditor = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+            // Each mediator along with its index for encryption key
+            let keys_mediator = keys_mediator
+                .iter()
+                .enumerate()
+                .map(|(i, (_, k))| {
+                    (
+                        if i < num_auditors as usize {
+                            i as u8
+                        } else {
+                            num_auditors.saturating_sub(1)
+                        },
+                        k.0,
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let mut asset_data_vec = Vec::with_capacity(batch_size);
+            let mut commitments = Vec::with_capacity(batch_size);
+            for i in 0..batch_size {
+                let asset_id = (i + 1) as u32;
+                let asset_data = AssetData::new(
+                    asset_id,
+                    keys_auditor.clone(),
+                    keys_mediator.clone(),
+                    &asset_comm_params,
+                    asset_tree_params.odd_parameters.sl_params.delta,
                 )
-            })
-            .collect::<Vec<_>>();
-
-        let mut asset_data_vec = Vec::with_capacity(batch_size);
-        let mut commitments = Vec::with_capacity(batch_size);
-        for i in 0..batch_size {
-            let asset_id = (i + 1) as u32;
-            let asset_data = AssetData::new(
-                asset_id,
-                keys_auditor.clone(),
-                keys_mediator.clone(),
-                &asset_comm_params,
-                asset_tree_params.odd_parameters.sl_params.delta,
-            )
-            .unwrap();
-            commitments.push(asset_data.commitment);
-            asset_data_vec.push(asset_data);
-        }
-
-        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-            &commitments,
-            &asset_tree_params,
-            Some(height),
-        );
-        let root = asset_tree.root_node();
-
-        let config = LegEncConfig {
-            parties_see_each_other,
-            reveal_asset_id: false,
-        };
-
-        let mut legs = Vec::with_capacity(batch_size);
-        let mut leg_encs = Vec::with_capacity(batch_size);
-        let mut leg_enc_rands = Vec::with_capacity(batch_size);
-        let mut nonces = Vec::with_capacity(batch_size);
-
-        for i in 0..batch_size {
-            let asset_id = (i + 1) as u32;
-            let leg = Leg::new(
-                pk_s_e.0,
-                pk_r_e.0,
-                amount,
-                asset_id,
-                keys_auditor.clone(),
-                keys_mediator.clone(),
-                vec![],
-            )
-            .unwrap();
-            let (leg_enc, leg_enc_rand) = leg
-                .encrypt(&mut rng, config.clone(), enc_key_gen, enc_gen)
                 .unwrap();
+                commitments.push(asset_data.commitment);
+                asset_data_vec.push(asset_data);
+            }
 
-            legs.push(leg);
-            leg_encs.push(leg_enc);
-            leg_enc_rands.push(leg_enc_rand);
-            nonces.push(format!("nonce_{}", i).into_bytes());
-        }
-
-        let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
-        let mut even_prover = Prover::new(
-            &asset_tree_params.even_parameters.pc_gens(),
-            even_transcript,
-        );
-        let mut odd_prover =
-            Prover::new(&asset_tree_params.odd_parameters.pc_gens(), odd_transcript);
-
-        let mut proofs = Vec::with_capacity(batch_size);
-        let clock = Instant::now();
-
-        for i in 0..batch_size {
-            let path = asset_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
-
-            let proof = LegCreationProof::<L, PallasF, VestaFr, PallasConfig, VestaParameters>::new_with_given_prover::<_, PallasParams, VestaParams>(
-                &mut rng,
-                legs[i].clone(),
-                leg_encs[i].clone(),
-                leg_enc_rands[i].clone(),
-                path,
-                asset_data_vec[i].clone(),
-                &root,
-                &nonces[i],
+            let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+                &commitments,
                 &asset_tree_params,
-                &asset_comm_params,
-                enc_key_gen,
-                enc_gen,
-                &mut even_prover,
-                &mut odd_prover,
+                Some(height),
+            );
+            let root = asset_tree.root_node();
 
-            ).unwrap();
-            proofs.push(proof);
-        }
+            let config = LegEncConfig {
+                parties_see_each_other,
+                reveal_asset_id: false,
+            };
 
-        let (even_bp, odd_bp) = prove_with_rng(
-            even_prover,
-            odd_prover,
-            &asset_tree_params.even_parameters.bp_gens(),
-            &asset_tree_params.odd_parameters.bp_gens(),
-            &mut rng,
-        )
-        .unwrap();
-        let prover_time = clock.elapsed();
+            let mut legs = Vec::with_capacity(batch_size);
+            let mut leg_encs = Vec::with_capacity(batch_size);
+            let mut leg_enc_rands = Vec::with_capacity(batch_size);
+            let mut nonces = Vec::with_capacity(batch_size);
 
-        let clock = Instant::now();
-        let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
-        let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
-        let mut even_verifier = Verifier::new(even_transcript);
-        let mut odd_verifier = Verifier::new(odd_transcript);
-
-        for i in 0..batch_size {
-            proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints(
-                    leg_encs[i].clone(),
-                    &root,
+            for i in 0..batch_size {
+                let asset_id = (i + 1) as u32;
+                let leg = Leg::new(
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    amount,
+                    asset_id,
+                    keys_auditor.clone(),
+                    keys_mediator.clone(),
                     vec![],
+                )
+                .unwrap();
+                let (leg_enc, leg_enc_rand) = leg
+                    .encrypt(&mut rng, config.clone(), enc_key_gen, enc_gen)
+                    .unwrap();
+
+                legs.push(leg);
+                leg_encs.push(leg_enc);
+                leg_enc_rands.push(leg_enc_rand);
+                nonces.push(format!("nonce_{}", i).into_bytes());
+            }
+
+            let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+            let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
+            let mut even_prover = Prover::new(
+                &asset_tree_params.even_parameters.pc_gens(),
+                even_transcript,
+            );
+            let mut odd_prover =
+                Prover::new(&asset_tree_params.odd_parameters.pc_gens(), odd_transcript);
+
+            let mut proofs = Vec::with_capacity(batch_size);
+            let clock = Instant::now();
+
+            for i in 0..batch_size {
+                let path = asset_tree.get_path_to_leaf_for_proof(i, 0).unwrap();
+
+                let proof = LegCreationProof::<
+                    L,
+                    PallasScalar,
+                    VestaScalar,
+                    PallasConfig,
+                    VestaParameters,
+                >::new_with_given_prover::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    legs[i].clone(),
+                    leg_encs[i].clone(),
+                    leg_enc_rands[i].clone(),
+                    path,
+                    asset_data_vec[i].clone(),
+                    &root,
                     &nonces[i],
                     &asset_tree_params,
                     &asset_comm_params,
                     enc_key_gen,
                     enc_gen,
-                    &mut even_verifier,
-                    &mut odd_verifier,
-                    None,
+                    &mut even_prover,
+                    &mut odd_prover,
                 )
                 .unwrap();
-        }
+                proofs.push(proof);
+            }
 
-        verify_with_rng(
-            even_verifier,
-            odd_verifier,
-            &even_bp,
-            &odd_bp,
-            asset_tree_params.even_parameters.pc_gens(),
-            asset_tree_params.odd_parameters.pc_gens(),
-            asset_tree_params.even_parameters.bp_gens(),
-            asset_tree_params.odd_parameters.bp_gens(),
-            &mut rng,
-        )
-        .unwrap();
+            let (even_bp, odd_bp) = prove_with_rng(
+                even_prover,
+                odd_prover,
+                &asset_tree_params.even_parameters.bp_gens(),
+                &asset_tree_params.odd_parameters.bp_gens(),
+                &mut rng,
+            )
+            .unwrap();
+            let prover_time = clock.elapsed();
 
-        let verification_time = clock.elapsed();
+            let clock = Instant::now();
+            let even_transcript = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+            let odd_transcript = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
+            let mut even_verifier = Verifier::new(even_transcript);
+            let mut odd_verifier = Verifier::new(odd_transcript);
 
-        let clock = Instant::now();
-        let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
-        let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
-        let mut even_verifier = Verifier::new(transcript_even);
-        let mut odd_verifier = Verifier::new(transcript_odd);
-        let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-        let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            for i in 0..batch_size {
+                proofs[i]
+                    .verify_sigma_protocols_and_enforce_constraints(
+                        leg_encs[i].clone(),
+                        &root,
+                        vec![],
+                        &nonces[i],
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        &mut even_verifier,
+                        &mut odd_verifier,
+                        None,
+                    )
+                    .unwrap();
+            }
 
-        let root = asset_tree.root_node();
-        for i in 0..batch_size {
-            proofs[i]
-                .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
-                    leg_encs[i].clone(),
-                    &root,
-                    vec![],
-                    &nonces[i],
-                    &asset_tree_params,
-                    &asset_comm_params,
-                    enc_key_gen,
-                    enc_gen,
-                    &mut even_verifier,
-                    &mut odd_verifier,
-                    Some(&mut rmc_1),
-                )
-                .unwrap();
-        }
+            verify_with_rng(
+                even_verifier,
+                odd_verifier,
+                &even_bp,
+                &odd_bp,
+                asset_tree_params.even_parameters.pc_gens(),
+                asset_tree_params.odd_parameters.pc_gens(),
+                asset_tree_params.even_parameters.bp_gens(),
+                asset_tree_params.odd_parameters.bp_gens(),
+                &mut rng,
+            )
+            .unwrap();
 
-        let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
-            even_verifier,
-            odd_verifier,
-            &even_bp,
-            &odd_bp,
-            &mut rng,
-        )
-        .unwrap();
+            let verification_time = clock.elapsed();
 
-        add_verification_tuples_batches_to_rmc(
-            vec![even_tuple_rmc],
-            vec![odd_tuple_rmc],
-            asset_tree_params.even_parameters.pc_gens(),
-            asset_tree_params.odd_parameters.pc_gens(),
-            asset_tree_params.even_parameters.bp_gens(),
-            asset_tree_params.odd_parameters.bp_gens(),
-            &mut rmc_0,
-            &mut rmc_1,
-        )
-        .unwrap();
-        verify_rmc(rmc_0, rmc_1).unwrap();
-        let rmc_verification_time = clock.elapsed();
+            let clock = Instant::now();
+            let transcript_even = MerlinTranscript::new(LEG_TXN_EVEN_LABEL);
+            let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
+            let mut even_verifier = Verifier::new(transcript_even);
+            let mut odd_verifier = Verifier::new(transcript_odd);
+            let mut rmc_0 = RandomizedMultChecker::new(VestaScalar::rand(&mut rng));
+            let mut rmc_1 = RandomizedMultChecker::new(PallasScalar::rand(&mut rng));
 
-        println!(
-            "parties_see_each_other={}, num_auditors={}, num_mediators={}, L={L}, height={}",
-            parties_see_each_other,
-            num_auditors,
-            num_mediators,
-            asset_tree.height()
-        );
-        println!("Combined leg proving time = {:?}", prover_time);
-        println!("Combined leg verification time = {:?}", verification_time);
-        println!(
-            "Combined leg RMC verification time = {:?}",
-            rmc_verification_time
-        );
-        println!(
-            "Combined proof size = {} bytes",
-            even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
-        );
-    };
+            let root = asset_tree.root_node();
+            for i in 0..batch_size {
+                proofs[i]
+                    .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
+                        leg_encs[i].clone(),
+                        &root,
+                        vec![],
+                        &nonces[i],
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                        &mut even_verifier,
+                        &mut odd_verifier,
+                        Some(&mut rmc_1),
+                    )
+                    .unwrap();
+            }
+
+            let (even_tuple_rmc, odd_tuple_rmc) = get_verification_tuples_with_rng(
+                even_verifier,
+                odd_verifier,
+                &even_bp,
+                &odd_bp,
+                &mut rng,
+            )
+            .unwrap();
+
+            add_verification_tuples_batches_to_rmc(
+                vec![even_tuple_rmc],
+                vec![odd_tuple_rmc],
+                asset_tree_params.even_parameters.pc_gens(),
+                asset_tree_params.odd_parameters.pc_gens(),
+                asset_tree_params.even_parameters.bp_gens(),
+                asset_tree_params.odd_parameters.bp_gens(),
+                &mut rmc_0,
+                &mut rmc_1,
+            )
+            .unwrap();
+            verify_rmc(rmc_0, rmc_1).unwrap();
+            let rmc_verification_time = clock.elapsed();
+
+            println!(
+                "parties_see_each_other={}, num_auditors={}, num_mediators={}, L={L}, height={}",
+                parties_see_each_other,
+                num_auditors,
+                num_mediators,
+                asset_tree.height()
+            );
+            println!("Combined leg proving time = {:?}", prover_time);
+            println!("Combined leg verification time = {:?}", verification_time);
+            println!(
+                "Combined leg RMC verification time = {:?}",
+                rmc_verification_time
+            );
+            println!(
+                "Combined proof size = {} bytes",
+                even_bp.compressed_size() + odd_bp.compressed_size() + proofs.compressed_size()
+            );
+        };
 
     test_with_config(true, 2, 3);
     test_with_config(false, 2, 3);
@@ -961,6 +968,8 @@ fn combined_leg_verification() {
 
 #[test]
 fn settlement_verification() {
+    // Single settlement proof over a growing leg count (2-, then 4-, then 5-leg bundles), run for both
+    // reveal_asset_id=false (legs need curve-tree membership) and =true (asset ids public); regular + RMC verify.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 14;
@@ -1499,6 +1508,8 @@ fn settlement_verification() {
 
 #[test]
 fn batch_settlement_verification() {
+    // 5 INDEPENDENT settlement proofs (each with a different leg count: M-1, M, M+1 legs), verified together
+    // by batching only the final BP/mult-checks (batch_verify_bp + RMC) — vs combined_* which shares one prover.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 15;
@@ -1690,8 +1701,8 @@ fn batch_settlement_verification() {
     let clock = Instant::now();
     let mut even_tuples = Vec::with_capacity(batch_size);
     let mut odd_tuples = Vec::with_capacity(batch_size);
-    let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-    let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+    let mut rmc_0 = RandomizedMultChecker::new(VestaScalar::rand(&mut rng));
+    let mut rmc_1 = RandomizedMultChecker::new(PallasScalar::rand(&mut rng));
 
     for i in 0..batch_size {
         let (even, odd) = proofs[i]
@@ -1739,6 +1750,8 @@ fn batch_settlement_verification() {
 
 #[test]
 fn large_settlement_verification() {
+    // Size stress: ONE settlement proof bundling 20 legs (all the same hidden-asset id, M=8 so multiple
+    // membership chunks), verified with the RMC path — checks a single big settlement still proves/verifies.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 17;
@@ -1884,6 +1897,8 @@ fn large_settlement_verification() {
 
 #[test]
 fn combined_settlement_verification() {
+    // 2 settlement proofs SHARING one prover/transcript, aggregated into a single BP via new_with_given_prover +
+    // prove_with_rng (vs batch_settlement_verification, which keeps the proofs independent and only batches checks).
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 17;
@@ -2083,8 +2098,8 @@ fn combined_settlement_verification() {
     let transcript_odd = MerlinTranscript::new(LEG_TXN_ODD_LABEL);
     let mut even_verifier = Verifier::new(transcript_even);
     let mut odd_verifier = Verifier::new(transcript_odd);
-    let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-    let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+    let mut rmc_0 = RandomizedMultChecker::new(VestaScalar::rand(&mut rng));
+    let mut rmc_1 = RandomizedMultChecker::new(PallasScalar::rand(&mut rng));
 
     let verify_sigma_rmc_clock = Instant::now();
     for i in 0..batch_size {
@@ -2140,6 +2155,8 @@ fn combined_settlement_verification() {
 
 #[test]
 fn six_leg_alternating_settlement() {
+    // 6-leg settlement with an interleaved reveal/hide pattern (legs 0,2,4 reveal the asset id; 1,3,5 hide it and
+    // need a curve-tree membership proof) — vs six_leg_grouped_settlement's first-3-reveal/last-3-hide split.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 17;
@@ -2293,6 +2310,8 @@ fn six_leg_alternating_settlement() {
 
 #[test]
 fn six_leg_grouped_settlement() {
+    // 6-leg settlement where the first 3 legs reveal the asset id and the last 3 hide it (vs the interleaved
+    // pattern in six_leg_alternating_settlement) — checks the grouped reveal/hide layout still verifies.
     let mut rng = rand::thread_rng();
 
     const NUM_GENS: usize = 1 << 17;
@@ -2444,7 +2463,171 @@ fn six_leg_grouped_settlement() {
     );
 }
 
-use proptest::prelude::*;
+#[test]
+fn leg_creation_proof_rejects_missing_blinding_key() {
+    let mut rng = rand::thread_rng();
+    const NUM_GENS: usize = 1 << 13;
+    const L: usize = 64;
+
+    let label = b"leg-missing-blinding";
+    let asset_tree_params =
+        SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+
+    let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    let num_auditors = 2u8;
+    let num_mediators = 1u8;
+    let asset_id = 1;
+
+    let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+        b"asset-comm-params-mb",
+        (num_auditors + num_mediators) as u32,
+        &asset_tree_params.even_parameters.bp_gens(),
+    );
+
+    let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+    let keys_enc = (0..num_auditors)
+        .map(|_| keygen_enc(&mut rng, enc_key_gen))
+        .collect::<Vec<_>>();
+    let keys_mediator = (0..num_mediators)
+        .map(|_| keygen_sig(&mut rng, sig_key_gen))
+        .collect::<Vec<_>>();
+
+    let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
+    let med_keys: Vec<_> = keys_mediator
+        .iter()
+        .enumerate()
+        .map(|(i, (_, k))| (i as u8, k.0))
+        .collect();
+
+    let asset_data = AssetData::new(
+        asset_id,
+        enc_keys.clone(),
+        med_keys.clone(),
+        &asset_comm_params,
+        asset_tree_params.odd_parameters.sl_params.delta,
+    )
+    .unwrap();
+
+    let set = vec![asset_data.commitment];
+    let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(2),
+    );
+
+    let nonce = b"test-nonce-mb";
+    let leg = Leg::new(
+        pk_s_e.0,
+        pk_r_e.0,
+        100,
+        asset_id,
+        enc_keys.clone(),
+        med_keys.clone(),
+        vec![],
+    )
+    .unwrap();
+    let (leg_enc, leg_enc_rand) = leg
+        .encrypt(
+            &mut rng,
+            LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: false,
+            },
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+    let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = asset_tree.root_node();
+
+    let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        leg.clone(),
+        leg_enc.clone(),
+        leg_enc_rand.clone(),
+        path,
+        asset_data.clone(),
+        &root,
+        nonce,
+        &asset_tree_params,
+        &asset_comm_params,
+        enc_key_gen,
+        enc_gen,
+    )
+    .unwrap();
+
+    assert!(
+        proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.clone(),
+                &root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .is_ok()
+    );
+
+    let mut missing_enc_blinding = proof.clone();
+    missing_enc_blinding
+        .re_randomized_points
+        .blindings_with_different_gen
+        .remove(&1);
+    assert!(
+        missing_enc_blinding
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.clone(),
+                &root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .is_err()
+    );
+
+    let mut missing_med_blinding = proof.clone();
+    missing_med_blinding
+        .re_randomized_points
+        .blindings_with_different_gen
+        .remove(&(enc_keys.len() + 1));
+    assert!(
+        missing_med_blinding
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_enc.clone(),
+                &root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .is_err()
+    );
+}
 
 proptest! {
     #[test]
@@ -2454,6 +2637,8 @@ proptest! {
         parties_see_each_other in any::<bool>(),
         reveal_asset_id in any::<bool>(),
     ) {
+        // Invariant: encrypt then decrypt-as-sender/-as-receiver round-trips the amount+asset id for any small
+        // values and any (parties_see_each_other, reveal_asset_id); counterparty pk shown iff parties_see_each_other.
         let mut rng = rand::thread_rng();
         let label = b"pt-roundtrip-small";
 
@@ -2511,6 +2696,8 @@ proptest! {
         has_mediators in any::<bool>(),
         has_public_extra_keys in any::<bool>(),
     ) {
+        // Invariant: across the full matrix of per-leg options (reveal_asset_id / parties_see_each_other / presence of
+        // auditor, mediator, public extra keys), the leg_enc's flags, ephemeral-key fields, and key-list lengths match.
         prop_assume!(!(has_mediators && !has_enc_keys));
 
         let mut rng = rand::thread_rng();
@@ -2613,11 +2800,198 @@ proptest! {
     }
 }
 
+proptest! {
+    // Reducing number of runs to finish tests faster
+    #![proptest_config(proptest::test_runner::Config { cases: 8, .. proptest::test_runner::Config::default() })]
+
+    #[test]
+    fn prop_leg_verification_rejects_bad_proof(
+        parties_see_each_other in any::<bool>(),
+        num_enc_keys in 0u8..2u8,
+        num_mediators in 0u8..2u8,
+        has_public_enc_keys in any::<bool>(),
+    ) {
+        // Invariant: a valid leg-creation proof, tampered each way (truncated sigma-response vectors, nulled r2/r1
+        // cross-party proofs, or a leg_enc with an r4 ephemeral-key component removed), is always rejected by verify.
+        prop_assume!(!(num_mediators > 0 && num_enc_keys == 0));
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        const HEIGHT: usize = 2;
+
+        let label = b"test_label";
+        let asset_tree_params = SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label, NUM_GENS as u32, NUM_GENS as u32,
+        ).unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"test_label_1",
+            (num_enc_keys + num_mediators) as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_enc = (0..num_enc_keys)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
+        let med_keys: Vec<_> = keys_mediator.iter().enumerate()
+            .map(|(i, (_, k))| (i as u8 % num_enc_keys.max(1), k.0))
+            .collect();
+
+        let pub_enc_keys: Vec<_> = if has_public_enc_keys {
+            vec![keygen_enc(&mut rng, enc_key_gen).1 .0]
+        } else {
+            vec![]
+        };
+
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        ).unwrap();
+
+        let set = vec![asset_data.commitment];
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &set, &asset_tree_params, Some(HEIGHT),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0, pk_r_e.0, amount, asset_id,
+            enc_keys, med_keys, pub_enc_keys.clone(),
+        ).unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg.encrypt(
+            &mut rng,
+            LegEncConfig { parties_see_each_other, reveal_asset_id: false },
+            enc_key_gen, enc_gen,
+        ).unwrap();
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+
+        let proof = LegCreationProof::<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>::new::<_, PallasParams, VestaParams>(
+            &mut rng, leg, leg_enc.clone(), leg_enc_rand,
+            path, asset_data, &root, nonce,
+            &asset_tree_params, &asset_comm_params, enc_key_gen, enc_gen,
+        ).unwrap();
+
+        let verify_bad_proof = |rng: &mut _,
+            p: &mut LegCreationProof<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>|
+        {
+            assert!(p.verify::<_, PallasParams, VestaParams>(
+                rng, leg_enc.clone(), &root, pub_enc_keys.clone(), nonce,
+                &asset_tree_params, &asset_comm_params, enc_key_gen, enc_gen, None,
+            ).is_err());
+        };
+
+        proof.verify::<_, PallasParams, VestaParams>(
+            &mut rng, leg_enc.clone(), &root, pub_enc_keys.clone(), nonce,
+            &asset_tree_params, &asset_comm_params, enc_key_gen, enc_gen, None,
+        ).unwrap();
+
+        // shorter proof.resp_eph_pk_enc
+        if !proof.resp_eph_pk_enc.is_empty() {
+            let mut p = proof.clone();
+            p.resp_eph_pk_enc.pop();
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        // shorter proof.resp_eph_pk_meds
+        if !leg_enc.mediators.is_empty() {
+            let mut p = proof.clone();
+            p.resp_eph_pk_meds.pop();
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        // shorter proof.resp_eph_pk_public_enc
+        if has_public_enc_keys {
+            let mut p = proof.clone();
+            p.resp_eph_pk_public_enc.pop();
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        // shorter proof.resp_comm_r_i_amount
+        {
+            let mut p = proof.clone();
+            p.resp_comm_r_i_amount.0.pop();
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        // set proof.resp_eph_pk_s_r to None (remove sender's r2 proof)
+        if parties_see_each_other {
+            let mut p = proof.clone();
+            p.resp_eph_pk_s_r = None;
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        // set proof.resp_eph_pk_r_s to None (remove receiver's r1 proof)
+        if parties_see_each_other {
+            let mut p = proof.clone();
+            p.resp_eph_pk_r_s = None;
+            verify_bad_proof(&mut rng, &mut p);
+        }
+
+        let verify_bad_leg_enc = |rng: &mut _, leg_enc: LegEncryption<PallasA>| {
+            assert!(proof.verify::<_, PallasParams, VestaParams>(
+                rng, leg_enc, &root, pub_enc_keys.clone(), nonce,
+                &asset_tree_params, &asset_comm_params, enc_key_gen, enc_gen, None,
+            ).is_err());
+        };
+
+        // leg_enc.eph_pk_s.r4 must be Some when asset-id is encrypted
+        {
+            let mut m = leg_enc.clone();
+            m.leg_enc_core_and_eph_keys.eph_pk_s.r4 = None;
+            verify_bad_leg_enc(&mut rng, m);
+        }
+
+        // leg_enc.eph_pk_r.r4 must be Some when asset-id is encrypted
+        {
+            let mut m = leg_enc.clone();
+            m.leg_enc_core_and_eph_keys.eph_pk_r.r4 = None;
+            verify_bad_leg_enc(&mut rng, m);
+        }
+
+        // leg_enc.eph_pk_enc_keys[i].r4 must be Some when asset-id is encrypted
+        if !leg_enc.eph_pk_enc_keys.is_empty() {
+            let mut m = leg_enc.clone();
+            m.eph_pk_enc_keys[0].r4 = None;
+            verify_bad_leg_enc(&mut rng, m);
+        }
+
+        // leg_enc.eph_pk_public_enc_keys[i].r4 must be Some when asset-id is encrypted
+        if has_public_enc_keys {
+            let mut m = leg_enc.clone();
+            m.eph_pk_public_enc_keys[0].r4 = None;
+            verify_bad_leg_enc(&mut rng, m);
+        }
+    }
+}
+
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
 
 #[cfg(feature = "ignore_prover_input_sanitation")]
 mod input_sanitation_disabled {
     use super::*;
+    use crate::Error;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::public_asset_leg_proof::PublicAssetLegCreationProof;
     use crate::leg::settlement_proof::LegProof;
@@ -2675,6 +3049,8 @@ mod input_sanitation_disabled {
 
     #[test]
     fn leg_proof_with_mismatched_asset_data() {
+        // Feeds the leg-proof verifier asset data that disagrees with the proof in 3 ways — leg asset id != committed
+        // asset_data id, a mutated asset_data.id, and leg auditor/mediator keys != asset_data's — each must be rejected.
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -2897,6 +3273,8 @@ mod input_sanitation_disabled {
 
     #[test]
     fn leg_creation_proof_verifier_error_paths() {
+        // Takes one valid (hidden-asset, cross-visible) leg proof and feeds verify mismatched public inputs: a leg_enc
+        // with reveal_asset_id=true, one with parties_see_each_other=false, and truncated sigma responses — all rejected.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -3115,6 +3493,8 @@ mod input_sanitation_disabled {
 
     #[test]
     fn settlement_creation_proof_verifier_error_paths() {
+        // Takes a valid 2-leg settlement proof and corrupts the leg_proofs vector — duplicating a leg proof (wrong
+        // count vs leg_encs) and swapping a HiddenAssetProof leg for a RevealedAssetProof variant — each must be rejected.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 14;
         const L: usize = 64;

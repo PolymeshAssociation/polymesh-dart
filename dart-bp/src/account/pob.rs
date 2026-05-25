@@ -1023,6 +1023,8 @@ mod tests {
 
     #[test]
     fn pob_with_auditor_as_verifier() {
+        // Prove the account's balance/counter to the auditor (who already knows the pubkey, so asset id is
+        // revealed); no pending legs involved, just the bare account-commitment opening.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1069,6 +1071,8 @@ mod tests {
 
     #[test]
     fn pob_with_anyone() {
+        // Prove balance to an arbitrary verifier while reconciling 20 pending legs (alternating sender/
+        // receiver), all with the default leg-enc config so every asset id stays hidden.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1195,6 +1199,8 @@ mod tests {
 
     #[test]
     fn pob_with_anyone_revealed_asset_id() {
+        // Like pob_with_anyone, but a mix of legs: every 4th uses reveal_asset_id config (asset id public)
+        // while the rest stay hidden, exercising both paths in one proof.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1328,6 +1334,8 @@ mod tests {
 
     #[test]
     fn pob_with_anyone_missing_resp_asset_id_on_hidden_leg_fails() {
+        // All legs are hidden-asset-id, so each needs an asset-id response; nulling resp_asset_id[0]
+        // (dropping it for a hidden leg) must make verification reject.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1439,6 +1447,8 @@ mod tests {
 
     #[test]
     fn pob_with_anyone_resp_asset_id_len_mismatch_fails() {
+        // Popping one entry off resp_asset_id makes its length no longer match the number of legs;
+        // verification must reject on the length-mismatch check.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");

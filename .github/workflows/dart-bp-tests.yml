@@ -57,7 +57,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Run negative tests by disabling prover's input sanitation and mocking features
-        run: cargo +nightly nextest run --package polymesh-dart-bp --features ignore_prover_input_sanitation,nightly_mocking_tests input_sanitation_disabled
+        run: cargo +nightly nextest run --package polymesh-dart-bp --features ignore_prover_input_sanitation,nightly_mocking_tests input_sanitation_disabled mocking_tests
 
   test-wasm:
     name: Build dart-bp for WASM target

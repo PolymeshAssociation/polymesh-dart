@@ -1243,6 +1243,8 @@ mod tests {
 
     #[test]
     fn mint_state_amount_boundaries() {
+        // Pure boundary check on get_state_for_mint: minting +1 at MAX_BALANCE overflows (err), while
+        // at MAX_BALANCE-1 it just fits (ok). No proof, just the state-helper guard.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -1256,7 +1258,11 @@ mod tests {
 
         let mut account_at_max = account.clone();
         account_at_max.balance = MAX_BALANCE;
-        assert!(account_at_max.get_state_for_mint(1).is_err());
+        assert_err!(
+            account_at_max.get_state_for_mint(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
 
         let mut account_at_boundary = account;
         account_at_boundary.balance = MAX_BALANCE - 1;
@@ -1662,6 +1668,8 @@ mod tests {
 
     #[test]
     fn increase_supply_txn_rejects_wrong_amount_and_nullifier() {
+        // Honest mint proof verifies, but re-verifying it against a wrong issued amount (+1) or a random
+        // nullifier must both be rejected.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -1794,6 +1802,8 @@ mod tests {
 
         #[test]
         fn mint_with_mocked_nullifier_input_fails_verification() {
+            // Prover mocks the nullifier to use current_rho+1, so the published nullifier no longer
+            // matches the committed account's rho; verification must reject.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -1895,6 +1905,8 @@ mod tests {
 
         #[test]
         fn mint_with_mocked_updated_randomness_relation_inputs_fails_verification() {
+            // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
+            // and updated randomness+1 instead of the real values; verification must reject.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;

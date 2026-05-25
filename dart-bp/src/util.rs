@@ -2,7 +2,7 @@ use crate::account::common::leg_link::{LegAccountLink, LegAccountLinkProtocol};
 use crate::account::state::{
     ASSET_ID_GEN_INDEX, AccountCommitmentKeyTrait, AccountState, BALANCE_GEN_INDEX,
     COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX,
-    NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX, SK_ENC_INV_GEN_INDEX, SK_GEN_INDEX,
+    NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX, SK_ENC_GEN_INDEX, SK_GEN_INDEX,
 };
 use crate::error::*;
 use crate::leg::{AmountCiphertext, LegEncryptionCore, PartyEphemeralPublicKey};
@@ -323,10 +323,10 @@ pub fn generate_schnorr_responses_for_balance_change<
         wits.insert(i + 1, F0::from(amount));
     }
 
-    // Response for other witnesses will already be generated in sigma protocols for leaf and account commitment
+    // Response for other witnesses will already be generated in sigma protocols for old and new account commitments
     let resp_comm_bp_bal = t_comm_bp_bal.partial_response(wits, prover_challenge)?;
 
-    // Response for witnesses will already be generated in sigma protocol for leaf and Bulletproof commitment
+    // Response for witnesses will already be generated in sigma protocol for old account commitment and Bulletproof commitment
     let mut resp_leg_amount = Vec::with_capacity(t_leg_amount.len());
     for t_leg_amount in t_leg_amount {
         resp_leg_amount.push(t_leg_amount.gen_partial_proof());
@@ -2092,9 +2092,9 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     let is_asset_id_revealed = asset_id.is_some();
     // +1 for re-randomization (curve tree)
     let required_resp_acc_old_len = if !is_asset_id_revealed {
-        SK_ENC_INV_GEN_INDEX + 1
+        SK_ENC_GEN_INDEX + 1
     } else {
-        SK_ENC_INV_GEN_INDEX
+        SK_ENC_GEN_INDEX
     };
     if resp_acc_old.0.len() < required_resp_acc_old_len {
         return Err(Error::ProofVerificationError(format!(
@@ -2174,8 +2174,8 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         resp_acc_old.0[ID_GEN_INDEX - offset_when_asset_id_revealed],
     );
     missing_resps.insert(
-        SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed,
-        resp_acc_old.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
+        SK_ENC_GEN_INDEX - offset_when_asset_id_revealed,
+        resp_acc_old.0[SK_ENC_GEN_INDEX - offset_when_asset_id_revealed],
     );
 
     let gens_acc_new = if asset_id.is_none() {
@@ -2220,7 +2220,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         asset_id,
         resp_leg_link,
         resp_sk_enc_inv_bp,
-        &resp_acc_old.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
+        &resp_acc_old.0[SK_ENC_GEN_INDEX - offset_when_asset_id_revealed],
         asset_id
             .is_none()
             .then(|| &resp_acc_old.0[ASSET_ID_GEN_INDEX]),
@@ -2255,10 +2255,10 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             )
         })?;
     missing_resps.insert(6, *resp_acc_new_cur_rand);
-    // Position 7: sk_enc (shared with resp_leaf at SK_ENC_INV_GEN_INDEX, adjusted for asset_id offset)
+    // Position 7: sk_enc (shared with resp_leaf at SK_ENC_GEN_INDEX, adjusted for asset_id offset)
     missing_resps.insert(
         7,
-        resp_acc_old.0[SK_ENC_INV_GEN_INDEX - offset_when_asset_id_revealed],
+        resp_acc_old.0[SK_ENC_GEN_INDEX - offset_when_asset_id_revealed],
     );
     // Position 8: sk_enc_inv — provided by resp_bp (not in missing_resps)
 
@@ -2641,6 +2641,7 @@ mod tests {
 
     #[test]
     fn test_constraints_for_balance_change() {
+        // Drives the R1CS balance-change gadget directly: for increase/decrease flags it asserts new = old -/+ amount is enforced (incl. an overflow-past-BALANCE_BITS case) and rejects wrong amounts, for both single and multi-amount variants.
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(128, 1);
 
@@ -2779,6 +2780,7 @@ mod tests {
 
     #[test]
     fn test_constraints_for_randomness_relations() {
+        // Drives the R1CS randomness gadget enforcing rho_{i+1} = rho * rho_i and s_{i+1} = s * s_i: passes when both products hold, fails when either is replaced by a +1 value.
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(128, 1);
         let mut rng = rand::thread_rng();

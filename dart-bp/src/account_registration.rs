@@ -351,14 +351,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         // Chunks commitment t-values and combined protos
         let combined_enc_data = if let Some((s_prep, rho_prep)) = &mut enc_prep {
             let mut blindings = vec![G::ScalarField::rand(rng)];
-            for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut s_prep.chunk_blindings[i]);
-                blindings.push(b);
-            }
-            for i in 0..NUM_CHUNKS {
-                let b = mem::take(&mut rho_prep.chunk_blindings[i]);
-                blindings.push(b);
-            }
+            blindings.extend(s_prep.chunk_blindings.iter_mut().map(|b| mem::take(b)));
+            blindings.extend(rho_prep.chunk_blindings.iter_mut().map(|b| mem::take(b)));
             let t_comm_s_rho_chunks_bp = SchnorrCommitment::new(
                 &RegTxnWithoutSkProof::<G, CHUNK_BITS, NUM_CHUNKS>::bp_gens_for_comm_s_rho_chunks(
                     leaf_level_pc_gens,
@@ -627,10 +621,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
         let mut enc_proto = Vec::with_capacity(NUM_CHUNKS);
-        for i in 0..NUM_CHUNKS {
+        for (i, (((enc_rand, enc_rand_blinding), chunk), chunk_blinding)) in enc_rands
+            .iter()
+            .zip(enc_rands_blindings.iter())
+            .zip(chunks.iter())
+            .zip(chunk_blindings.iter())
+            .enumerate()
+        {
             eph_proto.push(PokDiscreteLogProtocol::init(
-                enc_rands[i],
-                enc_rands_blindings[i],
+                *enc_rand,
+                *enc_rand_blinding,
                 enc_key_gen,
             ));
             eph_proto[i].challenge_contribution(
@@ -639,11 +639,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 &mut *transcript_ref,
             )?;
             enc_proto.push(PokPedersenCommitmentProtocol::init(
-                enc_rands[i],
-                enc_rands_blindings[i],
+                *enc_rand,
+                *enc_rand_blinding,
                 pk_T,
-                chunks[i],
-                chunk_blindings[i],
+                *chunk,
+                *chunk_blinding,
                 enc_gen,
             ));
             enc_proto[i].challenge_contribution(
@@ -789,30 +789,40 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 Error::ProofVerificationError("Missing encryption data for T".to_string())
             })?;
             let enc_rand = &enc_for_T.encrypted_randomness;
-            for i in 0..NUM_CHUNKS {
-                enc_rand.resp_eph_pk[i].challenge_contribution(
+            for ((resp_eph_pk, resp_encrypted), ciphertext) in enc_rand
+                .resp_eph_pk
+                .iter()
+                .zip(enc_rand.resp_encrypted.iter())
+                .zip(enc_rand.ciphertexts.iter())
+            {
+                resp_eph_pk.challenge_contribution(
                     enc_key_gen_T,
-                    &enc_rand.ciphertexts[i].eph_pk,
+                    &ciphertext.eph_pk,
                     &mut transcript_ref,
                 )?;
-                enc_rand.resp_encrypted[i].challenge_contribution(
+                resp_encrypted.challenge_contribution(
                     pk_T,
                     enc_gen,
-                    &enc_rand.ciphertexts[i].encrypted,
+                    &ciphertext.encrypted,
                     &mut transcript_ref,
                 )?;
             }
             let enc_rho = &enc_for_T.encrypted_rho;
-            for i in 0..NUM_CHUNKS {
-                enc_rho.resp_eph_pk[i].challenge_contribution(
+            for ((resp_eph_pk, resp_encrypted), ciphertext) in enc_rho
+                .resp_eph_pk
+                .iter()
+                .zip(enc_rho.resp_encrypted.iter())
+                .zip(enc_rho.ciphertexts.iter())
+            {
+                resp_eph_pk.challenge_contribution(
                     enc_key_gen_T,
-                    &enc_rho.ciphertexts[i].eph_pk,
+                    &ciphertext.eph_pk,
                     &mut transcript_ref,
                 )?;
-                enc_rho.resp_encrypted[i].challenge_contribution(
+                resp_encrypted.challenge_contribution(
                     pk_T,
                     enc_gen,
-                    &enc_rho.ciphertexts[i].encrypted,
+                    &ciphertext.encrypted,
                     &mut transcript_ref,
                 )?;
             }
@@ -998,27 +1008,36 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         // Verify encryption proofs
         if let Some((pk_T, enc_key_gen, enc_gen)) = &T {
-            let enc_for_T = self.encryption_for_T.as_ref().unwrap();
+            let enc_for_T = self
+                .encryption_for_T
+                .as_ref()
+                .ok_or_else(|| Error::PkTAndEncryptedRandomnessInconsistent)?;
             let enc_rand = &enc_for_T.encrypted_randomness;
             let resp_s_rho = &enc_for_T.resp_comm_s_rho_chunks_bp;
-            for i in 0..NUM_CHUNKS {
+            for (i, ((resp_eph_pk, resp_encrypted), ciphertext)) in enc_rand
+                .resp_eph_pk
+                .iter()
+                .zip(enc_rand.resp_encrypted.iter())
+                .zip(enc_rand.ciphertexts.iter())
+                .enumerate()
+            {
                 verify_or_rmc_2!(
                     rmc,
-                    enc_rand.resp_eph_pk[i],
+                    resp_eph_pk,
                     "Encrypted randomness verification failed",
-                    enc_rand.ciphertexts[i].eph_pk,
+                    ciphertext.eph_pk,
                     *enc_key_gen,
                     challenge,
                 );
                 verify_or_rmc_3!(
                     rmc,
-                    enc_rand.resp_encrypted[i],
+                    resp_encrypted,
                     "Encrypted randomness verification failed",
-                    enc_rand.ciphertexts[i].encrypted,
+                    ciphertext.encrypted,
                     *pk_T,
                     *enc_gen,
                     challenge,
-                    &enc_rand.resp_eph_pk[i].response,
+                    &resp_eph_pk.response,
                     &resp_s_rho.0[i + 1],
                 );
             }
@@ -1046,24 +1065,30 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
             // Verify rho encryption
             let enc_rho = &enc_for_T.encrypted_rho;
-            for i in 0..NUM_CHUNKS {
+            for (i, ((resp_eph_pk, resp_encrypted), ciphertext)) in enc_rho
+                .resp_eph_pk
+                .iter()
+                .zip(enc_rho.resp_encrypted.iter())
+                .zip(enc_rho.ciphertexts.iter())
+                .enumerate()
+            {
                 verify_or_rmc_2!(
                     rmc,
-                    enc_rho.resp_eph_pk[i],
+                    resp_eph_pk,
                     "Encrypted rho verification failed",
-                    enc_rho.ciphertexts[i].eph_pk,
+                    ciphertext.eph_pk,
                     *enc_key_gen,
                     challenge,
                 );
                 verify_or_rmc_3!(
                     rmc,
-                    enc_rho.resp_encrypted[i],
+                    resp_encrypted,
                     "Encrypted rho verification failed",
-                    enc_rho.ciphertexts[i].encrypted,
+                    ciphertext.encrypted,
                     *pk_T,
                     *enc_gen,
                     challenge,
-                    &enc_rho.resp_eph_pk[i].response,
+                    &resp_eph_pk.response,
                     &resp_s_rho.0[NUM_CHUNKS + i + 1],
                 );
             }
@@ -1370,7 +1395,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &account_commitment,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
-            None,
+            T,
             rmc,
         )?;
 
@@ -2279,6 +2304,8 @@ pub mod tests {
 
     #[test]
     fn account_init() {
+        // Builds a fresh AccountState and checks the derived fields: balance/counter start at 0, rho = Poseidon(rho_randomness, asset_id||counter),
+        // current_rho = rho^2; then refreshes state n times and asserts current_rho/current_randomness = base^{2+i} while base randomness stays fixed.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -2330,6 +2357,8 @@ pub mod tests {
 
     #[test]
     fn test_deterministic_key_and_randomness_generation() {
+        // Seed-derived keys/randomness are deterministic: same (seed,path,counter) reproduces identical output, and changing seed, path,
+        // or counter yields different keys/randomness (and hence distinct AccountStates) — domain separation across the derivation inputs.
         let mut rng = rand::thread_rng();
 
         let id = Fr::rand(&mut rng);
@@ -2453,6 +2482,8 @@ pub mod tests {
 
     #[test]
     fn registration_without_pk_T() {
+        // Plain registration with no regulator escrow (T = None), so no encryption_for_T is produced; verifies the proof both
+        // the normal way and via RandomizedMultChecker. The with_pk_T sibling additionally escrows the account secret to pk_T.
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -2562,6 +2593,9 @@ pub mod tests {
 
     #[test]
     fn registration_with_pk_T() {
+        // Registration that also escrows the account secret (rho/randomness, chunked) encrypted to regulator key pk_T; checks the
+        // ciphertext decrypts back to randomness, then that verification rejects a wrong pk_T, swapped chunk ciphertexts, and a
+        // chunk copied from the rho ciphertext into the randomness ciphertext.
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -2790,7 +2824,208 @@ pub mod tests {
     }
 
     #[test]
+    fn verify_split_rejects_tampered_trustee_ciphertexts() {
+        // Regression for REG-1: verify_split_and_return_tuples must pass T (not None) to
+        // verify_with_challenge so the sigma proofs over the trustee ciphertexts are checked.
+        // A malicious prover can supply garbage eph_pk/encrypted points for pk_T while
+        // keeping every other part of the proof valid — the trustee would then be unable to
+        // decrypt rho/randomness and perform force-transfer.  verify_split must reject that.
+        //
+        // Uses the W3 sequential-split construction (same as registration_sequential_workflow)
+        // because RegTxnProof::new produces a W1 proof verified by verify(), not verify_split().
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const CHUNK_BITS: usize = 48;
+        const NUM_CHUNKS: usize = 6;
+
+        let account_tree_params =
+            SelRerandProofParameters::<PallasParameters, VestaParameters>::new(
+                NUM_GENS as u32,
+                NUM_GENS as u32,
+            )
+            .unwrap();
+
+        let account_comm_key = setup_comm_key(b"verify-split-tamper-test");
+        let asset_id = 1u32;
+
+        let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let id = Fr::rand(&mut rng);
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_T) = keygen_enc(&mut rng, enc_key_gen);
+        let enc_gen = PallasA::rand(&mut rng);
+        let T = Some((pk_T.0, enc_key_gen, enc_gen));
+
+        let (mut account, rho_randomness, nullifier_gen_counter, poseidon_params) =
+            new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+        // Keep randomness small so proof generation is fast.
+        account.randomness = Fr::from(u16::rand(&mut rng) as u64 + 1u64);
+        account.current_randomness = account.randomness.square();
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let nonce = b"split-tamper-nonce";
+        let leaf_level_pc_gens = account_tree_params.even_parameters.pc_gens();
+        let leaf_level_bp_gens = account_tree_params.even_parameters.bp_gens();
+        let aff_key_gen = account_comm_key.sk_gen();
+
+        // Build a W3 (sequential-split) proof so it is verifiable by verify_split.
+        let make_honest_proof =
+            |rng: &mut rand::rngs::ThreadRng| -> RegTxnProof<PallasA, CHUNK_BITS, NUM_CHUNKS> {
+                let (protocol, mut prover) =
+                    RegTxnWithoutSkProtocol::<_, CHUNK_BITS, NUM_CHUNKS>::init(
+                        rng,
+                        &account,
+                        account_comm.clone(),
+                        rho_randomness,
+                        nullifier_gen_counter,
+                        nonce,
+                        &account_comm_key,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        &poseidon_params,
+                        T,
+                    )
+                    .unwrap();
+
+                let challenge_h = prover
+                    .transcript()
+                    .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+                let mut challenge_h_bytes = Vec::new();
+                challenge_h
+                    .serialize_compressed(&mut challenge_h_bytes)
+                    .unwrap();
+                let ledger_nonce: Vec<u8> = challenge_h_bytes
+                    .iter()
+                    .chain(nonce.iter())
+                    .copied()
+                    .collect();
+
+                let auth_proof = AuthProofOnlySks::new(
+                    rng,
+                    sk_aff.0,
+                    sk_enc.0,
+                    pk_aff.0,
+                    pk_enc.0,
+                    &ledger_nonce,
+                    &aff_key_gen,
+                    &enc_key_gen,
+                )
+                .unwrap();
+
+                let mut auth_proof_bytes = Vec::new();
+                auth_proof
+                    .serialize_compressed(&mut auth_proof_bytes)
+                    .unwrap();
+                prover
+                    .transcript()
+                    .append_message(AUTH_PROOF_LABEL, &auth_proof_bytes);
+                let challenge_h_final = prover
+                    .transcript()
+                    .challenge_scalar::<Fr>(TXN_CHALLENGE_LABEL);
+
+                let mut partial = protocol.gen_proof(&challenge_h_final).unwrap();
+                let r1cs_proof = prover.prove_with_rng(&leaf_level_bp_gens, rng).unwrap();
+                partial.proof = Some(r1cs_proof);
+
+                RegTxnProof::<_, CHUNK_BITS, NUM_CHUNKS> {
+                    auth_proof,
+                    partial,
+                }
+            };
+
+        let reg_proof = make_honest_proof(&mut rng);
+        assert!(reg_proof.partial.encryption_for_T.is_some());
+
+        // Positive: an honest W3 proof must pass verify_split.
+        reg_proof
+            .verify_split(
+                &mut rng,
+                id,
+                pk_aff.0,
+                pk_enc.0,
+                asset_id,
+                &account_comm,
+                nullifier_gen_counter,
+                nonce,
+                account_comm_key.clone(),
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                &poseidon_params,
+                T,
+                None,
+            )
+            .unwrap();
+
+        // Negative: corrupt one sigma response inside the trustee encryption proof while
+        // leaving everything else (ciphertexts, challenge transcript, other proofs) intact.
+        // This models a prover who submits bogus resp_eph_pk to avoid proving knowledge of the
+        // ephemeral randomness — the sigma checks are only run when T is passed (the fix).
+        // With the pre-fix None the tampered response would be silently skipped; with T it fails.
+        let mut tampered = make_honest_proof(&mut rng);
+        {
+            let enc = tampered.partial.encryption_for_T.as_mut().unwrap();
+            // Replace the first resp_eph_pk response with a random scalar.  The ciphertexts are
+            // unchanged so the transcript challenge is the same; only the sigma check catches this.
+            enc.encrypted_randomness.resp_eph_pk[0].response = Fr::rand(&mut rng);
+            enc.encrypted_rho.resp_eph_pk[0].response = Fr::rand(&mut rng);
+        }
+        assert!(
+            tampered
+                .verify_split(
+                    &mut rng,
+                    id,
+                    pk_aff.0,
+                    pk_enc.0,
+                    asset_id,
+                    &account_comm,
+                    nullifier_gen_counter,
+                    nonce,
+                    account_comm_key.clone(),
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    &poseidon_params,
+                    T,
+                    None,
+                )
+                .is_err(),
+            "verify_split must reject a tampered resp_eph_pk response (REG-1 regression)"
+        );
+
+        // Same check with RandomizedMultChecker.
+        let mut tampered_rmc = make_honest_proof(&mut rng);
+        {
+            let enc = tampered_rmc.partial.encryption_for_T.as_mut().unwrap();
+            enc.encrypted_randomness.resp_eph_pk[0].response = Fr::rand(&mut rng);
+            enc.encrypted_rho.resp_eph_pk[0].response = Fr::rand(&mut rng);
+        }
+        let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
+        let result = tampered_rmc.verify_split(
+            &mut rng,
+            id,
+            pk_aff.0,
+            pk_enc.0,
+            asset_id,
+            &account_comm,
+            nullifier_gen_counter,
+            nonce,
+            account_comm_key,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            &poseidon_params,
+            T,
+            Some(&mut rmc),
+        );
+        assert!(
+            result.is_err() || rmc.verify().is_err(),
+            "verify_split with RMC must reject a tampered resp_eph_pk response (REG-1 regression)"
+        );
+    }
+
+    #[test]
     fn registration_parallel_workflow() {
+        // W2 split-prover mode: host builds the sk-less partial (RegTxnWithoutSkProtocol::new) and Ledger builds the auth proof
+        // independently, both bound to the same plain nonce; run for T=None and T=Some(pk_T). Sequential sibling chains them via the challenge.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         let account_tree_params =
@@ -2907,6 +3142,8 @@ pub mod tests {
 
     #[test]
     fn registration_sequential_workflow() {
+        // W3 sequential split-prover mode: host inits the partial, derives challenge_h, Ledger's auth proof is built over (challenge_h||nonce)
+        // and folded back into the transcript for a final challenge before gen_proof — so the two halves are chained, not independent like the parallel sibling.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         let account_tree_params =
@@ -3175,6 +3412,8 @@ pub mod tests {
 
     #[test]
     fn test_digits() {
+        // base-2^B little-endian digit decomposition round-trips: a known constant splits into the expected bytes, and 100 random
+        // 48-bit-chunked field elements reconstruct from their digits (digits/chunk_boundaries sibling instead probes exact power-of-2 edges).
         let mut rng = rand::thread_rng();
 
         const CHUNK_BITS: usize = 8;
@@ -3211,6 +3450,8 @@ pub mod tests {
 
     #[test]
     fn test_digits_chunk_boundaries() {
+        // Digit decomposition exactly at chunk carry points (255/256, 65535/65536, 2^24-1/2^24): reconstruction holds and every
+        // non-top digit stays strictly below 2^CHUNK_BITS, catching off-by-one carry bugs the random-value sibling might miss.
         const CHUNK_BITS: usize = 8;
         const NUM_CHUNKS: usize = 4;
         let powers = powers_of_base::<Fr, CHUNK_BITS, NUM_CHUNKS>();
@@ -3302,6 +3543,8 @@ pub mod tests {
 
     #[test]
     fn test_rho_gen_constraints() {
+        // In-circuit rho-derivation R1CS constraints: proof verifies for honest inputs, but fails when rho is not the Poseidon
+        // pre-image of (rho_randomness, asset_id||counter), and fails when current_randomness != randomness^2.
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(256, 1);
         let mut rng = rand::thread_rng();
@@ -3709,6 +3952,8 @@ pub mod tests {
 
     #[test]
     fn combined_registration() {
+        // All registration proofs share ONE Prover/transcript and produce a single aggregated R1CS/Bulletproof, verified through one
+        // Verifier; run without- and with-pk_T plus an RMC pass. Unlike batch_registration where each proof is fully independent.
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -4047,6 +4292,8 @@ pub mod tests {
 
         #[test]
         fn registration_with_non_zero_balance() {
+            // A new account must commit to balance = 0; here balance is tampered to 100. With ignore_prover_input_sanitation the proof
+            // still builds, but verification (regular and RMC) must reject it.
             let mut rng = rand::thread_rng();
 
             // Setup begins
@@ -4143,6 +4390,8 @@ pub mod tests {
 
         #[test]
         fn registration_with_incorrect_keys() {
+            // Two cases where the account is committed with a public key that doesn't match the secret used in the proof: first a wrong
+            // signing pk (vs sk_i), then a wrong encryption pk_enc (vs sk_enc). Proof builds but verification must reject both.
             let mut rng = rand::thread_rng();
 
             // Setup begins
@@ -4547,6 +4796,8 @@ pub mod tests {
 
             #[test]
             fn registration_with_pk_t_and_mocked_rho_fails_verification() {
+                // Mocktopus mocks initial_nullifier + nullifier_proto to use a random rho unrelated to the committed account, so the
+                // nullifier/rho proof is built on a different rho than the commitment and pk_T escrow — verification must reject.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
@@ -4618,25 +4869,24 @@ pub mod tests {
                     expected_mocked_initial_nullifier
                 );
 
-                assert!(
-                    reg_proof
-                        .verify(
-                            &mut rng,
-                            id,
-                            pk_i.0,
-                            pk_enc.0,
-                            asset_id,
-                            &account_comm,
-                            nullifier_gen_counter,
-                            nonce,
-                            account_comm_key.clone(),
-                            &account_tree_params.even_parameters.pc_gens(),
-                            &account_tree_params.even_parameters.bp_gens(),
-                            &poseidon_params,
-                            Some((pk_t.0, enc_key_gen, enc_gen)),
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    reg_proof.verify(
+                        &mut rng,
+                        id,
+                        pk_i.0,
+                        pk_enc.0,
+                        asset_id,
+                        &account_comm,
+                        nullifier_gen_counter,
+                        nonce,
+                        account_comm_key.clone(),
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
+                        &poseidon_params,
+                        Some((pk_t.0, enc_key_gen, enc_gen)),
+                        None,
+                    ),
+                    Error::SchnorrError(_) | Error::ProofVerificationError(_)
                 );
 
                 let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
@@ -4664,6 +4914,8 @@ pub mod tests {
 
             #[test]
             fn registration_with_pk_t_and_mocked_randomness_fails_verification() {
+                // Mocktopus swaps the honest randomness/rho for random mocked scalars inside the pk_T chunk-encryption + combined-scalar
+                // protocols, so the values escrowed to pk_T diverge from the committed account values — verification must reject.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
@@ -4766,25 +5018,24 @@ pub mod tests {
                 )
                 .unwrap();
 
-                assert!(
-                    reg_proof
-                        .verify(
-                            &mut rng,
-                            id,
-                            pk_i.0,
-                            pk_enc.0,
-                            asset_id,
-                            &account_comm,
-                            nullifier_gen_counter,
-                            nonce,
-                            account_comm_key.clone(),
-                            &account_tree_params.even_parameters.pc_gens(),
-                            &account_tree_params.even_parameters.bp_gens(),
-                            &poseidon_params,
-                            Some((pk_t.0, enc_key_gen, enc_gen)),
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    reg_proof.verify(
+                        &mut rng,
+                        id,
+                        pk_i.0,
+                        pk_enc.0,
+                        asset_id,
+                        &account_comm,
+                        nullifier_gen_counter,
+                        nonce,
+                        account_comm_key.clone(),
+                        &account_tree_params.even_parameters.pc_gens(),
+                        &account_tree_params.even_parameters.bp_gens(),
+                        &poseidon_params,
+                        Some((pk_t.0, enc_key_gen, enc_gen)),
+                        None,
+                    ),
+                    Error::SchnorrError(_) | Error::ProofVerificationError(_)
                 );
 
                 let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
@@ -4812,6 +5063,8 @@ pub mod tests {
 
             #[test]
             fn registration_with_pk_t_and_mocked_encryption_target_fails_verification() {
+                // Mocktopus redirects the pk_T encryption to a different wrong_pk_t while the verifier still expects the real pk_T, so the
+                // escrow ciphertext targets the wrong regulator key — verification must reject.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;

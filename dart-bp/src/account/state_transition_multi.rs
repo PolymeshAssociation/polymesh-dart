@@ -2484,6 +2484,8 @@ mod tests {
 
     #[test]
     fn test_multi_asset_six_legs_mixed_revealed() {
+        // Alice across 6 legs / 3 assets where only legs 1 & 3 reveal the asset-id and the rest hide it (hidden legs need
+        // a curve-tree asset membership proof); checks the batched multi-account proof handles the mixed reveal pattern.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 14;

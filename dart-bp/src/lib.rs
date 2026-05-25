@@ -70,6 +70,10 @@ pub const BALANCE_LABEL: &'static [u8; 7] = b"balance";
 #[macro_use]
 mod macros;
 
+#[cfg(test)]
+#[macro_use]
+mod test_utils;
+
 pub mod keys;
 pub mod util;
 

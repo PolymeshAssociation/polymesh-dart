@@ -34,6 +34,8 @@ pub const LEG_TXN_INSTANCE_LABEL: &[u8; 22] = b"leg-txn-extra-instance";
 
 // Because of the way we organize keys, its better to have a single encryption key shared among all mediators. This is more efficient except when a mediator is removed which is rare
 
+// TODO: Remove index from mediator point to avoid issues.
+
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AssetCommitmentParams<
     G0: SWCurveConfig + Clone + Copy,

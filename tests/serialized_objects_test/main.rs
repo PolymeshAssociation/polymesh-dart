@@ -7,7 +7,7 @@ mod leg;
 mod split;
 mod utils;
 
-// Run as `cargo test --test serialized_objects_test generate_v1_serialized_objects -- --ignored`
+// Run as `cargo test -r --test serialized_objects_test generate_v1_serialized_objects -- --ignored`
 #[test]
 #[ignore = "Run explicitly to regenerate test vectors"]
 fn generate_v1_serialized_objects() {

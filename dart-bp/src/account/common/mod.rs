@@ -38,11 +38,10 @@ use dock_crypto_utils::transcript::Transcript;
 use leg_link::{LegAccountLink, LegAccountLinkProtocol, LegProverConfig};
 use polymesh_dart_common::AssetId;
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{
-    PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
-};
+use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
-    PartialPokDiscreteLog, PartialPokPedersenCommitment, PartialSchnorrResponse,
+    Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
+    PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -884,8 +883,9 @@ pub struct CommonAffirmationHostProof<
     pub partial: CommonStateChangeProofPartial<F0, F1, G0, G1, L>,
     pub host_commitment_proof: AccountCommitmentsHostProof<G0>,
     /// Host's PokPedersenCommitment proofs for ct_asset_id part (one per leg with hidden asset-id).
-    /// `ct_asset_id = enc_gen * asset_id + B_blinding * (-k_2)`
-    pub resp_ct_asset_id: Vec<PokPedersenCommitment<Affine<G0>>>,
+    /// `ct_asset_id = enc_gen * asset_id + B_blinding * (-k_2)`.
+    /// The asset-id is shared with the account commitments
+    pub resp_ct_asset_id: Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
     /// Auth's share of the leaf rerandomization scalar
     pub auth_rerandomization: F0,
     /// Commitment randomness for auth's new commitment part (B_blinding * rand_new_comm)
@@ -1165,19 +1165,14 @@ impl<
 
         let mut ct_asset_id_2_protos = Vec::new();
         if let Some(asset_id_blinding) = asset_id_blinding {
-            let asset_id = F0::from(account.asset_id());
-            for &k_asset_id in k_asset_ids.iter() {
-                let ct_asset_id_2 = (enc_gen * asset_id + b_blinding * (-k_asset_id)).into_affine();
-                let proto = PokPedersenCommitmentProtocol::init(
-                    asset_id,
-                    asset_id_blinding,
-                    &enc_gen,
-                    -k_asset_id,
-                    F0::rand(rng),
-                    &b_blinding,
-                );
-                ct_asset_id_2_protos.push((ct_asset_id_2, proto));
-            }
+            ct_asset_id_2_protos = Self::asset_id_proto(
+                rng,
+                F0::from(account.asset_id()),
+                asset_id_blinding,
+                k_asset_ids,
+                enc_gen,
+                b_blinding,
+            );
 
             {
                 let mut transcript = even_prover.transcript();
@@ -1393,7 +1388,7 @@ impl<
         // Generate ct_asset_id_2 proofs
         let resp_ct_asset_id_2: Vec<_> = ct_asset_id_2_protos
             .into_iter()
-            .map(|(_, proto)| proto.gen_proof(challenge))
+            .map(|(_, proto)| proto.gen_partial2_proof(challenge))
             .collect();
 
         Ok(CommonAffirmationHostProof {
@@ -1403,6 +1398,46 @@ impl<
             auth_rerandomization,
             auth_rand_new_comm,
         })
+    }
+}
+
+/// Separate impl block so `#[mockable]` covers only `asset_id_proto`.
+/// Tests mock this to inject a forged asset-id and verify the cross-binding rejects it.
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
+impl<
+    const L: usize,
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: DivisorCurve<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
+> CommonAffirmationSplitProtocol<L, F0, F1, G0, G1>
+{
+    pub(crate) fn asset_id_proto<R: CryptoRngCore>(
+        rng: &mut R,
+        asset_id: F0,
+        asset_id_blinding: F0,
+        k_asset_ids: &[F0],
+        enc_gen: Affine<G0>,
+        b_blinding: Affine<G0>,
+    ) -> Vec<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)> {
+        k_asset_ids
+            .iter()
+            .map(|&k_asset_id| {
+                let ct_asset_id_2 = (enc_gen * asset_id + b_blinding * (-k_asset_id)).into_affine();
+                let proto = PokPedersenCommitmentProtocol::init(
+                    asset_id,
+                    asset_id_blinding,
+                    &enc_gen,
+                    -k_asset_id,
+                    F0::rand(rng),
+                    &b_blinding,
+                );
+                (ct_asset_id_2, proto)
+            })
+            .collect()
     }
 }
 
@@ -1417,7 +1452,7 @@ pub struct CommonAffirmationSplitProof<
 > {
     pub partial: CommonStateChangeProofPartial<F0, F1, G0, G1, L>,
     pub host_commitment_proof: AccountCommitmentsHostProof<G0>,
-    pub resp_ct_asset_id: Vec<PokPedersenCommitment<Affine<G0>>>,
+    pub resp_ct_asset_id: Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
     pub auth_proof: AuthProofAffirmation<Affine<G0>>,
 }
 

@@ -62,7 +62,7 @@ cargo nextest run -r --test serialized_objects_test
 
 To create the serialized data, run
 ```
-cargo nextest run -r --test serialized_objects_test --run-ignored ignored
+cargo nextest run -r --test serialized_objects_test --run-ignored only
 ```
 
 ## Code coverage

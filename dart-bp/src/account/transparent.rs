@@ -3072,6 +3072,18 @@ pub(crate) fn verify_pk_enc<G: AffineRepr>(
     enc_key_gen: G,
     mut rmc: Option<&mut RandomizedMultChecker<G>>,
 ) -> Result<()> {
+    if encrypted_pubkey.eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            encrypted_pubkey.eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
+    if resp_eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            resp_eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
     verify_or_rmc_3!(
         rmc,
         resp_enc,
@@ -3587,6 +3599,8 @@ mod tests {
 
     #[test]
     fn combined_withdraw_proofs() {
+        // Unlike batch_withdraw_proofs (separate proofs), all withdraws share one even/odd Prover and
+        // transcript, producing a single aggregated Bulletproof for the whole batch.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 16;
@@ -4013,6 +4027,8 @@ mod tests {
 
     #[test]
     fn combined_deposit_proofs() {
+        // Unlike batch_deposit_proofs (separate proofs), all deposits share one even/odd Prover and
+        // transcript, producing a single aggregated Bulletproof for the whole batch.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 16;
@@ -5006,6 +5022,8 @@ mod tests {
 
         #[test]
         fn withdraw_proof_with_mocked_wrong_rho_for_nullifier_fails_verification() {
+            // Prover mocks the nullifier to use rho+1 (wrong rho), so the published nullifier no longer
+            // matches the committed account's rho; verification (plain and RMC) must reject.
             let mut rng = rand::thread_rng();
             let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
@@ -5125,6 +5143,8 @@ mod tests {
 
         #[test]
         fn withdraw_proof_with_mocked_balance_for_range_proof_fails_verification() {
+            // Prover feeds a wrong updated balance (true+1) into the range-proof constraints, so it no
+            // longer matches the new account commitment; verification (plain and RMC) must reject.
             let mut rng = rand::thread_rng();
             let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
@@ -5227,23 +5247,22 @@ mod tests {
             )
             .unwrap();
 
-            assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
-                        asset_id,
-                        withdraw_amount,
-                        updated_account_comm,
-                        nullifier,
-                        auditor_pubkeys.clone(),
-                        &root,
-                        nonce,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        &mut rng,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    auditor_pubkeys.clone(),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    &mut rng,
+                    None,
+                ),
+                Error::SchnorrError(_)
             );
 
             let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
@@ -5270,6 +5289,8 @@ mod tests {
 
         #[test]
         fn withdraw_proof_with_mocked_updated_randomness_relation_inputs_fails_verification() {
+            // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
+            // and updated randomness+1 instead of the real values; verification (plain and RMC) must reject.
             let mut rng = rand::thread_rng();
             let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
@@ -5374,23 +5395,22 @@ mod tests {
             )
             .unwrap();
 
-            assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
-                        asset_id,
-                        withdraw_amount,
-                        updated_account_comm,
-                        nullifier,
-                        auditor_pubkeys.clone(),
-                        &root,
-                        nonce,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        enc_key_gen,
-                        &mut rng,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    auditor_pubkeys.clone(),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    &mut rng,
+                    None,
+                ),
+                Error::SchnorrError(_)
             );
 
             let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));

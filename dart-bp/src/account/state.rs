@@ -28,7 +28,7 @@ pub(crate) const CURRENT_RHO_GEN_INDEX: usize = 5;
 pub(crate) const RANDOMNESS_GEN_INDEX: usize = 6;
 pub(crate) const CURRENT_RANDOMNESS_GEN_INDEX: usize = 7;
 pub(crate) const ID_GEN_INDEX: usize = 8;
-pub(crate) const SK_ENC_INV_GEN_INDEX: usize = 9;
+pub(crate) const SK_ENC_GEN_INDEX: usize = 9;
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
@@ -220,7 +220,7 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     }
 
     fn sk_enc_gen(&self) -> G {
-        self[SK_ENC_INV_GEN_INDEX]
+        self[SK_ENC_GEN_INDEX]
     }
 }
 
@@ -691,6 +691,8 @@ mod tests {
             counter in 0..100 as PendingTxnCounter,
             txn_kind in select(TXN_KINDS.to_vec()),
         ) {
+            // Over random balance/amount/counter, sweeps all 7 txn kinds calling the AccountState `get_state_for_*`
+            // methods directly: asserts the resulting balance/counter and that illegal cases (e.g. claim/reverse at counter 0) error.
             prop_assume!(amount <= balance);
             let state = test_account_state(balance, counter);
 
@@ -707,7 +709,7 @@ mod tests {
                 }
                 2 => {
                     if counter == 0 {
-                        assert!(state.get_state_for_claiming_received(amount).is_err());
+                        assert_err!(state.get_state_for_claiming_received(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         let s = state.get_state_for_claiming_received(amount).unwrap();
                         assert_eq!(s.balance(), balance + amount);
@@ -716,7 +718,7 @@ mod tests {
                 }
                 3 => {
                     if state.counter < counter {
-                        assert!(state.get_state_for_decreasing_counter(Some(counter)).is_err());
+                        assert_err!(state.get_state_for_decreasing_counter(Some(counter)), Error::ProofOfBalanceError(_), "Counter cannot be decreased below zero");
                     } else {
                         let s = state.get_state_for_decreasing_counter(Some(counter)).unwrap();
                         assert_eq!(s.balance(), balance);
@@ -725,7 +727,7 @@ mod tests {
                 }
                 4 => {
                     if counter == 0 {
-                        assert!(state.get_state_for_reversing_send(amount).is_err());
+                        assert_err!(state.get_state_for_reversing_send(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         let s = state.get_state_for_reversing_send(amount).unwrap();
                         assert_eq!(s.balance(), balance + amount);
@@ -753,6 +755,8 @@ mod tests {
             counter in 0..100 as PendingTxnCounter,
             txn_kind in select(TXN_KINDS.to_vec())
         ) {
+            // Same 7-txn-kind matrix as prop_account_state_transaction_type_matrix but driven through
+            // AccountStateBuilder (init/update_for_*/finalize) instead of the direct get_state_for_* calls.
             prop_assume!(amount <= balance);
             let state = test_account_state(balance, counter);
 
@@ -774,7 +778,7 @@ mod tests {
                 2 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if counter == 0 {
-                        assert!(b.update_for_claiming_received(amount).is_err());
+                        assert_err!(b.update_for_claiming_received(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         b.update_for_claiming_received(amount).unwrap();
                         let s = b.finalize();
@@ -785,7 +789,7 @@ mod tests {
                 3 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if state.counter < counter {
-                        assert!(b.update_for_decreasing_counter(Some(counter)).is_err());
+                        assert_err!(b.update_for_decreasing_counter(Some(counter)), Error::ProofOfBalanceError(_), "Counter cannot be decreased below zero");
                     } else {
                         b.update_for_decreasing_counter(Some(counter)).unwrap();
                         let s = b.finalize();
@@ -796,7 +800,7 @@ mod tests {
                 4 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if counter == 0 {
-                        assert!(b.update_for_reversing_send(amount).is_err());
+                        assert_err!(b.update_for_reversing_send(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         b.update_for_reversing_send(amount).unwrap();
                         let s = b.finalize();

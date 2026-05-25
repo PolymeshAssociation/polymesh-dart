@@ -267,6 +267,7 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::Error;
     use crate::account::tests::{setup_gens_new, setup_leg_with_conf};
     use crate::account::{AccountCommitmentKeyTrait, LegProverConfig, LegVerifierConfig};
     use crate::account_registration::tests::{new_account, setup_comm_key};
@@ -276,7 +277,7 @@ pub mod tests {
     use crate::fee_account::tests::new_fee_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{LegEncConfig, PartyEphemeralPublicKey};
+    use crate::leg::{LegEncConfig, PartyEphemeralPublicKey, SenderEphemeralPublicKey};
     use ark_ec::CurveGroup;
 
     type Fr = ark_pallas::Fr;
@@ -284,6 +285,7 @@ pub mod tests {
 
     #[test]
     fn registration() {
+        // Round-trips the registration auth-proof: device proves knowledge of the signing + encryption secret keys behind the registered public keys, and the verifier accepts.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -323,6 +325,7 @@ pub mod tests {
 
     #[test]
     fn fee_payment_auth() {
+        // Round-trips the fee-payment auth-proof over the re-randomized old/updated fee-account commitments + nullifier; checks the host/device partial commitments sum to the full ones, and that a wrong nullifier/nonce/old-comm/new-comm each makes verification fail.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2
@@ -478,6 +481,7 @@ pub mod tests {
 
     #[test]
     fn transparent_auth() {
+        // Round-trips the transparent (withdraw) auth-proof with two auditor keys; checks partial-commitment sums, that wrong nullifier/nonce/old-comm/new-comm fail, and that each auditor can decrypt its encrypted copy of the signing pubkey.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -567,70 +571,66 @@ pub mod tests {
         // Wrong public values: verification must fail in every case because they are
         // committed into the transcript, binding the sigma responses to them.
         let wrong_nullifier = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    wrong_nullifier,
-                    &auditor_pubkeys,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                wrong_nullifier,
+                &auditor_pubkeys,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
-        assert!(
-            proof
-                .verify(
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    &auditor_pubkeys,
-                    b"wrong-nonce",
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                &auditor_pubkeys,
+                b"wrong-nonce",
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let wrong_re_rand = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    &wrong_re_rand,
-                    &updated_account_comm.0,
-                    nullifier,
-                    &auditor_pubkeys,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                &wrong_re_rand,
+                &updated_account_comm.0,
+                nullifier,
+                &auditor_pubkeys,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let wrong_updated_comm = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    &re_randomized_account_commitment,
-                    &wrong_updated_comm,
-                    nullifier,
-                    &auditor_pubkeys,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                &re_randomized_account_commitment,
+                &wrong_updated_comm,
+                nullifier,
+                &auditor_pubkeys,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         // Verify decryption works
@@ -641,6 +641,7 @@ pub mod tests {
 
     #[test]
     fn affirmation_auth() {
+        // Round-trips the affirmation auth-proof for the sender signing off on one leg (balance decreased); checks partial-commitment sums and that a wrong nullifier/nonce fails verification.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -726,8 +727,8 @@ pub mod tests {
         .unwrap();
 
         let legs_verifier = vec![LegVerifierConfig {
-            encryption: leg_enc_core,
-            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
+            encryption: leg_enc_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             has_balance_decreased: Some(true),
             has_counter_decreased: None,
         }];
@@ -765,74 +766,70 @@ pub mod tests {
         );
 
         let wrong_nullifier = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    legs_verifier.clone(),
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    wrong_nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                wrong_nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
-        assert!(
-            proof
-                .verify(
-                    legs_verifier.clone(),
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    b"wrong-nonce",
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                b"wrong-nonce",
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let wrong_re_rand = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    legs_verifier.clone(),
-                    &wrong_re_rand,
-                    &updated_account_comm.0,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &wrong_re_rand,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let wrong_updated_comm = PallasA::rand(&mut rng);
-        assert!(
-            proof
-                .verify(
-                    legs_verifier.clone(),
-                    &re_randomized_account_commitment,
-                    &wrong_updated_comm,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &wrong_updated_comm,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let wrong_legs_verifier = vec![LegVerifierConfig {
@@ -841,21 +838,21 @@ pub mod tests {
             has_balance_decreased: None,
             has_counter_decreased: None,
         }];
-        assert!(
-            proof
-                .verify(
-                    wrong_legs_verifier,
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                wrong_legs_verifier,
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Invalid partial_ct_amounts length"
         );
 
         // Test: verifier uses a different leg encryption than what the prover used.
@@ -884,59 +881,84 @@ pub mod tests {
             has_balance_decreased: Some(true),
             has_counter_decreased: None,
         }];
-        assert!(
-            proof
-                .verify(
-                    wrong_encryption_legs,
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                wrong_encryption_legs,
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
         let mut truncated_amount_proof = proof.clone();
         truncated_amount_proof.partial_ct_amounts.clear();
-        assert!(
-            truncated_amount_proof
-                .verify(
-                    legs_verifier.clone(),
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            truncated_amount_proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Invalid partial_ct_amounts length"
         );
 
         let mut truncated_asset_id_proof = proof.clone();
         truncated_asset_id_proof.partial_ct_asset_ids.clear();
-        assert!(
-            truncated_asset_id_proof
-                .verify(
-                    legs_verifier,
-                    &re_randomized_account_commitment,
-                    &updated_account_comm.0,
-                    nullifier,
-                    nonce,
-                    account_comm_key.sk_gen(),
-                    enc_key_gen,
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            truncated_asset_id_proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Invalid partial_ct_asset_ids length"
+        );
+
+        // Verifier receives party_eph_pk with r4 = None while asset-id is hidden; must return Err, not panic.
+        let bad_eph_pk =
+            PartyEphemeralPublicKey::Sender(SenderEphemeralPublicKey { r4: None, ..eph_pk });
+        let bad_legs_verifier = vec![LegVerifierConfig {
+            encryption: leg_enc_core,
+            party_eph_pk: bad_eph_pk,
+            has_balance_decreased: Some(true),
+            has_counter_decreased: None,
+        }];
+        assert_err!(
+            proof.verify(
+                bad_legs_verifier,
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "missing the asset-id ephemeral key"
         );
     }
 }

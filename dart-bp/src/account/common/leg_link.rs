@@ -22,6 +22,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// AssetIdRevealedElsewhere - additionally proves `ct_asset_id - enc_gen * at = eph_pk[3] * {sk_enc^{-1}}`,
 /// only witness is `sk_enc^{-1}`. This is the case where the leg itself doesn't reveal asset-id but some
 /// other leg reveals it thus the prover reveals asset-id here as well.
+///
+/// Above is sub-optimal as sender/receiver don't always need to prove relation `ct_s`/`ct_r` if they
+/// are proving `ct_asset_id` or `ct_amount` (in case of balance change)
+
 #[derive(Clone, Debug)]
 pub enum LegAccountLink<G0: SWCurveConfig> {
     /// Participant ciphertext proof + asset-id ciphertext proof

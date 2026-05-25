@@ -43,16 +43,18 @@ impl<T: DartLimits> KeyDistributionProof<T> {
         let sk = key.secret.clone();
         let pk_enc = key.public;
         let pk = pk_enc.get_affine()?;
-        let rec_pks = recipient_pks
+        // Build the set first so that rec_pks uses BTreeSet iteration order, like Self::verify.
+        // The better approach would be to pass as BtreeSet instead of Vec, but that breaks the API.
+        let mut recipient_pks_set = BoundedBTreeSet::new();
+        for rpk in recipient_pks {
+            recipient_pks_set
+                .try_insert(rpk)
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let rec_pks = recipient_pks_set
             .iter()
             .map(|k| k.get_affine())
             .collect::<Result<Vec<_>, _>>()?;
-        let mut recipient_pks_set = BoundedBTreeSet::new();
-        for pk in recipient_pks {
-            recipient_pks_set
-                .try_insert(pk)
-                .map_err(|_| Error::TooManyPublicInputsInProof)?;
-        }
 
         let gens = dart_gens();
         let proof = key_distribution::KeyDistributionProof::new(

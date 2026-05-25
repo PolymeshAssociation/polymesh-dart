@@ -246,13 +246,15 @@ impl<
         let mut leg_proofs = Vec::with_capacity(num_legs);
         let mut hidden_asset_idx = 0;
 
-        for i in 0..num_legs {
-            let leg_proof = if leg_encs[i].is_asset_id_revealed() {
+        for ((leg, leg_enc), leg_enc_rand) in
+            legs.iter().zip(leg_encs.iter()).zip(leg_enc_rands.iter())
+        {
+            let leg_proof = if leg_enc.is_asset_id_revealed() {
                 let proof = PublicAssetLegCreationProof::new_with_given_prover_inner(
                     rng,
-                    legs[i].clone(),
-                    leg_encs[i].clone(),
-                    leg_enc_rands[i].clone(),
+                    leg.clone(),
+                    leg_enc.clone(),
+                    leg_enc_rand.clone(),
                     &tree_parameters.odd_parameters.pc_gens(),
                     &tree_parameters.odd_parameters.bp_gens(),
                     enc_key_gen,
@@ -265,9 +267,9 @@ impl<
                 let proof =
                     LegCreationProof::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
                         rng,
-                        legs[i].clone(),
-                        leg_encs[i].clone(),
-                        leg_enc_rands[i].clone(),
+                        leg.clone(),
+                        leg_enc.clone(),
+                        leg_enc_rand.clone(),
                         rerandomized_leaf,
                         randomizer,
                         asset_data[hidden_asset_idx].clone(),
@@ -515,22 +517,22 @@ impl<
         let mut hidden_asset_idx = 0;
         let mut revealed_asset_idx = 0;
 
-        for i in 0..num_legs {
+        for (i, (leg_proof, leg_enc)) in self.leg_proofs.iter().zip(leg_encs.iter()).enumerate() {
             let leg_public_enc_keys = if public_enc_keys.is_empty() {
                 vec![]
             } else {
                 public_enc_keys[i].clone()
             };
 
-            match &self.leg_proofs[i] {
+            match leg_proof {
                 LegProof::HiddenAssetProof(proof) => {
-                    if leg_encs[i].is_asset_id_revealed() {
+                    if leg_enc.is_asset_id_revealed() {
                         return Err(Error::ProofVerificationError(format!(
                             "Leg {i} is not a hidden asset-id leg"
                         )));
                     }
                     proof.verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
-                        leg_encs[i].clone(),
+                        leg_enc.clone(),
                         all_rerandomized_leaves[hidden_asset_idx],
                         leg_public_enc_keys,
                         tree_parameters,
@@ -545,19 +547,19 @@ impl<
                     hidden_asset_idx += 1;
                 }
                 LegProof::RevealedAssetProof(proof) => {
-                    if !leg_encs[i].is_asset_id_revealed() {
+                    if !leg_enc.is_asset_id_revealed() {
                         return Err(Error::ProofVerificationError(format!(
                             "Leg {i} is not a revealed asset-id leg"
                         )));
                     }
 
-                    let revealed_asset_id = leg_encs[i].asset_id().ok_or_else(|| {
+                    let revealed_asset_id = leg_enc.asset_id().ok_or_else(|| {
                         Error::ProofVerificationError(
                             "Revealed asset-id leg must have a public asset_id".to_string(),
                         )
                     })?;
                     proof.verify_sigma_protocols_and_enforce_constraints_inner(
-                        leg_encs[i].clone(),
+                        leg_enc.clone(),
                         revealed_asset_id,
                         enc_keys[revealed_asset_idx].clone(),
                         med_keys[revealed_asset_idx].clone(),

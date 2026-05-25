@@ -566,7 +566,11 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
             if !conf.encryption.is_asset_id_revealed() {
                 // If asset id is not revealed in this leg
-                let eph_pk_base = conf.party_eph_pk.eph_pk_asset_id().unwrap();
+                let eph_pk_base = conf.party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i}: party_eph_pk is missing the asset-id ephemeral key but the leg hides the asset-id"
+                    ))
+                })?;
                 match &self.leg_links[i].2 {
                     RespAssetId::Revealed => {
                         return Err(Error::ProofVerificationError(format!(
@@ -580,7 +584,11 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                                 "Leg {i}: auth proof claims asset_id is revealed elsewhere but no leg reveals it"
                             )));
                         }
-                        let y = (conf.encryption.asset_id_ciphertext().unwrap() - h_at.unwrap())
+                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                            Error::ProofVerificationError(format!(
+                                "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
+                            ))
+                        })? - h_at.unwrap())
                             .into_affine();
                         r.challenge_contribution(&eph_pk_base, &y, &mut transcript)?;
                     }

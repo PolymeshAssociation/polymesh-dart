@@ -411,7 +411,9 @@ impl<
             .filter_map(|l| l.has_balance_decreased)
             .collect();
         if has_balance_decreased.is_empty() {
-            return Err(Error::ProofVerificationError("`has_balance_decreased` wasn't set but still trying to take challenge contribution".into()));
+            return Err(Error::ProofVerificationError(
+                "`has_balance_decreased` can't be empty if triggering balance verification".into(),
+            ));
         }
         enforce_balance_change_verifier(
             proof.partial.comm_bp_bal,
@@ -480,7 +482,7 @@ impl<
             &common_state_change_proof
                 .partial
                 .resp_bp_randomness_relations,
-            &challenge,
+            challenge,
             account_comm_key,
             pc_gens,
             bp_gens,
@@ -503,7 +505,7 @@ impl<
                 &balance_change_proof.partial.comm_bp_bal,
                 &balance_change_proof.partial.t_comm_bp_bal,
                 &balance_change_proof.partial.resp_comm_bp_bal,
-                &challenge,
+                challenge,
                 *common_state_change_proof
                     .resp_acc_old
                     .0
@@ -834,25 +836,30 @@ impl<
             .filter_map(|l| l.has_balance_decreased)
             .collect();
 
-        let num_balance_decreases = has_decreased.len();
+        if has_decreased.is_empty() {
+            return Err(Error::ProofVerificationError(
+                "`has_balance_decreased` can't be empty if triggering balance verification".into(),
+            ));
+        }
+        let num_balance_changes = has_decreased.len();
 
-        if common_proof.auth_proof.partial_ct_amounts.len() != num_balance_decreases {
+        if common_proof.auth_proof.partial_ct_amounts.len() != num_balance_changes {
             return Err(Error::ProofVerificationError(format!(
                 "Invalid common_proof.auth_proof.partial_ct_amounts length. Expected {}, got {}",
-                num_balance_decreases,
+                num_balance_changes,
                 common_proof.auth_proof.partial_ct_amounts.len()
             )));
         }
 
-        if balance_proof.resp_ct_amount.len() != num_balance_decreases {
+        if balance_proof.resp_ct_amount.len() != num_balance_changes {
             return Err(Error::ProofVerificationError(format!(
                 "Invalid balance_proof.resp_ct_amount length. Expected {}, got {}",
-                num_balance_decreases,
+                num_balance_changes,
                 balance_proof.resp_ct_amount.len()
             )));
         }
 
-        let expected_resp_acc_new_len = 3 + if num_balance_decreases > 0 { 1 } else { 0 };
+        let expected_resp_acc_new_len = 3 + if num_balance_changes > 0 { 1 } else { 0 };
         if common_proof
             .host_commitment_proof
             .resp_acc_new
@@ -1025,18 +1032,6 @@ impl<
         );
 
         let mut missing_resps_acc_new = BTreeMap::new();
-        // for i in 0..gens_acc_new.len() {
-        //     if i == idx_current_rho || i == idx_current_randomness {
-        //         continue;
-        //     }
-        //     if i == idx_b_blinding_new {
-        //         continue;
-        //     }
-        //     if has_balance_changed && i == 0 {
-        //         continue;
-        //     }
-        //     missing_resps_acc_new.insert(i, common_proof.host_commitment_proof.resp_acc_old.0[i]);
-        // }
 
         // -1 as sk is not present
         if !has_balance_changed {
@@ -1218,6 +1213,17 @@ impl<
                         enc_gen,
                         B_blinding,
                         challenge,
+                        balance_proof
+                            .partial
+                            .resp_comm_bp_bal
+                            .responses
+                            .get(&(1 + amount_idx))
+                            .ok_or_else(|| {
+                                Error::ProofVerificationError(format!(
+                                    "resp_comm_bp_bal didn't have response for index {}",
+                                    1 + amount_idx
+                                ))
+                            })?
                     );
                     amount_idx += 1;
                 }
@@ -1248,6 +1254,7 @@ impl<
                         enc_gen,
                         B_blinding,
                         challenge,
+                        &common_proof.host_commitment_proof.resp_acc_old.0[ASSET_ID_GEN_INDEX - 1]
                     );
                     asset_id_idx += 1;
                 }

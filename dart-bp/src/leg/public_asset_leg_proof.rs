@@ -1,5 +1,7 @@
 use crate::error::Result;
-use crate::leg::leg_proof::{ensure_leg_encryption_consistent, ensure_sender_receiver_not_same};
+use crate::leg::leg_proof::{
+    ensure_eph_key_not_identity, ensure_leg_encryption_consistent, ensure_sender_receiver_not_same,
+};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
@@ -263,42 +265,46 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut eph_pk_enc_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg_enc.eph_pk_public_enc_keys.len());
 
-        for i in 0..leg_enc.num_mediators() {
+        for ((r_med, r_med_blinding), med_key) in r_meds
+            .iter()
+            .zip(r_meds_blindings.iter())
+            .zip(leg.med_keys.iter())
+        {
             // For proving ct_m[i] - pk_m[i] = enc_key_gen * r_meds[i]
             ct_meds_proto.push(PokDiscreteLogProtocol::init(
-                r_meds[i],
-                r_meds_blindings[i],
+                *r_med,
+                *r_med_blinding,
                 &enc_key_gen,
             ));
             // For proving M[i] = pk_en[i] * r_meds[i]
             eph_pk_meds_proto.push(PokDiscreteLogProtocol::init(
-                r_meds[i],
-                r_meds_blindings[i],
-                &leg.enc_keys[leg.med_keys[i].0 as usize],
+                *r_med,
+                *r_med_blinding,
+                &leg.enc_keys[med_key.0 as usize],
             ));
         }
 
-        for i in 0..leg_enc.eph_pk_enc_keys.len() {
+        for enc_key in &leg.enc_keys {
             // For proving
             // - A[i][0] = pk_en[i] * r_1
             // - A[i][1] = pk_en[i] * r_2
             // - A[i][2] = pk_en[i] * r_3
             eph_pk_enc_proto.push((
-                PokDiscreteLogProtocol::init(r_1, r_1_blinding, &leg.enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_2, r_2_blinding, &leg.enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_3, r_3_blinding, &leg.enc_keys[i]),
+                PokDiscreteLogProtocol::init(r_1, r_1_blinding, enc_key),
+                PokDiscreteLogProtocol::init(r_2, r_2_blinding, enc_key),
+                PokDiscreteLogProtocol::init(r_3, r_3_blinding, enc_key),
             ));
         }
 
-        for i in 0..leg_enc.eph_pk_public_enc_keys.len() {
+        for pk in &leg.public_enc_keys {
             // For proving
             // - A[i][0] = pk_en[i] * r_1
             // - A[i][1] = pk_en[i] * r_2
             // - A[i][2] = pk_en[i] * r_3
             eph_pk_public_enc_proto.push((
-                PokDiscreteLogProtocol::init(r_1, r_1_blinding, &leg.public_enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_2, r_2_blinding, &leg.public_enc_keys[i]),
-                PokDiscreteLogProtocol::init(r_3, r_3_blinding, &leg.public_enc_keys[i]),
+                PokDiscreteLogProtocol::init(r_1, r_1_blinding, pk),
+                PokDiscreteLogProtocol::init(r_2, r_2_blinding, pk),
+                PokDiscreteLogProtocol::init(r_3, r_3_blinding, pk),
             ));
         }
 
@@ -443,53 +449,42 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .map(|i| leg_enc.mediators[i].ct_med - leg.med_keys[i].1)
                 .collect::<Vec<_>>();
             let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
-            for i in 0..leg_enc.num_mediators() {
-                ct_meds_proto[i].challenge_contribution(
-                    &enc_key_gen,
-                    &y_ct_meds[i],
-                    &mut transcript_ref,
-                )?;
-                eph_pk_meds_proto[i].challenge_contribution(
-                    &leg.enc_keys[leg.med_keys[i].0 as usize],
-                    &leg_enc.mediators[i].eph_pk_med_key,
-                    &mut transcript_ref,
-                )?;
-            }
-
-            for i in 0..leg_enc.eph_pk_enc_keys.len() {
-                eph_pk_enc_proto[i].0.challenge_contribution(
-                    &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].r1,
-                    &mut transcript_ref,
-                )?;
-                eph_pk_enc_proto[i].1.challenge_contribution(
-                    &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].r2,
-                    &mut transcript_ref,
-                )?;
-                eph_pk_enc_proto[i].2.challenge_contribution(
-                    &leg.enc_keys[i],
-                    &leg_enc.eph_pk_enc_keys[i].r3,
+            for ((ct_med_proto, eph_pk_med_proto), ((y_ct_med, mediator), med_key)) in ct_meds_proto
+                .iter_mut()
+                .zip(eph_pk_meds_proto.iter_mut())
+                .zip(
+                    y_ct_meds
+                        .iter()
+                        .zip(leg_enc.mediators.iter())
+                        .zip(leg.med_keys.iter()),
+                )
+            {
+                ct_med_proto.challenge_contribution(&enc_key_gen, y_ct_med, &mut transcript_ref)?;
+                eph_pk_med_proto.challenge_contribution(
+                    &leg.enc_keys[med_key.0 as usize],
+                    &mediator.eph_pk_med_key,
                     &mut transcript_ref,
                 )?;
             }
 
-            for i in 0..leg_enc.eph_pk_public_enc_keys.len() {
-                eph_pk_public_enc_proto[i].0.challenge_contribution(
-                    &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].r1,
-                    &mut transcript_ref,
-                )?;
-                eph_pk_public_enc_proto[i].1.challenge_contribution(
-                    &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].r2,
-                    &mut transcript_ref,
-                )?;
-                eph_pk_public_enc_proto[i].2.challenge_contribution(
-                    &leg.public_enc_keys[i],
-                    &leg_enc.eph_pk_public_enc_keys[i].r3,
-                    &mut transcript_ref,
-                )?;
+            for ((p, enc_key), eph_pk_enc_key) in eph_pk_enc_proto
+                .iter_mut()
+                .zip(leg.enc_keys.iter())
+                .zip(leg_enc.eph_pk_enc_keys.iter())
+            {
+                p.0.challenge_contribution(enc_key, &eph_pk_enc_key.r1, &mut transcript_ref)?;
+                p.1.challenge_contribution(enc_key, &eph_pk_enc_key.r2, &mut transcript_ref)?;
+                p.2.challenge_contribution(enc_key, &eph_pk_enc_key.r3, &mut transcript_ref)?;
+            }
+
+            for ((p, pk), eph_pk_public_enc_key) in eph_pk_public_enc_proto
+                .iter_mut()
+                .zip(leg.public_enc_keys.iter())
+                .zip(leg_enc.eph_pk_public_enc_keys.iter())
+            {
+                p.0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript_ref)?;
+                p.1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript_ref)?;
+                p.2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript_ref)?;
             }
 
             t_comm_r_i_amount.challenge_contribution(&mut transcript_ref)?;
@@ -820,6 +815,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
         ensure_sender_receiver_not_same(&leg_enc)?;
 
+        ensure_eph_key_not_identity(&leg_enc)?;
+
         let vars = verifier.commit_vec(
             8 + if parties_see_each_other { 2 } else { 0 },
             self.comm_r_i_amount,
@@ -910,56 +907,48 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             .collect::<Vec<_>>();
         let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
 
-        for i in 0..self.resp_ct_meds.len() {
-            self.resp_ct_meds[i].challenge_contribution(
-                &enc_key_gen,
-                &y_ct_meds[i],
-                &mut transcript_ref,
-            )?;
+        for ((resp_ct_med, resp_eph_pk_med), ((y_ct_med, mediator), med_key)) in self
+            .resp_ct_meds
+            .iter()
+            .zip(self.resp_eph_pk_meds.iter())
+            .zip(
+                y_ct_meds
+                    .iter()
+                    .zip(leg_enc.mediators.iter())
+                    .zip(med_keys.iter()),
+            )
+        {
+            resp_ct_med.challenge_contribution(&enc_key_gen, y_ct_med, &mut transcript_ref)?;
             // M[i] = pk_en[med_keys[i].0] * r_meds[i]
-            self.resp_eph_pk_meds[i].challenge_contribution(
-                &enc_keys[med_keys[i].0 as usize],
-                &leg_enc.mediators[i].eph_pk_med_key,
+            resp_eph_pk_med.challenge_contribution(
+                &enc_keys[med_key.0 as usize],
+                &mediator.eph_pk_med_key,
                 &mut transcript_ref,
             )?;
         }
 
         // A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
-        for i in 0..self.resp_eph_pk_enc.len() {
-            self.resp_eph_pk_enc[i].0.challenge_contribution(
-                &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].r1,
-                &mut transcript_ref,
-            )?;
-            self.resp_eph_pk_enc[i].1.challenge_contribution(
-                &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].r2,
-                &mut transcript_ref,
-            )?;
-            self.resp_eph_pk_enc[i].2.challenge_contribution(
-                &enc_keys[i],
-                &leg_enc.eph_pk_enc_keys[i].r3,
-                &mut transcript_ref,
-            )?;
+        for ((p, enc_key), eph_pk_enc_key) in self
+            .resp_eph_pk_enc
+            .iter()
+            .zip(enc_keys.iter())
+            .zip(leg_enc.eph_pk_enc_keys.iter())
+        {
+            p.0.challenge_contribution(enc_key, &eph_pk_enc_key.r1, &mut transcript_ref)?;
+            p.1.challenge_contribution(enc_key, &eph_pk_enc_key.r2, &mut transcript_ref)?;
+            p.2.challenge_contribution(enc_key, &eph_pk_enc_key.r3, &mut transcript_ref)?;
         }
 
         // A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
-        for i in 0..self.resp_eph_pk_public_enc.len() {
-            self.resp_eph_pk_public_enc[i].0.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r1,
-                &mut transcript_ref,
-            )?;
-            self.resp_eph_pk_public_enc[i].1.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r2,
-                &mut transcript_ref,
-            )?;
-            self.resp_eph_pk_public_enc[i].2.challenge_contribution(
-                &public_enc_keys[i],
-                &leg_enc.eph_pk_public_enc_keys[i].r3,
-                &mut transcript_ref,
-            )?;
+        for ((p, pk), eph_pk_public_enc_key) in self
+            .resp_eph_pk_public_enc
+            .iter()
+            .zip(public_enc_keys.iter())
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+        {
+            p.0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript_ref)?;
+            p.1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript_ref)?;
+            p.2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript_ref)?;
         }
 
         self.t_comm_r_i_amount
@@ -1081,12 +1070,23 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
 
         // Verify mediator ciphertexts and ephemeral keys
-        for i in 0..self.resp_ct_meds.len() {
+        for (i, ((resp_ct_med, resp_eph_pk_med), ((y_ct_med, mediator), med_key))) in self
+            .resp_ct_meds
+            .iter()
+            .zip(self.resp_eph_pk_meds.iter())
+            .zip(
+                y_ct_meds
+                    .iter()
+                    .zip(leg_enc.mediators.iter())
+                    .zip(med_keys.iter()),
+            )
+            .enumerate()
+        {
             verify_or_rmc_2!(
                 rmc,
-                self.resp_ct_meds[i],
+                resp_ct_med,
                 format!("resp_ct_meds[{}] verification failed", i),
-                y_ct_meds[i],
+                *y_ct_med,
                 enc_key_gen,
                 &challenge,
             );
@@ -1094,72 +1094,84 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             // M[i] = pk_en[med_keys[i].0] * r_meds[i]
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_meds[i],
+                resp_eph_pk_med,
                 format!("resp_eph_pk_meds[{}] verification failed", i),
-                leg_enc.mediators[i].eph_pk_med_key,
-                enc_keys[med_keys[i].0 as usize],
+                mediator.eph_pk_med_key,
+                enc_keys[med_key.0 as usize],
                 &challenge,
-                &self.resp_ct_meds[i].response,
+                &resp_ct_med.response,
             );
         }
 
         // Verify ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
-        for i in 0..self.resp_eph_pk_enc.len() {
+        for (i, ((p, enc_key), eph_pk_enc_key)) in self
+            .resp_eph_pk_enc
+            .iter()
+            .zip(enc_keys.iter())
+            .zip(leg_enc.eph_pk_enc_keys.iter())
+            .enumerate()
+        {
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_enc[i].0,
+                p.0,
                 format!("resp_eph_pk_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r1,
-                enc_keys[i],
+                eph_pk_enc_key.r1,
+                *enc_key,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
             );
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_enc[i].1,
+                p.1,
                 format!("resp_eph_pk_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r2,
-                enc_keys[i],
+                eph_pk_enc_key.r2,
+                *enc_key,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
             );
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_enc[i].2,
+                p.2,
                 format!("resp_eph_pk_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_enc_keys[i].r3,
-                enc_keys[i],
+                eph_pk_enc_key.r3,
+                *enc_key,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
             );
         }
 
         // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
-        for i in 0..self.resp_eph_pk_public_enc.len() {
+        for (i, ((p, pk), eph_pk_public_enc_key)) in self
+            .resp_eph_pk_public_enc
+            .iter()
+            .zip(public_enc_keys.iter())
+            .zip(leg_enc.eph_pk_public_enc_keys.iter())
+            .enumerate()
+        {
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_public_enc[i].0,
+                p.0,
                 format!("resp_eph_pk_public_enc[{}].0 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r1,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r1,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
             );
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_public_enc[i].1,
+                p.1,
                 format!("resp_eph_pk_public_enc[{}].1 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r2,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r2,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[3],
             );
             verify_or_rmc_2!(
                 rmc,
-                self.resp_eph_pk_public_enc[i].2,
+                p.2,
                 format!("resp_eph_pk_public_enc[{}].2 verification failed", i),
-                leg_enc.eph_pk_public_enc_keys[i].r3,
-                public_enc_keys[i],
+                eph_pk_public_enc_key.r3,
+                *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
             );
@@ -1763,6 +1775,8 @@ mod tests {
 
     #[test]
     fn combined_public_asset_leg_verification() {
+        // Unlike batch_* (independent proofs, only the final mult-check batched), here all
+        // BATCH_SIZE leg proofs share one prover/transcript and a single aggregated R1CS proof.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -2075,11 +2089,19 @@ mod tests {
                 Some(&mut rmc),
             );
             let rmc_result = rmc.verify();
-            assert!(verify_without_rmc.is_err() || verify_result.is_err() || rmc_result.is_err());
+            assert!(
+                matches!(
+                    verify_without_rmc,
+                    Err(Error::ProofVerificationError(_) | Error::SchnorrError(_))
+                ) || verify_result.is_err()
+                    || rmc_result.is_err()
+            );
         }
 
         #[test]
         fn public_asset_leg_with_mocked_amount_ciphertext_fails_verification() {
+            // Prover encrypts amount+1 in the amount ciphertext while the rest of the proof commits
+            // to the real amount; the verifier must catch the mismatch and reject.
             let mut rng = rand::thread_rng();
             let nonce = b"test-nonce";
 
@@ -2270,11 +2292,18 @@ mod tests {
                 Some(&mut rmc),
             );
             let rmc_result = rmc.verify();
-            assert!(verify_result.is_err() || rmc_result.is_err());
+            assert!(
+                matches!(
+                    verify_result,
+                    Err(Error::ProofVerificationError(_) | Error::SchnorrError(_))
+                ) || rmc_result.is_err()
+            );
         }
 
         #[test]
         fn public_asset_leg_proof_verifier_error_paths() {
+            // Feed an otherwise-valid proof mismatched public inputs - asset-id hidden when it was
+            // proven revealed, too few enc/mediator keys, empty public keys - and check each is rejected.
             let mut rng = rand::thread_rng();
             const NUM_GENS: usize = 1 << 13;
 
@@ -2380,23 +2409,23 @@ mod tests {
                     enc_gen,
                 )
                 .unwrap();
-            assert!(
-                proof
-                    .verify(
-                        &mut rng,
-                        leg_enc_hidden.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc_hidden.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "asset-id is hidden in leg encryption"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &proof,
@@ -2415,23 +2444,23 @@ mod tests {
 
             let mut wrong_enc_keys = enc_keys.clone();
             wrong_enc_keys.pop();
-            assert!(
-                proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        wrong_enc_keys.clone(),
-                        med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    wrong_enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_enc.len() != enc_keys.len()"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &proof,
@@ -2450,23 +2479,23 @@ mod tests {
 
             let mut wrong_med_keys = med_keys.clone();
             wrong_med_keys.pop();
-            assert!(
-                proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        wrong_med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    wrong_med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_ct_meds.len() != med_keys.len()"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &proof,
@@ -2484,23 +2513,23 @@ mod tests {
             );
 
             let wrong_public_enc_keys: Vec<_> = vec![];
-            assert!(
-                proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        med_keys.clone(),
-                        wrong_public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    wrong_public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_public_enc.len() != public_enc_keys.len()"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &proof,
@@ -2519,23 +2548,23 @@ mod tests {
 
             let mut bad_med_key_idx = med_keys.clone();
             bad_med_key_idx[0].0 = num_enc_keys as u8;
-            assert!(
-                proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        bad_med_key_idx.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    bad_med_key_idx.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "out of range for enc_keys.len()"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &proof,
@@ -2554,23 +2583,23 @@ mod tests {
 
             let mut missing_cross_pk_proof = proof.clone();
             missing_cross_pk_proof.resp_eph_pk_s_r = None;
-            assert!(
-                missing_cross_pk_proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                missing_cross_pk_proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_s_r is missing"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &missing_cross_pk_proof,
@@ -2599,23 +2628,23 @@ mod tests {
                     enc_gen,
                 )
                 .unwrap();
-            assert!(
-                extra_cross_pk_proof
-                    .verify(
-                        &mut rng,
-                        leg_enc_no_cross.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                extra_cross_pk_proof.verify(
+                    &mut rng,
+                    leg_enc_no_cross.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_s_r is present"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &extra_cross_pk_proof,
@@ -2636,23 +2665,23 @@ mod tests {
             short_resp_proof.resp_comm_r_i_amount.0.pop();
             short_resp_proof.resp_comm_r_i_amount.0.pop();
             short_resp_proof.resp_comm_r_i_amount.0.pop();
-            assert!(
-                short_resp_proof
-                    .verify(
-                        &mut rng,
-                        leg_enc.clone(),
-                        asset_id,
-                        enc_keys.clone(),
-                        med_keys.clone(),
-                        public_enc_keys.clone(),
-                        nonce,
-                        &leaf_level_pc_gens,
-                        &leaf_level_bp_gens,
-                        enc_key_gen,
-                        enc_gen,
-                        None,
-                    )
-                    .is_err()
+            assert_err!(
+                short_resp_proof.verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                ),
+                Error::ProofVerificationError(_),
+                "resp_comm_r_i_amount response length is"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &short_resp_proof,
