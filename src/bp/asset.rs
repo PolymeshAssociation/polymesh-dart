@@ -73,6 +73,7 @@ impl From<&AssetState> for AssetKeysLookup {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetKeys {
     /// The encryption keys for auditors and mediators are stored in a set to ensure uniqueness.
+    #[serde(alias = "encKeys")]
     pub enc_keys: BTreeSet<EncryptionPublicKey>,
     /// The mediators are stored as a map from their `affirmation_key` to their encryption key.
     pub mediators: BTreeMap<AccountPublicKey, u8>,
