@@ -1200,6 +1200,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         mut committed_variables: Vec<Variable<G::ScalarField>>,
         parties_see_each_other: bool,
     ) -> Result<()> {
+        // Unwrap is fine because caller creates the committed_variables list
         let (var_r1_r2_inv, var_r2_r1_inv) = if parties_see_each_other {
             (
                 Some(committed_variables.pop().unwrap()),

@@ -268,6 +268,7 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
     let var_amount = committed_variables
         .drain(0..has_balance_decreased.len())
         .collect::<Vec<_>>();
+    // Unwrap is fine because caller creates the committed_variables list
     let var_bal_new = committed_variables.pop().unwrap();
     let var_bal_old = committed_variables.pop().unwrap();
     debug_assert!(committed_variables.is_empty());
@@ -2340,6 +2341,7 @@ pub(crate) fn enforce_constraints_for_randomness_relations<F: Field, CS: Constra
     cs: &mut CS,
     committed_variables: &mut Vec<Variable<F>>,
 ) {
+    // Unwrap is fine because caller creates the committed_variables list
     let var_s_i_plus_1 = committed_variables.pop().unwrap();
     let var_s_i = committed_variables.pop().unwrap();
     let var_s = committed_variables.pop().unwrap();

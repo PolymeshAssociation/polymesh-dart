@@ -872,27 +872,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
-name = "creusot-std"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eeaaebdee9aa688b8ad786e721deaee4e2d15da3a043acf6fcb7efb4a4e226c"
-dependencies = [
- "creusot-std-proc",
- "num-rational",
-]
-
-[[package]]
-name = "creusot-std-proc"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bee44c269dbf2a9c3afc96f5983ec3b0cd7e7105218e4dadf62eb821bd20ca46"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "criterion"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2656,7 +2635,6 @@ dependencies = [
  "ark-vesta",
  "blake2",
  "bulletproofs",
- "creusot-std",
  "criterion",
  "digest 0.10.7",
  "dock_crypto_utils",

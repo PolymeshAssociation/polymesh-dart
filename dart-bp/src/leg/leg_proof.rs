@@ -1841,6 +1841,7 @@ impl<
         let mut vars_enc_keys = Vec::with_capacity(num_enc_keys);
         let mut vars_med_keys = Vec::with_capacity(num_med_keys);
 
+        // Unwrap is fine because caller creates the committed_variables list
         for _ in 0..num_med_keys {
             let m_i_r_1_inv = committed_variables.pop().unwrap();
             let m_i = committed_variables.pop().unwrap();

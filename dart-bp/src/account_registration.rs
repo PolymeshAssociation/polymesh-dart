@@ -1536,6 +1536,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         mut vars: Vec<Variable<G::ScalarField>>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
     ) -> Result<()> {
+        // Unwrap is fine because caller creates the committed_variables list
         let var_current_randomness = vars.pop().unwrap();
         let var_randomness = vars.pop().unwrap();
         let var_current_rho = vars.pop().unwrap();
