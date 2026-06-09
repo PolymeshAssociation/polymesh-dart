@@ -5,12 +5,12 @@ use crate::account::state_transition::{
 };
 use crate::account::state_transition_multi::MultiAssetStateTransitionProof;
 use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AffirmAsReceiverSplitProof,
-    AffirmAsReceiverSplitProtocol, AffirmAsSenderSplitProof, AffirmAsSenderSplitProtocol,
-    ClaimReceivedSplitProof, ClaimReceivedSplitProtocol, IrreversibleAffirmAsReceiverSplitProof,
-    IrreversibleAffirmAsReceiverSplitProtocol, IrreversibleAffirmAsSenderSplitProof,
-    IrreversibleAffirmAsSenderSplitProtocol, LegProverConfig, LegVerifierConfig,
-    ReceiverCounterUpdateSplitProof, ReceiverCounterUpdateSplitProtocol,
+    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, AccountTxnWitness,
+    AffirmAsReceiverSplitProof, AffirmAsReceiverSplitProtocol, AffirmAsSenderSplitProof,
+    AffirmAsSenderSplitProtocol, ClaimReceivedSplitProof, ClaimReceivedSplitProtocol,
+    IrreversibleAffirmAsReceiverSplitProof, IrreversibleAffirmAsReceiverSplitProtocol,
+    IrreversibleAffirmAsSenderSplitProof, IrreversibleAffirmAsSenderSplitProtocol, LegProverConfig,
+    LegVerifierConfig, ReceiverCounterUpdateSplitProof, ReceiverCounterUpdateSplitProtocol,
     SenderCounterUpdateSplitProof, SenderCounterUpdateSplitProtocol, SenderReverseSplitProof,
     SenderReverseSplitProtocol,
 };
@@ -129,13 +129,17 @@ fn send_txn() {
 
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -275,12 +279,17 @@ fn receive_txn() {
 
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -422,13 +431,17 @@ fn claim_received_funds() {
 
         let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -566,12 +579,17 @@ fn counter_update_txn_by_sender() {
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -710,13 +728,17 @@ fn reverse_send_txn() {
 
         let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -855,12 +877,17 @@ fn reverse_receive_txn() {
         let (proof, nullifier) =
             ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
                 path,
                 &root,
                 nonce,
@@ -1003,13 +1030,17 @@ fn single_shot_settlement() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -1024,13 +1055,17 @@ fn single_shot_settlement() {
     let (receiver_proof, receiver_nullifier) =
         IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                receiver_account.clone(),
+                updated_receiver_account.clone(),
+                updated_receiver_account_comm,
+            ),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -1265,13 +1300,17 @@ fn single_shot_combined_create_and_send() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -1299,13 +1338,17 @@ fn single_shot_combined_create_and_send() {
     let (receiver_proof, receiver_nullifier) =
         IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                receiver_account.clone(),
+                updated_receiver_account.clone(),
+                updated_receiver_account_comm,
+            ),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -1571,13 +1614,8 @@ fn single_shot_combined_create_and_recv() {
             VestaParams,
         >(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            { let (c, e) = leg_enc.core_and_eph_keys_for_receiver(); (c, e, amount) },
+            AccountTxnWitness::new(sk_r.0, sk_r_e.0, receiver_account.clone(), updated_receiver_account.clone(), updated_receiver_account_comm),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -1585,7 +1623,7 @@ fn single_shot_combined_create_and_recv() {
             account_comm_key.clone(),
             enc_gen,
             &mut odd_prover,
-            &mut even_prover,
+            &mut even_prover
         )
         .unwrap();
 
@@ -1605,13 +1643,17 @@ fn single_shot_combined_create_and_recv() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -1832,6 +1874,7 @@ fn single_shot_swap() {
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -2055,13 +2098,17 @@ fn single_shot_swap() {
     let (alice_sender_proof, alice_sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -2080,13 +2127,8 @@ fn single_shot_swap() {
             VestaParams,
         >(
             &mut rng,
-            amount_2,
-            (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(), amount_2),
+            AccountTxnWitness::new(sk_s.0, sk_s_e.0, alice_account_2.clone(), updated_alice_account_2.clone(), updated_alice_account_comm_2),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -2094,7 +2136,7 @@ fn single_shot_swap() {
             account_comm_key.clone(),
             enc_gen,
             &mut even_prover_alice,
-            &mut odd_prover_alice,
+            &mut odd_prover_alice
         )
         .unwrap();
 
@@ -2125,13 +2167,8 @@ fn single_shot_swap() {
             VestaParams,
         >(
             &mut rng,
-            amount_1,
-            (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(), amount_1),
+            AccountTxnWitness::new(sk_r.0, sk_r_e.0, bob_account_1.clone(), updated_bob_account_1.clone(), updated_bob_account_comm_1),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -2139,23 +2176,25 @@ fn single_shot_swap() {
             account_comm_key.clone(),
             enc_gen,
             &mut even_prover_bob,
-            &mut odd_prover_bob,
+            &mut odd_prover_bob
         )
         .unwrap();
 
     let (bob_sender_proof, bob_sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -2436,13 +2475,17 @@ fn single_shot_settlement_asset_id_revealed() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -2457,13 +2500,17 @@ fn single_shot_settlement_asset_id_revealed() {
     let (receiver_proof, receiver_nullifier) =
         IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                receiver_account.clone(),
+                updated_receiver_account.clone(),
+                updated_receiver_account_comm,
+            ),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -2624,13 +2671,17 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -2658,13 +2709,17 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
     let (receiver_proof, receiver_nullifier) =
         IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                receiver_account.clone(),
+                updated_receiver_account.clone(),
+                updated_receiver_account_comm,
+            ),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -2854,13 +2909,8 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
             VestaParams,
         >(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &receiver_account,
-            &updated_receiver_account,
-            updated_receiver_account_comm,
+            { let (c, e) = leg_enc.core_and_eph_keys_for_receiver(); (c, e, amount) },
+            AccountTxnWitness::new(sk_r.0, sk_r_e.0, receiver_account.clone(), updated_receiver_account.clone(), updated_receiver_account_comm),
             receiver_path.clone(),
             &account_tree_root,
             nonce,
@@ -2868,7 +2918,7 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
             account_comm_key.clone(),
             enc_gen,
             &mut even_prover,
-            &mut odd_prover,
+            &mut odd_prover
         )
         .unwrap();
 
@@ -2888,13 +2938,17 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
     let (sender_proof, sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &sender_account,
-            &updated_sender_account,
-            updated_sender_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                sender_account.clone(),
+                updated_sender_account.clone(),
+                updated_sender_account_comm,
+            ),
             sender_path.clone(),
             &account_tree_root,
             nonce,
@@ -3197,13 +3251,17 @@ fn single_shot_swap_asset_id_revealed() {
     let (alice_sender_proof, alice_sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -3222,13 +3280,8 @@ fn single_shot_swap_asset_id_revealed() {
             VestaParams,
         >(
             &mut rng,
-            amount_2,
-            (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            (leg_enc_2.leg_enc_core_and_eph_keys.core.clone(), leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(), amount_2),
+            AccountTxnWitness::new(sk_s.0, sk_s_e.0, alice_account_2.clone(), updated_alice_account_2.clone(), updated_alice_account_comm_2),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -3236,7 +3289,7 @@ fn single_shot_swap_asset_id_revealed() {
             account_comm_key.clone(),
             enc_gen,
             &mut even_prover_alice,
-            &mut odd_prover_alice,
+            &mut odd_prover_alice
         )
         .unwrap();
 
@@ -3267,13 +3320,8 @@ fn single_shot_swap_asset_id_revealed() {
             VestaParams,
         >(
             &mut rng,
-            amount_1,
-            (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone()),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            (leg_enc_1.leg_enc_core_and_eph_keys.core.clone(), leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(), amount_1),
+            AccountTxnWitness::new(sk_r.0, sk_r_e.0, bob_account_1.clone(), updated_bob_account_1.clone(), updated_bob_account_comm_1),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -3281,23 +3329,25 @@ fn single_shot_swap_asset_id_revealed() {
             account_comm_key.clone(),
             enc_gen,
             &mut even_prover_bob,
-            &mut odd_prover_bob,
+            &mut odd_prover_bob
         )
         .unwrap();
 
     let (bob_sender_proof, bob_sender_nullifier) =
         IrreversibleAffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -3725,13 +3775,17 @@ fn swap_settlement_asset_id_revealed() {
     let (alice_proof_leg1, alice_nullifier_leg1) =
         AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -3750,12 +3804,15 @@ fn swap_settlement_asset_id_revealed() {
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_2,
             ),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_2.clone(),
+                updated_alice_account_2.clone(),
+                updated_alice_account_comm_2,
+            ),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -3793,12 +3850,15 @@ fn swap_settlement_asset_id_revealed() {
             (
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_1,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_1.clone(),
+                updated_bob_account_1.clone(),
+                updated_bob_account_comm_1,
+            ),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -3814,16 +3874,18 @@ fn swap_settlement_asset_id_revealed() {
     let (bob_proof_leg2, bob_nullifier_leg2) =
         AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -4128,13 +4190,17 @@ fn reverse_settlement_asset_id_revealed() {
     let (alice_proof_leg1, alice_nullifier_leg1) =
         SenderReverseTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -4153,12 +4219,15 @@ fn reverse_settlement_asset_id_revealed() {
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_2,
             ),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_2.clone(),
+                updated_alice_account_2.clone(),
+                updated_alice_account_comm_2,
+            ),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -4196,12 +4265,15 @@ fn reverse_settlement_asset_id_revealed() {
             (
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_1,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_1.clone(),
+                updated_bob_account_1.clone(),
+                updated_bob_account_comm_1,
+            ),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -4217,16 +4289,18 @@ fn reverse_settlement_asset_id_revealed() {
     let (bob_proof_leg2, bob_nullifier_leg2) =
         SenderReverseTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -4471,16 +4545,18 @@ fn batch_send_txn_proofs() {
     for i in 0..batch_size {
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
             (
                 leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
                 leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount,
             ),
-            all_keys[i].0.0.0.0,
-            all_keys[i].0.1.0.0,
-            &accounts[i],
-            &updated_accounts[i],
-            updated_account_comms[i],
+            AccountTxnWitness::new(
+                all_keys[i].0.0.0.0,
+                all_keys[i].0.1.0.0,
+                accounts[i].clone(),
+                updated_accounts[i].clone(),
+                updated_account_comms[i],
+            ),
             paths[i].clone(),
             &root,
             &nonces[i],
@@ -4714,16 +4790,18 @@ fn combined_send_txn_proofs() {
         let (proof, nullifier) =
             AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
                 (
                     leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
                     leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                    amount,
                 ),
-                all_keys[i].0.0.0.0,
-                all_keys[i].0.1.0.0,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
+                AccountTxnWitness::new(
+                    all_keys[i].0.0.0.0,
+                    all_keys[i].0.1.0.0,
+                    accounts[i].clone(),
+                    updated_accounts[i].clone(),
+                    updated_account_comms[i],
+                ),
                 paths[i].clone(),
                 &root,
                 &nonces[i],
@@ -4857,7 +4935,8 @@ fn combined_create_and_send() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        2,
+        1,
+        1,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -4953,13 +5032,17 @@ fn combined_create_and_send() {
     let (send_proof, nullifier) =
         AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             account_path.clone(),
             &account_tree_root,
             nonce,
@@ -5201,12 +5284,17 @@ fn batch_receive_txn_proofs() {
     for i in 0..batch_size {
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_encs[i].core_and_eph_keys_for_receiver(),
-            all_keys[i].1.0.0.0,
-            all_keys[i].1.1.0.0,
-            &accounts[i],
-            &updated_accounts[i],
-            updated_account_comms[i],
+            {
+                let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                all_keys[i].1.0.0.0,
+                all_keys[i].1.1.0.0,
+                accounts[i].clone(),
+                updated_accounts[i].clone(),
+                updated_account_comms[i],
+            ),
             paths[i].clone(),
             &root,
             &nonces[i],
@@ -5430,12 +5518,17 @@ fn combined_receive_txn_proofs() {
         let (proof, nullifier) =
             AffirmAsReceiverTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
                 &mut rng,
-                leg_encs[i].core_and_eph_keys_for_receiver(),
-                all_keys[i].1.0.0.0,
-                all_keys[i].1.1.0.0,
-                &accounts[i],
-                &updated_accounts[i],
-                updated_account_comms[i],
+                {
+                    let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    all_keys[i].1.0.0.0,
+                    all_keys[i].1.1.0.0,
+                    accounts[i].clone(),
+                    updated_accounts[i].clone(),
+                    updated_account_comms[i],
+                ),
                 paths[i].clone(),
                 &root,
                 &nonces[i],
@@ -5567,7 +5660,8 @@ fn swap_settlement() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        2,
+        1,
+        1,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -5992,13 +6086,17 @@ fn swap_settlement() {
     let (alice_proof_leg1, alice_nullifier_leg1) =
         AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -6017,12 +6115,15 @@ fn swap_settlement() {
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_2,
             ),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_2.clone(),
+                updated_alice_account_2.clone(),
+                updated_alice_account_comm_2,
+            ),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -6060,12 +6161,15 @@ fn swap_settlement() {
             (
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_1,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_1.clone(),
+                updated_bob_account_1.clone(),
+                updated_bob_account_comm_1,
+            ),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -6081,16 +6185,18 @@ fn swap_settlement() {
     let (bob_proof_leg2, bob_nullifier_leg2) =
         AffirmAsSenderTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -6432,12 +6538,17 @@ fn swap_settlement() {
     let (alice_counter_update_proof, alice_cu_nullifier) =
         SenderCounterUpdateTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &updated_alice_account_1,
-            &updated_alice_account_4,
-            updated_alice_account_comm_4,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                updated_alice_account_1.clone(),
+                updated_alice_account_4.clone(),
+                updated_alice_account_comm_4,
+            ),
             alice_1_path,
             &account_tree_root,
             nonce,
@@ -6452,16 +6563,18 @@ fn swap_settlement() {
     let (alice_claim_proof, alice_claim_nullifier) =
         ClaimReceivedTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_2,
             ),
-            sk_s.0,
-            sk_s_e.0,
-            &updated_alice_account_2,
-            &updated_alice_account_3,
-            updated_alice_account_comm_3,
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                updated_alice_account_2.clone(),
+                updated_alice_account_3.clone(),
+                updated_alice_account_comm_3,
+            ),
             alice_2_path,
             &account_tree_root,
             nonce,
@@ -6498,16 +6611,18 @@ fn swap_settlement() {
     let (bob_claim_proof, bob_claim_nullifier) =
         ClaimReceivedTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
             (
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_1,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &updated_bob_account_1,
-            &updated_bob_account_3,
-            updated_bob_account_comm_3,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                updated_bob_account_1.clone(),
+                updated_bob_account_3.clone(),
+                updated_bob_account_comm_3,
+            ),
             bob_1_path,
             &account_tree_root,
             nonce,
@@ -6525,12 +6640,15 @@ fn swap_settlement() {
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &updated_bob_account_2,
-            &updated_bob_account_4,
-            updated_bob_account_comm_4,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                updated_bob_account_2.clone(),
+                updated_bob_account_4.clone(),
+                updated_bob_account_comm_4,
+            ),
             bob_2_path,
             &account_tree_root,
             nonce,
@@ -7014,13 +7132,17 @@ fn reverse_settlement() {
     let (alice_proof_leg1, alice_nullifier_leg1) =
         SenderReverseTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_1,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_1,
-            &updated_alice_account_1,
-            updated_alice_account_comm_1,
+            {
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, amount_1)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_1.clone(),
+                updated_alice_account_1.clone(),
+                updated_alice_account_comm_1,
+            ),
             alice_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -7039,12 +7161,15 @@ fn reverse_settlement() {
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_2,
             ),
-            sk_s.0,
-            sk_s_e.0,
-            &alice_account_2,
-            &updated_alice_account_2,
-            updated_alice_account_comm_2,
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                alice_account_2.clone(),
+                updated_alice_account_2.clone(),
+                updated_alice_account_comm_2,
+            ),
             alice_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -7082,12 +7207,15 @@ fn reverse_settlement() {
             (
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                amount_1,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_1,
-            &updated_bob_account_1,
-            updated_bob_account_comm_1,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_1.clone(),
+                updated_bob_account_1.clone(),
+                updated_bob_account_comm_1,
+            ),
             bob_path_1.clone(),
             &account_tree_root,
             nonce,
@@ -7103,16 +7231,18 @@ fn reverse_settlement() {
     let (bob_proof_leg2, bob_nullifier_leg2) =
         SenderReverseTxnProof::new_with_given_prover::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount_2,
             (
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                amount_2,
             ),
-            sk_r.0,
-            sk_r_e.0,
-            &bob_account_2,
-            &updated_bob_account_2,
-            updated_bob_account_comm_2,
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                bob_account_2.clone(),
+                updated_bob_account_2.clone(),
+                updated_bob_account_comm_2,
+            ),
             bob_path_2.clone(),
             &account_tree_root,
             nonce,
@@ -7493,20 +7623,20 @@ fn multi_asset_settlement() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_s.0,
-                sk_s_e.0,
-                alice_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    alice_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_send(
+        builder.add_irreversible_send((
+            leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
+            leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             amount,
-            (
-                leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
-                leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
         alice_builders.push(builder);
     }
 
@@ -7549,14 +7679,19 @@ fn multi_asset_settlement() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_r.0,
-                sk_r_e.0,
-                bob_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    bob_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_receive(amount, leg_encs[i].core_and_eph_keys_for_receiver());
+        builder.add_irreversible_receive({
+            let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+            (c, e, amount)
+        });
         bob_builders.push(builder);
     }
 
@@ -7875,20 +8010,20 @@ fn multi_asset_combined_create_and_send() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_s.0,
-                sk_s_e.0,
-                alice_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    alice_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_send(
+        builder.add_irreversible_send((
+            leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
+            leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             amount,
-            (
-                leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
-                leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
         alice_builders.push(builder);
     }
 
@@ -7935,14 +8070,19 @@ fn multi_asset_combined_create_and_send() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_r.0,
-                sk_r_e.0,
-                bob_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    bob_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_receive(amount, leg_encs[i].core_and_eph_keys_for_receiver());
+        builder.add_irreversible_receive({
+            let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+            (c, e, amount)
+        });
         bob_builders.push(builder);
     }
 
@@ -8278,14 +8418,19 @@ fn multi_asset_combined_create_and_recv() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_r.0,
-                sk_r_e.0,
-                bob_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    bob_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_receive(amount, leg_encs[i].core_and_eph_keys_for_receiver());
+        builder.add_irreversible_receive({
+            let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+            (c, e, amount)
+        });
         bob_builders.push(builder);
     }
 
@@ -8332,20 +8477,20 @@ fn multi_asset_combined_create_and_recv() {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_s.0,
-                sk_s_e.0,
-                alice_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    alice_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_send(
+        builder.add_irreversible_send((
+            leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
+            leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             amount,
-            (
-                leg_encs[i].leg_enc_core_and_eph_keys.core.clone(),
-                leg_encs[i].leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
         alice_builders.push(builder);
     }
 
@@ -8710,14 +8855,19 @@ fn multi_asset_state_transition_different_confs() {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-            builder.add_receive_affirmation(leg_encs[i].core_and_eph_keys_for_receiver());
+            builder.add_receive_affirmation({
+                let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            });
             alice_builders.push(builder);
         }
 
@@ -9048,6 +9198,7 @@ pub fn setup_asset_and_account_params_new<const NUM_GENS: usize>() -> (
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
+        0,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9284,6 +9435,7 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9780,8 +9932,7 @@ macro_rules! gen_split_proof {
         let (protocol, mut even_prover, odd_prover, nullifier) =
             <$proto_ty>::init::<_, PallasParams, VestaParams>(
                 $rng,
-                $amount,
-                ($lec.clone(), $eph_pk.clone()),
+                ($lec.clone(), $eph_pk.clone(), $amount),
                 &$old,
                 &$new,
                 $uac,
@@ -9812,6 +9963,7 @@ macro_rules! gen_split_proof {
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                amount: $amount,
                 has_balance_changed: $hbc,
             }],
             &re_randomized_leaf,
@@ -9844,6 +9996,7 @@ macro_rules! gen_split_proof {
         party: $party:ident,
         has_balance_changed: $hbc:expr,
         rng: $rng:expr,
+        amount: $amount:expr,
         leg_enc_core: $lec:expr,
         eph_pk: $eph_pk:expr,
         old_account: $old:expr,
@@ -9860,6 +10013,8 @@ macro_rules! gen_split_proof {
         b_blinding: $bb:expr,
         reveal_asset_id: $rai:expr $(,)?
     ) => {{
+        // ct_amount is needed when the leg reveals its asset-id (even with no balance change)
+        let k_1 = PallasFr::rand($rng);
         let k_asset_id = if !$rai {
             Some(PallasFr::rand($rng))
         } else {
@@ -9869,7 +10024,7 @@ macro_rules! gen_split_proof {
         let (protocol, mut even_prover, odd_prover, nullifier) =
             <$proto_ty>::init::<_, PallasParams, VestaParams>(
                 $rng,
-                ($lec.clone(), $eph_pk.clone()),
+                ($lec.clone(), $eph_pk.clone(), $amount),
                 &$old,
                 &$new,
                 $uac,
@@ -9880,6 +10035,7 @@ macro_rules! gen_split_proof {
                 $ack.clone(),
                 $eg,
                 k_asset_id,
+                k_1,
             )
             .unwrap();
         let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -9890,7 +10046,7 @@ macro_rules! gen_split_proof {
             $ske,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![],
+            if $rai { vec![k_1] } else { vec![] },
             if !$rai {
                 vec![k_asset_id.unwrap()]
             } else {
@@ -9899,6 +10055,7 @@ macro_rules! gen_split_proof {
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                amount: $amount,
                 has_balance_changed: $hbc,
             }],
             &re_randomized_leaf,
@@ -9959,8 +10116,7 @@ macro_rules! gen_split_proof {
         let (protocol, mut even_prover, odd_prover, nullifier) =
             <$proto_ty>::init::<_, PallasParams, VestaParams>(
                 $rng,
-                $amount,
-                ($lec.clone(), $eph_pk.clone()),
+                ($lec.clone(), $eph_pk.clone(), $amount),
                 &$old,
                 &$new,
                 $uac,
@@ -10001,6 +10157,7 @@ macro_rules! gen_split_proof {
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                amount: $amount,
                 has_balance_changed: $hbc,
             }],
             &re_randomized_leaf,
@@ -10045,6 +10202,7 @@ macro_rules! gen_split_proof {
         party: $party:ident,
         has_balance_changed: $hbc:expr,
         rng: $rng:expr,
+        amount: $amount:expr,
         leg_enc_core: $lec:expr,
         eph_pk: $eph_pk:expr,
         old_account: $old:expr,
@@ -10061,6 +10219,7 @@ macro_rules! gen_split_proof {
         b_blinding: $bb:expr,
         reveal_asset_id: $rai:expr $(,)?
     ) => {{
+        let k_1 = PallasFr::rand($rng);
         let k_asset_id = if !$rai {
             Some(PallasFr::rand($rng))
         } else {
@@ -10070,7 +10229,7 @@ macro_rules! gen_split_proof {
         let (protocol, mut even_prover, odd_prover, nullifier) =
             <$proto_ty>::init::<_, PallasParams, VestaParams>(
                 $rng,
-                ($lec.clone(), $eph_pk.clone()),
+                ($lec.clone(), $eph_pk.clone(), $amount),
                 &$old,
                 &$new,
                 $uac,
@@ -10081,6 +10240,7 @@ macro_rules! gen_split_proof {
                 $ack.clone(),
                 $eg,
                 k_asset_id,
+                k_1,
             )
             .unwrap();
         let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -10101,7 +10261,7 @@ macro_rules! gen_split_proof {
             $ske,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![],
+            if $rai { vec![k_1] } else { vec![] },
             if !$rai {
                 vec![k_asset_id.unwrap()]
             } else {
@@ -10110,6 +10270,7 @@ macro_rules! gen_split_proof {
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
+                amount: $amount,
                 has_balance_changed: $hbc,
             }],
             &re_randomized_leaf,
@@ -10530,6 +10691,7 @@ fn receive_txn_split_proof() {
             party: Receiver,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -10584,6 +10746,7 @@ fn receive_txn_split_proof() {
             party: Receiver,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -10824,6 +10987,7 @@ fn counter_update_txn_by_sender_split_proof() {
             party: Sender,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -10867,6 +11031,7 @@ fn counter_update_txn_by_sender_split_proof() {
             party: Sender,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -11104,6 +11269,7 @@ fn reverse_receive_txn_split_proof() {
             party: Receiver,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -11147,6 +11313,7 @@ fn reverse_receive_txn_split_proof() {
             party: Receiver,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -11495,6 +11662,7 @@ fn single_shot_settlement_split_proof() {
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -11642,8 +11810,7 @@ fn single_shot_settlement_split_proof() {
                 VestaParameters,
             >::init::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                (leg_enc_core_s.clone(), eph_pk_s.clone()),
+                (leg_enc_core_s.clone(), eph_pk_s.clone(), amount),
                 &sender_account,
                 &updated_sender_account,
                 updated_sender_account_comm,
@@ -11676,6 +11843,7 @@ fn single_shot_settlement_split_proof() {
             vec![LegProverConfig {
                 encryption: leg_enc_core_s.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                amount,
                 has_balance_changed: true,
             }],
             &re_randomized_leaf_s,
@@ -11721,8 +11889,7 @@ fn single_shot_settlement_split_proof() {
                 VestaParameters,
             >::init::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                (leg_enc_core_r.clone(), eph_pk_r.clone()),
+                (leg_enc_core_r.clone(), eph_pk_r.clone(), amount),
                 &receiver_account,
                 &updated_receiver_account,
                 updated_receiver_account_comm,
@@ -11755,6 +11922,7 @@ fn single_shot_settlement_split_proof() {
             vec![LegProverConfig {
                 encryption: leg_enc_core_r.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
+                amount,
                 has_balance_changed: true,
             }],
             &re_randomized_leaf_r,
@@ -11977,8 +12145,7 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            (leg_enc_core_s.clone(), eph_pk_s.clone()),
+            (leg_enc_core_s.clone(), eph_pk_s.clone(), amount),
             &sender_account,
             &updated_sender_account,
             updated_sender_account_comm,
@@ -12007,6 +12174,7 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         vec![LegProverConfig {
             encryption: leg_enc_core_s.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+            amount,
             has_balance_changed: true,
         }],
         &re_randomized_leaf_s,
@@ -12046,8 +12214,7 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            (leg_enc_core_r.clone(), eph_pk_r.clone()),
+            (leg_enc_core_r.clone(), eph_pk_r.clone(), amount),
             &receiver_account,
             &updated_receiver_account,
             updated_receiver_account_comm,
@@ -12076,6 +12243,7 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         vec![LegProverConfig {
             encryption: leg_enc_core_r.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
+            amount,
             has_balance_changed: true,
         }],
         &re_randomized_leaf_r,
@@ -12221,8 +12389,7 @@ fn make_sender_split_proof(
         VestaParameters,
     >::init::<_, PallasParams, VestaParams>(
         rng,
-        amount,
-        (leg_enc_core.clone(), eph_pk.clone()),
+        (leg_enc_core.clone(), eph_pk.clone(), amount),
         account,
         updated_account,
         updated_account_comm,
@@ -12249,6 +12416,7 @@ fn make_sender_split_proof(
         vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+            amount,
             has_balance_changed: true,
         }],
         &re_randomized_leaf,
@@ -12279,6 +12447,7 @@ fn make_sender_split_proof(
 /// Build a correct receiver-affirmation split proof. Asset-id is revealed.
 fn make_receiver_split_proof(
     rng: &mut impl CryptoRngCore,
+    amount: Balance,
     leg_enc_core: &LegEncryptionCore<PallasA>,
     eph_pk: &ReceiverEphemeralPublicKey<PallasA>,
     account: &AccountState<PallasA>,
@@ -12302,6 +12471,8 @@ fn make_receiver_split_proof(
     PallasA,
 ) {
     let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+    // asset_id is revealed -> ct_amount is always needed; generate k_amount
+    let k_amount = PallasFr::rand(rng);
     let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
         64,
         PallasFr,
@@ -12310,7 +12481,7 @@ fn make_receiver_split_proof(
         VestaParameters,
     >::init::<_, PallasParams, VestaParams>(
         rng,
-        (leg_enc_core.clone(), eph_pk.clone()),
+        (leg_enc_core.clone(), eph_pk.clone(), amount),
         account,
         updated_account,
         updated_account_comm,
@@ -12321,6 +12492,7 @@ fn make_receiver_split_proof(
         account_comm_key.clone(),
         enc_gen,
         None, // asset_id revealed
+        k_amount,
     )
     .unwrap();
     let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -12331,11 +12503,12 @@ fn make_receiver_split_proof(
         sk_e,
         auth_rerandomization,
         auth_rand_new_comm,
-        vec![],
+        vec![k_amount], // revealed leg -> needs k_amount for ct_amount
         vec![],
         vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
+            amount,
             has_balance_changed: false,
         }],
         &re_randomized_leaf,
@@ -12739,6 +12912,7 @@ fn receiver_affirmation_w2_consistency() {
 
     let (proof, nullifier) = make_receiver_split_proof(
         &mut rng,
+        amount,
         &leg_enc_core,
         &eph_pk,
         &account,
@@ -12929,8 +13103,7 @@ fn sender_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut local_rng,
-            amount,
-            (device_leg_enc_core.clone(), device_eph_pk.clone()),
+            (device_leg_enc_core.clone(), device_eph_pk.clone(), amount),
             &account,
             &updated_account,
             updated_account_comm,
@@ -12967,6 +13140,7 @@ fn sender_affirmation_w3_consistency() {
             vec![LegProverConfig {
                 encryption: device_leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(device_eph_pk.clone()),
+                amount,
                 has_balance_changed: true,
             }],
             &re_randomized_leaf,
@@ -13067,8 +13241,7 @@ fn sender_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            (leg_enc_core.clone(), eph_pk.clone()),
+            (leg_enc_core.clone(), eph_pk.clone(), amount),
             &account,
             &updated_account,
             updated_account_comm,
@@ -13117,8 +13290,7 @@ fn sender_affirmation_w3_consistency() {
                 VestaParameters,
             >::init::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                (leg_enc_core.clone(), eph_pk.clone()),
+                (leg_enc_core.clone(), eph_pk.clone(), amount),
                 &account,
                 &updated_account,
                 updated_account_comm,
@@ -13187,8 +13359,7 @@ fn sender_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            (leg_enc_core.clone(), eph_pk.clone()),
+            (leg_enc_core.clone(), eph_pk.clone(), amount),
             &account,
             &updated_account,
             updated_account_comm, // host uses correct uac
@@ -13223,6 +13394,7 @@ fn sender_affirmation_w3_consistency() {
             vec![LegProverConfig {
                 encryption: leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                amount,
                 has_balance_changed: true,
             }],
             &re_leaf,
@@ -13481,6 +13653,7 @@ fn receiver_affirmation_w3_consistency() {
             party: Receiver,
             has_balance_changed: false,
             rng: &mut rng,
+            amount: amount,
             leg_enc_core: leg_enc_core,
             eph_pk: eph_pk,
             old_account: account,
@@ -13520,6 +13693,7 @@ fn receiver_affirmation_w3_consistency() {
 
     // Derive a reference challenge_h for tampered cases.
     let reference_challenge_h = {
+        let k_amount_ref = PallasFr::rand(&mut rng);
         let (_, mut ep, _, _) = AffirmAsReceiverSplitProtocol::<
             64,
             PallasFr,
@@ -13528,7 +13702,7 @@ fn receiver_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut rng,
-            (leg_enc_core.clone(), eph_pk.clone()),
+            (leg_enc_core.clone(), eph_pk.clone(), amount),
             &account,
             &updated_account,
             updated_account_comm,
@@ -13539,6 +13713,7 @@ fn receiver_affirmation_w3_consistency() {
             account_comm_key.clone(),
             enc_gen,
             None,
+            k_amount_ref,
         )
         .unwrap();
         ep.transcript()
@@ -13555,6 +13730,7 @@ fn receiver_affirmation_w3_consistency() {
         PallasA,
     ) {
         let mut local_rng = rand::thread_rng();
+        let k_amount_local = PallasFr::rand(&mut local_rng);
         let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
             64,
             PallasFr,
@@ -13563,7 +13739,7 @@ fn receiver_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut local_rng,
-            (dev_leg_enc_core.clone(), dev_eph_pk.clone()),
+            (dev_leg_enc_core.clone(), dev_eph_pk.clone(), amount),
             &account,
             &updated_account,
             updated_account_comm,
@@ -13574,6 +13750,7 @@ fn receiver_affirmation_w3_consistency() {
             account_comm_key.clone(),
             enc_gen,
             None,
+            k_amount_local,
         )
         .unwrap();
         let mut ch_bytes = Vec::new();
@@ -13590,11 +13767,12 @@ fn receiver_affirmation_w3_consistency() {
             sk_r_e.0,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![],
+            vec![k_amount_local], // revealed leg -> needs k_amount for ct_amount
             vec![],
             vec![LegProverConfig {
                 encryption: dev_leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(dev_eph_pk.clone()),
+                amount,
                 has_balance_changed: false,
             }],
             &re_leaf,
@@ -13923,13 +14101,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path.clone(),
             &root,
             nonce,
@@ -13960,13 +14142,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -14054,12 +14240,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path.clone(),
             &root,
             nonce,
@@ -14148,13 +14339,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path.clone(),
             &root,
             nonce,
@@ -14185,13 +14380,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_receiver(),
-            sk_r.0,
-            sk_r_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_r.0,
+                sk_r_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -14279,12 +14478,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path.clone(),
             &root,
             nonce,
@@ -14315,12 +14519,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -14408,13 +14617,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path.clone(),
             &root,
             nonce,
@@ -14445,13 +14658,17 @@ mod input_sanitation_disabled {
 
         let (proof, nullifier) = SenderReverseTxnProof::new::<_, PallasParams, VestaParams>(
             &mut rng,
-            amount,
-            leg_enc.core_and_eph_keys_for_sender(),
-            sk_s.0,
-            sk_s_e.0,
-            &account,
-            &updated_account,
-            updated_account_comm,
+            {
+                let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                (c, e, amount)
+            },
+            AccountTxnWitness::new(
+                sk_s.0,
+                sk_s_e.0,
+                account.clone(),
+                updated_account.clone(),
+                updated_account_comm,
+            ),
             path,
             &root,
             nonce,
@@ -14553,13 +14770,17 @@ mod input_sanitation_disabled {
         let (proof, nullifier) =
             IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_sender(),
-                sk_s.0,
-                sk_s_e.0,
-                &sender_account,
-                &malicious_sender_account,
-                malicious_sender_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    sender_account.clone(),
+                    malicious_sender_account.clone(),
+                    malicious_sender_comm,
+                ),
                 sender_path.clone(),
                 &account_tree_root,
                 nonce,
@@ -14596,13 +14817,17 @@ mod input_sanitation_disabled {
         let (proof, nullifier) =
             IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &receiver_account,
-                &malicious_receiver_account,
-                malicious_receiver_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    receiver_account.clone(),
+                    malicious_receiver_account.clone(),
+                    malicious_receiver_comm,
+                ),
                 receiver_path.clone(),
                 &account_tree_root,
                 nonce,
@@ -14638,13 +14863,17 @@ mod input_sanitation_disabled {
         let (proof, nullifier) =
             IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_sender(),
-                sk_s.0,
-                sk_s_e.0,
-                &sender_account,
-                &malicious_sender_account,
-                malicious_sender_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    sender_account.clone(),
+                    malicious_sender_account.clone(),
+                    malicious_sender_comm,
+                ),
                 sender_path.clone(),
                 &account_tree_root,
                 nonce,
@@ -14680,13 +14909,17 @@ mod input_sanitation_disabled {
         let (proof, nullifier) =
             IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &receiver_account,
-                &malicious_receiver_account,
-                malicious_receiver_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    receiver_account.clone(),
+                    malicious_receiver_account.clone(),
+                    malicious_receiver_comm,
+                ),
                 receiver_path,
                 &account_tree_root,
                 nonce,
@@ -14770,12 +15003,17 @@ mod input_sanitation_disabled {
         let (proof, nullifier) =
             ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &account,
-                &updated_account,
-                updated_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_comm,
+                ),
                 path.clone(),
                 &root,
                 nonce,
@@ -14806,12 +15044,17 @@ mod input_sanitation_disabled {
         let (proof2, nullifier2) =
             ReceiverCounterUpdateTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &account,
-                &updated_account2,
-                updated_comm2,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    account.clone(),
+                    updated_account2.clone(),
+                    updated_comm2,
+                ),
                 path,
                 &root,
                 nonce,
@@ -14841,9 +15084,7 @@ mod input_sanitation_disabled {
         use crate::account::common::CommonAffirmationSplitProtocol;
         use crate::account::state::NUM_GENERATORS;
         use crate::util::{
-            create_bp_and_null_t_values, enforce_balance_change_prover,
-            generate_schnorr_responses_for_balance_change,
-            generate_sigma_t_values_for_balance_change,
+            create_bp_and_null_t_values, create_leg_link_t_values, enforce_balance_change_prover,
         };
         use mocktopus::mocking::{MockResult, Mockable};
 
@@ -14876,17 +15117,12 @@ mod input_sanitation_disabled {
         fn clear_balance_change_amount_mocks() {
             enforce_balance_change_prover::<rand::rngs::ThreadRng, PallasFr, PallasParameters>
                 .clear_mock();
-            generate_sigma_t_values_for_balance_change::<
-                rand::rngs::ThreadRng,
-                PallasFr,
-                PallasParameters,
-            >
-                .clear_mock();
-            generate_schnorr_responses_for_balance_change::<PallasFr, PallasParameters>
-                .clear_mock();
         }
 
         fn mock_balance_change_amount(amount: Balance) {
+            // Make the balance bulletproof commit to a different amount than the leg. The amount
+            // response is taken from the leg's amount ciphertext, so the balance arithmetic stays
+            // self-consistent and only the check that the balance change equals the leg amount fails.
             enforce_balance_change_prover::<rand::rngs::ThreadRng, PallasFr, PallasParameters>
                 .mock_safe(
                     move |rng,
@@ -14908,61 +15144,6 @@ mod input_sanitation_disabled {
                         ))
                     },
                 );
-
-            generate_sigma_t_values_for_balance_change::<
-                rand::rngs::ThreadRng,
-                PallasFr,
-                PallasParameters,
-            >
-                .mock_safe(
-                    move |rng,
-                          existing_amount,
-                          ct_amount,
-                          old_balance_blinding,
-                          new_balance_blinding,
-                          amount_blinding,
-                          sk_enc_inv,
-                          sk_enc_inv_blinding,
-                          eph_pk_amount,
-                          pc_gens,
-                          bp_gens,
-                          enc_gen,
-                          prover_transcript| {
-                        let malicious_amounts = vec![amount; existing_amount.len()];
-                        MockResult::Continue((
-                            rng,
-                            malicious_amounts,
-                            ct_amount,
-                            old_balance_blinding,
-                            new_balance_blinding,
-                            amount_blinding,
-                            sk_enc_inv,
-                            sk_enc_inv_blinding,
-                            eph_pk_amount,
-                            pc_gens,
-                            bp_gens,
-                            enc_gen,
-                            prover_transcript,
-                        ))
-                    },
-                );
-
-            generate_schnorr_responses_for_balance_change::<PallasFr, PallasParameters>.mock_safe(
-                move |existing_amount,
-                      comm_bp_bal_blinding,
-                      t_comm_bp_bal,
-                      t_leg_amount,
-                      prover_challenge| {
-                    let malicious_amounts = vec![amount; existing_amount.len()];
-                    MockResult::Continue((
-                        malicious_amounts,
-                        comm_bp_bal_blinding,
-                        t_comm_bp_bal,
-                        t_leg_amount,
-                        prover_challenge,
-                    ))
-                },
-            );
         }
 
         // All sender/receiver actions use the shared logic so following tests should cover for other txns as well (to an extent)
@@ -15074,13 +15255,17 @@ mod input_sanitation_disabled {
 
             let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_sender(),
-                sk_s.0,
-                sk_s_e.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
                 path,
                 &root,
                 nonce,
@@ -15215,13 +15400,17 @@ mod input_sanitation_disabled {
 
             let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                amount,
-                leg_enc.core_and_eph_keys_for_sender(),
-                sk_s.0,
-                sk_s_e.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
                 path,
                 &root,
                 nonce,
@@ -15301,13 +15490,17 @@ mod input_sanitation_disabled {
 
             let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                honest_amount,
-                leg_enc.core_and_eph_keys_for_sender(),
-                sk_s.0,
-                sk_s_e.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, honest_amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
                 path,
                 &root,
                 nonce,
@@ -15393,13 +15586,17 @@ mod input_sanitation_disabled {
 
             let (proof, nullifier) = ClaimReceivedTxnProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
-                honest_amount,
-                leg_enc.core_and_eph_keys_for_receiver(),
-                sk_r.0,
-                sk_r_e.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, honest_amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    sk_r_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
                 path,
                 &root,
                 nonce,
@@ -15454,6 +15651,42 @@ mod input_sanitation_disabled {
                 VestaParameters,
             >::asset_id_proto::<rand::rngs::ThreadRng>
                 .clear_mock();
+        }
+
+        fn clear_leg_link_mock() {
+            create_leg_link_t_values::<PallasFr, PallasParameters>.clear_mock();
+        }
+
+        // Make the solo leg-link amount ciphertext commit to `forged` while the balance change and
+        // the leg ciphertext stay honest. This is the other side of mock_balance_change_amount: the
+        // lie is in the leg-link instead of the balance proof.
+        fn mock_leg_link_amount(forged: Balance) {
+            create_leg_link_t_values::<PallasFr, PallasParameters>.mock_safe(
+                move |legs,
+                      amounts,
+                      has_balance_changed,
+                      sk_enc_inv,
+                      sk_enc_inv_blinding,
+                      amount_blindings,
+                      asset_id,
+                      asset_id_blinding,
+                      enc_gen| {
+                    // amounts is &[Balance]; leak a forged slice of matching length.
+                    let forged_amounts: &'static [Balance] =
+                        Box::leak(vec![forged; amounts.len()].into_boxed_slice());
+                    MockResult::Continue((
+                        legs,
+                        forged_amounts,
+                        has_balance_changed,
+                        sk_enc_inv,
+                        sk_enc_inv_blinding,
+                        amount_blindings,
+                        asset_id,
+                        asset_id_blinding,
+                        enc_gen,
+                    ))
+                },
+            );
         }
 
         #[test]
@@ -15795,6 +16028,295 @@ mod input_sanitation_disabled {
                         .is_err()
                 );
             }
+        }
+
+        #[test]
+        fn leg_link_amount_mismatch_in_send_fails_verification() {
+            // The balance honestly decreases by 100 and the leg encrypts 100, but a mock makes the
+            // leg-link amount ciphertext commit to 60. The leg amount has to match both the balance
+            // change and the leg's own ciphertext, so verification must reject. This is the
+            // leg-link-side counterpart of sender_affirmation_with_mocked_smaller_amount.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"leg-link-amount-mismatch-send");
+
+            let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let honest_amount = 100u64;
+            let forged_leg_link_amount = 60u64;
+            let (_, leg_enc, _) = setup_leg(
+                &mut rng,
+                pk_a_e.0,
+                None,
+                honest_amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+            account.balance = 200;
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            // Honest balance change: decrease by 100 (matches the leg).
+            let updated_account = account.get_state_for_send(honest_amount).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            mock_leg_link_amount(forged_leg_link_amount);
+            let _guard = MockGuard::new(clear_leg_link_mock);
+
+            let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, honest_amount)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    sk_s_e.0,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_sender(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
+
+        #[test]
+        fn revealed_receive_with_leg_link_wrong_enc_key_fails_verification() {
+            // A receiver affirming a revealed-asset leg with no balance change must hold the
+            // account's encryption key, since the amount ciphertext is the only thing tying the
+            // account to the leg. Here the prover uses a different key (the kind of substitution the
+            // old participant relation allowed, e.g. the leg randomness r_1); the account commitment
+            // binds the real key, so verification must reject.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"revealed-receive-wrong-enc-key");
+
+            let ((_, (_, pk_s_e)), ((sk_r, pk_r), (_sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let amount = 100u64;
+
+            // Revealed asset-id leg, no balance change -> LegAccountLink::AmountOnly.
+            let conf = LegEncConfig {
+                parties_see_each_other: true,
+                reveal_asset_id: true,
+            };
+            let (_, leg_enc, _) = setup_leg_with_conf(
+                &mut rng,
+                conf,
+                pk_a_e.0,
+                None,
+                amount,
+                asset_id,
+                pk_s_e.0,
+                pk_r_e.0,
+                account_comm_key.sk_enc_gen(),
+                enc_gen,
+            );
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+            account.balance = 200;
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let updated_account = account.get_state_for_receive();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+            let nonce = b"test-nonce";
+
+            // The prover does not hold the account's encryption key; this stands in for using the
+            // leg randomness r_1 in place of the real key.
+            let wrong_sk_enc = PallasFr::rand(&mut rng);
+
+            let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    wrong_sk_enc,
+                    account.clone(),
+                    updated_account.clone(),
+                    updated_account_comm,
+                ),
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+            assert_account_verify_fails_with_rmc!(
+                proof,
+                &mut rng,
+                leg_enc.core_and_eph_keys_for_receiver(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key,
+                enc_gen,
+            );
+        }
+
+        #[test]
+        fn revealed_receive_split_with_wrong_device_enc_key_fails_verification() {
+            // On a revealed-asset receiver affirmation with no balance change, the device builds its
+            // half of the amount ciphertext from its encryption key. Here the device is given a key
+            // that is not the account's encryption key, so the device half and the host half no
+            // longer add up to the leg's amount ciphertext and the account commitment opening also
+            // fails; verification must reject.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"revealed-receive-split-wrong-device-key");
+            let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+            let ((_, (_, pk_s_e)), ((sk_r, pk_r), (_sk_r_e, pk_r_e)), (_, (_, pk_a_e))) =
+                setup_keys(
+                    &mut rng,
+                    account_comm_key.sk_gen(),
+                    account_comm_key.sk_enc_gen(),
+                );
+
+            let asset_id = 1;
+            let amount = 100u64;
+            let sk_r_scalar = sk_r.0;
+            // The device uses a non-account encryption key.
+            let wrong_sk_e_scalar = PallasFr::rand(&mut rng);
+
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_r, pk_r_e, id);
+            account.balance = 200;
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_tree =
+                get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+            let updated_account = account.get_state_for_receive();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            // Revealed asset-id leg.
+            let (leg_enc, updated_account_comm, path, root) = setup_single_leg_test(
+                &mut rng,
+                true,
+                pk_a_e.0,
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                asset_id,
+                account_comm_key.clone(),
+                enc_gen,
+                updated_account_comm,
+                &account_tree,
+            );
+            let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+
+            let nonce = b"test-nonce";
+            let (split_proof, nullifier, _) = gen_split_proof!(
+                no_amount;
+                Protocol: AffirmAsReceiverSplitProtocol::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>,
+                Proof: AffirmAsReceiverSplitProof,
+                party: Receiver,
+                has_balance_changed: false,
+                rng: &mut rng,
+                amount: amount,
+                leg_enc_core: leg_enc_core,
+                eph_pk: eph_pk,
+                old_account: account,
+                updated_account: updated_account,
+                updated_account_comm: updated_account_comm,
+                path: path,
+                root: &root,
+                nonce: nonce,
+                account_tree_params: &account_tree_params,
+                account_comm_key: account_comm_key,
+                enc_gen: enc_gen,
+                sk_scalar: sk_r_scalar,
+                sk_e_scalar: wrong_sk_e_scalar,
+                b_blinding: b_blinding,
+                reveal_asset_id: true,
+            );
+
+            assert!(
+                split_proof
+                    .verify_with_tuples::<_, PallasParams, VestaParams>(
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        &account_comm_key,
+                        enc_gen,
+                        &leg_enc_core,
+                        &eph_pk,
+                        &mut rng,
+                        None,
+                    )
+                    .is_err()
+            );
         }
     }
 

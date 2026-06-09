@@ -10,7 +10,9 @@ use curve_tree_relations::curve_tree::CurveTree;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState};
-use polymesh_dart_bp::account::{AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof};
+use polymesh_dart_bp::account::{
+    AccountTxnWitness, AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof,
+};
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
 use polymesh_dart_bp::leg::{Leg, LegEncConfig, LegEncryption};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
@@ -193,13 +195,17 @@ fn bench_sender_affirmation_verification(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, _, _>(
         &mut rng,
-        amount,
-        leg_enc.core_and_eph_keys_for_sender(),
-        sk_s.0.clone(),
-        sk_s_e.0.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
+        {
+            let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        },
+        AccountTxnWitness::new(
+            sk_s.0.clone(),
+            sk_s_e.0.clone(),
+            account.clone(),
+            updated_account.clone(),
+            updated_account_comm,
+        ),
         path,
         &root,
         nonce,
@@ -264,12 +270,17 @@ fn bench_receiver_affirmation_verification(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
-        leg_enc.core_and_eph_keys_for_receiver(),
-        sk_r.0.clone(),
-        sk_r_e.0.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
+        {
+            let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+            (c, e, 100)
+        },
+        AccountTxnWitness::new(
+            sk_r.0.clone(),
+            sk_r_e.0.clone(),
+            account.clone(),
+            updated_account.clone(),
+            updated_account_comm,
+        ),
         path,
         &root,
         nonce,
@@ -336,13 +347,17 @@ fn bench_sender_affirmation_verification_with_rmc(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, _, _>(
         &mut rng,
-        amount,
-        leg_enc.core_and_eph_keys_for_sender(),
-        sk_s.0.clone(),
-        sk_s_e.0.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
+        {
+            let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        },
+        AccountTxnWitness::new(
+            sk_s.0.clone(),
+            sk_s_e.0.clone(),
+            account.clone(),
+            updated_account.clone(),
+            updated_account_comm,
+        ),
         path,
         &root,
         nonce,
@@ -412,12 +427,17 @@ fn bench_receiver_affirmation_verification_with_rmc(c: &mut Criterion) {
 
     let (proof, nullifier) = AffirmAsReceiverTxnProof::new::<_, _, _>(
         &mut rng,
-        leg_enc.core_and_eph_keys_for_receiver(),
-        sk_r.0.clone(),
-        sk_r_e.0.clone(),
-        &account,
-        &updated_account,
-        updated_account_comm,
+        {
+            let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+            (c, e, 100)
+        },
+        AccountTxnWitness::new(
+            sk_r.0.clone(),
+            sk_r_e.0.clone(),
+            account.clone(),
+            updated_account.clone(),
+            updated_account_comm,
+        ),
         path,
         &root,
         nonce,

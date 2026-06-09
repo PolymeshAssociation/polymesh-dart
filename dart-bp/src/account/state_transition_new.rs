@@ -159,11 +159,8 @@ impl<
         challenge: &F0,
     ) -> Result<Option<BalanceChangeSplitProof<F0, G0>>> {
         if let Some(bp) = balance_prover {
-            let (partial, resp_ct_amount) = bp.gen_proof(challenge)?;
-            Ok(Some(BalanceChangeSplitProof {
-                partial,
-                resp_ct_amount,
-            }))
+            let partial = bp.gen_proof(challenge)?;
+            Ok(Some(BalanceChangeSplitProof { partial }))
         } else {
             Ok(None)
         }
@@ -227,12 +224,12 @@ impl<
     )> {
         self.host.pre_finalize_checks()?;
 
-        let num_balance_decreases = self.host.balance_changes.len();
-        if k_amounts.len() != num_balance_decreases {
+        let num_ct_amounts = LegProverConfig::num_ct_amounts(&self.host.legs);
+        if k_amounts.len() != num_ct_amounts {
             return Err(Error::ProofGenerationError(format!(
-                "k_amounts length {} does not match number of balance-changing legs {}",
+                "k_amounts length {} does not match number of legs needing ct_amount {}",
                 k_amounts.len(),
-                num_balance_decreases
+                num_ct_amounts
             )));
         }
 
@@ -261,6 +258,7 @@ impl<
                 account_comm_key,
                 enc_gen,
                 k_asset_ids,
+                k_amounts,
             )?;
 
         // Create balance prover after CommonAffirmationSplitProtocol init
@@ -272,8 +270,7 @@ impl<
                 self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
-                enc_gen,
-                k_amounts,
+                inner.balance_amount_blindings(),
                 &mut even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
@@ -314,12 +311,12 @@ impl<
     )> {
         self.host.pre_finalize_checks()?;
 
-        let num_balance_decreases = self.host.balance_changes.len();
-        if k_amounts.len() != num_balance_decreases {
+        let num_ct_amounts = LegProverConfig::num_ct_amounts(&self.host.legs);
+        if k_amounts.len() != num_ct_amounts {
             return Err(Error::ProofGenerationError(format!(
-                "k_amounts length {} does not match number of balance-changing legs {}",
+                "k_amounts length {} does not match number of legs needing ct_amount {}",
                 k_amounts.len(),
-                num_balance_decreases
+                num_ct_amounts
             )));
         }
 
@@ -351,6 +348,7 @@ impl<
                 account_comm_key,
                 enc_gen,
                 k_asset_ids,
+                k_amounts,
                 even_prover,
             )?;
 
@@ -363,8 +361,7 @@ impl<
                 self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
-                enc_gen,
-                k_amounts,
+                inner.balance_amount_blindings(),
                 even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
@@ -508,27 +505,12 @@ impl<
             )));
         }
 
-        if proof.common_proof.auth_proof.partial_ct_amounts.len() != num_balance_decreases {
+        // partial_ct_amounts / resp_ct_amount are sized over needs_ct_amount legs and checked by the
+        // split verifier; here only the presence of a balance proof is checked.
+        if num_balance_decreases > 0 && proof.balance_proof.is_none() {
             return Err(Error::ProofVerificationError(format!(
-                "Invalid common_proof.auth_proof.partial_ct_amounts length. Expected {}, got {}",
-                num_balance_decreases,
-                proof.common_proof.auth_proof.partial_ct_amounts.len()
+                "{num_balance_decreases} legs with balance change but no balance change proof provided"
             )));
-        }
-
-        if num_balance_decreases > 0 {
-            if let Some(balance_proof) = &proof.balance_proof {
-                if balance_proof.resp_ct_amount.len() != num_balance_decreases {
-                    return Err(Error::ProofVerificationError(format!(
-                        "{num_balance_decreases} legs with balance change but balance change proof for {} legs provided",
-                        balance_proof.resp_ct_amount.len()
-                    )));
-                }
-            } else {
-                return Err(Error::ProofVerificationError(format!(
-                    "{num_balance_decreases} legs with balance change but no balance change proof provided"
-                )));
-            }
         }
 
         let is_asset_id_revealed = num_hidden_asset_ids != self.legs.len();
@@ -611,13 +593,7 @@ impl<
         )?;
 
         if let Some(balance_proof) = &proof.balance_proof {
-            let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
-            verifier.init_balance_change_verification(
-                &proof.common_proof,
-                balance_proof,
-                enc_gen,
-                B_blinding,
-            )?;
+            verifier.init_balance_change_verification(&proof.common_proof, balance_proof)?;
         }
 
         Ok(verifier)
@@ -656,12 +632,9 @@ impl<
             )?;
 
         if let Some(balance_proof) = &proof.balance_proof {
-            let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
             verifier.init_balance_change_verification_with_given_verifier(
                 &proof.common_proof,
                 balance_proof,
-                enc_gen,
-                B_blinding,
                 even_verifier,
             )?;
         }
@@ -700,8 +673,6 @@ impl<
             verifier.init_balance_change_verification_with_given_verifier(
                 &proof.common_proof,
                 balance_proof,
-                enc_gen,
-                B_blinding,
                 even_verifier,
             )?;
         }
@@ -1496,8 +1467,16 @@ mod tests {
             carol_receives_comm,
             nonce,
         );
-        split_builder.add_receive_affirmation((leg_enc_core_1.clone(), eph_pk_1.clone()));
-        split_builder.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_2.clone()));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_1.clone(),
+            alice_send_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_2.clone(),
+            bob_send_amount,
+        ));
 
         let start = Instant::now();
         let (
@@ -1533,11 +1512,13 @@ mod tests {
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_1.clone()),
+                    amount: alice_send_amount,
                     has_balance_changed: false,
                 },
                 LegProverConfig {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_2.clone()),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 },
             ],
@@ -1725,11 +1706,16 @@ mod tests {
             alice_updated_comm,
             nonce,
         );
-        split_builder.add_send_affirmation(
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
             alice_to_bob_amount,
-            (leg_enc_core_1.clone(), eph_pk_s_1.clone()),
-        );
-        split_builder.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
 
         let start = Instant::now();
         let (
@@ -1765,11 +1751,13 @@ mod tests {
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
                     has_balance_changed: true,
                 },
                 LegProverConfig {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
                     has_balance_changed: false,
                 },
             ],
@@ -1964,6 +1952,7 @@ mod tests {
 
             // Auth random keys
             let k_amount_1 = PallasFr::rand(&mut rng);
+            let k_amount_2 = PallasFr::rand(&mut rng); // for receive leg (needed when asset-id revealed)
             let k_asset_id_1 = PallasFr::rand(&mut rng);
             let k_asset_id_2 = PallasFr::rand(&mut rng);
 
@@ -1992,13 +1981,11 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-            split_builder_1.add_send_affirmation(
+            split_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 alice_send_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut split_builder_2 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2015,6 +2002,7 @@ mod tests {
             split_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                bob_send_amount,
             ));
 
             // Host protocol init
@@ -2035,7 +2023,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[k_amount_1], &[]],
+                    &[
+                        &[k_amount_1],
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_2)
+                        } else {
+                            &[]
+                        },
+                    ],
                     &[&k_asset_ids_1[..], &k_asset_ids_2[..]],
                 )
                 .unwrap();
@@ -2071,6 +2066,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: true,
                 }],
                 &re_rand_leaf_1,
@@ -2091,13 +2087,18 @@ mod tests {
                 sk_alice_e_scalar,
                 auth_rerand_2,
                 auth_rand_new_comm_2,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_2]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 }],
                 &re_rand_leaf_2,
@@ -2417,7 +2418,9 @@ mod tests {
 
             // Auth random keys
             let k_amount_alice = PallasFr::rand(&mut rng);
+            let k_amount_alice_2 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_amount_bob = PallasFr::rand(&mut rng);
+            let k_amount_bob_1 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_asset_id_alice_1 = PallasFr::rand(&mut rng);
             let k_asset_id_alice_2 = PallasFr::rand(&mut rng);
             let k_asset_id_bob_1 = PallasFr::rand(&mut rng);
@@ -2458,13 +2461,11 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-            alice_split_builder_1.add_send_affirmation(
+            alice_split_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 alice_send_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut alice_split_builder_2 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2481,6 +2482,7 @@ mod tests {
             alice_split_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                bob_send_amount,
             ));
 
             let start = Instant::now();
@@ -2500,7 +2502,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[k_amount_alice], &[]],
+                    &[
+                        &[k_amount_alice],
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_alice_2)
+                        } else {
+                            &[]
+                        },
+                    ],
                     &[&k_asset_ids_alice_1[..], &k_asset_ids_alice_2[..]],
                 )
                 .unwrap();
@@ -2534,6 +2543,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: true,
                 }],
                 &alice_re_rand_leaf_1,
@@ -2554,13 +2564,18 @@ mod tests {
                 sk_alice_e_scalar,
                 alice_auth_rerand_2,
                 alice_auth_rand_new_comm_2,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_alice_2]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_alice_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 }],
                 &alice_re_rand_leaf_2,
@@ -2616,6 +2631,7 @@ mod tests {
             bob_split_builder_1.add_receive_affirmation((
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                alice_send_amount,
             ));
 
             let mut bob_split_builder_2 = AccountStateTransitionSplitProofBuilder::<
@@ -2630,13 +2646,11 @@ mod tests {
                 bob_account_2_updated_comm,
                 bob_nonce,
             );
-            bob_split_builder_2.add_send_affirmation(
+            bob_split_builder_2.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 bob_send_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let start = Instant::now();
             let (bob_host_protocol, mut bob_even_prover, bob_odd_prover) =
@@ -2655,7 +2669,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[], &[k_amount_bob]],
+                    &[
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_bob_1)
+                        } else {
+                            &[]
+                        },
+                        &[k_amount_bob],
+                    ],
                     &[&k_asset_ids_bob_1[..], &k_asset_ids_bob_2[..]],
                 )
                 .unwrap();
@@ -2682,13 +2703,18 @@ mod tests {
                 sk_bob_e_scalar,
                 bob_auth_rerand_1,
                 bob_auth_rand_new_comm_1,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_bob_1]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_bob_1.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: false,
                 }],
                 &bob_re_rand_leaf_1,
@@ -2716,6 +2742,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: true,
                 }],
                 &bob_re_rand_leaf_2,

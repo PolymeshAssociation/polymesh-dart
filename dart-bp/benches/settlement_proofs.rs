@@ -12,6 +12,7 @@ use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::{
     PairRandomizedMultCheckerGuard, RandomizedMultChecker,
 };
+use polymesh_dart_bp::account::AccountTxnWitness;
 use polymesh_dart_bp::account::state::{AccountCommitmentKeyTrait, AccountState, NUM_GENERATORS};
 use polymesh_dart_bp::account::state_transition::{
     AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
@@ -147,6 +148,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -347,6 +349,7 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -525,6 +528,7 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
         1,
+        0,
         asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -752,14 +756,19 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_send(amount, leg_encs[i].core_and_eph_keys_for_sender());
+        builder.add_irreversible_send({
+            let (c, e) = leg_encs[i].core_and_eph_keys_for_sender();
+            (c, e, amount)
+        });
         alice_builders.push(builder);
     }
 
@@ -806,14 +815,19 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_accounts[i].clone(),
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_accounts[i].clone(),
+                    updated_account,
+                    updated_comm,
+                ),
                 nonce,
             );
-        builder.add_irreversible_receive(amount, leg_encs[i].core_and_eph_keys_for_receiver());
+        builder.add_irreversible_receive({
+            let (c, e) = leg_encs[i].core_and_eph_keys_for_receiver();
+            (c, e, amount)
+        });
         bob_builders.push(builder);
     }
 

@@ -34,16 +34,38 @@ pub const LEG_TXN_INSTANCE_LABEL: &[u8; 22] = b"leg-txn-extra-instance";
 
 // Because of the way we organize keys, its better to have a single encryption key shared among all mediators. This is more efficient except when a mediator is removed which is rare
 
-// TODO: Remove index from mediator point to avoid issues.
-
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AssetCommitmentParams<
     G0: SWCurveConfig + Clone + Copy,
     G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
 > {
     pub j_0: Affine<G0>,
-    pub j_1: Affine<G0>,
+    /// Generators for the leaf commitment. The first `1 + num_enc_keys + num_med_keys` generators
+    /// commit the x-coordinates of the asset-id point, the auditor encryption keys and the mediator
+    /// affirmation keys (the "point block"). The next `num_med_keys` generators, starting at
+    /// 1 + num_enc_keys + num_med_keys`, commit each mediator's public encryption-key index.
+    /// The index for mediator slot `j` is committed under `comm_key[1 + num_enc_keys + num_med_keys + j]`.
     pub comm_key: Vec<Affine<G1>>,
+    /// Maximum number of (auditor/mediator shared) encryption keys these params are sized for.
+    pub num_enc_keys: u32,
+    /// Maximum number of mediator keys these params are sized for.
+    pub num_med_keys: u32,
+}
+
+impl<
+    G0: SWCurveConfig + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
+> AssetCommitmentParams<G0, G1>
+{
+    /// Index in `comm_key` at which the per-mediator index-generator block begins.
+    pub fn idx_offset(&self) -> usize {
+        1 + self.num_enc_keys as usize + self.num_med_keys as usize
+    }
+
+    /// Generator committing the encryption-key index of the mediator.
+    pub fn idx_gen(&self, med_index: usize) -> Affine<G1> {
+        self.comm_key[self.idx_offset() + med_index]
+    }
 }
 
 impl<
@@ -54,16 +76,26 @@ impl<
         + Copy,
 > AssetCommitmentParams<PallasConfig, G1>
 {
-    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
+    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key.
+    /// `num_enc_keys` and `num_med_keys` are the maximum auditor/mediator counts the params are sized for.
     pub fn new(
         label: &[u8],
-        num_keys: u32,
+        num_enc_keys: u32,
+        num_med_keys: u32,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
-        let j_1 = hash_to_pallas(label, b" : j_1").into_affine();
-        let comm_key = bp_gens_for_vec_commitment(num_keys + 1, leaf_layer_bp_gens).collect();
-        Self { j_0, j_1, comm_key }
+        // 1 (asset-id) + num_enc_keys (auditor pks) + num_med_keys (mediator pks).
+        // num_med_keys generators for the per-mediator index corresponding to its encryption key.
+        let comm_key =
+            bp_gens_for_vec_commitment(1 + num_enc_keys + 2 * num_med_keys, leaf_layer_bp_gens)
+                .collect();
+        Self {
+            j_0,
+            comm_key,
+            num_enc_keys,
+            num_med_keys,
+        }
     }
 }
 
@@ -102,28 +134,38 @@ impl<
         params: &AssetCommitmentParams<G0, G1>,
         delta: Affine<G0>,
     ) -> Result<Self> {
-        let total_keys = enc_keys.len() + med_keys.len();
-        if params.comm_key.len() < total_keys + 1 {
+        let n = enc_keys.len();
+        let m = med_keys.len();
+        // Auditors/encryption keys are bounded by `num_enc_keys` and mediators by `num_med_keys`; the
+        // point block is `1 + n + m` generators and the index block needs one generator per mediator.
+        if n > params.num_enc_keys as usize || m > params.num_med_keys as usize {
             return Err(Error::InsufficientCommitmentKeyLength(
                 params.comm_key.len(),
-                total_keys + 1,
+                1 + params.num_enc_keys as usize + 2 * params.num_med_keys as usize,
             ));
         }
         for (idx, _) in &med_keys {
-            if *idx as usize >= enc_keys.len() {
+            if *idx as usize >= n {
                 return Err(Error::InvalidKeyIndex(*idx as usize));
             }
         }
 
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
-        // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive
+        // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive.
+        // Point block: x-coordinates of [asset_id, auditor pks, mediator pks] under comm_key[0 .. 1+n+m].
         let points = Self::_points(id, &enc_keys, &med_keys, params);
-        let x_coords = points
+        let num_points = points.len(); // 1 + n + m
+        let mut gens = params.comm_key[..num_points].to_vec();
+        let mut scalars = points
             .into_iter()
             .map(|p| (delta + p).into_affine().x)
             .collect::<Vec<_>>();
-        let commitment =
-            G1::msm(&params.comm_key[..(total_keys + 1)], x_coords.as_slice()).unwrap();
+        // Each mediator's public encryption-key index as a scalar
+        for (j, (idx, _)) in med_keys.iter().enumerate() {
+            gens.push(params.idx_gen(j));
+            scalars.push(F1::from(*idx));
+        }
+        let commitment = G1::msm(&gens, scalars.as_slice()).unwrap();
         Ok(Self {
             id,
             enc_keys,
@@ -136,25 +178,26 @@ impl<
         Self::_points(self.id, &self.enc_keys, &self.med_keys, params)
     }
 
-    /// Return 1 point per key and role combined. The idea is to have 1 point per auditor/mediator and the
-    /// point should encapsulate all info about that auditor/mediator
-    /// Points are as list `[<asset_id * j_0, j_0 * role + en_1, j_0 * role + en_2, ..., j_0 * role + en_n, j_0 * role + j_1 * med_1_en + med_1, j_0 * role + j_1 * med_2_en + med_2, ..., j_0 * role + j_1 * med_m_en + med_m>]`
-    /// where `en_i` are the encryption keys, `med_i` are the mediator affirmation keys, `role = 0` for encryption keys
-    /// and `role = 1` for mediator keys and `med_i_en` refers to the index of encryption key help by `i`-th mediator. This index is
-    /// in the list of encryption keys `en_i`
+    /// Return 1 point per asset-id/auditor/mediator. The idea is to have 1 point per entry and the
+    /// point should encapsulate all info about that auditor/mediator.
+    /// Points are the list `[asset_id * j_0, en_1, en_2, ..., en_n, med_1, med_2, ..., med_m]`
+    /// where `en_i` are the auditor encryption keys and `med_i` are the mediator affirmation keys
+    /// (committed as bare points, exactly like auditor keys). The mediator's encryption-key index is
+    /// not included into the point but committed separately as a scalar under
+    /// [`AssetCommitmentParams::idx_gen`] (see [`AssetData::new`]).
     fn _points(
         asset_id: AssetId,
         enc_keys: &[Affine<G0>],
         med_keys: &[(u8, Affine<G0>)],
         params: &AssetCommitmentParams<G0, G1>,
     ) -> Vec<Affine<G0>> {
+        // By convention, first point is for asset-id, then are points for encryption keys,
+        // then are points for mediator keys, then are points for indices of mediator encryption keys
         iter::once((params.j_0 * G0::ScalarField::from(asset_id)).into_affine())
-            // For encryption keys, role = 0 and thus point is just the key itself
+            // Auditor encryption keys: just the key itself
             .chain(enc_keys.into_iter().map(|k| *k))
-            // For mediator keys, role = 1 and thus point is the key + j_0 + j_1 * index where index corresponds to the encryption key of this mediator
-            .chain(med_keys.into_iter().map(|(i, k)| {
-                (params.j_0 + params.j_1 * G0::ScalarField::from(*i) + *k).into_affine()
-            }))
+            // Mediator affirmation keys: just the key itself (index committed separately as a scalar).
+            .chain(med_keys.into_iter().map(|(_, k)| *k))
             .collect()
     }
 
@@ -385,6 +428,16 @@ pub struct MediatorEncryption<G: AffineRepr> {
     /// Encryption of mediator affirmation keys in the order they appear in [`AssetData`].
     /// These only need to be decrypted by the corresponding mediator and none other.
     pub ct_med: G,
+}
+
+impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryption<G> {
+    /// Recover the mediator's affirmation key from `ct_med` using the mediator's encryption key
+    /// `sk_enc` (the secret of the encryption key at `enc_key_index` in [`AssetData`]).
+    pub fn affirmation_key(&self, sk_enc: &F) -> Result<G> {
+        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let r_enc_gen = self.eph_pk_med_key * sk_enc_inv;
+        Ok((self.ct_med.into_group() - r_enc_gen).into_affine())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]

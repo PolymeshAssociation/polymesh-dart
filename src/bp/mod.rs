@@ -1080,6 +1080,7 @@ mod tests {
                     &mut receiver_state,
                     &leg_ref,
                     &leg_enc,
+                    receive_amount,
                     &account_tree,
                 )
                 .unwrap();
@@ -1250,6 +1251,7 @@ mod tests {
                 &mut sender_state,
                 &leg_ref,
                 &leg_enc,
+                0,
                 &account_tree,
             )
             .unwrap();
@@ -1323,6 +1325,7 @@ mod tests {
                 &mut receiver_state,
                 &leg_ref,
                 &leg_enc,
+                0,
                 &account_tree,
             )
             .unwrap();

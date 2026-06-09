@@ -187,6 +187,7 @@ fn build_batched_proof(
         &recv_keys,
         &s.leg_ref,
         &s.leg_enc,
+        s.amount,
         &mut recv_state,
         s.account_tree.prover_account_tree(),
     )?;

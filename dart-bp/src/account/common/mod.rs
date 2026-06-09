@@ -36,9 +36,11 @@ use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use dock_crypto_utils::transcript::Transcript;
 use leg_link::{LegAccountLink, LegAccountLinkProtocol, LegProverConfig};
-use polymesh_dart_common::AssetId;
+use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
+use schnorr_pok::discrete_log::{
+    PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
+};
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
     PartialSchnorrResponse,
@@ -133,10 +135,12 @@ pub struct CommonStateChangeProver<
     pub comm_bp_randomness_relations: Affine<G0>,
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
-    /// Blinding used for `sk_enc^{-1}`. Passed to `BalanceChangeProver` so `ct_amount` t-values use the same blinding.
     pub sk_enc_inv_blinding: F0,
     pub old_balance_blinding: F0,
     pub new_balance_blinding: F0,
+    /// Amount blindings of the balance-changed legs, shared with `BalanceChangeProver` so the
+    /// balance BP and the leg-link `ct_amount` use the same blinding for `v`
+    pub balance_amount_blindings: Vec<F0>,
     pub is_asset_id_revealed: bool,
 }
 
@@ -312,7 +316,7 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G0, G1>>,
     ) -> Result<Self> {
-        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let _enc_key_gen = account_comm_key.sk_enc_gen();
         // has_balance_changed denotes whether the balance changed for any leg. This flag is known to verifier as well
         let has_balance_changed = legs_with_conf.iter().any(|l| l.has_balance_changed);
         ensure_same_accounts(account, updated_account, has_balance_changed)?;
@@ -328,7 +332,8 @@ impl<
         let asset_id = account.asset_id();
 
         // For legs that have asset-id ciphertext, prove that asset-id ciphertext is correctly formed when is_asset_id_revealed = true
-        let (is_asset_id_revealed, legs) = legs_for_proof(legs_with_conf, asset_id)?;
+        let (is_asset_id_revealed, legs, amounts, legs_balance_changed) =
+            legs_for_proof(legs_with_conf, asset_id)?;
 
         for (leg_core, eph_pk) in &legs {
             add_to_transcript!(
@@ -361,6 +366,23 @@ impl<
             (b, b)
         };
 
+        // One amount blinding per ct_amount leg (revealed or balance-changed), owned by the leg-link.
+        // The balance-changed subset is shared with the balance BP in the same commit order.
+        let num_ct_amounts = (0..legs.len())
+            .filter(|&i| legs[i].0.is_asset_id_revealed() || legs_balance_changed[i])
+            .count();
+        let amount_blindings: Vec<F0> = (0..num_ct_amounts).map(|_| F0::rand(rng)).collect();
+        let mut balance_amount_blindings = Vec::with_capacity(amount_blindings.len());
+        let mut amount_idx = 0;
+        for i in 0..legs.len() {
+            if legs[i].0.is_asset_id_revealed() || legs_balance_changed[i] {
+                if legs_balance_changed[i] {
+                    balance_amount_blindings.push(amount_blindings[amount_idx]);
+                }
+                amount_idx += 1;
+            }
+        }
+
         let (
             nullifier,
             comm_bp_randomness_relations,
@@ -373,6 +395,8 @@ impl<
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             legs,
+            amounts,
+            legs_balance_changed,
             sk_enc,
             account,
             updated_account,
@@ -390,11 +414,11 @@ impl<
             asset_id_blinding,
             sk_enc_blinding,
             sk_enc_inv_blinding,
+            amount_blindings,
             even_prover,
             &account_comm_key,
             account_tree_params.even_parameters.pc_gens(),
             &account_tree_params.even_parameters.bp_gens(),
-            enc_key_gen,
             enc_gen,
         )?;
 
@@ -424,9 +448,10 @@ impl<
             comm_bp_randomness_relations,
             t_bp_randomness_relations,
             comm_bp_blinding,
-            sk_enc_inv_blinding, // needed by balance-change leg-amount proofs
+            sk_enc_inv_blinding,
             old_balance_blinding,
             new_balance_blinding,
+            balance_amount_blindings,
             is_asset_id_revealed,
         })
     }
@@ -480,7 +505,7 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
-        let (resp_leaf, resp_acc_new, resp_null, resp_leg_link, resp_bp_randomness_relations) =
+        let (resp_acc_old, resp_acc_new, resp_null, resp_leg_link, resp_bp_randomness_relations) =
             generate_sigma_responses_for_common_state_change(
                 sk_aff,
                 sk_enc,
@@ -511,7 +536,7 @@ impl<
             },
             t_acc_old: self.t_acc_old.t,
             t_acc_new: self.t_acc_new.t,
-            resp_acc_old: resp_leaf,
+            resp_acc_old,
             resp_acc_new,
             resp_leg_link,
         })
@@ -539,7 +564,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProof<G> {
 }
 
 /// Prover-side protocol state for host's affirmation account commitment Schnorr proofs (without sk, sk_enc).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct AccountCommitmentsHostProtocol<G: SWCurveConfig + Clone + Copy> {
     pub t_acc_old: SchnorrCommitment<Affine<G>>,
     pub t_acc_new: SchnorrCommitment<Affine<G>>,
@@ -671,6 +696,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
 }
 
 /// Prover-side protocol state for host's partial affirmation proof (BP, nullifier, transcript).
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct CommonStateChangePartialProtocol<
     const L: usize,
     F0: PrimeField,
@@ -680,8 +706,10 @@ pub struct CommonStateChangePartialProtocol<
 > {
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
     pub t_bp: SchnorrCommitment<Affine<G0>>,
+    #[zeroize(skip)]
     pub re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G0, G1>>,
     pub rerandomization: F0,
+    #[zeroize(skip)]
     pub comm_bp: Affine<G0>,
     pub comm_bp_blinding: F0,
 }
@@ -788,7 +816,7 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let asset_id = account.asset_id();
-        let (_, legs) = legs_for_proof(legs_with_conf, asset_id)?;
+        let (_, legs, _, _) = legs_for_proof(legs_with_conf, asset_id)?;
 
         add_to_transcript!(
             even_prover.transcript(),
@@ -850,10 +878,12 @@ impl<
     }
 
     /// Generate the partial proof given the host challenge.
-    pub fn gen_proof(self, challenge: &F0) -> CommonStateChangeProofPartial<F0, F1, G0, G1, L> {
+    pub fn gen_proof(mut self, challenge: &F0) -> CommonStateChangeProofPartial<F0, F1, G0, G1, L> {
+        // `Self` is `ZeroizeOnDrop` (no move-out), so `take()` the `Option` path rather than
+        // cloning it; `self` still drops at the end, zeroizing its secret fields.
         let (resp_null, resp_bp) = generate_null_bp_responses(
             self.comm_bp_blinding,
-            self.t_null,
+            self.t_null.clone(),
             &self.t_bp,
             None, // include_sk: host mode
             challenge,
@@ -862,7 +892,7 @@ impl<
 
         CommonStateChangeProofPartial {
             r1cs_proof: None,
-            re_randomized_path: self.re_randomized_path,
+            re_randomized_path: self.re_randomized_path.take(),
             resp_null,
             comm_bp_randomness_relations: self.comm_bp,
             t_bp_randomness_relations: self.t_bp.t,
@@ -886,6 +916,9 @@ pub struct CommonAffirmationHostProof<
     /// `ct_asset_id = enc_gen * asset_id + B_blinding * (-k_2)`.
     /// The asset-id is shared with the account commitments
     pub resp_ct_asset_id: Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
+    /// Host's proofs for `ct_amount_2 = enc_gen * amount + B_blinding * (-k)`, one per
+    /// `needs_ct_amount` leg. Full proof: amount is owned here and consumed by the balance BP.
+    pub resp_ct_amount: Vec<PokPedersenCommitment<Affine<G0>>>,
     /// Auth's share of the leaf rerandomization scalar
     pub auth_rerandomization: F0,
     /// Commitment randomness for auth's new commitment part (B_blinding * rand_new_comm)
@@ -898,6 +931,7 @@ pub struct CommonAffirmationHostProof<
 /// `init()` returns `(Self, Prover, Prover, nullifier)`.
 /// `init_with_given_prover()` returns `(Self, nullifier)` for batched proving.
 /// `gen_proof()` / `gen_proof_partial()` consume `Self` and produce `AffirmationSplitHostProof`.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct CommonAffirmationSplitProtocol<
     const L: usize,
     F0: PrimeField,
@@ -909,12 +943,19 @@ pub struct CommonAffirmationSplitProtocol<
     // Partial protocol state (stored inline to avoid lifetime from Prover)
     t_null: PokDiscreteLogProtocol<Affine<G0>>,
     t_bp: SchnorrCommitment<Affine<G0>>,
+    #[zeroize(skip)]
     re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G0, G1>>,
+    #[zeroize(skip)]
     comm_bp: Affine<G0>,
     comm_bp_blinding: F0,
     old_account: AccountState<Affine<G0>>,
     updated_account: AccountState<Affine<G0>>,
     ct_asset_id: Vec<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)>,
+    /// Host `ct_amount_2 = enc_gen * amount + B_blinding * (-k)`, one per `needs_ct_amount` leg.
+    ct_amount: Vec<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)>,
+    /// Witness-1 blindings of the balance-changed legs' `ct_amount_2`, in leg order, handed to the
+    /// `BalanceSplitProver` so its balance BP amount slots use the same amounts as those `ct_amount_2`.
+    balance_amount_blindings: Vec<F0>,
     host_rerandomization: F0,
     /// Auth's share of the leaf rerandomization scalar
     pub auth_rerandomization: F0,
@@ -949,6 +990,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
         k_asset_ids: &[F0],
+        k_amounts: &[F0],
     ) -> Result<(
         Self,
         Prover<'a, MerlinTranscript, Affine<G0>>,
@@ -1012,6 +1054,8 @@ impl<
             enc_gen,
             k_asset_ids,
             b_blinding,
+            &legs_with_conf,
+            k_amounts,
             &mut even_prover,
         )?;
 
@@ -1038,6 +1082,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
         k_asset_ids: &[F0],
+        k_amounts: &[F0],
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let (acc_host_proto, asset_id_blinding, b_blinding) =
@@ -1085,6 +1130,8 @@ impl<
             enc_gen,
             k_asset_ids,
             b_blinding,
+            &legs_with_conf,
+            k_amounts,
             even_prover,
         )?;
 
@@ -1135,17 +1182,22 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         acc_host_proto: AccountCommitmentsHostProtocol<G0>,
         asset_id_blinding: Option<F0>,
-        partial_proto: CommonStateChangePartialProtocol<L, F0, F1, G0, G1>,
+        mut partial_proto: CommonStateChangePartialProtocol<L, F0, F1, G0, G1>,
         nullifier: Affine<G0>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
         k_asset_ids: &[F0],
         b_blinding: Affine<G0>,
+        legs_with_conf: &[LegProverConfig<Affine<G0>>],
+        k_amounts: &[F0],
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<Self> {
-        let t_null = partial_proto.t_null;
-        let t_bp = partial_proto.t_bp;
-        let re_randomized_path = partial_proto.re_randomized_path;
+        // `partial_proto` is `ZeroizeOnDrop` (no move-out): clone the non-`Default` protocol
+        // structs, `take()` the `Option` path to avoid cloning it, and copy the `Copy` scalars/
+        // points. `partial_proto` then drops at the end, zeroizing its secret fields.
+        let t_null = partial_proto.t_null.clone();
+        let t_bp = partial_proto.t_bp.clone();
+        let re_randomized_path = partial_proto.re_randomized_path.take();
         let comm_bp = partial_proto.comm_bp;
         let comm_bp_blinding = partial_proto.comm_bp_blinding;
         let rerandomization = partial_proto.rerandomization;
@@ -1184,6 +1236,40 @@ impl<
                         &mut transcript,
                     )?;
                 }
+            }
+        }
+
+        // ct_amount_2 = enc_gen * amount + B_blinding * (-k), one per needs_ct_amount leg. The
+        // witness-1 (amount) blindings of the balance-changed legs are handed to the balance BP so
+        // its amount slots use the same amount as these ct_amount_2, which equals the amount in ct_amount.
+        let amount_blindings: Vec<F0> = (0..k_amounts.len()).map(|_| F0::rand(rng)).collect();
+        let ct_amount_2_protos = Self::amount_proto(
+            rng,
+            legs_with_conf,
+            &amount_blindings,
+            k_amounts,
+            enc_gen,
+            b_blinding,
+        );
+        {
+            let mut transcript = even_prover.transcript();
+            for (ct_amount_2, proto) in &ct_amount_2_protos {
+                proto.challenge_contribution(
+                    &enc_gen,
+                    &b_blinding,
+                    ct_amount_2,
+                    &mut transcript,
+                )?;
+            }
+        }
+        let mut balance_amount_blindings = Vec::new();
+        let mut amount_idx = 0;
+        for conf in legs_with_conf {
+            if conf.needs_ct_amount() {
+                if conf.has_balance_changed {
+                    balance_amount_blindings.push(amount_blindings[amount_idx]);
+                }
+                amount_idx += 1;
             }
         }
 
@@ -1275,6 +1361,8 @@ impl<
             old_account: account.clone(),
             updated_account: updated_account.clone(),
             ct_asset_id: ct_asset_id_2_protos,
+            ct_amount: ct_amount_2_protos,
+            balance_amount_blindings,
             host_rerandomization,
             auth_rerandomization,
         })
@@ -1297,6 +1385,12 @@ impl<
     /// Returns the new balance blinding from the host commitment protocol.
     pub fn new_balance_blinding(&self) -> F0 {
         self.acc_host_proto.new_balance_blinding
+    }
+
+    /// Witness-1 (amount) blindings of the balance-changed legs' `ct_amount_2`, in leg order, to be
+    /// consumed by the `BalanceSplitProver` so its balance BP amount slots use the same amounts as those `ct_amount_2`.
+    pub fn balance_amount_blindings(&self) -> Vec<F0> {
+        self.balance_amount_blindings.clone()
     }
 
     /// Returns the commitment randomness for auth's new commitment part.
@@ -1339,22 +1433,24 @@ impl<
     /// Used for batched proving where the caller finalizes BP externally.
     /// The returned `partial.r1cs_proof` is `None`.
     pub fn gen_proof_partial(
-        self,
+        mut self,
         challenge: &F0,
     ) -> Result<CommonAffirmationHostProof<L, F0, F1, G0, G1>> {
-        let Self {
-            acc_host_proto,
-            t_null,
-            t_bp,
-            re_randomized_path,
-            comm_bp,
-            comm_bp_blinding,
-            old_account,
-            updated_account,
-            ct_asset_id: ct_asset_id_2_protos,
-            host_rerandomization,
-            auth_rerandomization,
-        } = self;
+        // `Self` is `ZeroizeOnDrop`, so it cannot be destructured by move. Pull the owned
+        // fields out without moving out of `self`: `take()` the `Default`-able fields (the
+        // `Option` path and the `Vec`s, avoiding a clone of the large rerandomized path),
+        // `clone()` the small protocol structs, and copy the `Copy` scalars. `self` then
+        // drops at the end of the function, zeroizing the secret fields it still holds.
+        let acc_host_proto = self.acc_host_proto.clone();
+        let t_null = self.t_null.clone();
+        let t_bp = self.t_bp.clone();
+        let re_randomized_path = self.re_randomized_path.take();
+        let comm_bp = self.comm_bp;
+        let comm_bp_blinding = self.comm_bp_blinding;
+        let ct_asset_id_2_protos = core::mem::take(&mut self.ct_asset_id);
+        let ct_amount_2_protos = core::mem::take(&mut self.ct_amount);
+        let host_rerandomization = self.host_rerandomization;
+        let auth_rerandomization = self.auth_rerandomization;
 
         // Save rand_new_comm before consuming acc_host_proto
         let auth_rand_new_comm = acc_host_proto.rand_new_comm;
@@ -1362,8 +1458,8 @@ impl<
         // Generate host commitment proof
         let host_commitment_proof = acc_host_proto.gen_proof(
             challenge,
-            &old_account,
-            &updated_account,
+            &self.old_account,
+            &self.updated_account,
             host_rerandomization,
         )?;
 
@@ -1391,10 +1487,17 @@ impl<
             .map(|(_, proto)| proto.gen_partial2_proof(challenge))
             .collect();
 
+        // Generate ct_amount_2 proofs (full: amount owned here, consumed by the balance BP)
+        let resp_ct_amount: Vec<_> = ct_amount_2_protos
+            .into_iter()
+            .map(|(_, proto)| proto.gen_proof(challenge))
+            .collect();
+
         Ok(CommonAffirmationHostProof {
             partial,
             host_commitment_proof,
             resp_ct_asset_id: resp_ct_asset_id_2,
+            resp_ct_amount,
             auth_rerandomization,
             auth_rand_new_comm,
         })
@@ -1439,6 +1542,35 @@ impl<
             })
             .collect()
     }
+
+    pub(crate) fn amount_proto<R: CryptoRngCore>(
+        rng: &mut R,
+        legs_with_conf: &[LegProverConfig<Affine<G0>>],
+        amount_blindings: &[F0],
+        k_amounts: &[F0],
+        enc_gen: Affine<G0>,
+        b_blinding: Affine<G0>,
+    ) -> Vec<(Affine<G0>, PokPedersenCommitmentProtocol<Affine<G0>>)> {
+        let mut protos = Vec::with_capacity(k_amounts.len());
+        let mut idx = 0;
+        for conf in legs_with_conf {
+            if conf.needs_ct_amount() {
+                let amount = F0::from(conf.amount);
+                let ct_amount_2 = (enc_gen * amount + b_blinding * (-k_amounts[idx])).into_affine();
+                let proto = PokPedersenCommitmentProtocol::init(
+                    amount,
+                    amount_blindings[idx],
+                    &enc_gen,
+                    -k_amounts[idx],
+                    F0::rand(rng),
+                    &b_blinding,
+                );
+                protos.push((ct_amount_2, proto));
+                idx += 1;
+            }
+        }
+        protos
+    }
 }
 
 /// The full split proof: partial (host BP/nullifier) + host + auth
@@ -1453,6 +1585,7 @@ pub struct CommonAffirmationSplitProof<
     pub partial: CommonStateChangeProofPartial<F0, F1, G0, G1, L>,
     pub host_commitment_proof: AccountCommitmentsHostProof<G0>,
     pub resp_ct_asset_id: Vec<Partial2PokPedersenCommitment<Affine<G0>>>,
+    pub resp_ct_amount: Vec<PokPedersenCommitment<Affine<G0>>>,
     pub auth_proof: AuthProofAffirmation<Affine<G0>>,
 }
 
@@ -1472,6 +1605,7 @@ impl<
             partial: host_data.partial,
             host_commitment_proof: host_data.host_commitment_proof,
             resp_ct_asset_id: host_data.resp_ct_asset_id,
+            resp_ct_amount: host_data.resp_ct_amount,
             auth_proof,
         }
     }
@@ -1554,10 +1688,14 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
     (
         bool,
         Vec<(LegEncryptionCore<G>, PartyEphemeralPublicKey<G>)>,
+        Vec<Balance>,
+        Vec<bool>,
     ),
     Error,
 > {
     let mut legs = Vec::with_capacity(legs_with_conf.len());
+    let mut amounts = Vec::with_capacity(legs_with_conf.len());
+    let mut has_balance_changed = Vec::with_capacity(legs_with_conf.len());
     let mut is_asset_id_revealed = false;
     // If asset-id is revealed in any of the leg encryptions, then its assumed that its revealed and the proof
     // is done accordingly
@@ -1571,7 +1709,9 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
             }
             is_asset_id_revealed = true;
         }
+        amounts.push(leg_conf.amount);
+        has_balance_changed.push(leg_conf.has_balance_changed);
         legs.push((leg_conf.encryption, leg_conf.party_eph_pk));
     }
-    Ok((is_asset_id_revealed, legs))
+    Ok((is_asset_id_revealed, legs, amounts, has_balance_changed))
 }

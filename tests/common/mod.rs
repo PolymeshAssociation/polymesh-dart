@@ -245,6 +245,7 @@ impl DartUserAccountInner {
             &self.keys,
             leg_ref,
             &leg_enc,
+            amount,
             asset_state,
             account_tree,
         )?;
@@ -500,6 +501,7 @@ impl DartUserAccountInner {
             &self.keys,
             leg_ref,
             &leg_enc,
+            leg.amount(),
             asset_state,
             account_tree,
         )?;

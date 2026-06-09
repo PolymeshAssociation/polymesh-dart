@@ -236,7 +236,8 @@ fn leg_verification() {
                                 num_public_mediators: u8| {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_enc_keys + num_mediators) as u32,
+            num_enc_keys as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -250,6 +251,7 @@ fn leg_verification() {
             .map(|_| keygen_enc(&mut rng, enc_key_gen))
             .collect::<Vec<_>>();
 
+        let enc_secrets = keys_enc.iter().map(|(sk, _)| sk.0).collect::<Vec<_>>();
         let keys_enc = keys_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
         // Each mediator along with its index for encryption key
         let keys_mediator = keys_mediator
@@ -389,6 +391,24 @@ fn leg_verification() {
         assert_eq!(a, asset_id);
         assert_eq!(b, amount);
 
+        for (i, sk_enc) in enc_secrets.iter().enumerate() {
+            let (s, r, a, b) = leg_enc
+                .decrypt_given_key(sk_enc, false, i, enc_gen)
+                .unwrap();
+            assert_eq!(s, pk_s_e.0);
+            assert_eq!(r, pk_r_e.0);
+            assert_eq!(a, asset_id);
+            assert_eq!(b, amount);
+        }
+
+        for (j, med) in leg_enc.mediators.iter().enumerate() {
+            let (med_enc_idx, med_pk) = keys_mediator[j];
+            let recovered_mk = med
+                .affirmation_key(&enc_secrets[med_enc_idx as usize])
+                .unwrap();
+            assert_eq!(recovered_mk, med_pk);
+        }
+
         println!(
             "parties_see_each_other={}, num_enc_keys={}, num_mediators={}, num_public_enc_keys={}, num_public_mediators={}, L={L}, height={}",
             parties_see_each_other,
@@ -451,7 +471,8 @@ fn batch_leg_verification() {
                                 num_mediators: u8| {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -719,7 +740,8 @@ fn combined_leg_verification() {
         |parties_see_each_other: bool, num_auditors: u8, num_mediators: u8| {
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
-                (num_auditors + num_mediators) as u32,
+                num_auditors as u32,
+                num_mediators as u32,
                 &asset_tree_params.even_parameters.bp_gens(),
             );
 
@@ -994,6 +1016,7 @@ fn settlement_verification() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -1534,6 +1557,7 @@ fn batch_settlement_verification() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -1776,6 +1800,7 @@ fn large_settlement_verification() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -1923,6 +1948,7 @@ fn combined_settlement_verification() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2181,6 +2207,7 @@ fn six_leg_alternating_settlement() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2336,6 +2363,7 @@ fn six_leg_grouped_settlement() {
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
         num_auditors,
+        0,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2488,7 +2516,8 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
 
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params-mb",
-        (num_auditors + num_mediators) as u32,
+        num_auditors as u32,
+        num_mediators as u32,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2831,7 +2860,8 @@ proptest! {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"test_label_1",
-            (num_enc_keys + num_mediators) as u32,
+            num_enc_keys as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3078,7 +3108,8 @@ mod input_sanitation_disabled {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3298,7 +3329,8 @@ mod input_sanitation_disabled {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3517,6 +3549,7 @@ mod input_sanitation_disabled {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
             num_auditors as u32,
+            0,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 

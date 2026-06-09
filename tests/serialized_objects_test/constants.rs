@@ -94,6 +94,7 @@ pub const INSTANT_RECEIVER_AFFIRM_SPLIT_PROOF: &str = "instant_receiver_affirm_s
 
 pub const LEG_ENCRYPTED: &str = "leg_encrypted.bin";
 pub const MEDIATOR_ENCRYPTION: &str = "mediator_encryption.bin";
+pub const MEDIATOR_PROOF: &str = "mediator_proof.bin";
 
 pub const ACCOUNT_REGISTRATION_PROOF: &str = "account_registration_proof.bin";
 pub const ENCRYPTION_KEY_REGISTRATION_PROOF: &str = "encryption_key_registration_proof.bin";

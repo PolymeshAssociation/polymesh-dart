@@ -703,6 +703,7 @@ pub mod tests {
         let legs_prover = vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+            amount,
             has_balance_changed: true,
         }];
 

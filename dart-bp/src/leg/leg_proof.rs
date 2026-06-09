@@ -303,11 +303,15 @@ impl<
                         .x
                 })
                 .collect::<Vec<_>>();
-            let commitment = Projective::<G1>::msm(
+            let mut commitment = Projective::<G1>::msm(
                 &asset_comm_params.comm_key[..num_asset_data_points],
                 x_coords.as_slice(),
             )
             .unwrap();
+            // Each mediator's encryption-key index committed as a scalar
+            for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
+                commitment += asset_comm_params.idx_gen(j) * F1::from(*idx);
+            }
             assert_eq!(
                 commitment
                     + (tree_parameters.even_parameters.pc_gens().B_blinding
@@ -327,11 +331,18 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
+        // The leaf commits the per-mediator index as well. Subtract them (using the registered indices)
+        //  so `prove_ped_com` opens only the point block.
+        let mut adjusted_leaf = rerandomized_leaf.into_group();
+        for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
+            adjusted_leaf -= asset_comm_params.idx_gen(j) * F1::from(*idx);
+        }
+        let adjusted_leaf = adjusted_leaf.into_affine();
         let (re_randomized_points, divisor_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
             rng,
             even_prover,
             asset_data_points,
-            &rerandomized_leaf,
+            &adjusted_leaf,
             re_randomization_of_leaf,
             blindings_for_points.clone(),
             &tree_parameters.odd_parameters,
@@ -358,10 +369,7 @@ impl<
                     asset_data.enc_keys[i]
                 } else {
                     // For mediator
-                    (asset_comm_params.j_0
-                        + asset_comm_params.j_1 * F0::from(asset_data.med_keys[i - num_enc_keys].0)
-                        + asset_data.med_keys[i - num_enc_keys].1)
-                        .into_affine()
+                    asset_data.med_keys[i - num_enc_keys].1
                 };
                 assert_eq!(
                     re_randomized_points.re_randomized_points[i + 1].into_group(),
@@ -782,10 +790,7 @@ impl<
                     .skip(l.len() + 1),
             )
         {
-            let y = mediator.ct_med
-                + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(mediator.enc_key_index))
-                - re_rand_point;
+            let y = mediator.ct_med - re_rand_point;
             p.0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
@@ -1096,6 +1101,16 @@ impl<
         let num_med_keys = leg_enc.num_mediators();
         let num_pub_enc_keys = public_enc_keys.len();
 
+        if num_enc_keys > asset_comm_params.num_enc_keys as usize
+            || num_med_keys > asset_comm_params.num_med_keys as usize
+        {
+            return Err(Error::InsufficientCommitmentKeyLength(
+                asset_comm_params.comm_key.len(),
+                1 + asset_comm_params.num_enc_keys as usize
+                    + 2 * asset_comm_params.num_med_keys as usize,
+            ));
+        }
+
         if self.resp_eph_pk_enc.len() != num_enc_keys {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_enc_keys.len() != resp_eph_pk_enc.len() ({} != {})",
@@ -1235,9 +1250,17 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
+        // Subtract the per-mediator index (using the leg's public indices) before opening the
+        // point block. The opening matches the registered leaf if each public index equals the
+        // committed one, which binds `enc_key_index` to the asset leaf.
+        let mut adjusted_leaf = rerandomized_leaf.into_group();
+        for (j, mediator) in leg_enc.mediators.iter().enumerate() {
+            adjusted_leaf -= asset_comm_params.idx_gen(j) * F1::from(mediator.enc_key_index);
+        }
+        let adjusted_leaf = adjusted_leaf.into_affine();
         verify_ped_com::<_, _, _, _, Parameters1>(
             even_verifier,
-            rerandomized_leaf,
+            adjusted_leaf,
             self.re_randomized_points.clone(),
             self.ped_comms.clone(),
             &tree_parameters.odd_parameters,
@@ -1419,10 +1442,7 @@ impl<
                     .skip(num_enc_keys + 1),
             )
         {
-            let y = mediator.ct_med
-                + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(mediator.enc_key_index))
-                - re_rand_point;
+            let y = mediator.ct_med - re_rand_point;
             p_0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
@@ -1705,10 +1725,7 @@ impl<
             .enumerate()
         {
             let med_key_idx = mediator.enc_key_index as usize;
-            let y = mediator.ct_med
-                + asset_comm_params.j_0
-                + (asset_comm_params.j_1 * F0::from(med_key_idx as u64))
-                - re_rand_point;
+            let y = mediator.ct_med - re_rand_point;
             if med_key_idx >= num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
                     "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
@@ -2080,7 +2097,6 @@ impl<
                 .zip(leg_enc.eph_pk_enc_keys.iter())
                 .enumerate()
         {
-            // Since role=0 for encryption keys, no effect on base and thus its re_randomized_points[i + 1]
             // For proving relation `A_i[0] = pk_{{en,i}_r} * r_1 + blinding_base * l_i * r_1`
             let t_1 = PokPedersenCommitmentProtocol::init(
                 r_1,
@@ -2156,8 +2172,7 @@ impl<
             .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
             .enumerate()
         {
-            // role=1 for mediator keys
-            // For proving relation `ct_m[i] + j_0 + j_1 * index - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
+            // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
             let t_m = PokPedersenCommitmentProtocol::init(
                 *r_med,
                 *m_blinding,
@@ -2339,6 +2354,166 @@ pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
     }
 }
 
+#[cfg(all(test, feature = "ignore_prover_input_sanitation"))]
+mod input_sanitation_tests {
+    use super::*;
+    use crate::keys::{keygen_enc, keygen_sig};
+    use crate::leg::LegEncConfig;
+    use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
+    use ark_pallas::{Fq as PallasBase, Fr as PallasScalar, PallasConfig};
+    use ark_vesta::VestaConfig;
+    use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use curve_tree_relations::curve_tree::CurveTree;
+    use curve_tree_relations::parameters::SelRerandProofParametersNew;
+
+    type PallasParameters = PallasConfig;
+    type VestaParameters = VestaConfig;
+    type PallasF = PallasScalar;
+    type VestaF = PallasBase;
+
+    #[test]
+    fn mediator_enc_key_index_is_unbound() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"test-label";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 2u8;
+        let num_mediators = 1u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors as u32,
+            num_mediators as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        // Correct auditor index in the leaf.
+        let idx_leaf = 0u8;
+        let med_keys = vec![(idx_leaf, keys_mediator[0].1.0)];
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (mut leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let wrong_idx = 1u8;
+        let r = leg_enc_rand.r_meds[0];
+        let wrong_ek_idx = keys_auditor[wrong_idx as usize].1.0;
+        let med = &mut leg_enc.mediators[0];
+        med.enc_key_index = wrong_idx;
+        med.eph_pk_med_key = (wrong_ek_idx * r).into_affine();
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let med_enc_sk = keys_auditor[idx_leaf as usize].0.0;
+        let (dec_s, dec_r, dec_at, dec_amt) = leg_enc
+            .decrypt_given_key(&med_enc_sk, false, idx_leaf as usize, enc_gen)
+            .unwrap();
+        assert_eq!(dec_s, pk_s_e.0);
+        assert_eq!(dec_r, pk_r_e.0);
+        assert_eq!(dec_at, asset_id);
+        assert_eq!(dec_amt, amount);
+
+        assert!(
+            proof
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    vec![],
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+    }
+}
+
 #[cfg(all(
     test,
     feature = "nightly_mocking_tests",
@@ -2495,7 +2670,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -2654,7 +2830,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -2914,7 +3091,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3108,7 +3286,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3282,7 +3461,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3390,9 +3570,9 @@ mod mocking_tests {
         );
         assert_err!(verify_res, Error::ProofVerificationError(_));
 
-        let sk_control = keys_auditor[other].0.0;
+        let sk_other = keys_auditor[other].0.0;
         let (_, _, at_dec, amt_dec) = leg_enc
-            .decrypt_given_key(&sk_control, false, other, enc_gen)
+            .decrypt_given_key(&sk_other, false, other, enc_gen)
             .unwrap();
         assert_eq!(at_dec, asset_id);
         assert_eq!(amt_dec, amount);
@@ -3426,7 +3606,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            (num_auditors + num_mediators) as u32,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 

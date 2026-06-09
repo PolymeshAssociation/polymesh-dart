@@ -91,6 +91,58 @@ fn verify_v1_mediator_encryption() {
     med_enc.decode().unwrap();
 }
 
+/// Create a leg and return the encryption of mediator's affirmation public key and the affirmation keypair
+fn mediator_proof_inputs() -> (MediatorEncryption, AccountKeys) {
+    let mut rng = default_rng();
+    let sender_keys = alice_keys();
+    let receiver_keys = bob_keys();
+    let mediator_keys = AccountKeys::from_seed(CAROL_SEED).unwrap();
+    let mediators_config = [(mediator_keys.acct.public, mediator_keys.enc.public)];
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &mediators_config, &[]).unwrap();
+    let leg = Leg::new(
+        sender_keys.enc.public,
+        receiver_keys.enc.public,
+        ASSET_ID_0,
+        SETTLEMENT_AMOUNT,
+    )
+    .unwrap();
+    let (asset_enc_keys, asset_med_keys) = asset_state.get_encryption_and_mediator_keys().unwrap();
+    let (_, leg_enc, _) = leg
+        .encrypt(
+            &mut rng,
+            LegConfig::default().into(),
+            asset_enc_keys,
+            asset_med_keys,
+            vec![],
+        )
+        .unwrap();
+    let med_enc = leg_enc.mediator_encryption(0).unwrap().clone();
+    (med_enc, mediator_keys)
+}
+
+pub fn gen_mediator_proof() {
+    let mut rng = default_rng();
+    let (med_enc, mediator_keys) = mediator_proof_inputs();
+    let leg_ref = LegRef::new(SettlementRef([7u8; 32]), 0);
+    let proof = MediatorAffirmationProof::<()>::new(
+        &mut rng,
+        &leg_ref,
+        &med_enc,
+        &mediator_keys,
+        0,    // key_index
+        true, // accept
+    )
+    .unwrap();
+    save_scale_v1(MEDIATOR_PROOF, &proof);
+}
+
+#[test]
+fn verify_v1_mediator_proof() {
+    let (med_enc, _) = mediator_proof_inputs();
+    let proof: MediatorAffirmationProof = load_scale_v1(MEDIATOR_PROOF);
+    proof.verify(&med_enc).unwrap();
+}
+
 /// Verify a settlement proof loaded from disk.
 fn verify_settlement(filename: &str, asset_states: &[AssetState]) {
     let mut rng = default_rng();

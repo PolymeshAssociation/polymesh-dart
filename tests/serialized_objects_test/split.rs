@@ -459,6 +459,7 @@ pub fn gen_receiver_affirm_split() {
         &mut receiver_state,
         &leg_ref,
         &leg_enc,
+        SETTLEMENT_AMOUNT,
         &tree,
     )
     .unwrap();
@@ -520,6 +521,7 @@ pub fn gen_receiver_revert_affirmation_split() {
             &mut receiver_state,
             &leg_ref,
             &leg_enc,
+            0,
             &tree,
         )
         .unwrap();
@@ -705,6 +707,7 @@ pub fn gen_sender_counter_update_split() {
         &mut sender_state,
         &leg_ref,
         &leg_enc,
+        0,
         &tree,
     )
     .unwrap();

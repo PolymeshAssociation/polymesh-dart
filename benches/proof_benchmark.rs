@@ -376,6 +376,7 @@ fn proof_benchmark(c: &mut Criterion) {
                 &investor_keys,
                 &leg_ref,
                 &leg_enc,
+                leg_amount,
                 &mut investor_account_state,
                 &account_tree,
             )
@@ -389,6 +390,7 @@ fn proof_benchmark(c: &mut Criterion) {
         &investor_keys,
         &leg_ref,
         &leg_enc,
+        leg_amount,
         &mut investor_account_state,
         &account_tree,
     )

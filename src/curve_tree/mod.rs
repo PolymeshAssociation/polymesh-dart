@@ -14,7 +14,7 @@ pub use curve_tree_relations::{
 };
 
 use polymesh_dart_bp::leg as bp_leg;
-use polymesh_dart_common::MAX_ASSET_KEYS;
+use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -49,7 +49,8 @@ lazy_static::lazy_static! {
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
             ASSET_COMMITMENT_PARAMETERS_LABEL,
-            MAX_ASSET_KEYS,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens(),
         );
     static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();
@@ -245,7 +246,8 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
             let tree_parameters = get_asset_curve_tree_parameters();
             let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
                 ASSET_COMMITMENT_PARAMETERS_LABEL,
-                MAX_ASSET_KEYS,
+                MAX_ASSET_ENC_KEYS,
+                MAX_ASSET_MEDIATORS,
                 &tree_parameters.even_parameters.bp_gens(),
             );
             set_asset_commitment_parameters(parameters);

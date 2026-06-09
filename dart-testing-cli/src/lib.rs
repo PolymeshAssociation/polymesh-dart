@@ -1261,13 +1261,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::sender(),
             proof_action,
-            |account_keys, leg_ref, leg_enc, _leg, account_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
                     &leg_enc,
+                    leg.amount(),
                     account_state,
                     account_tree,
                 )?)
@@ -1399,6 +1400,7 @@ impl DartTestingDb {
                     &account_keys,
                     &leg_ref,
                     &leg_enc,
+                    amount,
                     asset_state,
                     account_tree,
                 )?)

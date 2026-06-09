@@ -40,6 +40,7 @@ pub use common::balance::BalanceChangeSplitProof;
 use common::balance::BalanceSplitProver;
 pub use common::balance::ensure_correct_balance_change;
 pub use common::ensure_same_accounts;
+pub use common::leg_link::AccountTxnWitness;
 pub use common::leg_link::LegProverConfig;
 pub use common::leg_link::LegVerifierConfig;
 pub use common::verifier::SplitStateChangeVerifier;
@@ -61,6 +62,7 @@ pub use state_transition_new::AccountStateTransitionSplitProofBuilder;
 pub use state_transition_new::AccountStateTransitionSplitProtocol;
 pub use state_transition_new::MultiAssetStateTransitionHostProtocol;
 pub use state_transition_new::MultiAssetStateTransitionSplitProof;
+use zeroize::Zeroize;
 
 // For most protocols, only leaf level rmc is sufficient
 
@@ -148,16 +150,12 @@ macro_rules! impl_txn_proof {
             Parameters1: DiscreteLogParameters,
         >(
             rng: &mut R,
-            $($amount: Balance,)?
-            leg_enc: (
+            leg_details: (
                 LegEncryptionCore<Affine<G0>>,
                 $EphPkType<Affine<G0>>,
+                Balance,
             ),
-            sk_aff: G0::ScalarField,
-            sk_enc: G0::ScalarField,
-            account: &AccountState<Affine<G0>>,
-            updated_account: &AccountState<Affine<G0>>,
-            updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+            witness: AccountTxnWitness<Affine<G0>>,
             leaf_path: CurveTreeWitnessPath<L, G0, G1>,
             account_tree_root: &Root<L, 1, G0, G1>,
             nonce: &[u8],
@@ -177,13 +175,8 @@ macro_rules! impl_txn_proof {
             let (mut proof, nullifier) =
                 Self::new_with_given_prover::<_, Parameters0, Parameters1>(
                     rng,
-                    $($amount,)?
-                    leg_enc,
-                    sk_aff,
-                    sk_enc,
-                    account,
-                    updated_account,
-                    updated_account_commitment,
+                    leg_details,
+                    witness,
                     leaf_path,
                     account_tree_root,
                     nonce,
@@ -253,16 +246,12 @@ macro_rules! impl_txn_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                amount: Balance,
-                leg_enc: (
+                leg_details: (
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
+                    Balance,
                 ),
-                sk_aff: G0::ScalarField,
-                sk_enc: G0::ScalarField,
-                account: &AccountState<Affine<G0>>,
-                updated_account: &AccountState<Affine<G0>>,
-                updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+                witness: AccountTxnWitness<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,
                 nonce: &[u8],
@@ -272,10 +261,9 @@ macro_rules! impl_txn_proof {
                 even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
                 odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
             ) -> Result<(Self, Affine<G0>)> {
+                let AccountTxnWitness { mut sk_aff, mut sk_enc, mut account, mut updated_account, updated_account_commitment } = witness;
                 impl_txn_proof!(@maybe_check_counter $check, account, updated_account);
-                let ct_amount = leg_enc.0.ct_amount;
-                let (leg_enc_core, eph_pk) = leg_enc;
-                let eph_pk_amount = eph_pk.r3;
+                let (leg_enc_core, eph_pk, amount) = leg_details;
 
                 let common_prover =
                     CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
@@ -283,11 +271,12 @@ macro_rules! impl_txn_proof {
                         vec![LegProverConfig {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
+                            amount,
                             has_balance_changed: true,
                         }],
                         sk_enc,
-                        account,
-                        updated_account,
+                        &account,
+                        &updated_account,
                         updated_account_commitment,
                         leaf_path,
                         account_tree_root,
@@ -303,20 +292,16 @@ macro_rules! impl_txn_proof {
                     rng,
                     vec![BalanceChangeConfig {
                         amount,
-                        ct_amount,
-                        eph_pk_amount,
                         has_balance_decreased: $prover_bal_dec,
                     }],
-                    sk_enc,
-                    account,
-                    updated_account,
+                    &account,
+                    &updated_account,
                     common_prover.old_balance_blinding,
                     common_prover.new_balance_blinding,
-                    common_prover.sk_enc_inv_blinding,
+                    common_prover.balance_amount_blindings.clone(),
                     even_prover,
                     account_tree_params.even_parameters.pc_gens(),
                     account_tree_params.even_parameters.bp_gens(),
-                    enc_gen,
                 )?;
 
                 let nullifier = common_prover.nullifier;
@@ -326,7 +311,12 @@ macro_rules! impl_txn_proof {
                     .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
                 let common_proof =
-                    common_prover.generate_sigma_responses(sk_aff, sk_enc, account, updated_account, &challenge)?;
+                    common_prover.generate_sigma_responses(sk_aff, sk_enc, &account, &updated_account, &challenge)?;
+
+                sk_aff.zeroize();
+                sk_enc.zeroize();
+                account.zeroize();
+                updated_account.zeroize();
 
                 let balance_proof = balance_change_prover.gen_proof(&challenge)?;
 
@@ -362,9 +352,6 @@ macro_rules! impl_txn_proof {
                 rng: &mut R,
                 rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
             ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-                let ct_amount = leg_enc.0.ct_amount;
-                let eph_pk_amount = leg_enc.1.r3;
-
                 let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
                     &self.common_proof,
                     vec![LegVerifierConfig {
@@ -384,8 +371,6 @@ macro_rules! impl_txn_proof {
 
                 verifier.init_balance_change_verification(
                     &self.balance_proof,
-                    &[AmountCiphertext(ct_amount, eph_pk_amount)],
-                    enc_gen,
                 )?;
 
                 let challenge = verifier
@@ -399,7 +384,6 @@ macro_rules! impl_txn_proof {
                     &self.common_proof,
                     Some(&self.balance_proof),
                     &challenge,
-                    vec![AmountCiphertext(ct_amount, eph_pk_amount)],
                     updated_account_commitment,
                     nullifier,
                     account_tree_params,
@@ -430,8 +414,6 @@ macro_rules! impl_txn_proof {
                 odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
                 rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
             ) -> Result<()> {
-                let ct_amount = leg_enc.0.ct_amount;
-                let eph_pk_amount = leg_enc.1.r3;
                 let (leg_enc_core, eph_pk) = leg_enc;
 
                 let mut verifier = StateChangeVerifier::init_with_given_verifier(
@@ -455,8 +437,6 @@ macro_rules! impl_txn_proof {
 
                 verifier.init_balance_change_verification_with_given_verifier(
                     &self.balance_proof,
-                    &[AmountCiphertext(ct_amount, eph_pk_amount)],
-                    enc_gen,
                     even_verifier,
                 )?;
 
@@ -468,7 +448,6 @@ macro_rules! impl_txn_proof {
                     &self.common_proof,
                     Some(&self.balance_proof),
                     &challenge,
-                    vec![AmountCiphertext(ct_amount, eph_pk_amount)],
                     updated_account_commitment,
                     nullifier,
                     account_tree_params,
@@ -510,7 +489,7 @@ macro_rules! impl_txn_proof {
             G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
         > $StructName<L, F0, F1, G0, G1>
         {
-            impl_txn_proof!(@gen_new $EphPkType);
+            impl_txn_proof!(@gen_new $EphPkType, amount);
 
             pub fn new_with_given_prover<
                 'a,
@@ -519,15 +498,12 @@ macro_rules! impl_txn_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                leg_enc: (
+                leg_details: (
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
+                    Balance,
                 ),
-                sk_aff: G0::ScalarField,
-                sk_enc: G0::ScalarField,
-                account: &AccountState<Affine<G0>>,
-                updated_account: &AccountState<Affine<G0>>,
-                updated_account_commitment: AccountStateCommitment<Affine<G0>>,
+                witness: AccountTxnWitness<Affine<G0>>,
                 leaf_path: CurveTreeWitnessPath<L, G0, G1>,
                 account_tree_root: &Root<L, 1, G0, G1>,
                 nonce: &[u8],
@@ -537,8 +513,9 @@ macro_rules! impl_txn_proof {
                 even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
                 odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
             ) -> Result<(Self, Affine<G0>)> {
+                let AccountTxnWitness { mut sk_aff, mut sk_enc, mut account, mut updated_account, updated_account_commitment } = witness;
                 impl_txn_proof!(@maybe_check_counter $check, account, updated_account);
-                let (leg_enc_core, eph_pk) = leg_enc;
+                let (leg_enc_core, eph_pk, amount) = leg_details;
 
                 let common_prover =
                     CommonStateChangeProver::init_with_given_prover::<_, Parameters0, Parameters1>(
@@ -546,11 +523,12 @@ macro_rules! impl_txn_proof {
                         vec![LegProverConfig {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
+                            amount,
                             has_balance_changed: false,
                         }],
                         sk_enc,
-                        account,
-                        updated_account,
+                        &account,
+                        &updated_account,
                         updated_account_commitment,
                         leaf_path,
                         account_tree_root,
@@ -569,7 +547,12 @@ macro_rules! impl_txn_proof {
                     .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
                 let common_proof =
-                    common_prover.generate_sigma_responses(sk_aff, sk_enc, account, updated_account, &challenge)?;
+                    common_prover.generate_sigma_responses(sk_aff, sk_enc, &account, &updated_account, &challenge)?;
+
+                sk_aff.zeroize();
+                sk_enc.zeroize();
+                account.zeroize();
+                updated_account.zeroize();
 
                 Ok((Self { common_proof }, nullifier))
             }
@@ -625,7 +608,6 @@ macro_rules! impl_txn_proof {
                     &self.common_proof,
                     None,
                     &challenge,
-                    vec![],
                     updated_account_commitment,
                     nullifier,
                     account_tree_params,
@@ -683,7 +665,6 @@ macro_rules! impl_txn_proof {
                     &self.common_proof,
                     None,
                     &challenge,
-                    vec![],
                     updated_account_commitment,
                     nullifier,
                     account_tree_params,
@@ -783,10 +764,10 @@ macro_rules! impl_txn_split_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                amount: Balance,
-                leg_enc: (
+                leg_details: (
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
+                    Balance,
                 ),
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
@@ -806,16 +787,12 @@ macro_rules! impl_txn_split_proof {
                 Affine<G0>,
             )> {
                 impl_txn_split_proof!(@maybe_check_counter $check, account, updated_account);
-                let ct_amount = leg_enc.0.ct_amount;
-                let eph_pk_amount = leg_enc.1.r3;
-                let (leg_enc_core, eph_pk) = leg_enc;
+                let (leg_enc_core, eph_pk, amount) = leg_details;
 
                 let k_asset_ids: Vec<F0> = k_asset_id.into_iter().collect();
 
                 let balance_changes = vec![BalanceChangeConfig {
                     amount,
-                    ct_amount,
-                    eph_pk_amount,
                     has_balance_decreased: $prover_bal_dec,
                 }];
 
@@ -825,6 +802,7 @@ macro_rules! impl_txn_split_proof {
                         vec![LegProverConfig {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
+                            amount,
                             has_balance_changed: true,
                         }],
                         account,
@@ -837,6 +815,7 @@ macro_rules! impl_txn_split_proof {
                         account_comm_key,
                         enc_gen,
                         &k_asset_ids,
+                        &[k_amount],
                     )?;
 
                 let balance_prover = BalanceSplitProver::init(
@@ -846,8 +825,7 @@ macro_rules! impl_txn_split_proof {
                     updated_account.balance(),
                     inner.old_balance_blinding(),
                     inner.new_balance_blinding(),
-                    enc_gen,
-                    &[k_amount],
+                    inner.balance_amount_blindings(),
                     &mut even_prover,
                     &account_tree_params.even_parameters.pc_gens(),
                     &account_tree_params.even_parameters.bp_gens(),
@@ -889,10 +867,9 @@ macro_rules! impl_txn_split_proof {
                     account_tree_params,
                     rng,
                 )?;
-                let (balance_proof_partial, resp_ct_amount) = self.balance_prover.gen_proof(challenge)?;
+                let balance_proof_partial = self.balance_prover.gen_proof(challenge)?;
                 let balance = BalanceChangeSplitProof {
                     partial: balance_proof_partial,
-                    resp_ct_amount,
                 };
                 Ok((host_data, balance))
             }
@@ -906,8 +883,7 @@ macro_rules! impl_txn_split_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                amount: Balance,
-                leg_enc: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>),
+                leg_details: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>, Balance),
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -930,8 +906,7 @@ macro_rules! impl_txn_split_proof {
                 let (protocol, mut even_prover, odd_prover, nullifier) =
                     Self::init::<_, Parameters0, Parameters1>(
                         rng,
-                        amount,
-                        leg_enc,
+                        leg_details,
                         account,
                         updated_account,
                         updated_account_commitment,
@@ -1037,12 +1012,9 @@ macro_rules! impl_txn_split_proof {
                     enc_gen,
                 )?;
 
-                let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
                 verifier.init_balance_change_verification(
                     &self.common,
                     &self.balance,
-                    enc_gen,
-                    B_blinding,
                 )?;
 
                 Ok(verifier)
@@ -1241,9 +1213,10 @@ macro_rules! impl_txn_split_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                leg_enc: (
+                leg_details: (
                     LegEncryptionCore<Affine<G0>>,
                     $EphPkType<Affine<G0>>,
+                    Balance,
                 ),
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
@@ -1255,6 +1228,7 @@ macro_rules! impl_txn_split_proof {
                 account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
                 enc_gen: Affine<G0>,
                 k_asset_id: Option<F0>,
+                k_amount: F0,
             ) -> Result<(
                 Self,
                 Prover<'a, MerlinTranscript, Affine<G0>>,
@@ -1262,9 +1236,15 @@ macro_rules! impl_txn_split_proof {
                 Affine<G0>,
             )> {
                 impl_txn_split_proof!(@maybe_check_counter $check, account, updated_account);
-                let (leg_enc_core, eph_pk) = leg_enc;
+                let (leg_enc_core, eph_pk, amount) = leg_details;
 
                 let k_asset_ids: Vec<F0> = k_asset_id.into_iter().collect();
+                // No balance change: ct_amount is needed only when this leg reveals its asset-id.
+                let k_amounts: Vec<F0> = if leg_enc_core.is_asset_id_revealed() {
+                    vec![k_amount]
+                } else {
+                    vec![]
+                };
 
                 let (inner, even_prover, odd_prover, nullifier) =
                     CommonAffirmationSplitProtocol::init::<_, Parameters0, Parameters1>(
@@ -1272,6 +1252,7 @@ macro_rules! impl_txn_split_proof {
                         vec![LegProverConfig {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
+                            amount,
                             has_balance_changed: false,
                         }],
                         account,
@@ -1284,6 +1265,7 @@ macro_rules! impl_txn_split_proof {
                         account_comm_key,
                         enc_gen,
                         &k_asset_ids,
+                        &k_amounts,
                     )?;
 
                 Ok((Self { inner }, even_prover, odd_prover, nullifier))
@@ -1322,7 +1304,7 @@ macro_rules! impl_txn_split_proof {
                 Parameters1: DiscreteLogParameters,
             >(
                 rng: &mut R,
-                leg_enc: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>),
+                leg_details: (LegEncryptionCore<Affine<G0>>, $EphPkType<Affine<G0>>, Balance),
                 account: &AccountState<Affine<G0>>,
                 updated_account: &AccountState<Affine<G0>>,
                 updated_account_commitment: AccountStateCommitment<Affine<G0>>,
@@ -1333,6 +1315,7 @@ macro_rules! impl_txn_split_proof {
                 account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
                 enc_gen: Affine<G0>,
                 k_asset_id: Option<F0>,
+                k_amount: F0,
             ) -> Result<(
                 CommonAffirmationHostProof<L, F0, F1, G0, G1>,
                 Affine<G0>, // rerandomized_leaf
@@ -1343,7 +1326,7 @@ macro_rules! impl_txn_split_proof {
                 let (protocol, mut even_prover, odd_prover, nullifier) =
                     Self::init::<_, Parameters0, Parameters1>(
                         rng,
-                        leg_enc,
+                        leg_details,
                         account,
                         updated_account,
                         updated_account_commitment,
@@ -1354,6 +1337,7 @@ macro_rules! impl_txn_split_proof {
                         account_comm_key,
                         enc_gen,
                         k_asset_id,
+                        k_amount,
                     )?;
                 let rerandomized_leaf = protocol.rerandomized_leaf();
                 let auth_rerandomization = protocol.auth_rerandomization();

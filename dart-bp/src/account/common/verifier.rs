@@ -1,18 +1,16 @@
 use crate::account::common::balance::BalanceChangeProof;
 use crate::account::common::balance::BalanceChangeSplitProof;
-use crate::account::common::leg_link::{LegAccountLink, LegVerifierConfig};
+use crate::account::common::leg_link::LegVerifierConfig;
 use crate::account::state::{
     ASSET_ID_GEN_INDEX, BALANCE_GEN_INDEX, COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX,
     CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX, NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX,
 };
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountStateCommitment, AmountCiphertext, CommonStateChangeProof,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountStateCommitment, CommonStateChangeProof};
 use crate::util::{
     bp_gens_vec_for_randomness_relations, enforce_balance_change_verifier,
     enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
     enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng,
-    handle_verification_tuples, take_challenge_contrib_of_sigma_t_values_for_balance_change,
+    handle_verification_tuples, take_challenge_contrib_of_balance_bp,
     verify_sigma_for_balance_change, verify_sigma_for_common_state_change,
 };
 use crate::{
@@ -36,6 +34,8 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use dock_crypto_utils::transcript::Transcript;
 use rand_core::CryptoRngCore;
+
+use schnorr_pok::partial::Partial2PokPedersenCommitment;
 
 use super::CommonAffirmationSplitProof;
 
@@ -103,8 +103,6 @@ impl<
     pub fn init_balance_change_verification(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amounts: &[AmountCiphertext<Affine<G0>>],
-        enc_gen: Affine<G0>,
     ) -> Result<()> {
         let mut even_verifier = self.even_verifier.take().ok_or_else(|| {
             Error::ProofVerificationError(
@@ -112,12 +110,7 @@ impl<
                     .to_string(),
             )
         })?;
-        self.init_balance_change_verification_with_given_verifier(
-            proof,
-            ct_amounts,
-            enc_gen,
-            &mut even_verifier,
-        )?;
+        self.init_balance_change_verification_with_given_verifier(proof, &mut even_verifier)?;
         self.even_verifier = Some(even_verifier);
         Ok(())
     }
@@ -132,7 +125,6 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -152,7 +144,6 @@ impl<
             common_state_change_proof,
             balance_change_proof,
             challenge,
-            ct_amounts,
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -175,7 +166,6 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -197,7 +187,6 @@ impl<
             common_state_change_proof,
             balance_change_proof,
             challenge,
-            ct_amounts,
             updated_account_commitment,
             nullifier,
             account_tree_params,
@@ -299,7 +288,11 @@ impl<
         }
 
         let mut asset_id = None;
-        for (i, leg_conf) in legs_with_conf.iter().enumerate() {
+        for (i, (leg_conf, link)) in legs_with_conf
+            .iter()
+            .zip(proof.resp_leg_link.iter())
+            .enumerate()
+        {
             if asset_id.is_none() {
                 asset_id = leg_conf.encryption.asset_id();
             } else if leg_conf.encryption.is_asset_id_revealed()
@@ -310,17 +303,17 @@ impl<
                 ));
             }
 
-            if !leg_conf.encryption.is_asset_id_revealed() {
-                if matches!(
-                    proof.resp_leg_link[i],
-                    LegAccountLink::AssetIdRevealed {
-                        resp_participant: _
-                    }
-                ) {
-                    return Err(Error::ProofVerificationError(format!(
-                        "Leg {i} has a hidden asset_id but auth proof marks it as revealed"
-                    )));
-                }
+            // Check the proof's leg-link variant carries what this leg needs:
+            // ct_amount iff revealed-in-this-leg or balance changed; ct_asset_id iff asset-id encrypted.
+            if leg_conf.needs_ct_amount() && link.resp_amount().is_none() {
+                return Err(Error::ProofVerificationError(format!(
+                    "Leg {i} required amount proof but the proof is missing it"
+                )));
+            }
+            if !leg_conf.is_asset_id_revealed() && link.resp_asset_id().is_none() {
+                return Err(Error::ProofVerificationError(format!(
+                    "Leg {i} required asset-id proof but the proof is missing it"
+                )));
             }
         }
 
@@ -401,8 +394,6 @@ impl<
     pub fn init_balance_change_verification_with_given_verifier(
         &mut self,
         proof: &BalanceChangeProof<F0, G0>,
-        ct_amounts: &[AmountCiphertext<Affine<G0>>],
-        enc_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     ) -> Result<()> {
         let has_balance_decreased: Vec<bool> = self
@@ -423,11 +414,10 @@ impl<
 
         let mut verifier_transcript = even_verifier.transcript();
 
-        take_challenge_contrib_of_sigma_t_values_for_balance_change(
-            ct_amounts,
+        // ct_amount challenge contributions are written in the leg-link (common) phase now;
+        // the balance phase only contributes the balance BP t-value.
+        take_challenge_contrib_of_balance_bp(
             &proof.partial.t_comm_bp_bal,
-            &proof.resp_leg_amount,
-            enc_gen,
             &mut verifier_transcript,
         )?;
         Ok(())
@@ -441,7 +431,6 @@ impl<
         common_state_change_proof: &CommonStateChangeProof<L, F0, F1, G0, G1>,
         balance_change_proof: Option<&BalanceChangeProof<F0, G0>>,
         challenge: &F0,
-        ct_amounts: Vec<AmountCiphertext<Affine<G0>>>,
         updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
@@ -490,18 +479,28 @@ impl<
             rmc.as_deref_mut(),
         )?;
 
+        // ct_amount points are read from the leg encryptions now, not passed separately.
+
         if let Some(balance_change_proof) = balance_change_proof {
-            // Filter legs to only include legs with balance changes
-            let balance_ct_amounts: Vec<AmountCiphertext<Affine<G0>>> = ct_amounts
-                .into_iter()
-                .zip(self.legs_with_conf.iter())
-                .filter(|(_, leg)| leg.has_balance_decreased.is_some())
-                .map(|(ct, _)| ct)
-                .collect();
+            // The balance BP consumes v from each balance-changed leg's leg-link ct_amount
+            // response (response2). Collect them in leg order to match the BP commit order.
+            let balance_resp_amounts: Vec<Partial2PokPedersenCommitment<Affine<G0>>> =
+                common_state_change_proof
+                    .resp_leg_link
+                    .iter()
+                    .zip(self.legs_with_conf.iter())
+                    .filter(|(_, leg)| leg.has_balance_decreased.is_some())
+                    .map(|(lk, _)| {
+                        lk.resp_amount().cloned().ok_or_else(|| {
+                            Error::ProofVerificationError(
+                                "Balance-changed leg is missing its ct_amount response".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
             verify_sigma_for_balance_change(
-                &balance_ct_amounts,
-                &balance_change_proof.resp_leg_amount,
+                &balance_resp_amounts,
                 &balance_change_proof.partial.comm_bp_bal,
                 &balance_change_proof.partial.t_comm_bp_bal,
                 &balance_change_proof.partial.resp_comm_bp_bal,
@@ -512,7 +511,7 @@ impl<
                     .get(BALANCE_GEN_INDEX)
                     .ok_or_else(|| {
                         Error::ProofVerificationError(format!(
-                            "Missing resp_leaf response at BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
+                            "Missing resp_acc_old response at BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
                         ))
                     })?,
                 *common_state_change_proof
@@ -524,18 +523,8 @@ impl<
                             "Missing resp_acc_new response for BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
                         ))
                     })?,
-                *common_state_change_proof.partial
-                    .resp_bp_randomness_relations
-                    .responses
-                    .get(&8)
-                    .ok_or_else(|| {
-                        Error::ProofVerificationError(
-                            "Missing resp_bp response for sk_enc_inv (index 8)".to_string(),
-                        )
-                    })?, // sk_enc_inv from resp_bp position 8 (always present)
                 pc_gens,
                 bp_gens,
-                enc_gen,
                 rmc.as_deref_mut(),
             )?;
         }
@@ -695,6 +684,25 @@ impl<
             )));
         }
 
+        let num_ct_amounts = legs_with_conf
+            .iter()
+            .filter(|l| l.needs_ct_amount())
+            .count();
+        if proof.resp_ct_amount.len() != num_ct_amounts {
+            return Err(Error::ProofVerificationError(format!(
+                "Invalid proof.resp_ct_amount length. Expected {}, got {}",
+                num_ct_amounts,
+                proof.resp_ct_amount.len()
+            )));
+        }
+        if proof.auth_proof.partial_ct_amounts.len() != num_ct_amounts {
+            return Err(Error::ProofVerificationError(format!(
+                "Invalid proof.auth_proof.partial_ct_amounts length. Expected {}, got {}",
+                num_ct_amounts,
+                proof.auth_proof.partial_ct_amounts.len()
+            )));
+        }
+
         let expected_host_comm_resp_len = if is_asset_id_revealed {
             NUM_GENERATORS - 2
         } else {
@@ -776,6 +784,27 @@ impl<
             }
         }
 
+        // ct_amount_2 challenge contributions (one per needs_ct_amount leg), mirroring the host
+        {
+            let mut transcript = even_verifier.transcript();
+            let mut amount_idx = 0;
+            for leg_conf in &legs_with_conf {
+                if leg_conf.needs_ct_amount() {
+                    let ct_amount = leg_conf.encryption.ct_amount;
+                    let ct_amount_1 = proof.auth_proof.partial_ct_amounts[amount_idx];
+                    let ct_amount_2 =
+                        (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
+                    proof.resp_ct_amount[amount_idx].challenge_contribution(
+                        &enc_gen,
+                        &B_blinding,
+                        &ct_amount_2,
+                        &mut transcript,
+                    )?;
+                    amount_idx += 1;
+                }
+            }
+        }
+
         {
             let (y_old, y_new) = old_and_new_host_commitments(
                 proof,
@@ -803,8 +832,6 @@ impl<
         &mut self,
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: &BalanceChangeSplitProof<F0, G0>,
-        enc_gen: Affine<G0>,
-        account_tree_params_pc_gens_B_blinding: Affine<G0>,
     ) -> Result<()> {
         let mut even_verifier = self.even_verifier.take().ok_or_else(|| {
             Error::ProofVerificationError(
@@ -814,8 +841,6 @@ impl<
         self.init_balance_change_verification_with_given_verifier(
             common_proof,
             balance_proof,
-            enc_gen,
-            account_tree_params_pc_gens_B_blinding,
             &mut even_verifier,
         )?;
         self.even_verifier = Some(even_verifier);
@@ -826,8 +851,6 @@ impl<
         &mut self,
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: &BalanceChangeSplitProof<F0, G0>,
-        enc_gen: Affine<G0>,
-        B_blinding: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     ) -> Result<()> {
         let has_decreased: Vec<bool> = self
@@ -843,21 +866,9 @@ impl<
         }
         let num_balance_changes = has_decreased.len();
 
-        if common_proof.auth_proof.partial_ct_amounts.len() != num_balance_changes {
-            return Err(Error::ProofVerificationError(format!(
-                "Invalid common_proof.auth_proof.partial_ct_amounts length. Expected {}, got {}",
-                num_balance_changes,
-                common_proof.auth_proof.partial_ct_amounts.len()
-            )));
-        }
-
-        if balance_proof.resp_ct_amount.len() != num_balance_changes {
-            return Err(Error::ProofVerificationError(format!(
-                "Invalid balance_proof.resp_ct_amount length. Expected {}, got {}",
-                num_balance_changes,
-                balance_proof.resp_ct_amount.len()
-            )));
-        }
+        // partial_ct_amounts / resp_ct_amount are sized over needs_ct_amount legs and checked in the
+        // common init; ct_amount_2 challenge contributions are written there too. The balance phase
+        // only contributes the balance BP t-value.
 
         let expected_resp_acc_new_len = 3 + if num_balance_changes > 0 { 1 } else { 0 };
         if common_proof
@@ -884,31 +895,13 @@ impl<
             even_verifier,
         )?;
 
-        // Balance T-value and ct_amount_2 challenge contributions
+        // Balance phase contributes only the balance BP t-value (ct_amount_2 is in the common phase).
         {
             let mut transcript = even_verifier.transcript();
-
             balance_proof
                 .partial
                 .t_comm_bp_bal
                 .serialize_compressed(&mut transcript)?;
-
-            let mut amount_idx = 0;
-            for leg_conf in &self.legs_with_conf {
-                if leg_conf.has_balance_decreased.is_some() {
-                    let ct_amount = leg_conf.encryption.ct_amount;
-                    let ct_amount_1 = common_proof.auth_proof.partial_ct_amounts[amount_idx];
-                    let ct_amount_2 =
-                        (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
-                    balance_proof.resp_ct_amount[amount_idx].challenge_contribution(
-                        &enc_gen,
-                        &B_blinding,
-                        &ct_amount_2,
-                        &mut transcript,
-                    )?;
-                    amount_idx += 1;
-                }
-            }
         }
 
         Ok(())
@@ -1151,9 +1144,38 @@ impl<
             missing_resps_bp,
         );
 
-        // Verify balance partial proof (if applicable)
+        // Verify ct_amount_2 for every needs_ct_amount leg, with ct_amount_2 = ct_amount - ct_amount_1.
+        // Recovering ct_amount from its two halves forces sk_enc^-1 to be the account's. For
+        // balance-changed legs collect the amount response (response1) for the balance BP.
+        let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+        let mut balance_amount_resps: Vec<F0> = Vec::new();
+        let mut amount_idx = 0;
+        for leg_conf in &self.legs_with_conf {
+            if leg_conf.needs_ct_amount() {
+                let ct_amount = leg_conf.encryption.ct_amount;
+                let ct_amount_1 = common_proof.auth_proof.partial_ct_amounts[amount_idx];
+                let ct_amount_2 = (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
+                verify_or_rmc_3!(
+                    rmc,
+                    common_proof.resp_ct_amount[amount_idx],
+                    format!("ct_amount_2 verification failed for leg {amount_idx}"),
+                    ct_amount_2,
+                    enc_gen,
+                    B_blinding,
+                    challenge,
+                );
+                if leg_conf.has_balance_decreased.is_some() {
+                    balance_amount_resps.push(common_proof.resp_ct_amount[amount_idx].response1);
+                }
+                amount_idx += 1;
+            }
+        }
+
+        // Verify balance partial proof (if applicable). The balance BP amount slots reuse the
+        // balance-changed legs' ct_amount_2 amount responses (response1); old/new from the
+        // account commitments.
         if let Some(balance_proof) = balance_proof {
-            let num_amounts = balance_proof.resp_ct_amount.len();
+            let num_amounts = balance_amount_resps.len();
 
             let mut gens_iter = crate::util::bp_gens_for_vec_commitment(
                 2 + num_amounts as u32,
@@ -1182,6 +1204,9 @@ impl<
             };
 
             let mut missing_resps_bal = BTreeMap::new();
+            for (j, resp) in balance_amount_resps.iter().enumerate() {
+                missing_resps_bal.insert(1 + j, *resp);
+            }
             missing_resps_bal.insert(1 + num_amounts, resp_old_bal);
             missing_resps_bal.insert(1 + num_amounts + 1, resp_new_bal);
 
@@ -1194,40 +1219,6 @@ impl<
                 challenge,
                 missing_resps_bal,
             );
-
-            // Verify ct_amount_2 PokPedersenCommitment proofs
-            let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
-            let mut amount_idx = 0;
-            for leg_conf in &self.legs_with_conf {
-                if leg_conf.has_balance_decreased.is_some() {
-                    let ct_amount = leg_conf.encryption.ct_amount;
-                    let ct_amount_1 = common_proof.auth_proof.partial_ct_amounts[amount_idx];
-                    let ct_amount_2 =
-                        (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
-
-                    verify_or_rmc_3!(
-                        rmc,
-                        balance_proof.resp_ct_amount[amount_idx],
-                        format!("ct_amount_2 verification failed for leg {amount_idx}"),
-                        ct_amount_2,
-                        enc_gen,
-                        B_blinding,
-                        challenge,
-                        balance_proof
-                            .partial
-                            .resp_comm_bp_bal
-                            .responses
-                            .get(&(1 + amount_idx))
-                            .ok_or_else(|| {
-                                Error::ProofVerificationError(format!(
-                                    "resp_comm_bp_bal didn't have response for index {}",
-                                    1 + amount_idx
-                                ))
-                            })?
-                    );
-                    amount_idx += 1;
-                }
-            }
         }
 
         // Verify ct_asset_id_2 PokPedersenCommitment proofs
