@@ -1318,8 +1318,8 @@ impl LegEncrypted {
         let is_mediator = leg_enc
             .mediators
             .iter()
-            .any(|m| m.enc_key_index as usize == key_index);
-        let leg_role = if is_mediator {
+            .position(|m| m.enc_key_index as usize == key_index);
+        let leg_role = if let Some(key_index) = is_mediator {
             LegRole::mediator(key_index as u8)
         } else {
             LegRole::auditor(key_index as u8)
