@@ -242,19 +242,18 @@ impl<
 
         debug_assert!(all_rerandomized_leaves.len() == num_hidden_asset_legs);
 
-        // Create individual leg proofs, based on asset-id visibility
+        // Create individual leg proofs, based on asset-id visibility.
         let mut leg_proofs = Vec::with_capacity(num_legs);
         let mut hidden_asset_idx = 0;
+        let mut asset_data_iter = asset_data.into_iter();
 
-        for ((leg, leg_enc), leg_enc_rand) in
-            legs.iter().zip(leg_encs.iter()).zip(leg_enc_rands.iter())
-        {
+        for ((leg, leg_enc), leg_enc_rand) in legs.into_iter().zip(leg_encs).zip(leg_enc_rands) {
             let leg_proof = if leg_enc.is_asset_id_revealed() {
                 let proof = PublicAssetLegCreationProof::new_with_given_prover_inner(
                     rng,
-                    leg.clone(),
-                    leg_enc.clone(),
-                    leg_enc_rand.clone(),
+                    leg,
+                    leg_enc,
+                    leg_enc_rand,
                     &tree_parameters.odd_parameters.pc_gens(),
                     &tree_parameters.odd_parameters.bp_gens(),
                     enc_key_gen,
@@ -264,15 +263,18 @@ impl<
                 LegProof::RevealedAssetProof(proof)
             } else {
                 let (rerandomized_leaf, randomizer) = all_rerandomized_leaves[hidden_asset_idx];
+                let asset_data = asset_data_iter
+                    .next()
+                    .expect("asset_data length validated to equal hidden-asset legs");
                 let proof =
                     LegCreationProof::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
                         rng,
-                        leg.clone(),
-                        leg_enc.clone(),
-                        leg_enc_rand.clone(),
+                        leg,
+                        leg_enc,
+                        leg_enc_rand,
                         rerandomized_leaf,
                         randomizer,
-                        asset_data[hidden_asset_idx].clone(),
+                        asset_data,
                         tree_parameters,
                         asset_comm_params,
                         enc_key_gen,
@@ -413,9 +415,9 @@ impl<
         &self,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
-        enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
-        public_enc_keys: Vec<Vec<Affine<G0>>>,
+        mut enc_keys: Vec<Vec<Affine<G0>>>,
+        mut med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
+        mut public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -517,11 +519,11 @@ impl<
         let mut hidden_asset_idx = 0;
         let mut revealed_asset_idx = 0;
 
-        for (i, (leg_proof, leg_enc)) in self.leg_proofs.iter().zip(leg_encs.iter()).enumerate() {
+        for (i, (leg_proof, leg_enc)) in self.leg_proofs.iter().zip(leg_encs).enumerate() {
             let leg_public_enc_keys = if public_enc_keys.is_empty() {
                 vec![]
             } else {
-                public_enc_keys[i].clone()
+                core::mem::take(&mut public_enc_keys[i])
             };
 
             match leg_proof {
@@ -532,7 +534,7 @@ impl<
                         )));
                     }
                     proof.verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
-                        leg_enc.clone(),
+                        leg_enc,
                         all_rerandomized_leaves[hidden_asset_idx],
                         leg_public_enc_keys,
                         tree_parameters,
@@ -559,10 +561,10 @@ impl<
                         )
                     })?;
                     proof.verify_sigma_protocols_and_enforce_constraints_inner(
-                        leg_enc.clone(),
+                        leg_enc,
                         revealed_asset_id,
-                        enc_keys[revealed_asset_idx].clone(),
-                        med_keys[revealed_asset_idx].clone(),
+                        core::mem::take(&mut enc_keys[revealed_asset_idx]),
+                        core::mem::take(&mut med_keys[revealed_asset_idx]),
                         leg_public_enc_keys,
                         &tree_parameters.odd_parameters.pc_gens(),
                         &tree_parameters.odd_parameters.bp_gens(),

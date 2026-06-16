@@ -237,7 +237,7 @@ impl<
             odd_verifier,
             account_tree_params,
         )?;
-        let re_randomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
+        let re_randomized_leaf = re_randomized_path.path.get_rerandomized_leaf()?;
 
         add_to_transcript!(
             even_verifier.transcript(),
@@ -620,7 +620,7 @@ impl<
             account_tree_params,
         )?;
 
-        let re_randomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
+        let re_randomized_leaf = re_randomized_path.path.get_rerandomized_leaf()?;
 
         // Public inputs to transcript
         add_to_transcript!(

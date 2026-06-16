@@ -10344,7 +10344,8 @@ macro_rules! verify_split_proof {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         $proof
             .common
             .auth_proof
@@ -10426,7 +10427,8 @@ macro_rules! verify_split_proof {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         $proof
             .common
             .auth_proof
@@ -12583,7 +12585,8 @@ fn verify_sender_split(
         .as_ref()
         .unwrap()
         .path
-        .get_rerandomized_leaf();
+        .get_rerandomized_leaf()
+        .unwrap();
     proof.common.auth_proof.verify(
         vec![LegVerifierConfig {
             encryption: leg_enc_core.clone(),
@@ -12663,7 +12666,8 @@ fn verify_receiver_split(
         .as_ref()
         .unwrap()
         .path
-        .get_rerandomized_leaf();
+        .get_rerandomized_leaf()
+        .unwrap();
     proof.common.auth_proof.verify(
         vec![LegVerifierConfig {
             encryption: leg_enc_core.clone(),
@@ -13317,7 +13321,8 @@ fn sender_affirmation_w3_consistency() {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         assert!(
             proof
                 .common
@@ -13459,7 +13464,8 @@ fn sender_affirmation_w3_consistency() {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         assert!(
             proof
                 .common
@@ -13524,7 +13530,8 @@ fn sender_affirmation_w3_consistency() {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         assert!(
             proof
                 .common
@@ -13857,7 +13864,8 @@ fn receiver_affirmation_w3_consistency() {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         assert!(
             proof
                 .common
@@ -13918,7 +13926,8 @@ fn receiver_affirmation_w3_consistency() {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         assert!(
             proof
                 .common

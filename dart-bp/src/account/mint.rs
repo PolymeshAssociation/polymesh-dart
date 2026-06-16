@@ -626,7 +626,7 @@ impl<
 
         let issuer_pk_proj = issuer_aff_pk.into_group();
         let issuer_pk_enc_proj = issuer_enc_pk.into_group();
-        let y = self.re_randomized_path.path.get_rerandomized_leaf()
+        let y = self.re_randomized_path.path.get_rerandomized_leaf()?
             - asset_id_comm
             - issuer_pk_proj
             - issuer_pk_enc_proj

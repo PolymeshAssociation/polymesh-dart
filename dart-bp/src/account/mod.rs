@@ -4,6 +4,8 @@ pub mod pob;
 pub mod state;
 pub mod state_transition;
 pub mod state_transition_multi;
+/// PoC: chunked MAST proof for evaluating the verifier-first chunking optimization.
+pub mod state_transition_multi_chunked;
 pub mod transparent;
 
 pub mod state_transition_new;

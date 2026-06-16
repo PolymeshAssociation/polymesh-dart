@@ -637,7 +637,7 @@ impl<
             .without_comms
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             - asset_id_comm;
         if has_balance_decreased {
             y = y - (account_comm_key.balance_gen() * F0::from(amount));
@@ -1470,6 +1470,7 @@ impl<
             .re_randomized_path
             .path
             .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
     }
 
     /// Returns the `rand_part_old_comm` value (needed by `AuthProofTransparent::new`).
@@ -1857,6 +1858,7 @@ impl<
             .re_randomized_path
             .path
             .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
             .into_group()
             - asset_id_comm;
         if has_balance_decreased {

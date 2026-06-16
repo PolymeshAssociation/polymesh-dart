@@ -1375,6 +1375,7 @@ impl<
             .expect("re_randomized_path must be set for non-batched proving")
             .path
             .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
     }
 
     /// Returns the old balance blinding from the host commitment protocol.

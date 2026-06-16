@@ -344,7 +344,7 @@ macro_rules! with_balance {
                                 )
                             })?
                             .path
-                            .get_rerandomized_leaf();
+                            .get_rerandomized_leaf()?;
 
                         proof.common.auth_proof.verify(
                             vec![bp_account::LegVerifierConfig {
@@ -364,7 +364,7 @@ macro_rules! with_balance {
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
                             enc_gen,
-                            None,
+                            Some(even_rmc),
                         )?;
 
                         let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
@@ -706,7 +706,7 @@ macro_rules! no_balance {
                                 )
                             })?
                             .path
-                            .get_rerandomized_leaf();
+                            .get_rerandomized_leaf()?;
 
                         proof.common.auth_proof.verify(
                             vec![bp_account::LegVerifierConfig {

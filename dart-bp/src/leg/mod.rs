@@ -3,6 +3,8 @@ pub mod mediator;
 
 pub mod public_asset_leg_proof;
 pub mod settlement_proof;
+/// PoC: chunked settlement proof for evaluating the verifier-first chunking optimization.
+pub mod settlement_proof_chunked;
 #[cfg(test)]
 pub mod tests;
 
@@ -533,72 +535,127 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let pk_s_enc = self.core.pk_s;
         let pk_r_enc = self.core.pk_r;
 
-        let ct_s = (enc_key_gen * r1 + pk_s_enc).into_affine();
-        let ct_r = (enc_key_gen * r2 + pk_r_enc).into_affine();
-        let ct_amount = (enc_key_gen * r3 + enc_gen * amount).into_affine();
+        // Draw all per-mediator randomness first so the RNG draw order is unchanged
+        // (r1..r4 above, then one r per mediator in index order).
+        let r_meds: Vec<F> = (0..self.med_keys.len()).map(|_| F::rand(rng)).collect();
 
-        // Encrypt asset-id if it isn't revealed
+        // Compute every group element projectively into one flat buffer, then do a single
+        // `normalize_batch` (one field inversion total instead of one per point). Push order
+        // and read-back order below MUST stay in lockstep.
+        let mut proj: Vec<G::Group> = Vec::new();
+        proj.push(enc_key_gen * r1 + pk_s_enc); // ct_s
+        proj.push(enc_key_gen * r2 + pk_r_enc); // ct_r
+        proj.push(enc_key_gen * r3 + enc_gen * amount); // ct_amount
+        if !config.reveal_asset_id {
+            proj.push(enc_key_gen * r4.unwrap() + enc_gen * asset_id); // ct_asset_id
+        }
+        proj.push(pk_s_enc * r1); // eph_pk_s.r1
+        proj.push(pk_s_enc * r3); // eph_pk_s.r3
+        if let Some(r) = r4 {
+            proj.push(pk_s_enc * r); // eph_pk_s.r4
+        }
+        if config.parties_see_each_other {
+            proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
+        }
+        proj.push(pk_r_enc * r2); // eph_pk_r.r2
+        proj.push(pk_r_enc * r3); // eph_pk_r.r3
+        if let Some(r) = r4 {
+            proj.push(pk_r_enc * r); // eph_pk_r.r4
+        }
+        if config.parties_see_each_other {
+            proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
+        }
+        for pk in self.enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
+            if let Some(r) = r4 {
+                proj.push(*pk * r);
+            }
+        }
+        for pk in self.public_enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
+            if let Some(r) = r4 {
+                proj.push(*pk * r);
+            }
+        }
+        for i in 0..self.med_keys.len() {
+            proj.push(self.enc_keys[self.med_keys[i].0 as usize] * r_meds[i]); // eph_pk_med_key
+            proj.push(enc_key_gen * r_meds[i] + self.med_keys[i].1); // ct_med
+        }
+
+        let aff = G::Group::normalize_batch(&proj);
+
+        // Read back in the exact push order via a cursor. Struct-literal fields evaluate in
+        // source order, so the `next!()` sequence below consumes `aff` in push order.
+        let mut k = 0usize;
+        macro_rules! next {
+            () => {{
+                let v = aff[k];
+                k += 1;
+                v
+            }};
+        }
+
+        let ct_s = next!();
+        let ct_r = next!();
+        let ct_amount = next!();
         let ct_asset_id = if config.reveal_asset_id {
             AssetIdEncryption::Revealed(self.core.asset_id)
         } else {
-            AssetIdEncryption::Ciphertext(
-                (enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine(),
-            )
+            AssetIdEncryption::Ciphertext(next!())
         };
-
-        // If parties are allowed to see each other create ephemeral public keys for those parts else skip
-        let cross_pk = if config.parties_see_each_other {
-            (
-                Some((pk_s_enc * r2).into_affine()),
-                Some((pk_r_enc * r1).into_affine()),
-            )
-        } else {
-            (None, None)
+        // r2 (cross) is pushed AFTER r3/r4, so set those first, then r2.
+        let mut eph_pk_s = SenderEphemeralPublicKey::<G> {
+            r1: next!(),
+            r2: None,
+            r3: next!(),
+            r4: r4.map(|_| next!()),
         };
+        eph_pk_s.r2 = config.parties_see_each_other.then(|| next!());
 
-        let eph_pk_s = SenderEphemeralPublicKey::<G> {
-            r1: (pk_s_enc * r1).into_affine(),
-            r2: cross_pk.0,
-            r3: (pk_s_enc * r3).into_affine(),
-            r4: r4.map(|r| (pk_s_enc * r).into_affine()),
+        // r1 (cross) is pushed AFTER r2/r3/r4, so set those first, then r1.
+        let mut eph_pk_r = ReceiverEphemeralPublicKey::<G> {
+            r1: None,
+            r2: next!(),
+            r3: next!(),
+            r4: r4.map(|_| next!()),
         };
+        eph_pk_r.r1 = config.parties_see_each_other.then(|| next!());
 
-        let eph_pk_r = ReceiverEphemeralPublicKey::<G> {
-            r1: cross_pk.1,
-            r2: (pk_r_enc * r2).into_affine(),
-            r3: (pk_r_enc * r3).into_affine(),
-            r4: r4.map(|r| (pk_r_enc * r).into_affine()),
-        };
+        let enc_keys: Vec<EphemeralPublicKey<G>> = self
+            .enc_keys
+            .iter()
+            .map(|_| EphemeralPublicKey::<G> {
+                r1: next!(),
+                r2: next!(),
+                r3: next!(),
+                r4: r4.map(|_| next!()),
+            })
+            .collect();
 
-        let enc_keys = self.enc_keys.iter().map(|pk| EphemeralPublicKey::<G> {
-            r1: (*pk * r1).into_affine(),
-            r2: (*pk * r2).into_affine(),
-            r3: (*pk * r3).into_affine(),
-            r4: r4.map(|r| (*pk * r).into_affine()),
-        });
-
-        let public_enc_keys = self
+        let public_enc_keys: Vec<EphemeralPublicKey<G>> = self
             .public_enc_keys
             .iter()
-            .map(|pk| EphemeralPublicKey::<G> {
-                r1: (*pk * r1).into_affine(),
-                r2: (*pk * r2).into_affine(),
-                r3: (*pk * r3).into_affine(),
-                r4: r4.map(|r| (*pk * r).into_affine()),
-            });
+            .map(|_| EphemeralPublicKey::<G> {
+                r1: next!(),
+                r2: next!(),
+                r3: next!(),
+                r4: r4.map(|_| next!()),
+            })
+            .collect();
 
-        let mut r_meds = Vec::with_capacity(self.med_keys.len());
-        let mut ct_meds = Vec::with_capacity(self.med_keys.len());
-
-        for i in 0..self.med_keys.len() {
-            let r = F::rand(rng);
-            ct_meds.push(MediatorEncryption {
+        let ct_meds: Vec<MediatorEncryption<G>> = (0..self.med_keys.len())
+            .map(|i| MediatorEncryption {
                 enc_key_index: self.med_keys[i].0,
-                eph_pk_med_key: (self.enc_keys[self.med_keys[i].0 as usize] * r).into_affine(),
-                ct_med: (enc_key_gen * r + self.med_keys[i].1).into_affine(),
-            });
-            r_meds.push(r);
-        }
+                eph_pk_med_key: next!(),
+                ct_med: next!(),
+            })
+            .collect();
+
+        debug_assert_eq!(k, aff.len());
 
         Zeroize::zeroize(&mut amount);
         Zeroize::zeroize(&mut asset_id);
@@ -615,8 +672,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                     eph_pk_s,
                     eph_pk_r,
                 },
-                eph_pk_enc_keys: enc_keys.collect(),
-                eph_pk_public_enc_keys: public_enc_keys.collect(),
+                eph_pk_enc_keys: enc_keys,
+                eph_pk_public_enc_keys: public_enc_keys,
                 mediators: ct_meds,
             },
             LegEncryptionRandomness {

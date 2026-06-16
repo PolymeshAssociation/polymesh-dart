@@ -228,7 +228,7 @@ impl<
 
         add_to_transcript!(odd_prover.transcript(), LEG_ENC_LABEL, leg_enc,);
 
-        let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
+        let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf()?;
 
         Self::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
             rng,
@@ -349,6 +349,9 @@ impl<
             &tree_parameters.even_parameters.bp_gens(),
             key_indices,
         )?;
+
+        #[cfg(all(test, feature = "nightly_mocking_tests"))]
+        let re_randomized_points = Self::tamper_re_randomized_points_for_test(re_randomized_points);
 
         Zeroize::zeroize(&mut re_randomization_of_leaf);
 
@@ -1057,7 +1060,7 @@ impl<
             re_randomized_path
         );
 
-        let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf();
+        let rerandomized_leaf = re_randomized_path.path.get_rerandomized_leaf()?;
 
         add_to_transcript!(odd_verifier.transcript(), LEG_ENC_LABEL, leg_enc,);
 
@@ -1847,6 +1850,15 @@ impl<
         (asset_id_point_blinding, l, k)
     }
 
+    /// Negative tests mock this to tamper the prover-supplied `blindings_with_different_gen` map after
+    /// `prove_ped_com` has called the honest leaf re-randomization, to do the auditor/mediator exclusion attack
+    #[cfg(all(test, feature = "nightly_mocking_tests"))]
+    fn tamper_re_randomized_points_for_test(
+        re_randomized_points: ReRandomizedPoints<G0>,
+    ) -> ReRandomizedPoints<G0> {
+        re_randomized_points
+    }
+
     fn enforce_constraints<CS: ConstraintSystem<F0>>(
         cs: &mut CS,
         amount: Option<Balance>,
@@ -2585,6 +2597,12 @@ mod mocking_tests {
     fn clear_split_point_blindings_mock() {
         LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::
             split_point_blindings
+            .clear_mock();
+    }
+
+    fn clear_tamper_re_randomized_points_for_test_mock() {
+        LegCreationProof::<64, PallasF, VestaF, PallasParameters, VestaParameters>::
+            tamper_re_randomized_points_for_test
             .clear_mock();
     }
 
@@ -3433,8 +3451,13 @@ mod mocking_tests {
         );
     }
 
+    /// A malicious settlement creator tries to make a leg verify while a configured auditor can no
+    /// longer decrypt it. Two attempts are checked: shifting only the blinding `l_target`, which the
+    /// sigma check on `blindings_with_different_gen` catches; and additionally patching
+    /// `blindings_with_different_gen` to match, which gets past the sigma check and is then caught by
+    /// the in-circuit binding of that term to the leaf re-randomization, at the bulletproof layer.
     #[test]
-    fn malicious_creator_can_exclude_auditor_from_decryption() {
+    fn malicious_creator_auditor_exclusion_is_rejected() {
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -3508,10 +3531,12 @@ mod mocking_tests {
             .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
             .unwrap();
 
-        // Offset applied to the target auditor. Same `delta` is used to (a) corrupt the published
-        // ephemeral keys here and (b) offset the BP blinding `l_target` via the mock below.
+        // The same `delta` corrupts the published ephemeral keys here and shifts the blinding
+        // `l_target` in the mock below, so the proof's eph relation still holds for the wrong keys.
         let delta = PallasF::rand(&mut rng);
         let b_blinding_base = asset_tree_params.odd_parameters.pc_gens().B_blinding;
+        // `B` is the generator used for `blindings_with_different_gen[i] = B * blinding`.
+        let b_base = asset_tree_params.odd_parameters.pc_gens().B;
         let r1 = leg_enc_rand.r1;
         let r2 = leg_enc_rand.r2;
         let r3 = leg_enc_rand.r3;
@@ -3526,50 +3551,69 @@ mod mocking_tests {
             eph.r4 = Some((eph.r4.unwrap() - b_blinding_base * (r4 * delta)).into_affine());
         }
 
-        let _guard = MockGuard::new(clear_split_point_blindings_mock);
-        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::split_point_blindings
-            .mock_safe(move |mut blindings: Vec<PallasF>, num_enc_keys: usize| {
-                // Index 0 is the asset-id blinding,
-                blindings[1 + target] += delta;
-                MockResult::Continue((blindings, num_enc_keys))
-            });
-
-        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-        let proof =
-            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
-                _,
-                PallasParams,
-                VestaParams,
-            >(
-                &mut rng,
-                leg,
+        // Re-prove the corrupted leg with the mocks currently in effect and run the verifier.
+        let build_and_verify = |rng: &mut rand::rngs::ThreadRng| {
+            let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let proof =
+                LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                    _,
+                    PallasParams,
+                    VestaParams,
+                >(
+                    rng,
+                    leg.clone(),
+                    leg_enc.clone(),
+                    leg_enc_rand.clone(),
+                    path,
+                    asset_data.clone(),
+                    &root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            proof.verify::<_, PallasParams, VestaParams>(
+                rng,
                 leg_enc.clone(),
-                leg_enc_rand,
-                path,
-                asset_data,
                 &root,
+                vec![],
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
                 enc_key_gen,
                 enc_gen,
+                None,
             )
-            .unwrap();
+        };
 
-        let verify_res = proof.verify::<_, PallasParams, VestaParams>(
-            &mut rng,
-            leg_enc.clone(),
-            &root,
-            vec![],
-            nonce,
-            &asset_tree_params,
-            &asset_comm_params,
-            enc_key_gen,
-            enc_gen,
-            None,
-        );
-        assert_err!(verify_res, Error::ProofVerificationError(_));
+        // First attempt: shift `l_target` only. The published `blindings_with_different_gen[target+1]`
+        // keeps its honest value and no longer equals `B * l_target`, so the sigma check on that term
+        // rejects.
+        let _g1 = MockGuard::new(clear_split_point_blindings_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::split_point_blindings
+            .mock_safe(move |mut blindings: Vec<PallasF>, num_enc_keys: usize| {
+                // index 0 is the asset-id blinding
+                blindings[1 + target] += delta;
+                MockResult::Continue((blindings, num_enc_keys))
+            });
+        assert_err!(build_and_verify(&mut rng), Error::ProofVerificationError(_));
 
+        // Second attempt: also patch `blindings_with_different_gen[target+1]` to `B * l_target` so the
+        // sigma check passes. The in-circuit equality of that term with the leaf re-randomization
+        // rejects it instead, at the bulletproof layer.
+        let _g2 = MockGuard::new(clear_tamper_re_randomized_points_for_test_mock);
+        LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::tamper_re_randomized_points_for_test
+            .mock_safe(move |mut rrp: ReRandomizedPoints<PallasParameters>| {
+                let patched =
+                    (b_base * delta + rrp.blindings_with_different_gen[&(target + 1)]).into_affine();
+                rrp.blindings_with_different_gen.insert(target + 1, patched);
+                MockResult::Return(rrp)
+            });
+        assert_err!(build_and_verify(&mut rng), Error::BulletproofR1CSError(_));
+
+        // The other auditor is untouched and still decrypts the leg.
         let sk_other = keys_auditor[other].0.0;
         let (_, _, at_dec, amt_dec) = leg_enc
             .decrypt_given_key(&sk_other, false, other, enc_gen)

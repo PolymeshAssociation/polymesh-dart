@@ -988,7 +988,7 @@ impl<
                     .collect::<Result<_, _>>()?;
                 proof.verify(
                     rng,
-                    leg_enc.clone(),
+                    leg_enc,
                     &root,
                     public_enc_keys,
                     ctx,

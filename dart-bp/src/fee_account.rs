@@ -991,7 +991,7 @@ impl<
         let acc_old = (self
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - reduce
             + (account_comm_key.balance_gen() * F0::from(increase_bal_by)))
@@ -1068,7 +1068,7 @@ impl<
         let acc_old = self
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - reduce
             + (account_comm_key.balance_gen() * increase_bal_by);
@@ -2417,7 +2417,10 @@ impl<
 
     /// Get the re-randomized leaf point (needed by the Ledger for its auth proof).
     pub fn rerandomized_leaf(&self) -> Affine<G0> {
-        self.re_randomized_path.path.get_rerandomized_leaf()
+        self.re_randomized_path
+            .path
+            .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
     }
 }
 
@@ -2660,7 +2663,7 @@ impl<
             .partial
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - asset_id_comm
             - (account_comm_key.balance_gen() * fee_amount_f);
@@ -2877,6 +2880,7 @@ impl<
             .re_randomized_path
             .path
             .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
     }
 
     /// Generate the host's proofs and finalize the Bulletproof.
@@ -3060,7 +3064,7 @@ impl<
             updated_account_commitment,
             asset_id_gen,
             balance_gen,
-        );
+        )?;
         comm_old.serialize_compressed(&mut transcript)?;
         comm_new.serialize_compressed(&mut transcript)?;
 
@@ -3120,7 +3124,7 @@ impl<
             updated_account_commitment,
             account_comm_key.asset_id_gen(),
             account_comm_key.balance_gen(),
-        );
+        )?;
 
         self.commitment_proof.host_proof.verify_with_challenge(
             y_old_affine,
@@ -3292,13 +3296,13 @@ impl<
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         asset_id_gen: Affine<G0>,
         balance_gen: Affine<G0>,
-    ) -> (Affine<G0>, Affine<G0>) {
+    ) -> Result<(Affine<G0>, Affine<G0>)> {
         let asset_id_comm = (asset_id_gen * F0::from(asset_id)).into_affine();
         let y_old = self
             .partial
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - asset_id_comm
             - (balance_gen * F0::from(fee_amount))
@@ -3315,7 +3319,7 @@ impl<
                 .auth_proof
                 .partial_updated_account_commitment;
         let y_new_affine = y_new.into_affine();
-        (y_old_affine, y_new_affine)
+        Ok((y_old_affine, y_new_affine))
     }
 }
 

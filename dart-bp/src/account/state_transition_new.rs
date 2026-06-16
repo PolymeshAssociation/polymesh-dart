@@ -1560,7 +1560,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         split_proof
             .common_proof
             .auth_proof
@@ -1799,7 +1800,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         split_proof
             .common_proof
             .auth_proof

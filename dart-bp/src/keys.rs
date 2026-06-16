@@ -111,7 +111,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
+        mut keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
         nonce: &[u8],
         sig_key_gen: G,
         enc_key_gen: G,
@@ -141,10 +141,12 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         r_enc.zeroize();
 
         let mut c = challenge;
-        for ((_, s), (_, e)) in keys.into_iter() {
-            s_sig += c * s;
-            s_enc += c * e;
+        for ((_, s), (_, e)) in keys.iter_mut() {
+            s_sig += c * *s;
+            s_enc += c * *e;
             c = c * challenge;
+            s.zeroize();
+            e.zeroize();
         }
 
         Ok(Self {
@@ -238,7 +240,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        keys: Vec<(G, G::ScalarField)>,
+        mut keys: Vec<(G, G::ScalarField)>,
         nonce: &[u8],
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
@@ -258,9 +260,10 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         let mut s = r;
         r.zeroize();
         let mut c = challenge;
-        for (_, e) in keys.into_iter() {
-            s += c * e;
+        for (_, e) in keys.iter_mut() {
+            s += c * *e;
             c = c * challenge;
+            e.zeroize();
         }
 
         Ok(Self { t, s })

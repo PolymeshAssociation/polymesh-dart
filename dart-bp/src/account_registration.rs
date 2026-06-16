@@ -1519,7 +1519,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &sk_gen,
             &enc_key_gen,
             &challenge,
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         Ok(())
