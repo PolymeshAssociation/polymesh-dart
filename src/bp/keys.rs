@@ -42,6 +42,7 @@ pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
 pub struct EncryptionPublicKey(CompressedAffine);
 
 /// FromStr for EncryptionPublicKey
@@ -146,6 +147,7 @@ impl EncryptionKeyPair {
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
 pub struct AccountPublicKey(pub(crate) CompressedAffine);
 
 /// FromStr for AccountPublicKey
