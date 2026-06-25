@@ -213,6 +213,128 @@ fn send_txn() {
 }
 
 #[test]
+fn affirmation_rejects_substituted_leg_enc() {
+    // leg_enc is folded into the affirmation transcript, so a valid sender affirmation for one leg
+    // must not verify against a different leg's encryption.
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 12;
+    const L: usize = 64;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let asset_id = 1;
+    let amount = 100;
+
+    let id = PallasFr::rand(&mut rng);
+    let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+    account.balance = 200;
+    let account_tree = get_tree_with_account_comm::<L, _>(
+        &account,
+        account_comm_key.clone(),
+        &account_tree_params,
+        6,
+    )
+    .unwrap();
+
+    let conf = LegEncConfig {
+        parties_see_each_other: true,
+        reveal_asset_id: false,
+    };
+    let (_, leg_enc_a, _) = setup_leg_with_conf(
+        &mut rng,
+        conf.clone(),
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let (_, leg_enc_b, _) = setup_leg_with_conf(
+        &mut rng,
+        conf,
+        pk_a_e.0,
+        None,
+        amount,
+        asset_id,
+        pk_s_e.0,
+        pk_r_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+
+    let nonce = b"test-nonce";
+    let updated_account = account.get_state_for_send(amount).unwrap();
+    let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+    let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+    let root = account_tree.root_node();
+
+    let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        {
+            let (c, e) = leg_enc_a.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        },
+        AccountTxnWitness::new(
+            sk_s.0,
+            sk_s_e.0,
+            account.clone(),
+            updated_account.clone(),
+            updated_account_comm,
+        ),
+        path,
+        &root,
+        nonce,
+        &account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+    )
+    .unwrap();
+
+    // Sanity: verifies against its own leg.
+    proof
+        .verify(
+            &mut rng,
+            leg_enc_a.core_and_eph_keys_for_sender(),
+            &root,
+            updated_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            None,
+        )
+        .unwrap();
+
+    // A different leg's encryption must be rejected.
+    assert!(
+        proof
+            .verify(
+                &mut rng,
+                leg_enc_b.core_and_eph_keys_for_sender(),
+                &root,
+                updated_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                None,
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn receive_txn() {
     let mut rng = rand::thread_rng();
 
@@ -1728,9 +1850,9 @@ fn single_shot_combined_create_and_recv() {
     println!(
         "tuples count {} {} {} {}",
         odd_tuple.proof_dependent_points.len() + sender_even.proof_dependent_points.len(),
-        odd_tuple.proof_independent_scalars.len() + sender_odd.proof_independent_scalars.len(),
+        odd_tuple.fixed_point_scalars.len() + sender_odd.fixed_point_scalars.len(),
         even_tuple.proof_dependent_points.len() + sender_odd.proof_dependent_points.len(),
-        even_tuple.proof_independent_scalars.len() + sender_odd.proof_independent_scalars.len(),
+        even_tuple.fixed_point_scalars.len() + sender_odd.fixed_point_scalars.len(),
     );
 
     let even_tuples = vec![odd_tuple, sender_even];

@@ -229,6 +229,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         add_to_transcript!(
@@ -759,6 +760,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         add_to_transcript!(
@@ -1149,12 +1151,21 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
     ) -> Result<(AccountCommitmentsHostProtocol<G0>, Option<F0>, Affine<G0>)> {
-        let num_hidden_asset_ids = LegProverConfig::num_hidden_asset_ids(legs_with_conf);
-        let is_asset_id_revealed = num_hidden_asset_ids < legs_with_conf.len();
-        if expected_hidden_asset_ids != num_hidden_asset_ids {
+        let (asset_id, num_hidden_asset_ids) =
+            LegProverConfig::asset_id_and_hidden_count(legs_with_conf)?;
+        // Asset id revealed in at-least one leg
+        let is_asset_id_revealed = asset_id.is_some();
+        // If asset-id is revealed in at least one leg, the prover does not treat it as witness in
+        // any leg and this no blindings are needed
+        let expected_blindings_asset_ids = if is_asset_id_revealed {
+            0
+        } else {
+            num_hidden_asset_ids
+        };
+        if expected_hidden_asset_ids != expected_blindings_asset_ids {
             return Err(Error::ProofGenerationError(format!(
                 "k_asset_ids length {} does not match expected {}",
-                expected_hidden_asset_ids, num_hidden_asset_ids
+                expected_hidden_asset_ids, expected_blindings_asset_ids
             )));
         }
 

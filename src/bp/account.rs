@@ -13,7 +13,8 @@ use ark_std::vec::Vec;
 use bounded_collections::BoundedVec;
 use bulletproofs::r1cs::VerificationTuple;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
-use rand_core::{CryptoRng, RngCore};
+use rand_chacha::ChaChaRng;
+use rand_core::{CryptoRng, RngCore, SeedableRng};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
@@ -353,21 +354,26 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
+        let rngs: Vec<ChaChaRng> = (0..account_assets.len())
+            .map(|_| {
+                let mut buf = [0_u8; 32];
+                rng.fill_bytes(&mut buf);
+                ChaChaRng::from_seed(buf)
+            })
+            .collect();
         let proofs_and_states = account_assets
             .par_iter()
-            .map_init(
-                || rng.clone(),
-                |rng, (account, asset_id, counter)| {
-                    AccountAssetRegistrationProof::new(
-                        rng,
-                        account,
-                        *asset_id,
-                        *counter,
-                        identity,
-                        tree_params,
-                    )
-                },
-            )
+            .zip(rngs.into_par_iter())
+            .map(|((account, asset_id, counter), mut rng)| {
+                AccountAssetRegistrationProof::new(
+                    &mut rng,
+                    account,
+                    *asset_id,
+                    *counter,
+                    identity,
+                    tree_params,
+                )
+            })
             .collect::<Result<Vec<_>, Error>>()?;
 
         let mut proofs = BoundedVec::with_bounded_capacity(account_assets.len());

@@ -120,8 +120,8 @@ impl<T: DartLimits> KeyDistributionProof<T> {
         recipient_key: &EncryptionSecretKey,
     ) -> Result<PallasScalar, Error> {
         let proof = self.inner.decode()?;
-        let sk_enc_inv = &recipient_key.inner().0;
+        let sk_enc = &recipient_key.inner().0;
         let enc_gen = dart_gens().leg_asset_value_gen().into_group();
-        Ok(proof.decrypt(recipient_index, sk_enc_inv, enc_gen)?)
+        Ok(proof.decrypt(recipient_index, sk_enc, enc_gen)?)
     }
 }

@@ -542,7 +542,7 @@ impl<
                 let even_tuple = VerificationTuple {
                     proof_dependent_points: vec![],
                     proof_dependent_scalars: vec![],
-                    proof_independent_scalars: vec![],
+                    fixed_point_scalars: vec![],
                 };
                 Ok((even_tuple, odd_tuple))
             }
@@ -802,10 +802,10 @@ impl<
         let mut odd_tuples = Vec::with_capacity(batch_size);
         for (even, odd) in tuples {
             // If any tuple is empty which can happen when asset id is revealed
-            if !even.proof_independent_scalars.is_empty() {
+            if !even.fixed_point_scalars.is_empty() {
                 even_tuples.push(even);
             }
-            if !odd.proof_independent_scalars.is_empty() {
+            if !odd.fixed_point_scalars.is_empty() {
                 odd_tuples.push(odd);
             }
         }

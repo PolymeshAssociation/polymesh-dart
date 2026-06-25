@@ -1,6 +1,6 @@
 use crate::account::{LegProverConfig, LegVerifierConfig};
-use crate::auth_proofs::helpers::{init_acc_comm_protocol, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL, helpers};
+use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
+use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
     add_to_transcript, error,
@@ -59,10 +59,15 @@ pub struct AuthProofAffirmation<G: AffineRepr> {
     /// `ct_asset_id_1_i = S[3] * sk_enc^{-1} + B_blinding * k_2_i`
     pub partial_ct_asset_ids: Vec<G>,
     pub D: G,
+    pub resp_D: Partial2PokPedersenCommitment<G>,
     pub resp_enc_key_gen: PokPedersenCommitment<G>,
     pub leg_links: Vec<LegAuthLink<G>>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<G: AffineRepr> AuthProofAffirmation<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
@@ -125,6 +130,10 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         enc_gen: G,
         mut transcript: &mut MerlinTranscript,
     ) -> error::Result<Self> {
+        let sk_blinding = G::ScalarField::rand(rng);
+        let sk_enc_blinding = G::ScalarField::rand(rng);
+        let sk_enc_inv_blinding = G::ScalarField::rand(rng);
+        let sk_enc_inv = Self::sk_enc_inverse(sk_enc)?;
         add_to_transcript!(
             transcript,
             NULLIFIER_LABEL,
@@ -146,10 +155,6 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             );
         }
 
-        let sk_blinding = G::ScalarField::rand(rng);
-        let sk_enc_blinding = G::ScalarField::rand(rng);
-        let sk_enc_inv_blinding = G::ScalarField::rand(rng);
-
         let (
             proto_old,
             proto_new,
@@ -168,8 +173,6 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             comm_re_rand_gen,
             &mut transcript,
         )?;
-
-        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
 
         let num_ct_amounts = legs_with_conf
             .iter()
@@ -322,9 +325,28 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         assert_eq!(offset_asset_id, k_asset_ids.len());
 
         // For proving sk_enc^{-1} relation, create D = enc_key_gen * sk_e + B * r.
-        // Now prove D * sk_enc^{-1} - B * r * sk_enc^{-1} = enc_gen
+        // Now prove
+        // D = enc_key_gen * sk_e + B * r
+        // D * sk_enc^{-1} - B * r * sk_enc^{-1} = enc_gen
         let r = G::ScalarField::rand(rng);
         let D = (enc_key_gen * sk_enc + comm_re_rand_gen * r).into_affine();
+
+        // The following is _likely expensive_ but clearer than trying to use one of leg encryption
+        // components since there are many cases there and i have to write a different relation for
+        // each case
+
+        // For // D = enc_key_gen * sk_e + B * r
+        let t_D = PokPedersenCommitmentProtocol::init(
+            sk_enc,
+            sk_enc_blinding,
+            &enc_key_gen,
+            r,
+            G::ScalarField::rand(rng),
+            &comm_re_rand_gen,
+        );
+        t_D.challenge_contribution(&enc_key_gen, &comm_re_rand_gen, &D, &mut transcript)?;
+
+        // For D * sk_enc^{-1} - B * r * sk_enc^{-1} = enc_gen
         let t_enc_key_gen = PokPedersenCommitmentProtocol::init(
             sk_enc_inv,
             sk_enc_inv_blinding,
@@ -343,7 +365,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         let (resp_re_randomized_account_commitment, resp_updated_account_commitment) =
-            helpers::resp_acc_comm(
+            resp_acc_comm(
                 sk,
                 sk_enc,
                 rand_part_old_comm,
@@ -379,6 +401,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             leg_links.push(link);
         }
 
+        let resp_D = t_D.gen_partial2_proof(&challenge);
         let resp_enc_key_gen = t_enc_key_gen.gen_proof(&challenge);
 
         Ok(Self {
@@ -391,6 +414,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             partial_ct_amounts,
             partial_ct_asset_ids,
             D,
+            resp_D,
             resp_enc_key_gen,
             leg_links,
         })
@@ -487,17 +511,8 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             )));
         }
 
-        let mut asset_id = None;
+        let (asset_id, num_hidden) = LegVerifierConfig::asset_id_and_hidden_count(&legs_conf)?;
         for (i, (leg_conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
-            if asset_id.is_none() {
-                asset_id = leg_conf.encryption.asset_id();
-            } else if leg_conf.encryption.is_asset_id_revealed()
-                && (asset_id != leg_conf.encryption.asset_id())
-            {
-                return Err(Error::ProofVerificationError(format!(
-                    "All legs must have the same asset id but mismatch at leg {i}"
-                )));
-            }
             // Check the leg-link variant carries what each leg needs. ct_amount and/or ct_asset_id.
             if leg_conf.needs_ct_amount() && link.resp_amount().is_none() {
                 return Err(Error::ProofVerificationError(format!(
@@ -513,11 +528,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let is_asset_id_revealed = asset_id.is_some();
 
-        let num_hidden_asset_ids = if is_asset_id_revealed {
-            0
-        } else {
-            LegVerifierConfig::num_hidden_asset_ids(&legs_conf)
-        };
+        let num_hidden_asset_ids = if is_asset_id_revealed { 0 } else { num_hidden };
         if self.partial_ct_asset_ids.len() != num_hidden_asset_ids {
             return Err(Error::ProofVerificationError(format!(
                 "Invalid partial_ct_asset_ids length. Expected {}, got {}",
@@ -584,6 +595,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 }
             }
         }
+
+        self.resp_D.challenge_contribution(
+            &enc_key_gen,
+            &comm_re_rand_gen,
+            &self.D,
+            &mut transcript,
+        )?;
 
         self.resp_enc_key_gen.challenge_contribution(
             &self.D,
@@ -663,6 +681,17 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         verify_or_rmc_3!(
             rmc,
+            self.resp_D,
+            "D proof is invalid",
+            self.D,
+            enc_key_gen,
+            comm_re_rand_gen,
+            &challenge,
+            &self.resp_re_randomized_account_commitment.0[1],
+        );
+
+        verify_or_rmc_3!(
+            rmc,
             self.resp_enc_key_gen,
             "Enc key gen proof is invalid",
             enc_key_gen,
@@ -671,6 +700,11 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             &challenge,
         );
         Ok(())
+    }
+
+    /// Just for mocking
+    pub(crate) fn sk_enc_inverse(sk_enc: G::ScalarField) -> error::Result<G::ScalarField> {
+        sk_enc.inverse().ok_or(Error::InvertingZero)
     }
 }
 
@@ -882,5 +916,105 @@ mod serialization {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account::PartyEphemeralPublicKey;
+    use crate::keys::keygen_enc;
+    use crate::leg::{Leg, LegEncConfig};
+    use ark_ec::short_weierstrass::Affine;
+    use ark_pallas::{Fr, PallasConfig};
+    use ark_std::UniformRand;
+    use rand::thread_rng;
+
+    #[test]
+    fn affirm_other_account_encryption_key() {
+        // Standalone affirmation auth accepts this proof even when the consumed account key differs
+        // from the leg key. The split verifier is the layer that checks the account leaf against the
+        // proof's partial commitment.
+        let mut rng = thread_rng();
+        // Use independent bases so the mismatch is not hidden by setup.
+        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let sk_e = Fr::rand(&mut rng);
+        let sk_enc_e = Fr::rand(&mut rng);
+        // Use a different encryption key for the leg sender.
+        let (sk_enc_a_keys, ek_a) = keygen_enc(&mut rng, enc_key_gen);
+        let sk_enc_a = sk_enc_a_keys.0;
+
+        let amount = 100u64;
+        let asset_id = 7u32;
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let leg = Leg::new(ek_a.0, pk_r_e.0, amount, asset_id, vec![], vec![], vec![]).unwrap();
+        let cfg = LegEncConfig {
+            parties_see_each_other: false,
+            reveal_asset_id: false,
+        };
+        let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
+        let (leg_core, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+
+        // The account leaf commits sk_enc_e, while the proof below is built with sk_enc_a.
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let pk_e = (sk_gen * sk_e + enc_key_gen * sk_enc_e).into_affine();
+        let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
+        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+        let nonce = b"acA1_split_gap";
+        let k_amount = Fr::rand(&mut rng);
+        let k_asset_id = Fr::rand(&mut rng);
+
+        let legs = vec![LegProverConfig {
+            encryption: leg_core.clone(),
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+            amount,
+            has_balance_changed: true,
+        }];
+        let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
+            &mut rng,
+            sk_e,
+            sk_enc_a,
+            rand_old,
+            rand_new,
+            vec![k_amount],
+            vec![k_asset_id],
+            legs,
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            nonce,
+            sk_gen,
+            enc_key_gen,
+            comm_re_rand_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        let conf = vec![LegVerifierConfig {
+            encryption: leg_core,
+            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
+            has_balance_decreased: Some(true),
+            has_counter_decreased: Some(false),
+        }];
+        proof
+            .verify(
+                conf,
+                &re_rand_leaf,
+                &updated_comm,
+                nullifier,
+                nonce,
+                sk_gen,
+                enc_key_gen,
+                comm_re_rand_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
     }
 }

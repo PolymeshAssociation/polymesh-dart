@@ -5,6 +5,7 @@ pub mod state;
 pub mod state_transition;
 pub mod state_transition_multi;
 /// PoC: chunked MAST proof for evaluating the verifier-first chunking optimization.
+#[cfg(feature = "std")]
 pub mod state_transition_multi_chunked;
 pub mod transparent;
 

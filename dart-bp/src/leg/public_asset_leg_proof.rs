@@ -805,9 +805,9 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
 
         let required_resp_comm_len = if parties_see_each_other { 11 } else { 9 };
-        if self.resp_comm_r_i_amount.0.len() < required_resp_comm_len {
+        if self.resp_comm_r_i_amount.0.len() != required_resp_comm_len {
             return Err(Error::ProofVerificationError(format!(
-                "resp_comm_r_i_amount response length is {} but expected at least {}",
+                "resp_comm_r_i_amount response length is {} but expected {}",
                 self.resp_comm_r_i_amount.0.len(),
                 required_resp_comm_len
             )));
@@ -1924,6 +1924,108 @@ mod tests {
         );
         println!("total prover time (combined) = {:?}", combined_prove_time);
         println!("verifier time (combined) = {:?}", combined_verify_time);
+    }
+
+    #[test]
+    fn revealed_asset_auditor_keys_are_caller_trusted_not_bound_to_asset_id() {
+        // The public-asset proof verifies against the auditor keys supplied by the caller.
+        // A mismatched key set still fails because it no longer matches the encrypted leg.
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        let label = b"test";
+        let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into();
+        let leaf_level_pc_gens = PedersenGens::<Affine<PallasConfig>>::default();
+        let leaf_level_bp_gens = BulletproofGens::<Affine<PallasConfig>>::new(NUM_GENS as u32, 1);
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let asset_id = 1;
+        let nonce = b"test-nonce";
+        // Use one key set to build the leg.
+        let attacker_audit = keygen_enc(&mut rng, enc_key_gen);
+        let attacker_med = keygen_sig(&mut rng, sig_key_gen);
+        let attacker_enc_keys: Vec<_> = vec![attacker_audit.1.0];
+        let attacker_med_keys: Vec<(u8, _)> = vec![(0u8, attacker_med.1.0)];
+        let public_enc_keys: Vec<Affine<PallasConfig>> = vec![];
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            100u64,
+            asset_id,
+            attacker_enc_keys.clone(),
+            attacker_med_keys.clone(),
+            public_enc_keys.clone(),
+        )
+        .unwrap();
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        assert!(leg_enc.is_asset_id_revealed());
+        let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
+            &mut rng,
+            leg.clone(),
+            leg_enc.clone(),
+            leg_enc_rand,
+            nonce,
+            &leaf_level_pc_gens,
+            &leaf_level_bp_gens,
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+        // Verifying with the same key set succeeds.
+        assert!(
+            proof
+                .verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    attacker_enc_keys.clone(),
+                    attacker_med_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_ok(),
+            "TRUST-BOUNDARY: dart-bp verify must accept whatever key set the caller passes"
+        );
+        // Verifying with a different key set fails.
+        let registry_audit = keygen_enc(&mut rng, enc_key_gen);
+        let registry_med = keygen_sig(&mut rng, sig_key_gen);
+        let registry_enc_keys: Vec<_> = vec![registry_audit.1.0];
+        let registry_med_keys: Vec<(u8, _)> = vec![(0u8, registry_med.1.0)];
+        assert!(
+            proof
+                .verify(
+                    &mut rng,
+                    leg_enc,
+                    asset_id,
+                    registry_enc_keys,
+                    registry_med_keys,
+                    public_enc_keys,
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+            "registry-key lookup is the sole guard: wrong key set must be rejected"
+        );
     }
 
     #[cfg(feature = "nightly_mocking_tests")]

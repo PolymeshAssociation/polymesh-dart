@@ -13,7 +13,7 @@ use ark_std::{format, string::ToString};
 use bulletproofs::r1cs::{ConstraintSystem, Prover};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use dock_crypto_utils::transcript::MerlinTranscript;
-use polymesh_dart_common::Balance;
+use polymesh_dart_common::{Balance, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::partial::PartialSchnorrResponse;
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment};
@@ -169,6 +169,10 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
+        if amount > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount));
+        }
+
         if has_balance_decreased {
             if new_state.balance() != old_state.balance() - amount {
                 return Err(Error::ProofGenerationError(

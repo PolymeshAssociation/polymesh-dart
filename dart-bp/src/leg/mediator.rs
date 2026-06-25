@@ -287,4 +287,101 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn mediator_action_rejects_wrong_sk() {
+        // A wrong mediator sk (one that does not open ct_med) lets the proof be built but must fail verification.
+        let mut rng = rand::thread_rng();
+        let label = b"testing";
+        let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_aud, k_aud) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_med, k_med) = keygen_enc(&mut rng, sig_key_gen);
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            100,
+            1,
+            vec![k_aud.0],
+            vec![(0u8, k_med.0)],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, _) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let nonce = b"test-nonce";
+        let wrong_med_sk = ark_pallas::Fr::rand(&mut rng);
+        let proof = MediatorTxnProof::new(
+            &mut rng,
+            leg_enc.mediators[0].clone(),
+            sk_aud.0,
+            wrong_med_sk,
+            true,
+            nonce,
+            &sig_key_gen,
+        )
+        .unwrap();
+        assert!(
+            proof
+                .verify(leg_enc.mediators[0].clone(), true, nonce, sig_key_gen, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mediator_action_rejects_wrong_enc_key_index() {
+        // ct_med is encrypted to the auditor key at the mediator's index; proving with a different
+        // auditor's enc key (a mismatched index) must fail verification.
+        let mut rng = rand::thread_rng();
+        let label = b"testing";
+        let sig_key_gen = hash_to_pallas(label, b"sk-gen").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_sk_aud0, k_aud0) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_aud1, k_aud1) = keygen_enc(&mut rng, enc_key_gen);
+        let (sk_med, k_med) = keygen_enc(&mut rng, sig_key_gen);
+
+        // Mediator uses auditor index 0 for encryption.
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            100,
+            1,
+            vec![k_aud0.0, k_aud1.0],
+            vec![(0u8, k_med.0)],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, _) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let nonce = b"test-nonce";
+        // Prove with auditor index 1's enc key instead of index 0.
+        let proof = MediatorTxnProof::new(
+            &mut rng,
+            leg_enc.mediators[0].clone(),
+            sk_aud1.0,
+            sk_med.0,
+            true,
+            nonce,
+            &sig_key_gen,
+        )
+        .unwrap();
+        assert!(
+            proof
+                .verify(leg_enc.mediators[0].clone(), true, nonce, sig_key_gen, None)
+                .is_err()
+        );
+    }
 }

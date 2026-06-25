@@ -29,7 +29,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance};
+use polymesh_dart_common::{AssetId, Balance, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::PokDiscreteLogProtocol;
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
@@ -127,12 +127,26 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if increase_bal_by > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(increase_bal_by));
+            }
+            if account.balance + increase_bal_by != updated_account.balance {
+                return Err(Error::AmountTooLarge(updated_account.balance));
+            }
+            if updated_account.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(updated_account.balance));
+            }
+        }
+
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -172,6 +186,9 @@ impl<
 
         let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
+
+        // NOTE: There is no range proof on the amount increase_bal_by as the chain tracks each
+        // issuer/minter's mints and does not allow it to mint more than `MAX_BALANCE`, in total as well.
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_acc_old = SchnorrCommitment::new(
@@ -511,6 +528,11 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        // The following is just defense in depth. The chain will never pass increase_bal_by > MAX_FEE_BALANCE
+        if increase_bal_by > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(increase_bal_by));
+        }
+
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,

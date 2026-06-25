@@ -53,7 +53,7 @@ impl FeeAccountState {
         asset_id: AssetId,
         balance: Balance,
     ) -> Result<Self, Error> {
-        let bp_state = BPFeeAccountState::new(rng, account.get_affine()?, balance, asset_id);
+        let bp_state = BPFeeAccountState::new(rng, account.get_affine()?, balance, asset_id)?;
         bp_state.try_into()
     }
 
@@ -922,7 +922,7 @@ impl<
                     .pc_gens()
                     .B_blinding;
 
-                let rerandomized_leaf = proof.partial.rerandomized_leaf();
+                let rerandomized_leaf = proof.partial.rerandomized_leaf()?;
                 proof.commitment_proof.auth_proof.verify(
                     &rerandomized_leaf,
                     &updated_account_commitment.0,

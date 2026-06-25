@@ -287,22 +287,12 @@ impl<
             )));
         }
 
-        let mut asset_id = None;
+        let (asset_id, _) = LegVerifierConfig::asset_id_and_hidden_count(&legs_with_conf)?;
         for (i, (leg_conf, link)) in legs_with_conf
             .iter()
             .zip(proof.resp_leg_link.iter())
             .enumerate()
         {
-            if asset_id.is_none() {
-                asset_id = leg_conf.encryption.asset_id();
-            } else if leg_conf.encryption.is_asset_id_revealed()
-                && (asset_id != leg_conf.encryption.asset_id())
-            {
-                return Err(Error::ProofVerificationError(
-                    "All legs must have the same asset id".to_string(),
-                ));
-            }
-
             // Check the proof's leg-link variant carries what this leg needs:
             // ct_amount iff revealed-in-this-leg or balance changed; ct_asset_id iff asset-id encrypted.
             if leg_conf.needs_ct_amount() && link.resp_amount().is_none() {
@@ -664,9 +654,9 @@ impl<
         // NOTE: No curve-tree gadget or ROOT/RE_RANDOMIZED_PATH transcript entries.
         // Those are handled externally by the batched multi-asset verifier.
 
-        let is_asset_id_revealed = LegVerifierConfig::is_asset_id_revealed_in_any(&legs_with_conf);
-
-        let num_hidden_asset_ids = LegVerifierConfig::num_hidden_asset_ids(&legs_with_conf);
+        let (asset_id, num_hidden) = LegVerifierConfig::asset_id_and_hidden_count(&legs_with_conf)?;
+        let is_asset_id_revealed = asset_id.is_some();
+        let num_hidden_asset_ids = if is_asset_id_revealed { 0 } else { num_hidden };
 
         if proof.auth_proof.partial_ct_asset_ids.len() != num_hidden_asset_ids {
             return Err(Error::ProofVerificationError(format!(
@@ -977,8 +967,8 @@ impl<
         enc_gen: Affine<G0>,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let is_asset_id_revealed =
-            LegVerifierConfig::is_asset_id_revealed_in_any(&self.legs_with_conf);
+        let (asset_id, _) = LegVerifierConfig::asset_id_and_hidden_count(&self.legs_with_conf)?;
+        let is_asset_id_revealed = asset_id.is_some();
         let has_balance_changed = LegVerifierConfig::has_balance_changed(&self.legs_with_conf);
         let b_blinding = account_tree_params
             .even_parameters
@@ -1310,19 +1300,10 @@ fn old_and_new_host_commitments<
     legs_with_conf: &[LegVerifierConfig<Affine<G0>>],
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
 ) -> Result<(Affine<G0>, Affine<G0>)> {
-    let is_asset_id_revealed = LegVerifierConfig::is_asset_id_revealed_in_any(&legs_with_conf);
+    let (asset_id, _) = LegVerifierConfig::asset_id_and_hidden_count(&legs_with_conf)?;
 
-    let asset_id_comm = if is_asset_id_revealed {
-        let asset_id = legs_with_conf
-            .iter()
-            .find_map(|l| l.encryption.asset_id())
-            .ok_or_else(|| {
-                Error::ProofVerificationError("asset_id revealed but not found in legs".to_string())
-            })?;
-        Some(account_comm_key.asset_id_gen() * F0::from(asset_id))
-    } else {
-        None
-    };
+    let asset_id_comm =
+        asset_id.map(|asset_id| account_comm_key.asset_id_gen() * F0::from(asset_id));
 
     let mut y_old = re_randomized_leaf.into_group()
         - proof

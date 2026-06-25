@@ -2814,6 +2814,148 @@ mod tests {
     }
 
     #[test]
+    fn mixed_asset_id_legs_rejected() {
+        // Malicious prover: account and revealed leg are asset 1, but the hidden leg encrypts a
+        // different asset id.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_dave_e)),
+            (_, (_, pk_eve_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let hidden_asset_id = 2;
+        let dave_to_alice_amount = 200;
+        let eve_to_alice_amount = 250;
+
+        // Alice receives, asset id revealed.
+        let leg_revealed = Leg::new(
+            pk_dave_e.0,
+            pk_alice_e.0,
+            dave_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_revealed, _) = leg_revealed
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Alice receives, asset id hidden, but encrypting a different asset id.
+        let leg_hidden = Leg::new(
+            pk_eve_e.0,
+            pk_alice_e.0,
+            eve_to_alice_amount,
+            hidden_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_hidden, _) = leg_hidden
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &alice_account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let account_tree_root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let mut builder = AccountStateBuilder::init(alice_account.clone());
+        builder.update_for_receive();
+        builder.update_for_receive();
+        let alice_updated = builder.finalize();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let mut alice_builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
+                nonce,
+            );
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_revealed.core_and_eph_keys_for_receiver();
+            (c, e, dave_to_alice_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_hidden.core_and_eph_keys_for_receiver();
+            (c, e, eve_to_alice_amount)
+        });
+
+        let (alice_proof, alice_nullifier) = alice_builder
+            .finalize::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_receive_affirmation(leg_enc_revealed.core_and_eph_keys_for_receiver());
+        alice_verifier.add_receive_affirmation(leg_enc_hidden.core_and_eph_keys_for_receiver());
+        assert!(
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn host_builder_pre_finalize_rejects_empty_legs() {
         // pre_finalize_checks must fail when no legs have been added to the builder.
         let mut rng = rand::thread_rng();

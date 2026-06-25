@@ -80,6 +80,7 @@ pub mod util;
 pub mod account;
 pub mod account_registration;
 /// PoC: chunked account registration for evaluating the verifier-first chunking optimization.
+#[cfg(feature = "std")]
 pub mod account_registration_chunked;
 mod error;
 pub mod poseidon_impls;

@@ -214,6 +214,7 @@ impl<
                 odd_prover,
                 tree_parameters,
                 rng,
+                None,
             )?;
 
         add_to_transcript!(
@@ -348,6 +349,7 @@ impl<
             &tree_parameters.odd_parameters,
             &tree_parameters.even_parameters.bp_gens(),
             key_indices,
+            None,
         )?;
 
         #[cfg(all(test, feature = "nightly_mocking_tests"))]
@@ -1268,6 +1270,7 @@ impl<
             self.ped_comms.clone(),
             &tree_parameters.odd_parameters,
             key_indices,
+            None,
         )?;
 
         let mut vars_count = 11 + (self.resp_eph_pk_enc.len() + self.resp_eph_pk_meds.len()) * 2;
@@ -2522,6 +2525,352 @@ mod input_sanitation_tests {
                     None,
                 )
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn public_enc_key_identity_cannot_skip_binding() {
+        // A creator-supplied public encryption key must use the same encryption randomness as the
+        // rest of the leg. Tampering its ephemeral key should fail.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let label = b"test-label";
+        let p = SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+        let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"acp",
+            1,
+            0,
+            &p.even_parameters.bp_gens(),
+        );
+        let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, aud) = keygen_enc(&mut rng, enc_key_gen);
+        let enc_keys = vec![aud.0];
+        let asset_data = AssetData::new(
+            1u32,
+            enc_keys.clone(),
+            vec![],
+            &acp,
+            p.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+        let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &p,
+            Some(2),
+        );
+        let root = tree.root_node();
+        // Use the identity point as the extra public encryption key.
+        let id_pk = ark_pallas::Affine::zero();
+        let leg = Leg::new(pk_s.0, pk_r.0, 100u64, 1u32, enc_keys, vec![], vec![id_pk]).unwrap();
+        let (mut leg_enc, rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        // Make the identity-key ephemeral component non-identity.
+        leg_enc.eph_pk_public_enc_keys[0].r3 = enc_gen; // arbitrary non-O point
+        let path = tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        // The proof should not accept the modified ephemeral component.
+        let proof_res =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                rand,
+                path,
+                asset_data,
+                &root,
+                b"n",
+                &p,
+                &acp,
+                enc_key_gen,
+                enc_gen,
+            );
+        // Either proof creation or verification can reject it.
+        let rejected = match proof_res {
+            Err(_) => true,
+            Ok(proof) => proof
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    vec![id_pk],
+                    b"n",
+                    &p,
+                    &acp,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_err(),
+        };
+        assert!(
+            rejected,
+            "identity public_enc_key with a divergent eph term must be rejected (binding non-skippable)"
+        );
+    }
+
+    #[test]
+    fn public_enc_key_decodes_same_amount_as_canonical() {
+        // A valid extra public encryption key should decrypt the same asset id and amount as the
+        // asset auditor key.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let label = b"test-label";
+        let p = SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+        let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"acp",
+            1,
+            0,
+            &p.even_parameters.bp_gens(),
+        );
+        let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r) = keygen_enc(&mut rng, enc_key_gen);
+        let (aud_sk, aud) = keygen_enc(&mut rng, enc_key_gen);
+        let (pub_sk, pub_pk) = keygen_enc(&mut rng, enc_key_gen); // extra auditor
+        let enc_keys = vec![aud.0];
+        let asset_data = AssetData::new(
+            7u32,
+            enc_keys.clone(),
+            vec![],
+            &acp,
+            p.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+        let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &p,
+            Some(2),
+        );
+        let root = tree.root_node();
+        let leg = Leg::new(
+            pk_s.0,
+            pk_r.0,
+            100u64,
+            7u32,
+            enc_keys,
+            vec![],
+            vec![pub_pk.0],
+        )
+        .unwrap();
+        let (leg_enc, rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        let path = tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                rand,
+                path,
+                asset_data,
+                &root,
+                b"n",
+                &p,
+                &acp,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        assert!(
+            proof
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    vec![pub_pk.0],
+                    b"n",
+                    &p,
+                    &acp,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_ok()
+        );
+        // Both auditor keys should decode the same asset id and amount.
+        let (_, _, at_a, amt_a) = leg_enc
+            .decrypt_given_key(&aud_sk.0, false, 0, enc_gen)
+            .unwrap();
+        let (_, _, at_p, amt_p) = leg_enc
+            .decrypt_given_key(&pub_sk.0, true, 0, enc_gen)
+            .unwrap();
+        assert_eq!((at_a, amt_a), (7u32, 100u64));
+        assert_eq!((at_p, amt_p), (at_a, amt_a));
+    }
+
+    #[test]
+    fn public_enc_keys_same_r_and_identity_base() {
+        // An extra public auditor should decrypt the same amount as the asset auditor.
+        // The verifier must also reject an identity public encryption key.
+        use ark_std::Zero;
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let label = b"test-label";
+        let p = SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"nonce";
+        let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            1,
+            0,
+            &p.even_parameters.bp_gens(),
+        );
+        let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r) = keygen_enc(&mut rng, enc_key_gen);
+        let (a_sk, a_pk) = keygen_enc(&mut rng, enc_key_gen);
+        let (x_sk, x_pk) = keygen_enc(&mut rng, enc_key_gen);
+        let enc_keys = vec![a_pk.0];
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            vec![],
+            &acp,
+            p.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+        let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &p,
+            Some(2),
+        );
+        let root = tree.root_node();
+        let leg = Leg::new(
+            pk_s.0,
+            pk_r.0,
+            amount,
+            asset_id,
+            enc_keys,
+            vec![],
+            vec![x_pk.0],
+        )
+        .unwrap();
+        let (leg_enc, leg_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        let path = tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_rand,
+                path,
+                asset_data,
+                &root,
+                nonce,
+                &p,
+                &acp,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        // Both auditor keys should decode the transfer amount.
+        let (_, _, _, amt_extra) = leg_enc
+            .decrypt_given_key(&x_sk.0, true, 0, enc_gen)
+            .unwrap();
+        let (_, _, _, amt_asset) = leg_enc
+            .decrypt_given_key(&a_sk.0, false, 0, enc_gen)
+            .unwrap();
+        assert_eq!(amt_extra, amount);
+        assert_eq!(amt_asset, amount);
+        // The proof verifies with the extra auditor key.
+        assert!(
+            proof
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    vec![x_pk.0],
+                    nonce,
+                    &p,
+                    &acp,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_ok()
+        );
+        // The identity point is not a valid public encryption key.
+        let ident = Affine::<PallasParameters>::zero();
+        let res_ident = proof.verify::<_, PallasParams, VestaParams>(
+            &mut rng,
+            leg_enc,
+            &root,
+            vec![ident],
+            nonce,
+            &p,
+            &acp,
+            enc_key_gen,
+            enc_gen,
+            None,
+        );
+        assert!(
+            res_ident.is_err(),
+            "verifier must reject identity public_enc_keys base (add non-identity check); currently accepted -> LOW residual"
         );
     }
 }

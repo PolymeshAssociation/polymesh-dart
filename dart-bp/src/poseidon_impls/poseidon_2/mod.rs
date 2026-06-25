@@ -473,7 +473,7 @@ mod tests {
 
             println!(
                 "For Poseidon2 perm width={width}, d={degree} full rounds {full_rounds}, partial rounds {partial_rounds}, no of constraints is {}",
-                &prover.number_of_constraints()
+                &prover.num_multipliers()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();
@@ -537,7 +537,7 @@ mod tests {
             println!(
                 "For Poseidon2 hash 2:1 rounds {}, no of constraints is {}",
                 full_rounds + partial_rounds,
-                &prover.number_of_constraints()
+                &prover.num_multipliers()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();

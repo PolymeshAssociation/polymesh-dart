@@ -30,7 +30,7 @@ use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance};
+use polymesh_dart_common::{AssetId, BALANCE_BITS, Balance, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
@@ -85,6 +85,11 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        // The following is just defense in depth. The chain will never pass amount > MAX_BALANCE
+        // and pass the "correct" amount
+        if amount > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(amount));
+        }
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -1183,6 +1188,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();

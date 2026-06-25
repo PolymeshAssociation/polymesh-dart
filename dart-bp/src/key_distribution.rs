@@ -5,7 +5,7 @@ use crate::error::*;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::{PrimeField, Zero};
+use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{UniformRand, format, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, R1CSProof, Verifier};
@@ -426,12 +426,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     pub fn decrypt(
         &self,
         recipient_index: usize,
-        sk_enc_inv: &G::ScalarField,
+        sk_enc: &G::ScalarField,
         enc_gen: G::Group,
     ) -> Result<G::ScalarField> {
         if recipient_index >= self.recipient_cts.len() {
             return Err(Error::InvalidRecipientIndex);
         }
+
+        let mut sk_enc_inv = sk_enc.inverse().unwrap();
 
         let max = 1_u64 << CHUNK_BITS;
         let chunks = self
@@ -447,6 +449,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             })
             .collect::<Vec<_>>();
 
+        sk_enc_inv.zeroize();
+
         let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
         let mut reconstructed = G::ScalarField::zero();
         for (i, c) in chunks.into_iter().enumerate() {
@@ -461,7 +465,6 @@ mod tests {
     #![allow(deprecated)]
 
     use super::*;
-    use ark_ff::Field;
     use ark_pallas::{Affine as PallasA, Fr as PallasFr};
     use bulletproofs::{BulletproofGens, PedersenGens};
     use std::time::Instant;
@@ -546,7 +549,7 @@ mod tests {
 
         for (i, recipient_sk) in recipient_sks_2.iter().enumerate() {
             let decrypted = proof_2
-                .decrypt(i, &recipient_sk.inverse().unwrap(), enc_gen.into_group())
+                .decrypt(i, &recipient_sk, enc_gen.into_group())
                 .unwrap();
             assert_eq!(sk, decrypted);
         }
@@ -619,7 +622,7 @@ mod tests {
 
         for (i, recipient_sk) in recipient_sks_3.iter().enumerate() {
             let decrypted = proof_3
-                .decrypt(i, &recipient_sk.inverse().unwrap(), enc_gen.into_group())
+                .decrypt(i, &recipient_sk, enc_gen.into_group())
                 .unwrap();
             assert_eq!(sk, decrypted);
         }
@@ -683,6 +686,103 @@ mod tests {
             result,
             Error::ProofVerificationError(_),
             "resp_comm_sk_chunks_bp"
+        );
+    }
+
+    #[test]
+    fn key_distribution_chunk_sk_binding_is_enforced() {
+        // The encrypted chunks must match the chunks committed in the Bulletproof vector.
+        // Changing a shared ciphertext without changing the proof responses should fail.
+        let mut rng = rand::thread_rng();
+
+        const CHUNK_BITS: usize = 48;
+        const NUM_CHUNKS: usize = 6;
+
+        let sk = PallasFr::from(u32::rand(&mut rng) as u64 + u16::rand(&mut rng) as u64);
+
+        let enc_key_gen = PallasA::rand(&mut rng);
+        let enc_gen = PallasA::rand(&mut rng);
+        let pk = (enc_key_gen * sk).into_affine();
+
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(512, 1);
+        let nonce = b"chunk-sk-binding";
+
+        let mut recipient_pks = Vec::new();
+        for _ in 0..2 {
+            let recipient_sk = PallasFr::rand(&mut rng);
+            recipient_pks.push((enc_key_gen * recipient_sk).into_affine());
+        }
+
+        let proof = KeyDistributionProof::<PallasA, CHUNK_BITS, NUM_CHUNKS>::new(
+            &mut rng,
+            sk,
+            pk,
+            &recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+        )
+        .unwrap();
+
+        // Honest proof verifies.
+        proof
+            .verify(
+                &mut rng,
+                &pk,
+                &recipient_pks,
+                enc_key_gen,
+                enc_gen,
+                nonce,
+                &pc_gens,
+                &bp_gens,
+                None,
+            )
+            .unwrap();
+
+        // Change chunk 0's shared ciphertext by one unit.
+        let mut tampered = proof.clone();
+        tampered.shared_cts[0] = (tampered.shared_cts[0].into_group() + enc_gen).into_affine();
+
+        let result = tampered.verify(
+            &mut rng,
+            &pk,
+            &recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+            None,
+        );
+        assert_err!(
+            result,
+            Error::ProofVerificationError(_),
+            "Shared ciphertext"
+        );
+
+        // Change a higher chunk as well, so the key reconstruction path is exercised.
+        let mut tampered2 = proof.clone();
+        let powers = powers_of_base::<PallasFr, CHUNK_BITS, NUM_CHUNKS>();
+        let _ = powers; // verify reconstructs from shared_cts and powers
+        tampered2.shared_cts[NUM_CHUNKS - 1] =
+            (tampered2.shared_cts[NUM_CHUNKS - 1].into_group() + enc_gen).into_affine();
+        let result2 = tampered2.verify(
+            &mut rng,
+            &pk,
+            &recipient_pks,
+            enc_key_gen,
+            enc_gen,
+            nonce,
+            &pc_gens,
+            &bp_gens,
+            None,
+        );
+        assert!(
+            result2.is_err(),
+            "shifting a higher chunk's shared ciphertext must break the chunk-sk / pk linkage"
         );
     }
 
@@ -793,7 +893,7 @@ mod tests {
 
         for (i, recipient_sk) in recipient_sks.iter().enumerate() {
             let decrypted = proof
-                .decrypt(i, &recipient_sk.inverse().unwrap(), enc_gen.into_group())
+                .decrypt(i, &recipient_sk, enc_gen.into_group())
                 .unwrap();
             assert_eq!(sk, decrypted);
         }

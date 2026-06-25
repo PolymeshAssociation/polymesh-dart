@@ -221,6 +221,7 @@ impl<
                     odd_prover,
                     tree_parameters,
                     rng,
+                    None,
                 )?;
 
             add_to_transcript!(

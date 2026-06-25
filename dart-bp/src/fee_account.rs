@@ -81,11 +81,21 @@ pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
     mocktopus::macros::mockable
 )]
 impl<G: AffineRepr> FeeAccountState<G> {
-    pub fn new<R: CryptoRngCore>(rng: &mut R, pk: G, balance: Balance, asset_id: AssetId) -> Self {
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        pk: G,
+        balance: Balance,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(balance));
+        }
+
         let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
 
-        Self {
+        Ok(Self {
             pk,
             balance,
             asset_id,
@@ -93,7 +103,7 @@ impl<G: AffineRepr> FeeAccountState<G> {
             initial_randomness: randomness,
             rho,
             randomness,
-        }
+        })
     }
 
     pub fn commit<CK: AccountCommitmentKeyTrait<G>>(
@@ -235,6 +245,10 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
         mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         let pk = account.pk;
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if account.balance() > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(account.balance()));
+        }
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -317,6 +331,11 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: &mut MerlinTranscript,
     ) -> Result<G> {
+        // The following is just defense in depth. The chain will never pass balance > MAX_FEE_BALANCE
+        // and ensures that the "correct" (what was paid for) balance
+        if balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(balance));
+        }
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -705,6 +724,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -2119,6 +2139,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -2416,11 +2437,9 @@ impl<
     }
 
     /// Get the re-randomized leaf point (needed by the Ledger for its auth proof).
-    pub fn rerandomized_leaf(&self) -> Affine<G0> {
-        self.re_randomized_path
-            .path
-            .get_rerandomized_leaf()
-            .expect("rerandomized leaf must be set")
+    pub fn rerandomized_leaf(&self) -> Result<Affine<G0>> {
+        let l = self.re_randomized_path.path.get_rerandomized_leaf()?;
+        Ok(l)
     }
 }
 
@@ -3707,7 +3726,7 @@ pub mod tests {
         pk: VerKey<G>,
         balance: Balance,
     ) -> FeeAccountState<G> {
-        FeeAccountState::new(rng, pk.0, balance, asset_id)
+        FeeAccountState::new(rng, pk.0, balance, asset_id).unwrap()
     }
 
     #[test]
@@ -3728,6 +3747,8 @@ pub mod tests {
         assert_eq!(fee_account.pk, pk_i.0);
 
         fee_account.commit(&account_comm_key).unwrap();
+
+        assert!(FeeAccountState::new(&mut rng, pk_i.0, MAX_FEE_BALANCE + 1, asset_id).is_err());
     }
 
     #[test]
@@ -4756,7 +4777,7 @@ pub mod tests {
 
         //  Ledger side: creates AuthProofFeePayment on its own AUTH_TXN_LABEL transcript
         // Ledger needs: sk, auth's share of rerandomization/new_randomness, and public data from Host
-        let rerandomized_leaf = partial.rerandomized_leaf();
+        let rerandomized_leaf = partial.rerandomized_leaf().unwrap();
 
         let sk_gen = account_comm_key.sk_gen();
         let randomness_gen = account_comm_key.randomness_gen();
@@ -5066,6 +5087,39 @@ pub mod tests {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     mod input_sanitation_disabled {
         use super::*;
+
+        #[test]
+        fn fee_account_registration_rejects_out_of_range_balance() {
+            let mut rng = rand::thread_rng();
+            let account_comm_key = setup_comm_key(b"testing");
+            let asset_id = 1;
+            let nonce = b"test-nonce";
+            let bad_balance = MAX_FEE_BALANCE + 1;
+
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, bad_balance);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+            let reg_proof = RegTxnProof::new(
+                &mut rng,
+                sk_i.0,
+                &account,
+                account_comm.clone(),
+                nonce,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            let res = reg_proof.verify(
+                &pk_i.0,
+                bad_balance,
+                asset_id,
+                &account_comm,
+                nonce,
+                account_comm_key,
+                None,
+            );
+            assert!(matches!(res, Err(Error::AmountTooLarge(_))));
+        }
 
         #[test]
         fn increase_balance_more_than_expected_in_topup_txn() {

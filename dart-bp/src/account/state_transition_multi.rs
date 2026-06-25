@@ -147,6 +147,7 @@ impl<
                     odd_prover,
                     account_tree_params,
                     rng,
+                    None,
                 )?;
 
             add_to_transcript!(
@@ -301,6 +302,17 @@ impl<
                 self.account_proofs.len(),
                 account_verifiers.len()
             )));
+        }
+
+        // Defense in depth. The chain should reject repeated nullifiers but we reject here as well.
+        let mut seen_nullifiers = Vec::with_capacity(account_verifiers.len());
+        for verifier in &account_verifiers {
+            if seen_nullifiers.contains(&verifier.nullifier) {
+                return Err(Error::ProofVerificationError(
+                    "Repeated nullifier in multi-asset state transition proof".to_string(),
+                ));
+            }
+            seen_nullifiers.push(verifier.nullifier);
         }
 
         add_to_transcript!(even_verifier.transcript(), ROOT_LABEL, tree_root,);
@@ -826,6 +838,39 @@ mod tests {
             println!(
                 "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
                 proving_time, verification_time, verification_time_rmc, proof_size
+            );
+
+            // Repeating an old account across slots yields a repeated nullifier and must be rejected.
+            let mut dup_verifier_1 = AccountStateTransitionProofVerifier::init(
+                bob_account_1_updated_comm,
+                bob_nullifier_1,
+                bob_nonce,
+            );
+            dup_verifier_1.add_receive_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            let mut dup_verifier_2 = AccountStateTransitionProofVerifier::init(
+                bob_account_1_updated_comm,
+                bob_nullifier_1,
+                bob_nonce,
+            );
+            dup_verifier_2.add_receive_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            assert!(
+                multi_asset_proof
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        vec![dup_verifier_1, dup_verifier_2],
+                        &account_tree_root,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
             );
         };
 

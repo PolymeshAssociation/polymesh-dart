@@ -4,6 +4,7 @@ pub mod mediator;
 pub mod public_asset_leg_proof;
 pub mod settlement_proof;
 /// PoC: chunked settlement proof for evaluating the verifier-first chunking optimization.
+#[cfg(feature = "std")]
 pub mod settlement_proof_chunked;
 #[cfg(test)]
 pub mod tests;
@@ -821,7 +822,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
 
-        let sk_enc_inv = sk_enc
+        let mut sk_enc_inv = sk_enc
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
@@ -850,6 +851,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             )
             .into_affine()
         });
+        sk_enc_inv.zeroize();
 
         Ok((sender, receiver, asset_id, amount))
     }
@@ -876,7 +878,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
 
-        let sk_enc_inv = sk_enc
+        let mut sk_enc_inv = sk_enc
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
@@ -905,6 +907,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             )
             .into_affine()
         });
+        sk_enc_inv.zeroize();
 
         Ok((sender, receiver, asset_id, amount))
     }

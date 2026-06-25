@@ -37,7 +37,7 @@ fn new_fee_account<R: CryptoRngCore>(
     pk: VerKey<PallasA>,
     balance: u64,
 ) -> FeeAccountState<PallasA> {
-    FeeAccountState::new(rng, pk.0, balance, asset_id)
+    FeeAccountState::new(rng, pk.0, balance, asset_id).unwrap()
 }
 
 fn create_shared_setup() -> (
