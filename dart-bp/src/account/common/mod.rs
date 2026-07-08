@@ -838,7 +838,7 @@ impl<
             );
         }
 
-        let (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp) = create_bp_and_null_t_values(
+        let (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp, _) = create_bp_and_null_t_values(
             rng,
             false, // include_sk: host mode
             account.rho(),

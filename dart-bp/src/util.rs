@@ -64,8 +64,8 @@ macro_rules! add_to_transcript {
         $(
             $value.serialize_compressed(&mut buf)?;
             $transcript.append($label, &buf);
+            buf.clear();
         )*
-        buf.clear()
     };
 }
 
@@ -277,9 +277,9 @@ pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>
     let mut delta = LinearCombination::default();
     for (i, b) in has_balance_decreased.into_iter().enumerate() {
         if b {
-            delta = delta - var_amount[i];
+            delta -= var_amount[i];
         } else {
-            delta = delta + var_amount[i];
+            delta += var_amount[i];
         }
     }
 
@@ -884,6 +884,7 @@ pub(crate) fn create_bp_and_null_t_values<
     F0,                                 // comm_bp_blinding
     PokDiscreteLogProtocol<Affine<G0>>, // t_null
     SchnorrCommitment<Affine<G0>>,      // t_bp
+    Option<F0>,                         // sk_enc_inv (Some in solo mode, None in host mode)
 )> {
     let null_gen = account_comm_key.current_rho_gen();
     let nullifier = (null_gen * old_rho).into_affine();
@@ -925,7 +926,14 @@ pub(crate) fn create_bp_and_null_t_values<
             &bp_gens_vec_for_randomness_and_sk_enc_relations(pc_gens, bp_gens),
             blindings,
         );
-        (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp)
+        (
+            nullifier,
+            comm_bp,
+            comm_bp_blinding,
+            t_null,
+            t_bp,
+            Some(sk_enc_inv),
+        )
     } else {
         let (comm_bp, mut vars) = prover.commit_vec(&wits, comm_bp_blinding, bp_gens);
         enforce_constraints_for_randomness_relations(prover, &mut vars);
@@ -934,7 +942,7 @@ pub(crate) fn create_bp_and_null_t_values<
             &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
             blindings,
         );
-        (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp)
+        (nullifier, comm_bp, comm_bp_blinding, t_null, t_bp, None)
     };
 
     Zeroize::zeroize(&mut wits);
@@ -1120,8 +1128,6 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
 
     let is_asset_id_revealed = asset_id_blinding.is_none();
 
-    let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
-
     let h_at = is_asset_id_revealed
         .then(|| (enc_gen * G0::ScalarField::from(old_account.asset_id())).into_affine());
 
@@ -1154,6 +1160,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         comm_bp_blinding,
         t_null,
         t_bp_randomness_relations,
+        sk_enc_inv,
     ) = create_bp_and_null_t_values(
         rng,
         true, // include_sk
@@ -1177,6 +1184,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         pc_gens,
         bp_gens,
     )?;
+    let mut sk_enc_inv = sk_enc_inv.ok_or(Error::InvertingZero)?;
 
     // Create leg-link T-values (solo only)
     let t_leg_link = create_leg_link_t_values(

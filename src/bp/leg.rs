@@ -1030,7 +1030,7 @@ impl<
             .collect::<Result<_, _>>()?;
 
         let tuples = proof.verify_and_return_tuples(
-            leg_enc.clone(),
+            leg_enc,
             &root,
             public_enc_keys,
             ctx,

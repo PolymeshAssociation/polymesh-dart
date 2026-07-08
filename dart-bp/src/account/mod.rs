@@ -355,11 +355,12 @@ macro_rules! impl_txn_proof {
                 rng: &mut R,
                 rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
             ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
+                let (leg_enc_core, eph_pk) = leg_enc;
                 let mut verifier = StateChangeVerifier::init::<Parameters0, Parameters1>(
                     &self.common_proof,
                     vec![LegVerifierConfig {
-                        encryption: leg_enc.0.clone(),
-                        party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(leg_enc.1.clone()),
+                        encryption: leg_enc_core,
+                        party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                         has_balance_decreased: $ver_bal_dec,
                         has_counter_decreased: $ver_ctr_dec,
                     }],

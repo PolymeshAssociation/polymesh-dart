@@ -10685,6 +10685,7 @@ fn send_txn_split_proof() {
         );
         println!("split proof size = {}", split_proof.compressed_size());
 
+        let clock = Instant::now();
         let (even_tuple, odd_tuple) = verify_split_proof!(
             proof: split_proof,
             party: Sender,
@@ -10702,11 +10703,7 @@ fn send_txn_split_proof() {
             rng: &mut rng,
         );
         verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
-
-        println!(
-            "reveal_asset_id={}, full verification passed!",
-            reveal_asset_id
-        );
+        let verifier_time = clock.elapsed();
 
         // Sequential flow
         let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
@@ -10733,6 +10730,7 @@ fn send_txn_split_proof() {
             b_blinding: b_blinding,
             reveal_asset_id: reveal_asset_id,
         );
+        let clock = Instant::now();
         let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
             sequential;
             proof: split_proof_seq,
@@ -10752,6 +10750,12 @@ fn send_txn_split_proof() {
         );
         verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
             .unwrap();
+        let verifier_time_seq = clock.elapsed();
+
+        println!(
+            "total prover time = {:?}, total verifier time (parallel W2) = {:?}, verifier time (sequential W3) = {:?}",
+            host_proof_time, verifier_time, verifier_time_seq
+        );
     };
 
     // asset-id hidden
@@ -10839,6 +10843,7 @@ fn receive_txn_split_proof() {
         );
         println!("split proof size = {}", split_proof.compressed_size());
 
+        let clock = Instant::now();
         let (even_tuple, odd_tuple) = verify_split_proof!(
             proof: split_proof,
             party: Receiver,
@@ -10856,11 +10861,7 @@ fn receive_txn_split_proof() {
             rng: &mut rng,
         );
         verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
-
-        println!(
-            "reveal_asset_id={}, full verification passed!",
-            reveal_asset_id
-        );
+        let verifier_time = clock.elapsed();
 
         // Sequential flow
         let (split_proof_seq, nullifier_seq, _) = gen_split_proof!(
@@ -10887,6 +10888,7 @@ fn receive_txn_split_proof() {
             b_blinding: b_blinding,
             reveal_asset_id: reveal_asset_id,
         );
+        let clock = Instant::now();
         let (even_tuple_seq, odd_tuple_seq) = verify_split_proof!(
             sequential;
             proof: split_proof_seq,
@@ -10906,6 +10908,12 @@ fn receive_txn_split_proof() {
         );
         verify_given_verification_tuples(even_tuple_seq, odd_tuple_seq, &account_tree_params)
             .unwrap();
+        let verifier_time_seq = clock.elapsed();
+
+        println!(
+            "total prover time = {:?}, total verifier time (parallel W2) = {:?}, verifier time (sequential W3) = {:?}",
+            host_proof_time, verifier_time, verifier_time_seq
+        );
     };
 
     // asset-id hidden

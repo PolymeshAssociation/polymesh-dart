@@ -179,7 +179,9 @@ impl<
         self.chunks.iter().map(|c| c.compressed_size()).sum()
     }
 
-    /// Run the per-chunk sigma-protocol verification and return BP verification tuples
+    /// Run the per-chunk sigma-protocol verification and return BP verification tuples.
+    /// `enc_keys`/`med_keys` carry one entry per revealed-asset leg (in leg order);
+    /// `public_enc_keys` is empty or one entry per leg. Each is sliced to the chunk owning it.
     pub fn verify_and_return_tuples<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
@@ -189,6 +191,9 @@ impl<
         rng: &mut R,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
+        enc_keys: Vec<Vec<Affine<G0>>>,
+        med_keys: Vec<Vec<(u8, Affine<G0>)>>,
+        public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -199,24 +204,52 @@ impl<
         Vec<VerificationTuple<Affine<G1>>>,
         Vec<VerificationTuple<Affine<G0>>>,
     )> {
-        let expected: usize = self.chunks.iter().map(|c| c.leg_proofs.len()).sum();
-        if leg_encs.len() != expected {
+        let total_legs: usize = self.chunks.iter().map(|c| c.leg_proofs.len()).sum();
+        let total_revealed = leg_encs.iter().filter(|e| e.is_asset_id_revealed()).count();
+        if leg_encs.len() != total_legs {
             return Err(Error::ProofVerificationError(
                 "Number of leg encryptions does not match total legs across chunks".to_string(),
             ));
         }
+        if enc_keys.len() != total_revealed || med_keys.len() != total_revealed {
+            return Err(Error::ProofVerificationError(
+                "enc_keys/med_keys must have one entry per revealed-asset leg".to_string(),
+            ));
+        }
+        let has_public = !public_enc_keys.is_empty();
+        if has_public && public_enc_keys.len() != total_legs {
+            return Err(Error::ProofVerificationError(
+                "public_enc_keys must be empty or one entry per leg".to_string(),
+            ));
+        }
 
         let mut encs_it = leg_encs.into_iter();
+        let mut enc_keys_it = enc_keys.into_iter();
+        let mut med_keys_it = med_keys.into_iter();
+        let mut public_it = public_enc_keys.into_iter();
         let mut even_tuples = Vec::with_capacity(self.chunks.len());
         let mut odd_tuples = Vec::with_capacity(self.chunks.len());
         for chunk in &self.chunks {
-            let chunk_encs: Vec<_> = (&mut encs_it).take(chunk.leg_proofs.len()).collect();
+            let n = chunk.leg_proofs.len();
+            let chunk_encs: Vec<_> = (&mut encs_it).take(n).collect();
+            // enc_keys/med_keys are per revealed leg, so take as many as this chunk reveals.
+            let n_revealed = chunk_encs
+                .iter()
+                .filter(|e| e.is_asset_id_revealed())
+                .count();
+            let chunk_enc_keys: Vec<_> = (&mut enc_keys_it).take(n_revealed).collect();
+            let chunk_med_keys: Vec<_> = (&mut med_keys_it).take(n_revealed).collect();
+            let chunk_public: Vec<_> = if has_public {
+                (&mut public_it).take(n).collect()
+            } else {
+                Vec::new()
+            };
             let (even, odd) = chunk.verify_and_return_tuples::<R, Parameters0, Parameters1>(
                 chunk_encs,
                 asset_tree_root,
-                Vec::new(), // enc_keys: empty (hidden-asset legs only)
-                Vec::new(), // med_keys: empty
-                Vec::new(), // public_enc_keys: empty
+                chunk_enc_keys,
+                chunk_med_keys,
+                chunk_public,
                 nonce,
                 tree_parameters,
                 asset_comm_params,
@@ -240,6 +273,9 @@ impl<
         rng: &mut R,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
+        enc_keys: Vec<Vec<Affine<G0>>>,
+        med_keys: Vec<Vec<(u8, Affine<G0>)>>,
+        public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -251,6 +287,9 @@ impl<
                 rng,
                 leg_encs,
                 asset_tree_root,
+                enc_keys,
+                med_keys,
+                public_enc_keys,
                 nonce,
                 tree_parameters,
                 asset_comm_params,
@@ -552,6 +591,9 @@ mod tests {
                     &mut rng,
                     leg_encs.clone(),
                     &root,
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -584,6 +626,9 @@ mod tests {
                     &mut rng,
                     leg_encs.clone(),
                     &root,
+                    vec![],
+                    vec![],
+                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -643,5 +688,179 @@ mod tests {
                 row.proof_bytes,
             );
         }
+    }
+
+    #[test]
+    fn settlement_chunk_mixed_revealed() {
+        // Legs alternate hidden/revealed asset-id.
+        const NUM_GENS: usize = 1 << 15;
+        const L: usize = 64;
+        const M: usize = 2;
+
+        let height = 4;
+        let chunk_size = 2; // leaves per multipath
+        let nonce = b"settlement_mixed_nonce";
+        let amount: u64 = 100;
+        let hidden_asset_id = 1u32;
+        let revealed_asset_id = 2u32;
+
+        let mut rng = rand::thread_rng();
+        let label = b"settlement_mixed_label";
+
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            1,
+            0,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        // Hidden asset committed in the tree; revealed legs need no tree leaf.
+        let asset_data = AssetData::<_, _, PallasParameters, VestaParameters>::new(
+            hidden_asset_id,
+            vec![pk_a_e.0],
+            vec![],
+            &asset_comm_params,
+            asset_tree_params.odd_parameters.sl_params.delta,
+        )
+        .unwrap();
+        let asset_tree = CurveTree::<L, M, VestaParameters, PallasParameters>::from_leaves(
+            &[asset_data.commitment],
+            &asset_tree_params,
+            Some(height),
+        );
+        let root = asset_tree.root_node();
+
+        let is_revealed_per_leg = [false, true, false, true, false, true];
+        let mut legs = Vec::new();
+        let mut leg_encs = Vec::new();
+        let mut leg_enc_rands = Vec::new();
+        let mut asset_data_vec = Vec::new(); // one per hidden leg
+        for &revealed in &is_revealed_per_leg {
+            let asset_id = if revealed {
+                revealed_asset_id
+            } else {
+                hidden_asset_id
+            };
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                asset_id,
+                vec![pk_a_e.0],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        reveal_asset_id: revealed,
+                        parties_see_each_other: true,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            legs.push(leg);
+            leg_encs.push(leg_enc);
+            leg_enc_rands.push(leg_enc_rand);
+            if !revealed {
+                asset_data_vec.push(asset_data.clone());
+            }
+        }
+
+        // Multipaths over the hidden legs' leaves (all leaf 0)
+        let indices = vec![0u32; asset_data_vec.len()];
+        let mut leaf_paths = Vec::new();
+        for chunk in indices.chunks(chunk_size) {
+            leaf_paths.push(asset_tree.get_paths_to_leaves(chunk).unwrap());
+        }
+
+        let batch =
+            SettlementCreationProofBatch::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                legs,
+                leg_encs.clone(),
+                leg_enc_rands,
+                leaf_paths,
+                asset_data_vec,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_eq!(batch.num_chunks(), 3);
+
+        // one enc_keys/med_keys entry per revealed leg, in leg order.
+        let num_revealed = is_revealed_per_leg.iter().filter(|&&r| r).count();
+        let enc_keys = vec![vec![pk_a_e.0]; num_revealed];
+        let med_keys: Vec<Vec<(u8, ark_pallas::Affine)>> = vec![vec![]; num_revealed];
+
+        batch
+            .verify_batched_bp::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_encs.clone(),
+                &root,
+                enc_keys.clone(),
+                med_keys.clone(),
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut rmc_even = RandomizedMultChecker::new(VestaScalar::rand(&mut rng));
+        let mut rmc_odd = RandomizedMultChecker::new(PallasScalar::rand(&mut rng));
+        let (even_tuples, odd_tuples) = batch
+            .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_encs,
+                &root,
+                enc_keys,
+                med_keys,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                Some(&mut rmc_odd),
+            )
+            .unwrap();
+        add_verification_tuples_batches_to_rmc(
+            even_tuples,
+            odd_tuples,
+            asset_tree_params.even_parameters.pc_gens(),
+            asset_tree_params.odd_parameters.pc_gens(),
+            asset_tree_params.even_parameters.bp_gens(),
+            asset_tree_params.odd_parameters.bp_gens(),
+            &mut rmc_even,
+            &mut rmc_odd,
+        )
+        .unwrap();
+        verify_rmc(rmc_even, rmc_odd).unwrap();
     }
 }
