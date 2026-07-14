@@ -35,7 +35,9 @@ pub const LEG_TXN_EVEN_LABEL: &[u8; 18] = b"leg-txn-even-level";
 pub const LEG_TXN_CHALLENGE_LABEL: &[u8; 17] = b"leg-txn-challenge";
 pub const LEG_TXN_INSTANCE_LABEL: &[u8; 22] = b"leg-txn-extra-instance";
 
-// Because of the way we organize keys, its better to have a single encryption key shared among all mediators. This is more efficient except when a mediator is removed which is rare
+// Because of the way we organize keys, its better to have a single encryption key shared among all mediators.
+// This is more efficient except when a mediator is removed which is rare. Also better for asset-id
+// privacy since an uncommon indexing will reveal the asset during proof
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AssetCommitmentParams<
@@ -46,7 +48,7 @@ pub struct AssetCommitmentParams<
     /// Generators for the leaf commitment. The first `1 + num_enc_keys + num_med_keys` generators
     /// commit the x-coordinates of the asset-id point, the auditor encryption keys and the mediator
     /// affirmation keys (the "point block"). The next `num_med_keys` generators, starting at
-    /// 1 + num_enc_keys + num_med_keys`, commit each mediator's public encryption-key index.
+    /// `1 + num_enc_keys + num_med_keys`, commit each mediator's public encryption-key index.
     /// The index for mediator slot `j` is committed under `comm_key[1 + num_enc_keys + num_med_keys + j]`.
     pub comm_key: Vec<Affine<G1>>,
     /// Maximum number of (auditor/mediator shared) encryption keys these params are sized for.
@@ -163,10 +165,10 @@ impl<
             .into_iter()
             .map(|p| (delta + p).into_affine().x)
             .collect::<Vec<_>>();
-        // Each mediator's public encryption-key index as a scalar
+        // Each mediator's public encryption-key index plus one as a scalar
         for (j, (idx, _)) in med_keys.iter().enumerate() {
             gens.push(params.idx_gen(j));
-            scalars.push(F1::from(*idx));
+            scalars.push(F1::from(*idx + 1));
         }
         let commitment = G1::msm(&gens, scalars.as_slice()).unwrap();
         Ok(Self {
@@ -437,8 +439,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryption<G> {
     /// Recover the mediator's affirmation key from `ct_med` using the mediator's encryption key
     /// `sk_enc` (the secret of the encryption key at `enc_key_index` in [`AssetData`]).
     pub fn affirmation_key(&self, sk_enc: &F) -> Result<G> {
-        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         let r_enc_gen = self.eph_pk_med_key * sk_enc_inv;
+        sk_enc_inv.zeroize();
         Ok((self.ct_med.into_group() - r_enc_gen).into_affine())
     }
 }
@@ -536,13 +539,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let pk_s_enc = self.core.pk_s;
         let pk_r_enc = self.core.pk_r;
 
-        // Draw all per-mediator randomness first so the RNG draw order is unchanged
-        // (r1..r4 above, then one r per mediator in index order).
+        // Per-mediator randomness in index order
         let r_meds: Vec<F> = (0..self.med_keys.len()).map(|_| F::rand(rng)).collect();
 
-        // Compute every group element projectively into one flat buffer, then do a single
-        // `normalize_batch` (one field inversion total instead of one per point). Push order
-        // and read-back order below MUST stay in lockstep.
         let mut proj: Vec<G::Group> = Vec::new();
         proj.push(enc_key_gen * r1 + pk_s_enc); // ct_s
         proj.push(enc_key_gen * r2 + pk_r_enc); // ct_r
@@ -589,8 +588,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
 
         let aff = G::Group::normalize_batch(&proj);
 
-        // Read back in the exact push order via a cursor. Struct-literal fields evaluate in
-        // source order, so the `next!()` sequence below consumes `aff` in push order.
         let mut k = 0usize;
         macro_rules! next {
             () => {{
@@ -608,21 +605,20 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         } else {
             AssetIdEncryption::Ciphertext(next!())
         };
-        // r2 (cross) is pushed AFTER r3/r4, so set those first, then r2.
+
         let mut eph_pk_s = SenderEphemeralPublicKey::<G> {
             r1: next!(),
             r2: None,
             r3: next!(),
-            r4: r4.map(|_| next!()),
+            r4: (!config.reveal_asset_id).then(|| next!()),
         };
         eph_pk_s.r2 = config.parties_see_each_other.then(|| next!());
 
-        // r1 (cross) is pushed AFTER r2/r3/r4, so set those first, then r1.
         let mut eph_pk_r = ReceiverEphemeralPublicKey::<G> {
             r1: None,
             r2: next!(),
             r3: next!(),
-            r4: r4.map(|_| next!()),
+            r4: (!config.reveal_asset_id).then(|| next!()),
         };
         eph_pk_r.r1 = config.parties_see_each_other.then(|| next!());
 

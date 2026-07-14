@@ -51,7 +51,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
         leg_enc: MediatorEncryption<G>,
-        enc_sk: G::ScalarField,
+        mut enc_sk: G::ScalarField,
         mut mediator_sk: G::ScalarField,
         accept: bool,
         nonce: &[u8],
@@ -76,6 +76,7 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             sig_key_gen,
         );
 
+        Zeroize::zeroize(&mut enc_sk);
         Zeroize::zeroize(&mut mediator_sk);
 
         enc_pk.challenge_contribution(eph_pk, sig_key_gen, &y, &mut transcript)?;

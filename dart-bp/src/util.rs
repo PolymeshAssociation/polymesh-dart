@@ -1581,16 +1581,25 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
     )],
     asset_id: Option<AssetId>,
     resp_leg_link: &[LegAccountLink<G0>],
+    needs_ct_amount: &[bool],
     enc_gen: Affine<G0>,
     transcript: &mut MerlinTranscript,
 ) -> Result<()> {
     let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
 
-    for (i, ((core, party_eph_pk), resp_leg_link)) in
-        legs.iter().zip(resp_leg_link.iter()).enumerate()
+    for (i, (((core, party_eph_pk), resp_leg_link), needs_amount)) in legs
+        .iter()
+        .zip(resp_leg_link.iter())
+        .zip(needs_ct_amount.iter())
+        .enumerate()
     {
         // It's been validated resp_leg_link contains amount and asset-id responses for required leg-link proofs
-        if let Some(resp_amount) = resp_leg_link.resp_amount() {
+        if *needs_amount {
+            let resp_amount = resp_leg_link.resp_amount().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Leg {i} required amount proof but the proof is missing it"
+                ))
+            })?;
             let eph_pk_amount = party_eph_pk.eph_pk_amount();
             resp_amount.challenge_contribution(
                 &eph_pk_amount,
@@ -1599,7 +1608,12 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                 &mut *transcript,
             )?;
         }
-        if let Some(resp_asset_id) = resp_leg_link.resp_asset_id() {
+        if !core.is_asset_id_revealed() {
+            let resp_asset_id = resp_leg_link.resp_asset_id().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Leg {i} required asset-id proof but the proof is missing it"
+                ))
+            })?;
             let eph_pk_asset_id = party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
                 Error::ProofVerificationError(format!("Expected eph_pk_asset_id for leg {i}"))
             })?;
@@ -1644,6 +1658,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     t_randomness_relations: &Affine<G0>,
     resp_null: &PartialPokDiscreteLog<Affine<G0>>,
     resp_leg_link: &[LegAccountLink<G0>],
+    needs_ct_amount: &[bool],
     verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_gen: Affine<G0>,
@@ -1653,6 +1668,13 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
             "Mismatched leg vector lengths: legs.len() = {}, resp_leg_link.len() = {}",
             legs.len(),
             resp_leg_link.len()
+        )));
+    }
+    if legs.len() != needs_ct_amount.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: legs.len() = {}, needs_ct_amount.len() = {}",
+            legs.len(),
+            needs_ct_amount.len()
         )));
     }
 
@@ -1672,6 +1694,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
         &legs,
         asset_id,
         resp_leg_link,
+        needs_ct_amount,
         enc_gen,
         &mut transcript,
     )?;
@@ -1699,6 +1722,7 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
     )],
     asset_id: Option<AssetId>,
     resp_leg_link: &[LegAccountLink<G0>],
+    needs_ct_amount: &[bool],
     resp_sk_enc_inv_bp: &G0::ScalarField,
     resp_asset_id_acc_old: Option<&G0::ScalarField>,
     verifier_challenge: &G0::ScalarField,
@@ -1707,11 +1731,21 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
 ) -> Result<()> {
     let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
 
-    for (i, (leg, resp_leg_link)) in legs.iter().zip(resp_leg_link.iter()).enumerate() {
+    for (i, ((leg, resp_leg_link), needs_amount)) in legs
+        .iter()
+        .zip(resp_leg_link.iter())
+        .zip(needs_ct_amount.iter())
+        .enumerate()
+    {
         let (core, party_eph_pk) = leg;
 
         // ct_amount = Eph_amt * sk_enc^-1 + enc_gen * v
-        if let Some(resp_amount) = resp_leg_link.resp_amount() {
+        if *needs_amount {
+            let resp_amount = resp_leg_link.resp_amount().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Leg {i} required amount proof but the proof is missing it"
+                ))
+            })?;
             let eph_pk_amount = party_eph_pk.eph_pk_amount();
             verify_or_rmc_3!(
                 rmc,
@@ -1726,7 +1760,12 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
         }
 
         // ct_asset_id when the asset-id is encrypted in this leg
-        if let Some(resp_asset_id) = resp_leg_link.resp_asset_id() {
+        if !core.is_asset_id_revealed() {
+            let resp_asset_id = resp_leg_link.resp_asset_id().ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Leg {i} required asset-id proof but the proof is missing it"
+                ))
+            })?;
             let eph_pk_asset_id = party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
                 Error::ProofVerificationError(format!("Missing eph_pk_asset_id for leg {i}"))
             })?;
@@ -1800,6 +1839,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
     resp_null: &PartialPokDiscreteLog<Affine<G0>>,
     resp_leg_link: &[LegAccountLink<G0>],
+    needs_ct_amount: &[bool],
     resp_bp: &PartialSchnorrResponse<Affine<G0>>,
     verifier_challenge: &G0::ScalarField,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1820,6 +1860,13 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             "Mismatched leg vector lengths: legs.len() = {}, resp_leg_link.len() = {}",
             legs.len(),
             resp_leg_link.len()
+        )));
+    }
+    if legs.len() != needs_ct_amount.len() {
+        return Err(Error::ProofVerificationError(format!(
+            "Mismatched leg vector lengths: legs.len() = {}, needs_ct_amount.len() = {}",
+            legs.len(),
+            needs_ct_amount.len()
         )));
     }
 
@@ -1965,6 +2012,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         legs,
         asset_id,
         resp_leg_link,
+        needs_ct_amount,
         resp_sk_enc_inv_bp,
         asset_id
             .is_none()

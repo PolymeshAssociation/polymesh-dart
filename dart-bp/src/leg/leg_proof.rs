@@ -309,9 +309,9 @@ impl<
                 x_coords.as_slice(),
             )
             .unwrap();
-            // Each mediator's encryption-key index committed as a scalar
+            // Each mediator's encryption-key index plus one committed as a scalar
             for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
-                commitment += asset_comm_params.idx_gen(j) * F1::from(*idx);
+                commitment += asset_comm_params.idx_gen(j) * (F1::from(*idx + 1));
             }
             assert_eq!(
                 commitment
@@ -332,11 +332,11 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // The leaf commits the per-mediator index as well. Subtract them (using the registered indices)
+        // The leaf commits the per-mediator index plus one as well. Subtract them (using the registered indices)
         //  so `prove_ped_com` opens only the point block.
         let mut adjusted_leaf = rerandomized_leaf.into_group();
         for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
-            adjusted_leaf -= asset_comm_params.idx_gen(j) * F1::from(*idx);
+            adjusted_leaf -= asset_comm_params.idx_gen(j) * (F1::from(*idx + 1));
         }
         let adjusted_leaf = adjusted_leaf.into_affine();
         let (re_randomized_points, divisor_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
@@ -1255,12 +1255,12 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // Subtract the per-mediator index (using the leg's public indices) before opening the
+        // Subtract the per-mediator index plus one (using the leg's public indices) before opening the
         // point block. The opening matches the registered leaf if each public index equals the
         // committed one, which binds `enc_key_index` to the asset leaf.
         let mut adjusted_leaf = rerandomized_leaf.into_group();
         for (j, mediator) in leg_enc.mediators.iter().enumerate() {
-            adjusted_leaf -= asset_comm_params.idx_gen(j) * F1::from(mediator.enc_key_index);
+            adjusted_leaf -= asset_comm_params.idx_gen(j) * (F1::from(mediator.enc_key_index + 1));
         }
         let adjusted_leaf = adjusted_leaf.into_affine();
         verify_ped_com::<_, _, _, _, Parameters1>(

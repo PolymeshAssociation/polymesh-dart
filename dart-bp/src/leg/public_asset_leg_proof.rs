@@ -600,8 +600,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
     /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
-    /// specified by leg creator and are always known to the verifier
+    /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and are always
+    ///  known to the verifier.
     /// `asset_id` is the public asset-id (must match the revealed asset-id in `leg_enc`).
     pub fn verify_and_return_tuples<R: CryptoRngCore>(
         &self,
@@ -645,8 +645,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
     /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
-    /// specified by leg creator and are always known to the verifier
+    /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and are always
+    ///  known to the verifier.
     /// `asset_id` is the public asset-id (must match the revealed asset-id in `leg_enc`).
     pub fn verify_sigma_protocols_and_enforce_constraints(
         &self,
@@ -774,6 +774,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     "med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
                     *idx,
                     enc_keys.len()
+                )));
+            }
+            if leg_enc.mediators[i].enc_key_index != *idx {
+                return Err(Error::ProofVerificationError(format!(
+                    "med_keys[{i}].0 index {} mismatch with index {} in leg encryption",
+                    *idx, leg_enc.mediators[i].enc_key_index
                 )));
             }
         }
@@ -918,6 +924,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                     .zip(med_keys.iter()),
             )
         {
+            // ct_med - pk_m = enc_key_gen * r_meds[i]
             resp_ct_med.challenge_contribution(&enc_key_gen, y_ct_med, &mut transcript_ref)?;
             // M[i] = pk_en[med_keys[i].0] * r_meds[i]
             resp_eph_pk_med.challenge_contribution(

@@ -133,7 +133,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let sk_blinding = G::ScalarField::rand(rng);
         let sk_enc_blinding = G::ScalarField::rand(rng);
         let sk_enc_inv_blinding = G::ScalarField::rand(rng);
-        let sk_enc_inv = Self::sk_enc_inverse(sk_enc)?;
+        let sk_enc_inv = Self::sk_enc_inverse(&sk_enc)?;
         add_to_transcript!(
             transcript,
             NULLIFIER_LABEL,
@@ -512,19 +512,6 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         }
 
         let (asset_id, num_hidden) = LegVerifierConfig::asset_id_and_hidden_count(&legs_conf)?;
-        for (i, (leg_conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
-            // Check the leg-link variant carries what each leg needs. ct_amount and/or ct_asset_id.
-            if leg_conf.needs_ct_amount() && link.resp_amount().is_none() {
-                return Err(Error::ProofVerificationError(format!(
-                    "Leg {i} required amount proof but auth proof is missing it"
-                )));
-            }
-            if !leg_conf.is_asset_id_revealed() && link.resp_asset_id().is_none() {
-                return Err(Error::ProofVerificationError(format!(
-                    "Leg {i} required asset-id proof but auth proof is missing it"
-                )));
-            }
-        }
 
         let is_asset_id_revealed = asset_id.is_some();
 
@@ -543,7 +530,12 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let mut offset_asset_id = 0;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
-            if let Some(resp_amount) = link.resp_amount() {
+            if conf.needs_ct_amount() {
+                let resp_amount = link.resp_amount().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i} required amount proof but auth proof is missing it"
+                    ))
+                })?;
                 let eph_pk_base = conf.party_eph_pk.eph_pk_amount();
                 resp_amount.challenge_contribution(
                     &eph_pk_base,
@@ -554,8 +546,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 offset_amount += 1;
             }
 
-            if let Some(resp_asset_id) = link.resp_asset_id() {
+            if !conf.is_asset_id_revealed() {
                 // If asset id is not revealed in this leg
+                let resp_asset_id = link.resp_asset_id().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i} required asset-id proof but auth proof is missing it"
+                    ))
+                })?;
                 let eph_pk_base = conf.party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Leg {i}: party_eph_pk is missing the asset-id ephemeral key but the leg hides the asset-id"
@@ -630,7 +627,12 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let mut offset_asset_id = 0;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
-            if let Some(resp_amount) = link.resp_amount() {
+            if conf.needs_ct_amount() {
+                let resp_amount = link.resp_amount().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i} required amount proof but auth proof is missing it"
+                    ))
+                })?;
                 let eph_pk_base = conf.party_eph_pk.eph_pk_amount();
                 verify_or_rmc_3!(
                     rmc,
@@ -645,12 +647,25 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 offset_amount += 1;
             }
 
-            if let Some(resp_asset_id) = link.resp_asset_id() {
+            if !conf.is_asset_id_revealed() {
                 // If asset id is not revealed in this leg
-                let eph_pk_base = conf.party_eph_pk.eph_pk_asset_id().unwrap();
+                let resp_asset_id = link.resp_asset_id().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i} required asset-id proof but auth proof is missing it"
+                    ))
+                })?;
+                let eph_pk_base = conf.party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
+                    Error::ProofVerificationError(format!(
+                        "Leg {i}: party_eph_pk is missing the asset-id ephemeral key but the leg hides the asset-id"
+                    ))
+                })?;
                 match resp_asset_id {
                     RespAssetId::Elsewhere(r) => {
-                        let y = (conf.encryption.asset_id_ciphertext().unwrap() - h_at.unwrap())
+                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                            Error::ProofVerificationError(format!(
+                                "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
+                            ))
+                        })? - h_at.unwrap())
                             .into_affine();
                         verify_or_rmc_2!(
                             rmc,
@@ -703,7 +718,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
     }
 
     /// Just for mocking
-    pub(crate) fn sk_enc_inverse(sk_enc: G::ScalarField) -> error::Result<G::ScalarField> {
+    pub(crate) fn sk_enc_inverse(sk_enc: &G::ScalarField) -> error::Result<G::ScalarField> {
         sk_enc.inverse().ok_or(Error::InvertingZero)
     }
 }

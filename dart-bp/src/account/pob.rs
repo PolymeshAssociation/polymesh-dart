@@ -294,11 +294,6 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub resp_enc_key_gen: PokDiscreteLog<G>,
     pub resp_participant: Vec<PartialPokDiscreteLog<G>>,
     /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
-    ///
-    /// Structural invariants (enforced by the verifier):
-    /// - `resp_asset_id.len() == legs.len()`
-    /// - `resp_asset_id[i].is_some()` iff the corresponding leg hides the asset ID
-    ///   (i.e., iff `!legs[i].is_asset_id_revealed()`)
     pub resp_asset_id: Vec<Option<PartialPokDiscreteLog<G>>>,
     /// Proving relationship `\sum{C_v} - (\sum{R[2]}) * sk_en^{-1} = h * \sum{v}`
     pub resp_recv_amount: Option<PartialPokDiscreteLog<G>>,
@@ -442,7 +437,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             &account_comm_key.current_rho_gen(),
         );
 
-        // To prove secret key in account state is same as in public key
+        // To prove secret key in account state is same as in public key. This relation ensures that
+        // knowledge of secret key is required to do PoB and thus can be removed accordingly
         let t_pk =
             PokDiscreteLogProtocol::init(sk_aff.clone(), sk_blinding, &account_comm_key.sk_gen());
 
@@ -663,6 +659,8 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         )
     }
 
+    /// The calls must first ensure that `legs` are unique and actually pending (check their status from chain)
+    /// as the following assumes these to be true
     pub fn verify_with_given_transcript(
         &self,
         asset_id: AssetId,
@@ -707,11 +705,34 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     "No response for sender amount".to_string(),
                 ));
             }
+        } else {
+            if self.resp_sent_amount.is_some() {
+                return Err(Error::ProofVerificationError(
+                    "Response for sender amount when prover is not a sender".to_string(),
+                ));
+            }
+            if pending_sent_amount > 0 {
+                return Err(Error::ProofVerificationError(
+                    "Non zero pending_sent_amount when prover is not a sender".to_string(),
+                ));
+            }
         }
+
         if receiver_in_leg_indices.len() > 0 {
             if self.resp_recv_amount.is_none() {
                 return Err(Error::ProofVerificationError(
                     "No response for receiver amount".to_string(),
+                ));
+            }
+        } else {
+            if self.resp_recv_amount.is_some() {
+                return Err(Error::ProofVerificationError(
+                    "Response for receiver amount when prover is not a receiver".to_string(),
+                ));
+            }
+            if pending_recv_amount > 0 {
+                return Err(Error::ProofVerificationError(
+                    "Non zero pending_recv_amount when prover is not a receiver".to_string(),
                 ));
             }
         }
@@ -1555,5 +1576,91 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn pob_with_anyone_no_pending_legs() {
+        // Account with zero pending legs (counter = 0). The honest proof carries pending_sent =
+        // pending_recv = 0 and verifies. A proof claiming a nonzero pending_sent, a nonzero pending_recv,
+        // a nonzero pending_recv, or a nonempty sender/receiver index set while disclosing no legs must
+        // be rejected.
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), _, _) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id);
+        account.balance = 1000;
+        account.counter = 0;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let nonce = b"test-nonce";
+
+        let build = |rng: &mut rand::rngs::ThreadRng, sent: u64, recv: u64| {
+            PobWithAnyoneProof::new(
+                rng,
+                sk.0,
+                sk_e.0,
+                &account,
+                account_comm.clone(),
+                vec![],
+                BTreeSet::new(),
+                BTreeSet::new(),
+                sent,
+                recv,
+                nonce,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap()
+        };
+
+        let verify = |proof: &PobWithAnyoneProof<PallasA>,
+                      sender: BTreeSet<usize>,
+                      receiver: BTreeSet<usize>,
+                      sent: u64,
+                      recv: u64| {
+            proof.verify(
+                asset_id,
+                account.balance,
+                account.counter,
+                id,
+                &pk.0,
+                &pk_e.0,
+                account_comm.clone(),
+                vec![],
+                sender,
+                receiver,
+                sent,
+                recv,
+                nonce,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+        };
+
+        // Honest: no pending legs, both amounts zero
+        let honest = build(&mut rng, 0, 0);
+        verify(&honest, BTreeSet::new(), BTreeSet::new(), 0, 0).unwrap();
+
+        // Nonzero pending_sent_amount
+        let bad_sent = build(&mut rng, 999, 0);
+        assert!(verify(&bad_sent, BTreeSet::new(), BTreeSet::new(), 999, 0).is_err());
+
+        // Nonzero pending_recv_amount
+        let bad_recv = build(&mut rng, 0, 999);
+        assert!(verify(&bad_recv, BTreeSet::new(), BTreeSet::new(), 0, 999).is_err());
+
+        // Claiming a sender leg index while disclosing no legs
+        assert!(verify(&honest, BTreeSet::from([0usize]), BTreeSet::new(), 0, 0).is_err());
+
+        // Claiming a receiver leg index while disclosing no legs
+        assert!(verify(&honest, BTreeSet::new(), BTreeSet::from([0usize]), 0, 0).is_err());
     }
 }

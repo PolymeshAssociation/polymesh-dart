@@ -3203,6 +3203,67 @@ proptest! {
     }
 }
 
+#[test]
+fn leg_creator_tries_to_portray_mediator_as_auditor() {
+    // A leg creator registers an asset whose sole mediator uses encryption-key index 0, then proves
+    // against that leaf while presenting the mediator key as a second auditor and claiming zero
+    // mediators. Under `index + 1` the mediator contributes `idx_gen(0) * 1`, not the identity, so the
+    // mediated leaf and the all-auditor leaf are distinct commitments and the re-labelled layout is not
+    // the registered leaf.
+
+    let mut rng = rand::thread_rng();
+    const NUM_GENS: usize = 1 << 12;
+    let label = b"test";
+    let asset_tree_params =
+        SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+    let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+        b"asset-comm-params",
+        2,
+        2,
+        &asset_tree_params.even_parameters.bp_gens(),
+    );
+    let delta = asset_tree_params.odd_parameters.sl_params.delta;
+
+    let asset_id = 1;
+    let (_, ek0) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, mk0) = keygen_sig(&mut rng, sig_key_gen);
+
+    // Mediated layout (1 enc, 1 mediator at index 0) vs mediator-less layout (2 enc, 0 mediators).
+    let asset_a = AssetData::new(
+        asset_id,
+        vec![ek0.0],
+        vec![(0u8, mk0.0)],
+        &asset_comm_params,
+        delta,
+    )
+    .unwrap();
+    let asset_b = AssetData::new(
+        asset_id,
+        vec![ek0.0, mk0.0],
+        vec![],
+        &asset_comm_params,
+        delta,
+    )
+    .unwrap();
+
+    assert_ne!(
+        asset_a.commitment, asset_b.commitment,
+        "index+1 must keep the mediated leaf distinct from the extra-auditor layout"
+    );
+    // The divergence is exactly the index-generator term for the mediator at index 0.
+    assert_eq!(
+        (asset_a.commitment.into_group() - asset_b.commitment).into_affine(),
+        asset_comm_params.idx_gen(0)
+    );
+}
+
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
 
 #[cfg(feature = "ignore_prover_input_sanitation")]

@@ -288,24 +288,6 @@ impl<
         }
 
         let (asset_id, _) = LegVerifierConfig::asset_id_and_hidden_count(&legs_with_conf)?;
-        for (i, (leg_conf, link)) in legs_with_conf
-            .iter()
-            .zip(proof.resp_leg_link.iter())
-            .enumerate()
-        {
-            // Check the proof's leg-link variant carries what this leg needs:
-            // ct_amount iff revealed-in-this-leg or balance changed; ct_asset_id iff asset-id encrypted.
-            if leg_conf.needs_ct_amount() && link.resp_amount().is_none() {
-                return Err(Error::ProofVerificationError(format!(
-                    "Leg {i} required amount proof but the proof is missing it"
-                )));
-            }
-            if !leg_conf.is_asset_id_revealed() && link.resp_asset_id().is_none() {
-                return Err(Error::ProofVerificationError(format!(
-                    "Leg {i} required asset-id proof but the proof is missing it"
-                )));
-            }
-        }
 
         // If asset-id is revealed, there would be one less response
         let expected_num_resps = NUM_GENERATORS + { asset_id.is_none() as usize };
@@ -355,6 +337,8 @@ impl<
             );
         }
 
+        let needs_ct_amount: Vec<bool> =
+            legs_with_conf.iter().map(|c| c.needs_ct_amount()).collect();
         enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
             legs_with_conf
                 .iter()
@@ -368,6 +352,7 @@ impl<
             &proof.partial.t_bp_randomness_relations,
             &proof.partial.resp_null,
             &proof.resp_leg_link,
+            &needs_ct_amount,
             even_verifier,
             account_comm_key,
             enc_gen,
@@ -441,6 +426,11 @@ impl<
             .iter()
             .map(|l| l.has_counter_decreased)
             .collect();
+        let needs_ct_amount: Vec<bool> = self
+            .legs_with_conf
+            .iter()
+            .map(|c| c.needs_ct_amount())
+            .collect();
         let _ = verify_sigma_for_common_state_change(
             &leg_cores,
             has_counter_decreased,
@@ -458,6 +448,7 @@ impl<
             &common_state_change_proof.resp_acc_new,
             &common_state_change_proof.partial.resp_null,
             &common_state_change_proof.resp_leg_link,
+            &needs_ct_amount,
             &common_state_change_proof
                 .partial
                 .resp_bp_randomness_relations,
