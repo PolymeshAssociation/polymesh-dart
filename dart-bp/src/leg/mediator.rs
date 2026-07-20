@@ -31,6 +31,7 @@ pub const MEDIATOR_TXN_REJECT_RESPONSE: &[u8; 6] = b"reject";
 
 /// CDS 1-of-n OR over sigma protocol: proves `y = base1_k * w1 + base2 * w2` for a hidden `k`,
 /// where `base2` and `y` are shared across branches.
+/// Follows the protocol of Theorem 8 and Corollary 12 of [Proofs of Partial Knowledge and Simplified Design of Witness Hiding Protocols](https://people.csail.mit.edu/rivest/voting/papers/CramerDamgardSchoenmakers-ProofsOfPartialKnowledge.pdf)
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct CdsOr<G: AffineRepr> {
     /// Challenges

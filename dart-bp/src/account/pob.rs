@@ -97,7 +97,13 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             PK_LABEL,
             pk_aff,
             PK_ENC_LABEL,
-            pk_enc
+            pk_enc,
+            ASSET_ID_LABEL,
+            account.asset_id(),
+            BALANCE_LABEL,
+            account.balance(),
+            COUNTER_LABEL,
+            account.counter()
         );
 
         let null_gen = account_comm_key.current_rho_gen();
@@ -214,7 +220,13 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
             PK_LABEL,
             pk_aff,
             PK_ENC_LABEL,
-            pk_enc
+            pk_enc,
+            ASSET_ID_LABEL,
+            asset_id,
+            BALANCE_LABEL,
+            balance,
+            COUNTER_LABEL,
+            counter
         );
 
         let null_gen = account_comm_key.current_rho_gen();
@@ -835,8 +847,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 }
                 if eph_pk_bases_for_asset_id[i].is_none() {
                     return Err(Error::ProofVerificationError(format!(
-                        "Missing asset-id ephemeral key for hidden-asset leg {}",
-                        i
+                        "Missing asset-id ephemeral key for hidden-asset leg {i}",
                     )));
                 }
                 let y = legs[i]
@@ -844,6 +855,17 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .map(|ct| (ct.into_group() + minus_h_at).into_affine());
                 y_asset_id.push(y);
             } else {
+                if let Some(a) = legs[i].asset_id() {
+                    if a != asset_id {
+                        return Err(Error::ProofVerificationError(format!(
+                            "Incorrect asset-id {a} for revealed-asset leg {i}",
+                        )));
+                    }
+                } else {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Missing asset-id for revealed-asset leg {i}",
+                    )));
+                }
                 y_asset_id.push(None);
             }
         }
@@ -1036,7 +1058,7 @@ mod tests {
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{Leg, LegEncConfig};
+    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig};
     use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
@@ -1332,13 +1354,13 @@ mod tests {
                 &pk.0,
                 &pk_e.0,
                 account_comm,
-                legs,
+                legs.clone(),
                 sender_in_leg_indices.clone(),
                 receiver_in_leg_indices.clone(),
                 pending_sent_amount,
                 pending_recv_amount,
                 nonce,
-                account_comm_key,
+                account_comm_key.clone(),
                 enc_gen,
             )
             .unwrap();
@@ -1350,6 +1372,31 @@ mod tests {
         println!(
             "total prover time = {:?}, total verifier time = {:?}",
             prover_time, verifier_time
+        );
+
+        // Change asset-id in one of the revealed legs
+        legs[0].leg_enc_core_and_eph_keys.core.ct_asset_id =
+            AssetIdEncryption::Revealed(asset_id + 1);
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    id,
+                    &pk.0,
+                    &pk_e.0,
+                    account_comm,
+                    legs,
+                    sender_in_leg_indices,
+                    receiver_in_leg_indices,
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key,
+                    enc_gen,
+                )
+                .is_err()
         );
     }
 
