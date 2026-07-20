@@ -1121,6 +1121,13 @@ impl<
         let num_med_keys = leg_enc.num_mediators();
         let num_pub_enc_keys = public_enc_keys.len();
 
+        // Mediators require >=1 encryption keys
+        if num_med_keys > 0 && num_enc_keys == 0 {
+            return Err(Error::ProofVerificationError(
+                "Need at least 1 encryption key when there is a mediator".to_string(),
+            ));
+        }
+
         if num_enc_keys > asset_comm_params.num_enc_keys as usize
             || num_med_keys > asset_comm_params.num_med_keys as usize
         {
