@@ -37,7 +37,7 @@ impl AssetKeysLookup {
         self.assets.insert(asset_state.asset_id, asset_state.keys);
     }
 
-    pub fn get_keys(&self, asset_id: AssetId) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+    pub fn get_keys(&self, asset_id: AssetId) -> Result<(Vec<PallasA>, Vec<PallasA>), Error> {
         let asset_keys = self
             .assets
             .get(&asset_id)
@@ -75,8 +75,8 @@ pub struct AssetKeys {
     /// The encryption keys for auditors and mediators are stored in a set to ensure uniqueness.
     #[cfg_attr(feature = "serde", serde(alias = "encKeys"))]
     pub enc_keys: BTreeSet<EncryptionPublicKey>,
-    /// The mediators are stored as a map from their `affirmation_key` to their encryption key.
-    pub mediators: BTreeMap<AccountPublicKey, u8>,
+    /// The affirmation keys of mediators.
+    pub mediators: BTreeSet<AccountPublicKey>,
 }
 
 impl AssetKeys {
@@ -100,32 +100,25 @@ impl AssetKeys {
             asset.enc_keys.insert(*enc_key);
         }
 
-        // Create a list of mediators with their corresponding encryption key indices.
-        for (account_key, enc_key) in mediators {
-            // Get the index of the encryption key for the mediator.  This shouldn't fail since the encryption keys for mediators are included in the `enc_key_list`.
-            let enc_idx = asset
-                .enc_keys
-                .iter()
-                .position(|auditor_key| auditor_key == enc_key)
-                .ok_or_else(|| Error::EncryptionKeyMissing)?;
-            asset.mediators.insert(*account_key, enc_idx as u8);
+        for account_key in mediators.keys() {
+            asset.mediators.insert(*account_key);
         }
 
         Ok(asset)
     }
 
-    pub fn get_keys(&self) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+    pub fn get_keys(&self) -> Result<(Vec<PallasA>, Vec<PallasA>), Error> {
         // Convert encryption keys to affine points.
         let enc_keys = self
             .enc_keys
             .iter()
             .map(|enc_key| enc_key.get_affine())
             .collect::<Result<_, _>>()?;
-        // Convert mediator encryption keys to affine points and pair them with their corresponding affirmation key indices.
+        // Convert mediator affirmation keys to affine points.
         let med_keys = self
             .mediators
             .iter()
-            .map(|(account_key, enc_idx)| Ok((*enc_idx, account_key.get_affine()?)))
+            .map(|account_key| account_key.get_affine())
             .collect::<Result<_, Error>>()?;
 
         Ok((enc_keys, med_keys))
@@ -133,16 +126,9 @@ impl AssetKeys {
 
     /// Generates the asset commitment data for this asset state, which includes the asset ID, encryption keys, mediator keys, and the parameters for the asset commitment scheme.
     pub fn asset_data(&self, asset_id: AssetId) -> Result<AssetCommitmentData, Error> {
-        let tree_params = get_asset_curve_tree_parameters();
         let asset_comm_params = get_asset_commitment_parameters();
         let (enc_keys, med_keys) = self.get_keys()?;
-        let asset_data = AssetCommitmentData::new(
-            asset_id,
-            enc_keys,
-            med_keys,
-            asset_comm_params,
-            tree_params.odd_parameters.sl_params.delta,
-        )?;
+        let asset_data = AssetCommitmentData::new(asset_id, enc_keys, med_keys, asset_comm_params)?;
         Ok(asset_data)
     }
 
@@ -171,8 +157,7 @@ pub struct AssetState {
 impl AssetState {
     /// Creates a new asset state with the given asset ID, mediators, and auditors.
     ///
-    /// `mediators` is a slice of `(enc_key_index, affirmation_key)` pairs. The index must point to
-    /// a valid entry in `auditors` (i.e., `< auditors.len()`).
+    /// `mediators` is a slice of `(affirmation_key, encryption_key)` pairs.
     pub fn new<T: DartLimits>(
         asset_id: AssetId,
         mediators: &[(AccountPublicKey, EncryptionPublicKey)],
@@ -212,10 +197,8 @@ impl AssetState {
         })
     }
 
-    /// Retrieves the encryption keys for auditors and mediators, along with the indices of the mediator keys in the list of encryption keys.
-    pub fn get_encryption_and_mediator_keys(
-        &self,
-    ) -> Result<(Vec<PallasA>, Vec<(u8, PallasA)>), Error> {
+    /// Retrieves the encryption keys for auditors and mediators, along with the mediator affirmation keys.
+    pub fn get_encryption_and_mediator_keys(&self) -> Result<(Vec<PallasA>, Vec<PallasA>), Error> {
         self.keys.get_keys()
     }
 

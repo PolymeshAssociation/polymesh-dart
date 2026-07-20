@@ -8,6 +8,7 @@ use common::*;
 
 struct SettlementSetup {
     account_tree: DartProverAccountTree,
+    asset_lookup: AssetKeysLookup,
     issuer_acct: DartUserAccount,
     investor_acct: DartUserAccount,
     mediator_accts: Option<Vec<DartUserAccount>>,
@@ -95,8 +96,11 @@ fn setup_settlement(num_mediators: usize) -> Result<SettlementSetup> {
     let leg_ref = LegRef::new(settlement_ref, 0);
     let leg_enc = settlement.legs[0].leg_enc().clone();
 
+    let asset_lookup = chain.get_asset_lookup().clone();
+
     Ok(SettlementSetup {
         account_tree,
+        asset_lookup,
         issuer_acct,
         investor_acct,
         mediator_accts: (!mediator_accts.is_empty()).then_some(mediator_accts),
@@ -261,7 +265,7 @@ fn test_leg_wrapper_check_leg_references() -> Result<()> {
 
     let s = setup_settlement(0)?;
     let instant_proof = build_instant_proof(&mut rng, &s)?;
-    assert!(instant_proof.check_leg_references());
+    assert!(instant_proof.check_leg_references(&s.asset_lookup));
 
     let s = setup_settlement(0)?;
     let mut instant_proof = build_instant_proof(&mut rng, &s)?;
@@ -270,28 +274,28 @@ fn test_leg_wrapper_check_leg_references() -> Result<()> {
         .leg_affirmations
         .try_push(dup)
         .expect("BoundedVec full");
-    assert!(!instant_proof.check_leg_references());
+    assert!(!instant_proof.check_leg_references(&s.asset_lookup));
 
     let s_ref = [0u8; 32];
     let s = setup_settlement(0)?;
     let mut instant_proof = build_instant_proof(&mut rng, &s)?;
     instant_proof.leg_affirmations[0].sender.leg_ref = LegRef::new(SettlementRef(s_ref), 0);
-    assert!(!instant_proof.check_leg_references());
+    assert!(!instant_proof.check_leg_references(&s.asset_lookup));
 
     let s = setup_settlement(0)?;
     let mut instant_proof = build_instant_proof(&mut rng, &s)?;
     instant_proof.leg_affirmations[0].receiver.leg_ref = LegRef::new(SettlementRef(s_ref), 0);
-    assert!(!instant_proof.check_leg_references());
+    assert!(!instant_proof.check_leg_references(&s.asset_lookup));
 
     let s = setup_settlement(1)?;
     let mut instant_proof = build_instant_proof(&mut rng, &s)?;
     instant_proof.leg_affirmations[0].mediators = Default::default();
-    assert!(!instant_proof.check_leg_references());
+    assert!(!instant_proof.check_leg_references(&s.asset_lookup));
 
     let s = setup_settlement(1)?;
     let mut instant_proof = build_instant_proof(&mut rng, &s)?;
     instant_proof.leg_affirmations[0].mediators[0].leg_ref = LegRef::new(SettlementRef(s_ref), 0);
-    assert!(!instant_proof.check_leg_references());
+    assert!(!instant_proof.check_leg_references(&s.asset_lookup));
 
     let s = setup_settlement(0)?;
     let batched_proof = build_batched_proof(&mut rng, &s)?;

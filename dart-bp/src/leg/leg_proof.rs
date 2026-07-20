@@ -42,7 +42,7 @@ use schnorr_pok::partial::{
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
 
-/// This is the proof for a single leg creation. Report section 5.1.5
+/// Leg-creation proof with one ephemeral per mediator encryption key .
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct LegCreationProof<
     const L: usize,
@@ -96,11 +96,11 @@ pub struct LegCreationProof<
         PartialPokDiscreteLog<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
     )>,
-    /// Responses for proving mediator key relations
+    /// Responses for proving mediator key relations.
     pub resp_eph_pk_meds: Vec<(
         Partial2PokPedersenCommitment<Affine<G0>>,
         PartialPokDiscreteLog<Affine<G0>>,
-        PartialPokDiscreteLog<Affine<G0>>,
+        Vec<PartialPokDiscreteLog<Affine<G0>>>,
     )>,
     /// Response for proving `S[1] = S[0] * r_2/r_1` (only when sender_receiver_decryption_needed)
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G0>>>,
@@ -295,24 +295,21 @@ impl<
 
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if cfg!(debug_assertions) {
-            let x_coords = asset_data_points
-                .clone()
-                .into_iter()
-                .map(|p| {
-                    (tree_parameters.odd_parameters.sl_params.delta + p)
-                        .into_affine()
-                        .x
+            let coords = asset_data_points
+                .iter()
+                .flat_map(|p| {
+                    let (x, y) = p.xy().unwrap();
+                    [x, y]
                 })
                 .collect::<Vec<_>>();
             let mut commitment = Projective::<G1>::msm(
-                &asset_comm_params.comm_key[..num_asset_data_points],
-                x_coords.as_slice(),
+                &asset_comm_params.comm_key[..2 * num_asset_data_points],
+                coords.as_slice(),
             )
             .unwrap();
-            // Each mediator's encryption-key index plus one committed as a scalar
-            for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
-                commitment += asset_comm_params.idx_gen(j) * (F1::from(*idx + 1));
-            }
+            // Mediator count committed under the trailing generator.
+            commitment +=
+                asset_comm_params.count_gen() * F1::from(asset_data.num_mediator_keys() as u64);
             assert_eq!(
                 commitment
                     + (tree_parameters.even_parameters.pc_gens().B_blinding
@@ -332,23 +329,21 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // The leaf commits the per-mediator index plus one as well. Subtract them (using the registered indices)
-        //  so `prove_ped_com` opens only the point block.
-        let mut adjusted_leaf = rerandomized_leaf.into_group();
-        for (j, (idx, _)) in asset_data.med_keys.iter().enumerate() {
-            adjusted_leaf -= asset_comm_params.idx_gen(j) * (F1::from(*idx + 1));
-        }
-        let adjusted_leaf = adjusted_leaf.into_affine();
+        // The leaf commits the mediator count under `count_gen`. Subtract it so `prove_ped_com` opens
+        // only the point block.
+        let adjusted_leaf = (rerandomized_leaf.into_group()
+            - asset_comm_params.count_gen() * F1::from(num_med_keys as u64))
+        .into_affine();
         let (re_randomized_points, divisor_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
             rng,
             even_prover,
-            asset_data_points,
+            &asset_data_points,
             &adjusted_leaf,
             re_randomization_of_leaf,
-            blindings_for_points.clone(),
+            &blindings_for_points,
             &tree_parameters.odd_parameters,
             &tree_parameters.even_parameters.bp_gens(),
-            key_indices,
+            &key_indices,
             None,
         )?;
 
@@ -365,7 +360,8 @@ impl<
         if cfg!(debug_assertions) {
             assert_eq!(
                 re_randomized_points.re_randomized_points[0].into_group(),
-                (asset_comm_params.j_0 * at) + (b_blinding_base * blindings_for_points[0])
+                (asset_comm_params.j_0 * (at + F0::from(1u64)))
+                    + (b_blinding_base * blindings_for_points[0])
             );
 
             for i in 0..asset_data.num_total_keys() {
@@ -374,7 +370,7 @@ impl<
                     asset_data.enc_keys[i]
                 } else {
                     // For mediator
-                    asset_data.med_keys[i - num_enc_keys].1
+                    asset_data.med_keys[i - num_enc_keys]
                 };
                 assert_eq!(
                     re_randomized_points.re_randomized_points[i + 1].into_group(),
@@ -396,7 +392,15 @@ impl<
         // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m`.
         // `M_i = pk_{e, j} * m_i` is the ephemeral public key so that mediator can get `enc_key_gen * m_i` to
         // subtract from `ct_{m,i}` where `pk_{e, j}` is the encryption key corresponding to this mediator
-        let r_meds = leg_enc_rand.r_meds.clone();
+        let r_meds = leg_enc_rand.r_meds.as_ref().ok_or_else(|| {
+            Error::ProofGenerationError(
+                "r_meds is missing in leg encryption randomness".to_string(),
+            )
+        })?;
+        // `ensure_leg_encryption_consistent` above checks this is present for a hidden asset-id.
+        let mediators = leg_enc.mediators.as_ref().ok_or_else(|| {
+            Error::ProofGenerationError("mediators are missing in leg encryption".to_string())
+        })?;
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
 
@@ -625,7 +629,7 @@ impl<
         );
 
         let mut pk_m_proto = Self::mediator_key_protos(
-            &r_meds,
+            r_meds,
             &m_blindings,
             &k,
             &k_blindings,
@@ -787,14 +791,12 @@ impl<
             )?;
         }
 
-        for ((p, mediator), re_rand_point) in
-            pk_m_proto.iter_mut().zip(leg_enc.mediators.iter()).zip(
-                re_randomized_points
-                    .re_randomized_points
-                    .iter()
-                    .skip(l.len() + 1),
-            )
-        {
+        for ((p, mediator), re_rand_point) in pk_m_proto.iter_mut().zip(mediators.iter()).zip(
+            re_randomized_points
+                .re_randomized_points
+                .iter()
+                .skip(l.len() + 1),
+        ) {
             let y = mediator.ct_med - re_rand_point;
             p.0.challenge_contribution(
                 &enc_key_gen,
@@ -805,8 +807,14 @@ impl<
 
             p.1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
 
-            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
-            p.2.challenge_contribution(base, &mediator.eph_pk_med_key, &mut transcript)?;
+            // One commitment per encryption key, all sharing the `m_i_r_1_inv` response.
+            for i in 0..num_enc_keys {
+                p.2[i].challenge_contribution(
+                    &leg_enc.eph_pk_enc_keys[i].r1,
+                    &mediator.eph_pk_med_keys[i],
+                    &mut transcript,
+                )?;
+            }
         }
 
         for ((p, pk), eph_pk_public_enc) in eph_pk_public_enc_proto
@@ -824,10 +832,15 @@ impl<
             )?;
         }
 
+        // The asset-id point is `j_0 * (asset_id + 1)`; subtract `j_0` so this relation binds the
+        // un-offset (original) `asset_id` (shared with the ct_asset_id relation).
+        let asset_id_point_y = (re_randomized_points.re_randomized_points[0].into_group()
+            - asset_comm_params.j_0)
+            .into_affine();
         t_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
             &b_blinding_base,
-            &re_randomized_points.re_randomized_points[0],
+            &asset_id_point_y,
             &mut transcript,
         )?;
 
@@ -869,7 +882,9 @@ impl<
                 (
                     p_0.gen_partial2_proof(&challenge),
                     p_1.gen_partial_proof(),
-                    p_2.gen_partial_proof(),
+                    p_2.into_iter()
+                        .map(|p| p.gen_partial_proof())
+                        .collect::<Vec<_>>(),
                 )
             })
             .collect();
@@ -1112,7 +1127,8 @@ impl<
             return Err(Error::InsufficientCommitmentKeyLength(
                 asset_comm_params.comm_key.len(),
                 1 + asset_comm_params.num_enc_keys as usize
-                    + 2 * asset_comm_params.num_med_keys as usize,
+                    + asset_comm_params.num_med_keys as usize
+                    + 1,
             ));
         }
 
@@ -1218,12 +1234,25 @@ impl<
             }
         }
 
-        for mediator in &leg_enc.mediators {
-            let idx = mediator.enc_key_index as usize;
-            if idx >= num_enc_keys {
+        // Mediator entries (even empty vec) must be present when asset-id is hidden and this proof
+        // is only for a hidden asset-id.
+        let mediators = leg_enc.mediators.as_ref().ok_or_else(|| {
+            Error::ProofVerificationError("mediators are missing in leg encryption".to_string())
+        })?;
+
+        for (mediator, (_, _, p_2)) in mediators.iter().zip(self.resp_eph_pk_meds.iter()) {
+            if mediator.eph_pk_med_keys.len() != num_enc_keys {
                 return Err(Error::ProofVerificationError(format!(
-                    "leg_enc.mediators[i].enc_key_index is out of bounds for eph_pk_enc_keys ({} >= {})",
-                    idx, num_enc_keys
+                    "mediator.eph_pk_med_keys.len() != num_enc_keys ({} != {})",
+                    mediator.eph_pk_med_keys.len(),
+                    num_enc_keys
+                )));
+            }
+            if p_2.len() != num_enc_keys {
+                return Err(Error::ProofVerificationError(format!(
+                    "resp_eph_pk_meds[i].2.len() != num_enc_keys ({} != {})",
+                    p_2.len(),
+                    num_enc_keys
                 )));
             }
         }
@@ -1255,21 +1284,17 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // Subtract the per-mediator index plus one (using the leg's public indices) before opening the
-        // point block. The opening matches the registered leaf if each public index equals the
-        // committed one, which binds `enc_key_index` to the asset leaf.
-        let mut adjusted_leaf = rerandomized_leaf.into_group();
-        for (j, mediator) in leg_enc.mediators.iter().enumerate() {
-            adjusted_leaf -= asset_comm_params.idx_gen(j) * (F1::from(mediator.enc_key_index + 1));
-        }
-        let adjusted_leaf = adjusted_leaf.into_affine();
+        // Subtract the mediator-count term (committed under `count_gen`) before opening the point block.
+        let adjusted_leaf = (rerandomized_leaf.into_group()
+            - asset_comm_params.count_gen() * F1::from(num_med_keys as u64))
+        .into_affine();
         verify_ped_com::<_, _, _, _, Parameters1>(
             even_verifier,
             adjusted_leaf,
-            self.re_randomized_points.clone(),
-            self.ped_comms.clone(),
+            &self.re_randomized_points,
+            &self.ped_comms,
             &tree_parameters.odd_parameters,
-            key_indices,
+            &key_indices,
             None,
         )?;
 
@@ -1437,11 +1462,8 @@ impl<
             )?;
         }
 
-        for (((p_0, p_1, p_2), mediator), re_rand_point) in self
-            .resp_eph_pk_meds
-            .iter()
-            .zip(leg_enc.mediators.iter())
-            .zip(
+        for (((p_0, p_1, p_2), mediator), re_rand_point) in
+            self.resp_eph_pk_meds.iter().zip(mediators.iter()).zip(
                 self.re_randomized_points
                     .re_randomized_points
                     .iter()
@@ -1458,8 +1480,13 @@ impl<
 
             p_1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
 
-            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
-            p_2.challenge_contribution(base, &mediator.eph_pk_med_key, &mut transcript)?;
+            for i in 0..num_enc_keys {
+                p_2[i].challenge_contribution(
+                    &leg_enc.eph_pk_enc_keys[i].r1,
+                    &mediator.eph_pk_med_keys[i],
+                    &mut transcript,
+                )?;
+            }
         }
 
         for (i, (((p_0, p_1, p_2, p_3), pk), eph_pk_public_enc_key)) in self
@@ -1483,10 +1510,15 @@ impl<
             )?;
         }
 
+        // The asset-id point is `j_0 * (asset_id + 1)`; subtract `j_0` so this relation binds the
+        // un-offset `asset_id` (shared with the ct_asset_id relation).
+        let asset_id_point_y = (self.re_randomized_points.re_randomized_points[0].into_group()
+            - asset_comm_params.j_0)
+            .into_affine();
         self.resp_asset_id.challenge_contribution(
             &asset_comm_params.j_0,
             &b_blinding_base,
-            &self.re_randomized_points.re_randomized_points[0],
+            &asset_id_point_y,
             &mut transcript,
         )?;
 
@@ -1532,7 +1564,7 @@ impl<
             rmc,
             self.resp_asset_id,
             "resp_asset_id verification failed",
-            self.re_randomized_points.re_randomized_points[0],
+            asset_id_point_y,
             asset_comm_params.j_0,
             b_blinding_base,
             &challenge,
@@ -1721,7 +1753,7 @@ impl<
         for (i, (((p_0, p_1, p_2), mediator), re_rand_point)) in self
             .resp_eph_pk_meds
             .iter()
-            .zip(leg_enc.mediators.iter())
+            .zip(mediators.iter())
             .zip(
                 self.re_randomized_points
                     .re_randomized_points
@@ -1730,15 +1762,7 @@ impl<
             )
             .enumerate()
         {
-            let med_key_idx = mediator.enc_key_index as usize;
             let y = mediator.ct_med - re_rand_point;
-            if med_key_idx >= num_enc_keys {
-                return Err(Error::ProofVerificationError(format!(
-                    "leg_enc.eph_pk_med_keys[{i}].0 is out of bounds for eph_pk_enc_keys ({} >= {})",
-                    med_key_idx, num_enc_keys
-                )));
-            }
-            let base = leg_enc.eph_pk_enc_keys[med_key_idx].r1;
 
             verify_or_rmc_3!(
                 rmc,
@@ -1766,15 +1790,18 @@ impl<
                 &p_0.response2,
             );
 
-            verify_or_rmc_2!(
-                rmc,
-                p_2,
-                format!("resp_eph_pk_meds[{}].2 verification failed", i),
-                mediator.eph_pk_med_key,
-                base,
-                &challenge,
-                &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
-            );
+            // Verify every ephemeral against the same shared `m_i_r_1_inv` response.
+            for l in 0..num_enc_keys {
+                verify_or_rmc_2!(
+                    rmc,
+                    p_2[l],
+                    format!("resp_eph_pk_meds[{}].2[{}] verification failed", i, l),
+                    mediator.eph_pk_med_keys[l],
+                    leg_enc.eph_pk_enc_keys[l].r1,
+                    &challenge,
+                    &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
+                );
+            }
         }
 
         // Verify public ephemeral keys for encryption keys: A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3, A[i][3] = pk_en[i] * r_4
@@ -2166,26 +2193,20 @@ impl<
     ) -> Vec<(
         PokPedersenCommitmentProtocol<Affine<G0>>,
         PokDiscreteLogProtocol<Affine<G0>>,
-        PokDiscreteLogProtocol<Affine<G0>>,
+        Vec<PokDiscreteLogProtocol<Affine<G0>>>,
     )> {
         #[cfg(feature = "ignore_prover_input_sanitation")]
-        let _ = (num_enc_keys, re_randomized_points);
+        let _ = re_randomized_points;
 
         let mut pk_m_proto = Vec::with_capacity(r_meds.len());
-        for (
-            i,
-            (
-                ((((r_med, m_blinding), k_i), k_blinding), mediator),
-                (m_r_1_inv_i, m_r_1_inv_blinding),
-            ),
-        ) in r_meds
-            .iter()
-            .zip(m_blindings.iter())
-            .zip(k.iter())
-            .zip(k_blindings.iter())
-            .zip(leg_enc.mediators.iter())
-            .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
-            .enumerate()
+        for (i, ((((r_med, m_blinding), k_i), k_blinding), (m_i_r_1_inv, m_r_1_inv_blinding))) in
+            r_meds
+                .iter()
+                .zip(m_blindings.iter())
+                .zip(k.iter())
+                .zip(k_blindings.iter())
+                .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
+                .enumerate()
         {
             // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
             let t_m = PokPedersenCommitmentProtocol::init(
@@ -2207,10 +2228,16 @@ impl<
             // For proving relation `re_randomized_points[1 + num_enc_keys + i].1 = B * k_i`
             let t_k = PokDiscreteLogProtocol::init(*k_i, *k_blinding, &b_base);
 
-            let base = &leg_enc.eph_pk_enc_keys[mediator.enc_key_index as usize].r1;
-
-            // For proving relation `M_i[0] = A_j[0] * r_meds[i] / r_1`
-            let t_eph_m = PokDiscreteLogProtocol::init(*m_r_1_inv_i, *m_r_1_inv_blinding, base);
+            // For proving relations, \forall `l`, `M_i[0] = A_l[0] * r_meds[i] / r_1`, all sharing witness `r_meds[i] / r_1`
+            let t_eph_m: Vec<PokDiscreteLogProtocol<Affine<G0>>> = (0..num_enc_keys)
+                .map(|l| {
+                    PokDiscreteLogProtocol::init(
+                        *m_i_r_1_inv,
+                        *m_r_1_inv_blinding,
+                        &leg_enc.eph_pk_enc_keys[l].r1,
+                    )
+                })
+                .collect();
             pk_m_proto.push((t_m, t_k, t_eph_m));
         }
         pk_m_proto
@@ -2261,12 +2288,12 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
+        let _ = (leg, leg_enc);
         return Ok(());
     }
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        // Check consistency between leg and leg_enc fields
         if leg_enc.eph_pk_enc_keys.len() != leg.enc_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in eph_pk_enc_keys length: leg_enc has {} but leg has {} enc_keys",
@@ -2283,28 +2310,31 @@ pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
             )));
         }
 
-        if leg_enc.num_mediators() != leg.med_keys.len() {
+        // Mediator entries are only created when asset-id is hidden which is the case for this proof.
+        let mediators = leg_enc.mediators.as_ref().ok_or_else(|| {
+            Error::ProofGenerationError("mediators are missing in leg encryption".to_string())
+        })?;
+
+        if mediators.len() != leg.med_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in ct_meds length: leg_enc has {} but leg has {} med_keys",
-                leg_enc.num_mediators(),
+                mediators.len(),
                 leg.med_keys.len()
             )));
         }
 
-        for (i, (idx, _)) in leg.med_keys.iter().enumerate() {
-            if (*idx as usize) >= leg.enc_keys.len() {
+        for (i, mediator) in mediators.iter().enumerate() {
+            if mediator.eph_pk_med_keys.len() != leg.enc_keys.len() {
                 return Err(Error::ProofGenerationError(format!(
-                    "leg.med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
-                    *idx,
+                    "Mismatch in mediators[{i}].eph_pk_med_keys length: leg_enc has {} but leg has {} enc_keys",
+                    mediator.eph_pk_med_keys.len(),
                     leg.enc_keys.len()
                 )));
             }
         }
 
         ensure_sender_receiver_not_same(leg_enc)?;
-
         ensure_eph_key_not_identity(leg_enc)?;
-
         Ok(())
     }
 }
@@ -2358,15 +2388,23 @@ pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
         || (s.r4.is_some() && s.r4.as_ref().unwrap().is_zero())
         || r.r1.is_some() && r.r1.as_ref().unwrap().is_zero()
         || r.r2.is_zero()
-        || r.r3.is_zero()       // this and next are redundant since leg creation proof ensures r_i are consistent
+        || r.r3.is_zero()
         || (r.r4.is_some() && r.r4.as_ref().unwrap().is_zero())
     {
-        Err(Error::ProofGenerationError(
+        return Err(Error::ProofGenerationError(
             "eph_pk_s or eph_pk_r is identity".to_string(),
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    if let Some(mediators) = leg_enc.mediators.as_ref() {
+        for (i, mediator) in mediators.iter().enumerate() {
+            if mediator.eph_pk_med_keys.iter().any(|e| e.is_zero()) {
+                return Err(Error::ProofGenerationError(format!(
+                    "mediators[{i}] eph_pk_med_keys is identity"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "ignore_prover_input_sanitation"))]
@@ -2387,7 +2425,7 @@ mod input_sanitation_tests {
     type VestaF = PallasBase;
 
     #[test]
-    fn mediator_enc_key_index_is_unbound() {
+    fn mediator_ephemeral_is_bound() {
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 13;
         const L: usize = 64;
@@ -2429,16 +2467,14 @@ mod input_sanitation_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        // Correct auditor index in the leaf.
         let idx_leaf = 0u8;
-        let med_keys = vec![(idx_leaf, keys_mediator[0].1.0)];
+        let med_keys = vec![keys_mediator[0].1.0];
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -2472,12 +2508,12 @@ mod input_sanitation_tests {
             )
             .unwrap();
 
+        // Tamper one of the mediator's ephemerals so it no longer shares the entry's randomness.
         let wrong_idx = 1u8;
-        let r = leg_enc_rand.r_meds[0];
+        let r = leg_enc_rand.r_meds.as_ref().unwrap()[0];
         let wrong_ek_idx = keys_auditor[wrong_idx as usize].1.0;
-        let med = &mut leg_enc.mediators[0];
-        med.enc_key_index = wrong_idx;
-        med.eph_pk_med_key = (wrong_ek_idx * r).into_affine();
+        let med = &mut leg_enc.mediators.as_mut().unwrap()[0];
+        med.eph_pk_med_keys[idx_leaf as usize] = (wrong_ek_idx * r).into_affine();
 
         let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let proof =
@@ -2555,14 +2591,7 @@ mod input_sanitation_tests {
         let (_, pk_r) = keygen_enc(&mut rng, enc_key_gen);
         let (_, aud) = keygen_enc(&mut rng, enc_key_gen);
         let enc_keys = vec![aud.0];
-        let asset_data = AssetData::new(
-            1u32,
-            enc_keys.clone(),
-            vec![],
-            &acp,
-            p.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let asset_data = AssetData::new(1u32, enc_keys.clone(), vec![], &acp).unwrap();
         let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &vec![asset_data.commitment],
             &p,
@@ -2658,14 +2687,7 @@ mod input_sanitation_tests {
         let (aud_sk, aud) = keygen_enc(&mut rng, enc_key_gen);
         let (pub_sk, pub_pk) = keygen_enc(&mut rng, enc_key_gen); // extra auditor
         let enc_keys = vec![aud.0];
-        let asset_data = AssetData::new(
-            7u32,
-            enc_keys.clone(),
-            vec![],
-            &acp,
-            p.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let asset_data = AssetData::new(7u32, enc_keys.clone(), vec![], &acp).unwrap();
         let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &vec![asset_data.commitment],
             &p,
@@ -2772,14 +2794,7 @@ mod input_sanitation_tests {
         let (a_sk, a_pk) = keygen_enc(&mut rng, enc_key_gen);
         let (x_sk, x_pk) = keygen_enc(&mut rng, enc_key_gen);
         let enc_keys = vec![a_pk.0];
-        let asset_data = AssetData::new(
-            asset_id,
-            enc_keys.clone(),
-            vec![],
-            &acp,
-            p.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let asset_data = AssetData::new(asset_id, enc_keys.clone(), vec![], &acp).unwrap();
         let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &vec![asset_data.commitment],
             &p,
@@ -2955,6 +2970,10 @@ mod mocking_tests {
             .clear_mock();
     }
 
+    fn clear_asset_data_points_mock() {
+        AssetData::<PallasF, VestaF, PallasParameters, VestaParameters>::points.clear_mock();
+    }
+
     fn assert_leg_verify_fails_with_rmc(
         proof: &LegCreationProof<64, PallasF, VestaF, PallasParameters, VestaParameters>,
         rng: &mut impl CryptoRngCore,
@@ -3053,18 +3072,13 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let asset_data_2 = AssetData::new(
             asset_id_2,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3213,18 +3227,13 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3474,18 +3483,13 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3669,18 +3673,13 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3730,10 +3729,11 @@ mod mocking_tests {
                       neg_blinding_base,
                       _re_randomized_points,
                       leg_enc| {
-                    let mut pk_m_proto = Vec::with_capacity(leg_enc.mediators.len());
+                    let num_mediators = leg_enc.num_mediators();
+                    let mut pk_m_proto = Vec::with_capacity(num_mediators);
                     let mocked_r_1 = PallasF::from(7u64);
 
-                    for i in 0..leg_enc.mediators.len() {
+                    for i in 0..num_mediators {
                         let mocked_r_med = PallasF::from((i as u64) + 11u64);
                         let mocked_m_blinding = PallasF::from((i as u64) + 13u64);
                         let mocked_k = PallasF::from((i as u64) + 17u64);
@@ -3750,13 +3750,16 @@ mod mocking_tests {
                             &neg_blinding_base,
                         );
                         let t_k = PokDiscreteLogProtocol::init(mocked_k, mocked_k_blinding, &b_base);
-                        let base =
-                            &leg_enc.eph_pk_enc_keys[leg_enc.mediators[i].enc_key_index as usize].r1;
-                        let t_eph_m = PokDiscreteLogProtocol::init(
-                            mocked_m_r_1_inv,
-                            mocked_m_r_1_inv_blinding,
-                            base,
-                        );
+                        // One per encryption key, all sharing witness `m_i_r_1_inv`
+                        let t_eph_m = (0..num_enc_keys)
+                            .map(|kk| {
+                                PokDiscreteLogProtocol::init(
+                                    mocked_m_r_1_inv,
+                                    mocked_m_r_1_inv_blinding,
+                                    &leg_enc.eph_pk_enc_keys[kk].r1,
+                                )
+                            })
+                            .collect::<Vec<_>>();
                         pk_m_proto.push((t_m, t_k, t_eph_m));
                     }
 
@@ -3846,7 +3849,7 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys: Vec<(u8, PallasA)> = vec![];
+        let med_keys: Vec<PallasA> = vec![];
 
         // The asset leaf holds the *real* auditor keys.
         let asset_data = AssetData::new(
@@ -3854,7 +3857,6 @@ mod mocking_tests {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -4015,18 +4017,13 @@ mod mocking_tests {
             .collect::<Vec<_>>();
 
         let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        let med_keys = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -4057,8 +4054,11 @@ mod mocking_tests {
         let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
 
         // Change the mediator ciphertext: CT_{m_target} = correct - delta.B_blinding.
-        leg_enc.mediators[target].ct_med =
-            (leg_enc.mediators[target].ct_med - b_blinding_base * delta).into_affine();
+        {
+            let mediators = leg_enc.mediators.as_mut().unwrap();
+            mediators[target].ct_med =
+                (mediators[target].ct_med - b_blinding_base * delta).into_affine();
+        }
 
         let _guard = MockGuard::new(clear_split_point_blindings_mock);
         let offset_index = 1 + num_enc_keys + target;

@@ -176,6 +176,11 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
+        for (a, e) in pub_keys.iter() {
+            if a.is_zero() || e.is_zero() {
+                return Err(Error::PointAtIdentity);
+            }
+        }
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
         add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;
@@ -281,6 +286,11 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
+        for k in pub_keys.iter() {
+            if k.is_zero() {
+                return Err(Error::PointAtIdentity);
+            }
+        }
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
         add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;

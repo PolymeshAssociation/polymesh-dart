@@ -416,13 +416,17 @@ impl DartUserAccountInner {
         let leg = leg_data.enc.decrypt(LegRole::mediator(0), &self.keys)?;
         log::info!("Mediator's view of the leg: {:?}", leg);
 
-        // Create the mediator affirmation proof.
+        // Create the mediator affirmation proof. A leg with a revealed asset-id has no mediator
+        // entry, so the mediator proves knowledge of its affirmation key instead.
         log::info!("Mediator generate affirmation proof");
-        let med_enc = leg_data
-            .enc
-            .mediator_encryption(0)
-            .map_err(|_| anyhow!("Failed to get mediator encryption for mediator affirmation"))?;
-        let proof = MediatorAffirmationProof::new(rng, leg_ref, &med_enc, &self.keys, 0, accept)?;
+        let proof = if leg_data.enc.is_asset_id_revealed()? {
+            MediatorAffirmationProof::new_revealed(rng, leg_ref, &self.keys, 0, accept)?
+        } else {
+            let med_enc = leg_data.enc.mediator_encryption(0).map_err(|_| {
+                anyhow!("Failed to get mediator encryption for mediator affirmation")
+            })?;
+            MediatorAffirmationProof::new(rng, leg_ref, &med_enc, &self.keys, 0, accept)?
+        };
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())
@@ -1103,7 +1107,11 @@ impl DartSettlementLeg {
     /// The mediator is only allowed to submit this proof if the settlement has not been executed or rejected yet.
     ///
     /// Once the settlement is executed or rejected, the mediators are finalized and cannot affirm or reject anymore.
-    pub fn mediator_affirmation(&mut self, proof: &MediatorAffirmationProof) -> Result<()> {
+    pub fn mediator_affirmation(
+        &mut self,
+        proof: &MediatorAffirmationProof,
+        asset_lookup: &AssetKeysLookup,
+    ) -> Result<()> {
         if self.mediators.is_empty() {
             return Err(anyhow!("Leg does not require a mediator affirmation"));
         }
@@ -1124,14 +1132,35 @@ impl DartSettlementLeg {
             }
         };
 
-        // verify the proof.
-        let med_enc = self
-            .enc
-            .mediator_encryption(mediator_id)
-            .map_err(|_| anyhow!("Failed to get mediator encryption for mediator affirmation"))?;
-        proof
-            .verify(&med_enc)
-            .context("Invalid mediator affirmation proof")?;
+        // Verify the proof. A leg with a revealed asset-id has no mediator entry, so the
+        // affirmation is checked against the asset's registered mediator key.
+        if self.enc.is_asset_id_revealed()? {
+            let asset_id = self
+                .enc
+                .decode()?
+                .asset_id()
+                .ok_or_else(|| anyhow!("Revealed asset-id leg must have a public asset_id"))?;
+            let med_keys = asset_lookup
+                .get(&asset_id)
+                .ok_or_else(|| anyhow!("Asset {} not found", asset_id))?
+                .mediators
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            let mediator_pk = med_keys
+                .get(mediator_id as usize)
+                .ok_or_else(|| anyhow!("Invalid mediator key index for this leg"))?;
+            proof
+                .verify_revealed(mediator_pk)
+                .context("Invalid mediator affirmation proof")?;
+        } else {
+            let med_enc = self.enc.mediator_encryption(mediator_id).map_err(|_| {
+                anyhow!("Failed to get mediator encryption for mediator affirmation")
+            })?;
+            proof
+                .verify(&med_enc)
+                .context("Invalid mediator affirmation proof")?;
+        }
 
         // Update the leg's mediator status based on the proof.
         *mediator_status = new_status;
@@ -1301,16 +1330,16 @@ pub struct DartSettlement {
 }
 
 impl DartSettlement {
-    pub fn from_proof(proof: SettlementProof<()>) -> Result<Self> {
+    pub fn from_proof(proof: SettlementProof<()>, asset_lookup: &AssetKeysLookup) -> Result<Self> {
         let id = proof.settlement_ref();
-        let affirm_counts = proof.count_leg_affirmations()?;
+        let affirm_counts = proof.count_leg_affirmations(asset_lookup)?;
         let pending_affirms = affirm_counts.total_affirmations();
         let legs = proof
             .legs
             .into_iter()
             .map(|leg| {
                 let mediators = leg
-                    .get_mediator_ids()?
+                    .get_mediator_ids(asset_lookup)?
                     .into_iter()
                     .map(|idx| (idx, AffirmationStatus::Pending))
                     .collect();
@@ -1345,6 +1374,7 @@ impl DartSettlement {
         &mut self,
         proofs: &[InstantSettlementLegAffirmations<(), AccountTreeConfig>],
         tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
+        asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<()> {
         self.ensure_pending()?;
@@ -1370,7 +1400,7 @@ impl DartSettlement {
 
             // Verify mediator affirmations
             for mediator_proof in &proof.mediators {
-                leg.mediator_affirmation(mediator_proof)?;
+                leg.mediator_affirmation(mediator_proof, asset_lookup)?;
             }
 
             leg.update_status()?;
@@ -1480,7 +1510,11 @@ impl DartSettlement {
     }
 
     /// Verify a mediator affirmation proof for a specific leg in the settlement.
-    pub fn mediator_affirmation(&mut self, proof: &MediatorAffirmationProof) -> Result<()> {
+    pub fn mediator_affirmation(
+        &mut self,
+        proof: &MediatorAffirmationProof,
+        asset_lookup: &AssetKeysLookup,
+    ) -> Result<()> {
         self.ensure_pending()?;
 
         let leg_id = proof.leg_ref.leg_id() as usize;
@@ -1488,7 +1522,7 @@ impl DartSettlement {
             return Err(anyhow!("Leg index {} out of bounds", leg_id));
         }
         let leg = &mut self.legs[leg_id];
-        leg.mediator_affirmation(proof)?;
+        leg.mediator_affirmation(proof, asset_lookup)?;
 
         if proof.accept {
             // If the mediator has accepted, update the status of the settlement.
@@ -2108,7 +2142,7 @@ impl DartChainState {
             .context("Invalid settlement proof")?;
 
         // Save the settlement.
-        let settlement = DartSettlement::from_proof(proof)?;
+        let settlement = DartSettlement::from_proof(proof, asset_lookup)?;
         self.settlements.insert(settlement_ref, settlement);
 
         Ok(settlement_ref)
@@ -2138,15 +2172,16 @@ impl DartChainState {
             ));
         }
 
-        // Ensure leg affirmation refernes are valid.
-        if !proof.check_leg_references() {
+        let mut rng = new_rng();
+        let asset_lookup = self.get_asset_lookup();
+
+        // Ensure leg affirmation references are valid.
+        if !proof.check_leg_references(asset_lookup) {
             return Err(anyhow!(
                 "Invalid leg references in instant settlement proof"
             ));
         }
 
-        let mut rng = new_rng();
-        let asset_lookup = self.get_asset_lookup();
         // verify the settlement proof.
         proof
             .settlement
@@ -2154,13 +2189,14 @@ impl DartChainState {
             .context("Invalid settlement proof")?;
 
         // Create the settlement.
-        let mut settlement = DartSettlement::from_proof(proof.settlement)?;
+        let mut settlement = DartSettlement::from_proof(proof.settlement, asset_lookup)?;
         let settlement_ref = settlement.id;
 
         // Process all instant affirmations.
         settlement.instant_leg_affirmations(
             &proof.leg_affirmations,
             &self.account_tree,
+            asset_lookup,
             &mut rng,
         )?;
 
@@ -2362,6 +2398,7 @@ impl DartChainState {
         let proof = scale_encode_and_decode_test(&proof)?;
 
         let settlement_ref = proof.leg_ref.settlement_ref();
+        let asset_lookup = self.get_asset_lookup().clone();
 
         // Get the settlement.
         let settlement = self
@@ -2370,7 +2407,7 @@ impl DartChainState {
             .ok_or_else(|| anyhow!("Settlement {:?} does not exist", settlement_ref))?;
 
         // Verify the mediator affirmation proof and update the settlement status.
-        settlement.mediator_affirmation(&proof)?;
+        settlement.mediator_affirmation(&proof, &asset_lookup)?;
 
         Ok(())
     }

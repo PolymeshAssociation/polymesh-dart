@@ -298,9 +298,9 @@ impl<
         })
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify<
         R: CryptoRngCore,
@@ -312,7 +312,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -334,7 +333,6 @@ impl<
                 leg_encs,
                 asset_tree_root,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 tree_parameters,
@@ -348,9 +346,9 @@ impl<
         handle_verification_tuples(even_tuple, odd_tuple, tree_parameters, rmc)
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify_and_return_tuples<
         R: CryptoRngCore,
@@ -361,7 +359,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -380,7 +377,6 @@ impl<
             leg_encs,
             asset_tree_root,
             enc_keys,
-            med_keys,
             public_enc_keys,
             nonce,
             tree_parameters,
@@ -405,9 +401,9 @@ impl<
         )
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify_sigma_protocols_and_enforce_constraints<
         Parameters0: DiscreteLogParameters,
@@ -417,7 +413,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         mut enc_keys: Vec<Vec<Affine<G0>>>,
-        mut med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         mut public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -465,13 +460,6 @@ impl<
             return Err(Error::ProofVerificationError(format!(
                 "Number of encryption keys ({}) does not equal number of revealed asset-id legs ({})",
                 enc_keys.len(),
-                num_revealed_asset_legs
-            )));
-        }
-        if num_revealed_asset_legs != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "Number of mediator key vectors ({}) does not equal number of revealed asset-id legs ({})",
-                med_keys.len(),
                 num_revealed_asset_legs
             )));
         }
@@ -565,7 +553,6 @@ impl<
                         leg_enc,
                         revealed_asset_id,
                         core::mem::take(&mut enc_keys[revealed_asset_idx]),
-                        core::mem::take(&mut med_keys[revealed_asset_idx]),
                         leg_public_enc_keys,
                         &tree_parameters.odd_parameters.pc_gens(),
                         &tree_parameters.odd_parameters.bp_gens(),

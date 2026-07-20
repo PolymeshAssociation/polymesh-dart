@@ -57,7 +57,7 @@ pub mod split_types;
 use crate::curve_tree::{
     AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
     CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
-    get_asset_commitment_parameters, get_asset_curve_tree_parameters,
+    get_asset_commitment_parameters,
 };
 use crate::*;
 pub use fee::*;

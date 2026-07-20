@@ -261,7 +261,7 @@ pub fn enforce_balance_change_verifier<F0: PrimeField, G0: SWCurveConfig<ScalarF
     Ok(())
 }
 
-pub fn enforce_constraints_for_balance_change<F: Field, CS: ConstraintSystem<F>>(
+pub fn enforce_constraints_for_balance_change<F: PrimeField, CS: ConstraintSystem<F>>(
     cs: &mut CS,
     mut committed_variables: Vec<Variable<F>>,
     has_balance_decreased: Vec<bool>,

@@ -731,6 +731,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         T: Option<(G, G, G)>,
         verifier: &mut Verifier<MerlinTranscript, G>,
     ) -> Result<()> {
+        if pk_aff.is_zero() || pk_enc.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         if T.is_none() ^ self.encryption_for_T.is_none() {
             return Err(Error::PkTAndEncryptedRandomnessInconsistent);
         }
@@ -1468,7 +1471,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         verifier: &mut Verifier<MerlinTranscript, G>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        // Partial challenge contribution (transcript)
         self.partial.challenge_contribution_with_verifier(
             id,
             pk_aff,

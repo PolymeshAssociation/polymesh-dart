@@ -163,14 +163,7 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     // Auditor key
     let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
 
-    let asset_data = AssetData::new(
-        asset_id,
-        vec![pk_a_e.0],
-        vec![],
-        &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
-    )
-    .unwrap();
+    let asset_data = AssetData::new(asset_id, vec![pk_a_e.0], vec![], &asset_comm_params).unwrap();
 
     let commitments = vec![asset_data.commitment];
 
@@ -275,7 +268,6 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                     &root,
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -302,7 +294,6 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
                         &mut local_rng,
                         leg_encs.clone(),
                         &root,
-                        vec![],
                         vec![],
                         vec![],
                         nonce,
@@ -360,14 +351,7 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
 
     for i in 0..(M + 1) {
         let asset_id = (i + 1) as u32;
-        let ad = AssetData::new(
-            asset_id,
-            vec![pk_a_e.0],
-            vec![],
-            &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let ad = AssetData::new(asset_id, vec![pk_a_e.0], vec![], &asset_comm_params).unwrap();
         commitments.push(ad.commitment);
         all_asset_data.push(ad);
     }
@@ -481,7 +465,6 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
                         &root,
                         vec![],
                         vec![],
-                        vec![],
                         &nonces[i],
                         &asset_tree_params,
                         &asset_comm_params,
@@ -546,14 +529,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let mut asset_commitments = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let asset_data = AssetData::new(
-            asset_id,
-            vec![pk_auditor_e.0],
-            vec![],
-            &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let asset_data =
+            AssetData::new(asset_id, vec![pk_auditor_e.0], vec![], &asset_comm_params).unwrap();
         asset_commitments.push(asset_data.commitment);
         asset_data_vec.push(asset_data);
     }
@@ -699,7 +676,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &asset_tree_root,
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -726,7 +702,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                         &mut local_rng,
                         leg_encs.clone(),
                         &asset_tree_root,
-                        vec![],
                         vec![],
                         vec![],
                         nonce,
@@ -910,7 +885,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                     &asset_tree_root,
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -1003,7 +977,6 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
                 .verify_and_return_tuples(
                     leg_encs.clone(),
                     &asset_tree_root,
-                    vec![],
                     vec![],
                     vec![],
                     nonce,

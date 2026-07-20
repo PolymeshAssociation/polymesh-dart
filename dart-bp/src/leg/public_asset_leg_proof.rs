@@ -1,12 +1,9 @@
 use crate::error::Result;
-use crate::leg::leg_proof::{
-    ensure_eph_key_not_identity, ensure_leg_encryption_consistent, ensure_sender_receiver_not_same,
-};
+use crate::leg::leg_proof::{ensure_eph_key_not_identity, ensure_sender_receiver_not_same};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
-use ark_ec::CurveGroup;
-use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
@@ -24,9 +21,7 @@ use dock_crypto_utils::transcript::Transcript;
 use polymesh_dart_common::AssetId;
 use polymesh_dart_common::{BALANCE_BITS, Balance};
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
-};
+use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialPokPedersenCommitment};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::Zeroize;
@@ -49,8 +44,6 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
     pub resp_eph_pk_r_v: PartialPokDiscreteLog<Affine<G>>,
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G>>>,
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G>>>,
-    pub resp_ct_meds: Vec<PokDiscreteLog<Affine<G>>>,
-    pub resp_eph_pk_meds: Vec<PartialPokDiscreteLog<Affine<G>>>,
     /// Proof of correctness of ephemeral public keys of asset auditors.
     pub resp_eph_pk_enc: Vec<(
         PartialPokDiscreteLog<Affine<G>>,
@@ -159,13 +152,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             }
         }
 
-        ensure_leg_encryption_consistent(&leg, &leg_enc)?;
+        ensure_public_leg_encryption_consistent(&leg, &leg_enc)?;
 
         let mut r_1 = leg_enc_rand.r1;
         let mut r_2 = leg_enc_rand.r2;
         let mut r_3 = leg_enc_rand.r3;
-
-        let r_meds = leg_enc_rand.r_meds.clone();
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
 
@@ -186,10 +177,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_3_r_2_inv_blinding = G::ScalarField::rand(rng);
         let mut r_2_r_1_inv_blinding = parties_see_each_other.then(|| G::ScalarField::rand(rng));
         let mut r_1_r_2_inv_blinding = parties_see_each_other.then(|| G::ScalarField::rand(rng));
-
-        let mut r_meds_blindings = (0..r_meds.len())
-            .map(|_| G::ScalarField::rand(rng))
-            .collect::<Vec<_>>();
 
         let mut amount = G::ScalarField::from(leg.core.amount);
 
@@ -260,29 +247,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             (None, None)
         };
 
-        let mut ct_meds_proto = Vec::with_capacity(leg_enc.num_mediators());
-        let mut eph_pk_meds_proto = Vec::with_capacity(leg_enc.num_mediators());
         let mut eph_pk_enc_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg_enc.eph_pk_public_enc_keys.len());
-
-        for ((r_med, r_med_blinding), med_key) in r_meds
-            .iter()
-            .zip(r_meds_blindings.iter())
-            .zip(leg.med_keys.iter())
-        {
-            // For proving ct_m[i] - pk_m[i] = enc_key_gen * r_meds[i]
-            ct_meds_proto.push(PokDiscreteLogProtocol::init(
-                *r_med,
-                *r_med_blinding,
-                &enc_key_gen,
-            ));
-            // For proving M[i] = pk_en[i] * r_meds[i]
-            eph_pk_meds_proto.push(PokDiscreteLogProtocol::init(
-                *r_med,
-                *r_med_blinding,
-                &leg.enc_keys[med_key.0 as usize],
-            ));
-        }
 
         for enc_key in &leg.enc_keys {
             // For proving
@@ -375,8 +341,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Zeroize::zeroize(&mut r_2_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_1_r_2_inv_blinding);
 
-        Zeroize::zeroize(&mut r_meds_blindings);
-
         {
             let mut transcript_ref = prover.transcript();
 
@@ -445,28 +409,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 )?;
             }
 
-            let y_ct_meds = (0..leg_enc.num_mediators())
-                .map(|i| leg_enc.mediators[i].ct_med - leg.med_keys[i].1)
-                .collect::<Vec<_>>();
-            let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
-            for ((ct_med_proto, eph_pk_med_proto), ((y_ct_med, mediator), med_key)) in ct_meds_proto
-                .iter_mut()
-                .zip(eph_pk_meds_proto.iter_mut())
-                .zip(
-                    y_ct_meds
-                        .iter()
-                        .zip(leg_enc.mediators.iter())
-                        .zip(leg.med_keys.iter()),
-                )
-            {
-                ct_med_proto.challenge_contribution(&enc_key_gen, y_ct_med, &mut transcript_ref)?;
-                eph_pk_med_proto.challenge_contribution(
-                    &leg.enc_keys[med_key.0 as usize],
-                    &mediator.eph_pk_med_key,
-                    &mut transcript_ref,
-                )?;
-            }
-
             for ((p, enc_key), eph_pk_enc_key) in eph_pk_enc_proto
                 .iter_mut()
                 .zip(leg.enc_keys.iter())
@@ -504,15 +446,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let resp_eph_pk_s_r = eph_pk_s_r_proto.map(|p| p.gen_partial_proof());
         let resp_eph_pk_r_s = eph_pk_r_s_proto.map(|p| p.gen_partial_proof());
 
-        let resp_ct_meds = ct_meds_proto
-            .into_iter()
-            .map(|p| p.gen_proof(&challenge))
-            .collect();
-        let resp_eph_pk_meds = eph_pk_meds_proto
-            .into_iter()
-            .map(|p| p.gen_partial_proof())
-            .collect();
-
         let resp_eph_pk_enc = eph_pk_enc_proto
             .into_iter()
             .map(|(p0, p1, p2)| {
@@ -549,8 +482,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp_eph_pk_r_v,
             resp_eph_pk_s_r,
             resp_eph_pk_r_s,
-            resp_ct_meds,
-            resp_eph_pk_meds,
             resp_eph_pk_enc,
             resp_eph_pk_public_enc,
             comm_r_i_amount,
@@ -559,8 +490,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         })
     }
 
-    /// Verifier will know the asset-id and thus know the encryption (auditor) and mediator keys.
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
+    /// Verifier will know the asset-id and thus know the encryption (auditor) keys.
+    /// `enc_keys` are the encryption (auditor) keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and
     /// are always known to the verifier
@@ -571,7 +502,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         leg_enc: LegEncryption<Affine<G>>,
         asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
-        med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
@@ -584,7 +514,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             leg_enc,
             asset_id,
             enc_keys,
-            med_keys,
             public_enc_keys,
             nonce,
             leaf_level_pc_gens,
@@ -598,7 +527,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         handle_verification_tuple(tuple, leaf_level_pc_gens, leaf_level_bp_gens, rmc)
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
+    /// `enc_keys` are the encryption (auditor) keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and are always
     ///  known to the verifier.
@@ -608,7 +537,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         leg_enc: LegEncryption<Affine<G>>,
         asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
-        med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
@@ -624,7 +552,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             leg_enc,
             asset_id,
             enc_keys,
-            med_keys,
             public_enc_keys,
             nonce,
             leaf_level_pc_gens,
@@ -643,7 +570,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Ok(tuple)
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the asset
+    /// `enc_keys` are the encryption (auditor) keys associated with the asset
     /// and become known to the verifier since the asset-id is known.
     /// `public_enc_keys` are the extra encryption (auditor) specified by leg creator and are always
     ///  known to the verifier.
@@ -653,7 +580,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         leg_enc: LegEncryption<Affine<G>>,
         asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
-        med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
         nonce: &[u8],
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
@@ -677,7 +603,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             leg_enc,
             asset_id,
             enc_keys,
-            med_keys,
             public_enc_keys,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
@@ -693,7 +618,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         leg_enc: LegEncryption<Affine<G>>,
         asset_id: AssetId,
         enc_keys: Vec<Affine<G>>,
-        med_keys: Vec<(u8, Affine<G>)>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Affine<G>>,
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
@@ -722,21 +646,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 enc_keys.len()
             )));
         }
-        if self.resp_ct_meds.len() != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_ct_meds.len() != med_keys.len() ({} != {})",
-                self.resp_ct_meds.len(),
-                med_keys.len()
-            )));
-        }
-        if self.resp_eph_pk_meds.len() != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "resp_eph_pk_meds.len() != med_keys.len() ({} != {})",
-                self.resp_eph_pk_meds.len(),
-                med_keys.len()
-            )));
-        }
-
         if self.resp_eph_pk_public_enc.len() != public_enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "resp_eph_pk_public_enc.len() != public_enc_keys.len() ({} != {})",
@@ -745,12 +654,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
-        if leg_enc.num_mediators() != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "leg_enc.ct_meds.len() != med_keys.len() ({} != {})",
-                leg_enc.num_mediators(),
-                med_keys.len()
-            )));
+        // Mediator entries are not created when asset-id is revealed.
+        if leg_enc.mediators.is_some() {
+            return Err(Error::ProofVerificationError(
+                "mediators must be absent when asset-id is revealed".to_string(),
+            ));
         }
 
         if leg_enc.eph_pk_enc_keys.len() != enc_keys.len() {
@@ -766,22 +674,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 leg_enc.eph_pk_public_enc_keys.len(),
                 public_enc_keys.len()
             )));
-        }
-
-        for (i, (idx, _)) in med_keys.iter().enumerate() {
-            if (*idx as usize) >= enc_keys.len() {
-                return Err(Error::ProofVerificationError(format!(
-                    "med_keys[{i}].0 index {} out of range for enc_keys.len() {}",
-                    *idx,
-                    enc_keys.len()
-                )));
-            }
-            if leg_enc.mediators[i].enc_key_index != *idx {
-                return Err(Error::ProofVerificationError(format!(
-                    "med_keys[{i}].0 index {} mismatch with index {} in leg encryption",
-                    *idx, leg_enc.mediators[i].enc_key_index
-                )));
-            }
         }
 
         let parties_see_each_other = leg_enc.do_parties_see_each_other();
@@ -904,32 +796,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &eph_pk_r_s,
-                &mut transcript_ref,
-            )?;
-        }
-
-        let y_ct_meds = (0..leg_enc.num_mediators())
-            .map(|i| leg_enc.mediators[i].ct_med - med_keys[i].1)
-            .collect::<Vec<_>>();
-        let y_ct_meds = Projective::normalize_batch(&y_ct_meds);
-
-        for ((resp_ct_med, resp_eph_pk_med), ((y_ct_med, mediator), med_key)) in self
-            .resp_ct_meds
-            .iter()
-            .zip(self.resp_eph_pk_meds.iter())
-            .zip(
-                y_ct_meds
-                    .iter()
-                    .zip(leg_enc.mediators.iter())
-                    .zip(med_keys.iter()),
-            )
-        {
-            // ct_med - pk_m = enc_key_gen * r_meds[i]
-            resp_ct_med.challenge_contribution(&enc_key_gen, y_ct_med, &mut transcript_ref)?;
-            // M[i] = pk_en[med_keys[i].0] * r_meds[i]
-            resp_eph_pk_med.challenge_contribution(
-                &enc_keys[med_key.0 as usize],
-                &mediator.eph_pk_med_key,
                 &mut transcript_ref,
             )?;
         }
@@ -1073,40 +939,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[10],
-            );
-        }
-
-        // Verify mediator ciphertexts and ephemeral keys
-        for (i, ((resp_ct_med, resp_eph_pk_med), ((y_ct_med, mediator), med_key))) in self
-            .resp_ct_meds
-            .iter()
-            .zip(self.resp_eph_pk_meds.iter())
-            .zip(
-                y_ct_meds
-                    .iter()
-                    .zip(leg_enc.mediators.iter())
-                    .zip(med_keys.iter()),
-            )
-            .enumerate()
-        {
-            verify_or_rmc_2!(
-                rmc,
-                resp_ct_med,
-                format!("resp_ct_meds[{}] verification failed", i),
-                *y_ct_med,
-                enc_key_gen,
-                &challenge,
-            );
-
-            // M[i] = pk_en[med_keys[i].0] * r_meds[i]
-            verify_or_rmc_2!(
-                rmc,
-                resp_eph_pk_med,
-                format!("resp_eph_pk_meds[{}] verification failed", i),
-                mediator.eph_pk_med_key,
-                enc_keys[med_key.0 as usize],
-                &challenge,
-                &resp_ct_med.response,
             );
         }
 
@@ -1389,6 +1221,49 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     }
 }
 
+/// Same as [`crate::leg::leg_proof::ensure_leg_encryption_consistent`] but for a revealed asset-id
+/// where the leg encryption has no mediator entries.
+pub(crate) fn ensure_public_leg_encryption_consistent<G0: SWCurveConfig>(
+    leg: &Leg<Affine<G0>>,
+    leg_enc: &LegEncryption<Affine<G0>>,
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        let _ = (leg, leg_enc);
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if leg_enc.eph_pk_enc_keys.len() != leg.enc_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in eph_pk_enc_keys length: leg_enc has {} but leg has {} enc_keys",
+                leg_enc.eph_pk_enc_keys.len(),
+                leg.enc_keys.len()
+            )));
+        }
+
+        if leg_enc.eph_pk_public_enc_keys.len() != leg.public_enc_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in eph_pk_public_enc_keys length: leg_enc has {} but leg has {} public_enc_keys",
+                leg_enc.eph_pk_public_enc_keys.len(),
+                leg.public_enc_keys.len()
+            )));
+        }
+
+        // Mediator entries are not created when asset-id is revealed.
+        if leg_enc.mediators.is_some() {
+            return Err(Error::ProofGenerationError(
+                "mediators must be absent when asset-id is revealed".to_string(),
+            ));
+        }
+
+        ensure_sender_receiver_not_same(leg_enc)?;
+        ensure_eph_key_not_identity(leg_enc)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(deprecated)]
@@ -1440,11 +1315,7 @@ mod tests {
         let nonce = b"test-nonce";
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-        let med_keys: Vec<_> = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
-            .collect();
+        let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
         let leg = Leg::new(
@@ -1497,7 +1368,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -1517,7 +1387,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -1575,7 +1444,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -1595,7 +1463,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -1646,11 +1513,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-        let med_keys: Vec<_> = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
-            .collect();
+        let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
         // Create multiple legs and proofs
@@ -1721,7 +1584,6 @@ mod tests {
                     leg_encs[i].clone(),
                     leg_encs[i].asset_id().unwrap(),
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     &nonces[i],
                     &leaf_level_pc_gens,
@@ -1745,7 +1607,6 @@ mod tests {
                     leg_encs[i].clone(),
                     leg_encs[i].asset_id().unwrap(),
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     &nonces[i],
                     &leaf_level_pc_gens,
@@ -1817,11 +1678,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-        let med_keys: Vec<_> = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
-            .collect();
+        let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
         let mut legs = Vec::with_capacity(BATCH_SIZE);
@@ -1904,7 +1761,6 @@ mod tests {
                     leg_encs[i].clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -1953,7 +1809,7 @@ mod tests {
         let attacker_audit = keygen_enc(&mut rng, enc_key_gen);
         let attacker_med = keygen_sig(&mut rng, sig_key_gen);
         let attacker_enc_keys: Vec<_> = vec![attacker_audit.1.0];
-        let attacker_med_keys: Vec<(u8, _)> = vec![(0u8, attacker_med.1.0)];
+        let attacker_med_keys: Vec<_> = vec![attacker_med.1.0];
         let public_enc_keys: Vec<Affine<PallasConfig>> = vec![];
         let leg = Leg::new(
             pk_s_e.0,
@@ -1997,7 +1853,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     attacker_enc_keys.clone(),
-                    attacker_med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2013,7 +1868,6 @@ mod tests {
         let registry_audit = keygen_enc(&mut rng, enc_key_gen);
         let registry_med = keygen_sig(&mut rng, sig_key_gen);
         let registry_enc_keys: Vec<_> = vec![registry_audit.1.0];
-        let registry_med_keys: Vec<(u8, _)> = vec![(0u8, registry_med.1.0)];
         assert!(
             proof
                 .verify(
@@ -2021,7 +1875,6 @@ mod tests {
                     leg_enc,
                     asset_id,
                     registry_enc_keys,
-                    registry_med_keys,
                     public_enc_keys,
                     nonce,
                     &leaf_level_pc_gens,
@@ -2074,7 +1927,6 @@ mod tests {
             LegEncryption<Affine<PallasConfig>>,
             LegEncryptionRandomness<ark_pallas::Fr>,
             Vec<Affine<PallasConfig>>,
-            Vec<(u8, Affine<PallasConfig>)>,
             Vec<Affine<PallasConfig>>,
             PedersenGens<Affine<PallasConfig>>,
             BulletproofGens<Affine<PallasConfig>>,
@@ -2110,11 +1962,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-            let med_keys: Vec<_> = keys_mediator
-                .iter()
-                .enumerate()
-                .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
-                .collect();
+            let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
             let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
             let leg = Leg::new(
@@ -2145,7 +1993,6 @@ mod tests {
                 leg_enc,
                 leg_enc_rand,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 leaf_level_pc_gens,
                 leaf_level_bp_gens,
@@ -2160,7 +2007,6 @@ mod tests {
             leg_enc: LegEncryption<Affine<PallasConfig>>,
             asset_id: AssetId,
             enc_keys: Vec<Affine<PallasConfig>>,
-            med_keys: Vec<(u8, Affine<PallasConfig>)>,
             public_enc_keys: Vec<Affine<PallasConfig>>,
             nonce: &[u8],
             leaf_level_pc_gens: &PedersenGens<Affine<PallasConfig>>,
@@ -2173,7 +2019,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 leaf_level_pc_gens,
@@ -2189,7 +2034,6 @@ mod tests {
                 leg_enc,
                 asset_id,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 leaf_level_pc_gens,
@@ -2220,7 +2064,6 @@ mod tests {
                 leg_enc,
                 leg_enc_rand,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 leaf_level_pc_gens,
                 leaf_level_bp_gens,
@@ -2354,7 +2197,6 @@ mod tests {
                 leg_enc,
                 asset_id,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 &leaf_level_pc_gens,
@@ -2378,7 +2220,6 @@ mod tests {
             leg_enc: LegEncryption<Affine<PallasConfig>>,
             asset_id: AssetId,
             enc_keys: Vec<Affine<PallasConfig>>,
-            med_keys: Vec<(u8, Affine<PallasConfig>)>,
             public_enc_keys: Vec<Affine<PallasConfig>>,
             nonce: &[u8],
             leaf_level_pc_gens: &PedersenGens<Affine<PallasConfig>>,
@@ -2392,7 +2233,6 @@ mod tests {
                 leg_enc,
                 asset_id,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 leaf_level_pc_gens,
@@ -2448,11 +2288,7 @@ mod tests {
             let nonce = b"test-nonce";
 
             let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-            let med_keys: Vec<_> = keys_mediator
-                .iter()
-                .enumerate()
-                .map(|(i, (_, k))| (i as u8 % num_enc_keys as u8, k.0))
-                .collect();
+            let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
             let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
             let leg = Leg::new(
@@ -2497,7 +2333,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2525,7 +2360,6 @@ mod tests {
                     leg_enc_hidden.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2543,7 +2377,6 @@ mod tests {
                 leg_enc_hidden,
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -2560,7 +2393,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     wrong_enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2578,7 +2410,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 wrong_enc_keys,
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -2587,15 +2418,15 @@ mod tests {
                 enc_gen,
             );
 
-            let mut wrong_med_keys = med_keys.clone();
-            wrong_med_keys.pop();
+            // Mediator entries are not created when asset-id is revealed.
+            let mut leg_enc_with_mediators = leg_enc.clone();
+            leg_enc_with_mediators.mediators = Some(vec![]);
             assert_err!(
                 proof.verify(
                     &mut rng,
-                    leg_enc.clone(),
+                    leg_enc_with_mediators,
                     asset_id,
                     enc_keys.clone(),
-                    wrong_med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2605,21 +2436,7 @@ mod tests {
                     None,
                 ),
                 Error::ProofVerificationError(_),
-                "resp_ct_meds.len() != med_keys.len()"
-            );
-            assert_public_asset_leg_verify_fails_with_rmc(
-                &proof,
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                wrong_med_keys,
-                public_enc_keys.clone(),
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
+                "mediators must be absent when asset-id is revealed"
             );
 
             let wrong_public_enc_keys: Vec<_> = vec![];
@@ -2629,7 +2446,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     wrong_public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2647,43 +2463,7 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 wrong_public_enc_keys,
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
-            );
-
-            let mut bad_med_key_idx = med_keys.clone();
-            bad_med_key_idx[0].0 = num_enc_keys as u8;
-            assert_err!(
-                proof.verify(
-                    &mut rng,
-                    leg_enc.clone(),
-                    asset_id,
-                    enc_keys.clone(),
-                    bad_med_key_idx.clone(),
-                    public_enc_keys.clone(),
-                    nonce,
-                    &leaf_level_pc_gens,
-                    &leaf_level_bp_gens,
-                    enc_key_gen,
-                    enc_gen,
-                    None,
-                ),
-                Error::ProofVerificationError(_),
-                "out of range for enc_keys.len()"
-            );
-            assert_public_asset_leg_verify_fails_with_rmc(
-                &proof,
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                bad_med_key_idx,
-                public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
                 &leaf_level_bp_gens,
@@ -2699,7 +2479,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2717,7 +2496,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -2744,7 +2522,6 @@ mod tests {
                     leg_enc_no_cross.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2762,7 +2539,6 @@ mod tests {
                 leg_enc_no_cross.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys.clone(),
                 public_enc_keys.clone(),
                 nonce,
                 &leaf_level_pc_gens,
@@ -2781,7 +2557,6 @@ mod tests {
                     leg_enc.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     public_enc_keys.clone(),
                     nonce,
                     &leaf_level_pc_gens,
@@ -2799,7 +2574,6 @@ mod tests {
                 leg_enc.clone(),
                 asset_id,
                 enc_keys.clone(),
-                med_keys,
                 public_enc_keys,
                 nonce,
                 &leaf_level_pc_gens,

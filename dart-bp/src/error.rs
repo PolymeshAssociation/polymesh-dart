@@ -161,6 +161,10 @@ pub enum Error {
     /// Missing proof
     #[error("Missing proof")]
     MissingProof,
+
+    /// Point at identity not allowed
+    #[error("Point at identity not allowed")]
+    PointAtIdentity,
 }
 
 impl Error {

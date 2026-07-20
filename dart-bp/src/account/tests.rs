@@ -2015,22 +2015,10 @@ fn single_shot_swap() {
     let amount_2 = 200;
 
     let keys = vec![pk_a_e.0];
-    let asset_data_1 = AssetData::new(
-        asset_id_1,
-        keys.clone(),
-        vec![],
-        &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
-    )
-    .unwrap();
-    let asset_data_2 = AssetData::new(
-        asset_id_2,
-        keys.clone(),
-        vec![],
-        &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
-    )
-    .unwrap();
+    let asset_data_1 =
+        AssetData::new(asset_id_1, keys.clone(), vec![], &asset_comm_params).unwrap();
+    let asset_data_2 =
+        AssetData::new(asset_id_2, keys.clone(), vec![], &asset_comm_params).unwrap();
 
     let set = vec![asset_data_1.commitment, asset_data_2.commitment];
     let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
@@ -2653,7 +2641,6 @@ fn single_shot_settlement_asset_id_revealed() {
             leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -2866,7 +2853,6 @@ fn single_shot_combined_create_and_send_asset_id_revealed() {
             leg_enc.clone(),
             leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
-            vec![],
             vec![],
             nonce,
             &leaf_level_pc_gens,
@@ -3095,7 +3081,6 @@ fn single_shot_combined_create_and_recv_asset_id_revealed() {
             leg_enc.clone(),
             leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
-            vec![],
             vec![],
             nonce,
             &leaf_level_pc_gens,
@@ -3504,7 +3489,6 @@ fn single_shot_swap_asset_id_revealed() {
             leg_enc_1.asset_id().unwrap(),
             vec![leg_1.enc_keys[0]],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -3523,7 +3507,6 @@ fn single_shot_swap_asset_id_revealed() {
             leg_enc_2.clone(),
             leg_enc_2.asset_id().unwrap(),
             vec![leg_2.enc_keys[0]],
-            vec![],
             vec![],
             nonce,
             &leaf_level_pc_gens,
@@ -3852,7 +3835,6 @@ fn swap_settlement_asset_id_revealed() {
             leg_enc_1.asset_id().unwrap(),
             vec![leg_1.enc_keys[0]],
             vec![],
-            vec![],
             nonce,
             &leaf_level_pc_gens,
             &leaf_level_bp_gens,
@@ -3871,7 +3853,6 @@ fn swap_settlement_asset_id_revealed() {
             leg_enc_2.clone(),
             leg_enc_2.asset_id().unwrap(),
             vec![leg_2.enc_keys[0]],
-            vec![],
             vec![],
             nonce,
             &leaf_level_pc_gens,
@@ -5073,13 +5054,12 @@ fn combined_create_and_send() {
 
     let (_, pk_m) = keygen_sig(&mut rng, account_comm_key.sk_gen());
     let keys_enc = vec![pk_a_e.0];
-    let keys_med = vec![(0, pk_m.0)];
+    let keys_med = vec![pk_m.0];
     let asset_data = AssetData::new(
         asset_id,
         keys_enc.clone(),
         keys_med.clone(),
         &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
     )
     .unwrap();
 
@@ -5807,13 +5787,12 @@ fn swap_settlement() {
     // Both assets have same mediator
     let (sk_m, pk_m) = keygen_sig(&mut rng, account_comm_key.sk_gen());
     let keys_enc = vec![pk_e.0];
-    let keys_med = vec![(0, pk_m.0)];
+    let keys_med = vec![pk_m.0];
     let asset_data_1 = AssetData::new(
         asset_id_1,
         keys_enc.clone(),
         keys_med.clone(),
         &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
     )
     .unwrap();
     let asset_data_2 = AssetData::new(
@@ -5821,7 +5800,6 @@ fn swap_settlement() {
         keys_enc.clone(),
         keys_med.clone(),
         &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
     )
     .unwrap();
 
@@ -6114,24 +6092,28 @@ fn swap_settlement() {
 
     let med_proof_1 = MediatorTxnProof::new_with_given_transcript(
         &mut rng,
-        leg_enc_1.mediators[index_in_asset_data].clone(),
-        sk_e.0,
         sk_m.0,
+        sk_e.0,
+        index_in_asset_data,
+        index_in_asset_data,
         accept,
         nonce,
-        &account_comm_key.sk_gen(),
+        &leg_enc_1.mediators.as_ref().unwrap()[index_in_asset_data],
+        account_comm_key.sk_gen(),
         &mut transcript,
     )
     .unwrap();
 
     let med_proof_2 = MediatorTxnProof::new_with_given_transcript(
         &mut rng,
-        leg_enc_2.mediators[index_in_asset_data].clone(),
-        sk_e.0,
         sk_m.0,
+        sk_e.0,
+        index_in_asset_data,
+        index_in_asset_data,
         accept,
         nonce,
-        &account_comm_key.sk_gen(),
+        &leg_enc_2.mediators.as_ref().unwrap()[index_in_asset_data],
+        account_comm_key.sk_gen(),
         &mut transcript,
     )
     .unwrap();
@@ -6143,57 +6125,27 @@ fn swap_settlement() {
 
     med_proof_1
         .verify_with_given_transcript(
-            leg_enc_1.mediators[index_in_asset_data].clone(),
+            index_in_asset_data,
             accept,
             nonce,
+            &leg_enc_1.mediators.as_ref().unwrap()[index_in_asset_data],
             account_comm_key.sk_gen(),
             &mut transcript,
-            None,
         )
         .unwrap();
 
     med_proof_2
         .verify_with_given_transcript(
-            leg_enc_2.mediators[index_in_asset_data].clone(),
+            index_in_asset_data,
             accept,
             nonce,
+            &leg_enc_2.mediators.as_ref().unwrap()[index_in_asset_data],
             account_comm_key.sk_gen(),
             &mut transcript,
-            None,
         )
         .unwrap();
 
     let mediator_verification_time = clock.elapsed();
-
-    let clock = Instant::now();
-    let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_LABEL);
-    let mut rmc_med = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
-
-    med_proof_1
-        .verify_with_given_transcript(
-            leg_enc_1.mediators[index_in_asset_data].clone(),
-            accept,
-            nonce,
-            account_comm_key.sk_gen(),
-            &mut transcript,
-            Some(&mut rmc_med),
-        )
-        .unwrap();
-
-    med_proof_2
-        .verify_with_given_transcript(
-            leg_enc_2.mediators[index_in_asset_data].clone(),
-            accept,
-            nonce,
-            account_comm_key.sk_gen(),
-            &mut transcript,
-            Some(&mut rmc_med),
-        )
-        .unwrap();
-
-    rmc_med.verify().unwrap();
-
-    let mediator_verification_time_rmc = clock.elapsed();
 
     // Combined alice proofs for both legs (alice sends in leg1, receives in leg2)
     let clock = Instant::now();
@@ -7083,11 +7035,8 @@ fn swap_settlement() {
         settlement_proof_size
     );
     println!(
-        "Mediator affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
-        mediator_proving_time,
-        mediator_verification_time,
-        mediator_verification_time_rmc,
-        mediator_proof_size
+        "Mediator affirmation proving time = {:?}, verification time = {:?}, proof size = {} bytes",
+        mediator_proving_time, mediator_verification_time, mediator_proof_size
     );
     println!(
         "Alice affirmation proving time = {:?}, verification time = {:?}, verification time with RMC = {:?}, proof size = {} bytes",
@@ -7888,7 +7837,6 @@ fn multi_asset_settlement() {
             &asset_tree_root,
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -7949,7 +7897,6 @@ fn multi_asset_settlement() {
         .verify_and_return_tuples(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -8241,7 +8188,6 @@ fn multi_asset_combined_create_and_send() {
             &asset_tree_root,
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -8339,7 +8285,6 @@ fn multi_asset_combined_create_and_send() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -8649,7 +8594,6 @@ fn multi_asset_combined_create_and_recv() {
             &asset_tree_root,
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -8750,7 +8694,6 @@ fn multi_asset_combined_create_and_recv() {
         .verify_sigma_protocols_and_enforce_constraints(
             leg_encs.clone(),
             &asset_tree_root,
-            vec![],
             vec![],
             vec![],
             nonce,
@@ -9206,7 +9149,7 @@ pub fn setup_leg_with_conf<R: CryptoRngCore>(
 ) {
     let enc_keys = vec![pk_e];
     let med_keys = if pk_m.is_some() {
-        vec![(0, pk_m.unwrap())]
+        vec![pk_m.unwrap()]
     } else {
         vec![]
     };
@@ -9375,7 +9318,6 @@ pub fn setup_single_leg_settlement_common<
     asset_comm_params: AssetCommitmentParams<PallasParameters, VestaParameters>,
     account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
     enc_gen: PallasA,
-    asset_tree_delta: PallasA,
 ) -> (
     AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>,
     CurveTreeWitnessPath<L, VestaParameters, PallasParameters>,
@@ -9415,14 +9357,7 @@ pub fn setup_single_leg_settlement_common<
 
     // Create asset data
     let keys = vec![pk_a_e.0];
-    let asset_data = AssetData::new(
-        asset_id,
-        keys.clone(),
-        vec![],
-        &asset_comm_params,
-        asset_tree_delta,
-    )
-    .unwrap();
+    let asset_data = AssetData::new(asset_id, keys.clone(), vec![], &asset_comm_params).unwrap();
 
     // Create asset tree with the asset commitment
     let set = vec![asset_data.commitment];
@@ -9561,8 +9496,6 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
-    let asset_tree_delta = asset_tree_params.odd_parameters.sl_params.delta;
-
     setup_single_leg_settlement_common(
         asset_tree_height,
         account_tree_height,
@@ -9571,7 +9504,6 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
         asset_comm_params,
         account_comm_key,
         enc_gen,
-        asset_tree_delta,
     )
 }
 
@@ -9624,14 +9556,8 @@ pub fn setup_multi_asset_settlement<
     let mut asset_commitments = Vec::with_capacity(num_legs);
 
     for asset_id in 1..=num_legs as u32 {
-        let asset_data = AssetData::new(
-            asset_id,
-            keys.clone(),
-            vec![],
-            &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
-        )
-        .unwrap();
+        let asset_data =
+            AssetData::new(asset_id, keys.clone(), vec![], &asset_comm_params).unwrap();
         asset_commitments.push(asset_data.commitment);
         asset_data_vec.push(asset_data);
     }
@@ -9770,7 +9696,7 @@ pub fn setup_public_asset_leg<R: CryptoRngCore>(
     };
     let enc_keys = vec![pk_e];
     let med_keys = if pk_m.is_some() {
-        vec![(0, pk_m.unwrap())]
+        vec![pk_m.unwrap()]
     } else {
         vec![]
     };
@@ -11813,15 +11739,8 @@ fn single_shot_settlement_split_proof() {
     let amount: Balance = 50;
 
     // Build a deterministic asset tree (commitment does not depend on reveal_asset_id).
-    let asset_tree_delta = asset_tree_params.odd_parameters.sl_params.delta;
-    let asset_data_for_tree = AssetData::new(
-        asset_id,
-        vec![pk_a_e.0],
-        vec![],
-        &asset_comm_params,
-        asset_tree_delta,
-    )
-    .unwrap();
+    let asset_data_for_tree =
+        AssetData::new(asset_id, vec![pk_a_e.0], vec![], &asset_comm_params).unwrap();
     let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
         &vec![asset_data_for_tree.commitment],
         &asset_tree_params,
@@ -11891,14 +11810,8 @@ fn single_shot_settlement_split_proof() {
         // asset_path is consumed by LegCreationProof::new; obtain fresh each time.
         let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         // Clone the asset_data deterministically (same inputs, same commitment).
-        let asset_data = AssetData::new(
-            asset_id,
-            vec![pk_a_e.0],
-            vec![],
-            &asset_comm_params,
-            asset_tree_delta,
-        )
-        .unwrap();
+        let asset_data =
+            AssetData::new(asset_id, vec![pk_a_e.0], vec![], &asset_comm_params).unwrap();
 
         let start = Instant::now();
         let settlement_proof =
@@ -12410,7 +12323,6 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
             leg_enc.clone(),
             leg_enc.asset_id().unwrap(),
             vec![leg.enc_keys[0]],
-            vec![],
             vec![],
             nonce,
             &leaf_level_pc_gens,

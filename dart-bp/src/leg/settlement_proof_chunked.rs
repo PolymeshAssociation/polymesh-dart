@@ -180,7 +180,7 @@ impl<
     }
 
     /// Run the per-chunk sigma-protocol verification and return BP verification tuples.
-    /// `enc_keys`/`med_keys` carry one entry per revealed-asset leg (in leg order);
+    /// `enc_keys` carry one entry per revealed-asset leg (in leg order);
     /// `public_enc_keys` is empty or one entry per leg. Each is sliced to the chunk owning it.
     pub fn verify_and_return_tuples<
         R: CryptoRngCore,
@@ -192,7 +192,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>,
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -211,9 +210,9 @@ impl<
                 "Number of leg encryptions does not match total legs across chunks".to_string(),
             ));
         }
-        if enc_keys.len() != total_revealed || med_keys.len() != total_revealed {
+        if enc_keys.len() != total_revealed {
             return Err(Error::ProofVerificationError(
-                "enc_keys/med_keys must have one entry per revealed-asset leg".to_string(),
+                "enc_keys must have one entry per revealed-asset leg".to_string(),
             ));
         }
         let has_public = !public_enc_keys.is_empty();
@@ -225,20 +224,18 @@ impl<
 
         let mut encs_it = leg_encs.into_iter();
         let mut enc_keys_it = enc_keys.into_iter();
-        let mut med_keys_it = med_keys.into_iter();
         let mut public_it = public_enc_keys.into_iter();
         let mut even_tuples = Vec::with_capacity(self.chunks.len());
         let mut odd_tuples = Vec::with_capacity(self.chunks.len());
         for chunk in &self.chunks {
             let n = chunk.leg_proofs.len();
             let chunk_encs: Vec<_> = (&mut encs_it).take(n).collect();
-            // enc_keys/med_keys are per revealed leg, so take as many as this chunk reveals.
+            // enc_keys are per revealed leg, so take as many as this chunk reveals.
             let n_revealed = chunk_encs
                 .iter()
                 .filter(|e| e.is_asset_id_revealed())
                 .count();
             let chunk_enc_keys: Vec<_> = (&mut enc_keys_it).take(n_revealed).collect();
-            let chunk_med_keys: Vec<_> = (&mut med_keys_it).take(n_revealed).collect();
             let chunk_public: Vec<_> = if has_public {
                 (&mut public_it).take(n).collect()
             } else {
@@ -248,7 +245,6 @@ impl<
                 chunk_encs,
                 asset_tree_root,
                 chunk_enc_keys,
-                chunk_med_keys,
                 chunk_public,
                 nonce,
                 tree_parameters,
@@ -274,7 +270,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>,
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -288,7 +283,6 @@ impl<
                 leg_encs,
                 asset_tree_root,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 tree_parameters,
@@ -398,7 +392,6 @@ mod tests {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         let commitments = vec![asset_data.commitment];
@@ -498,7 +491,6 @@ mod tests {
                     &root,
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -531,7 +523,6 @@ mod tests {
                     &mut rng,
                     leg_encs.clone(),
                     &root,
-                    vec![],
                     vec![],
                     vec![],
                     nonce,
@@ -593,7 +584,6 @@ mod tests {
                     &root,
                     vec![],
                     vec![],
-                    vec![],
                     nonce,
                     &asset_tree_params,
                     &asset_comm_params,
@@ -626,7 +616,6 @@ mod tests {
                     &mut rng,
                     leg_encs.clone(),
                     &root,
-                    vec![],
                     vec![],
                     vec![],
                     nonce,
@@ -735,7 +724,6 @@ mod tests {
             vec![pk_a_e.0],
             vec![],
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         let asset_tree = CurveTree::<L, M, VestaParameters, PallasParameters>::from_leaves(
@@ -811,7 +799,7 @@ mod tests {
 
         assert_eq!(batch.num_chunks(), 3);
 
-        // one enc_keys/med_keys entry per revealed leg, in leg order.
+        // one enc_keys entry per revealed leg, in leg order.
         let num_revealed = is_revealed_per_leg.iter().filter(|&&r| r).count();
         let enc_keys = vec![vec![pk_a_e.0]; num_revealed];
         let med_keys: Vec<Vec<(u8, ark_pallas::Affine)>> = vec![vec![]; num_revealed];
@@ -822,7 +810,6 @@ mod tests {
                 leg_encs.clone(),
                 &root,
                 enc_keys.clone(),
-                med_keys.clone(),
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -840,7 +827,6 @@ mod tests {
                 leg_encs,
                 &root,
                 enc_keys,
-                med_keys,
                 vec![],
                 nonce,
                 &asset_tree_params,

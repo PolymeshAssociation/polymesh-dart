@@ -336,6 +336,9 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
         if balance > MAX_FEE_BALANCE {
             return Err(Error::AmountTooLarge(balance));
         }
+        if pk.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         add_to_transcript!(
             transcript,
             NONCE_LABEL,

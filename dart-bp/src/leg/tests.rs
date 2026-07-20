@@ -80,11 +80,7 @@ fn leg_encryption_configs() {
     let asset_id = 1;
 
     let enc_keys = keys_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-    let med_keys = keys_mediator
-        .iter()
-        .enumerate()
-        .map(|(i, (_, k))| (i as u8, k.0))
-        .collect::<Vec<_>>();
+    let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
     let public_enc_keys = keys_public_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
     let leg = Leg::new(
@@ -255,21 +251,8 @@ fn leg_verification() {
 
         let enc_secrets = keys_enc.iter().map(|(sk, _)| sk.0).collect::<Vec<_>>();
         let keys_enc = keys_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        // Each mediator along with its index for encryption key
-        let keys_mediator = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| {
-                (
-                    if i < num_enc_keys as usize {
-                        i as u8
-                    } else {
-                        (num_enc_keys - 1) as u8
-                    },
-                    k.0,
-                )
-            })
-            .collect::<Vec<_>>();
+        // Mediator affirmation keys
+        let keys_mediator = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
         let public_enc_keys: Vec<_> = keys_public_enc.iter().map(|(_, k)| k.0).collect();
 
         let asset_data = AssetData::new(
@@ -277,7 +260,6 @@ fn leg_verification() {
             keys_enc.clone(),
             keys_mediator.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -403,12 +385,12 @@ fn leg_verification() {
             assert_eq!(b, amount);
         }
 
-        for (j, med) in leg_enc.mediators.iter().enumerate() {
-            let (med_enc_idx, med_pk) = keys_mediator[j];
-            let recovered_mk = med
-                .affirmation_key(&enc_secrets[med_enc_idx as usize])
-                .unwrap();
-            assert_eq!(recovered_mk, med_pk);
+        for (j, med) in leg_enc.mediators.iter().flatten().enumerate() {
+            // Each entry is encrypted to every asset encryption key, so any of them recovers it.
+            for (k, sk_enc) in enc_secrets.iter().enumerate() {
+                let recovered_mk = med.affirmation_key(sk_enc, k).unwrap();
+                assert_eq!(recovered_mk, keys_mediator[j]);
+            }
         }
 
         println!(
@@ -486,21 +468,8 @@ fn batch_leg_verification() {
             .collect::<Vec<_>>();
 
         let keys_auditor = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        // Each mediator along with its index for encryption key
-        let keys_mediator = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| {
-                (
-                    if i < num_auditors as usize {
-                        i as u8
-                    } else {
-                        (num_auditors - 1) as u8
-                    },
-                    k.0,
-                )
-            })
-            .collect::<Vec<_>>();
+        // Mediator affirmation keys
+        let keys_mediator = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         let mut asset_data_vec = Vec::with_capacity(batch_size);
         let mut commitments = Vec::with_capacity(batch_size);
@@ -511,7 +480,6 @@ fn batch_leg_verification() {
                 keys_auditor.clone(),
                 keys_mediator.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
 
@@ -755,21 +723,8 @@ fn combined_leg_verification() {
                 .collect::<Vec<_>>();
 
             let keys_auditor = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-            // Each mediator along with its index for encryption key
-            let keys_mediator = keys_mediator
-                .iter()
-                .enumerate()
-                .map(|(i, (_, k))| {
-                    (
-                        if i < num_auditors as usize {
-                            i as u8
-                        } else {
-                            num_auditors.saturating_sub(1)
-                        },
-                        k.0,
-                    )
-                })
-                .collect::<Vec<_>>();
+            // Mediator affirmation keys
+            let keys_mediator = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
             let mut asset_data_vec = Vec::with_capacity(batch_size);
             let mut commitments = Vec::with_capacity(batch_size);
@@ -780,7 +735,6 @@ fn combined_leg_verification() {
                     keys_auditor.clone(),
                     keys_mediator.clone(),
                     &asset_comm_params,
-                    asset_tree_params.odd_parameters.sl_params.delta,
                 )
                 .unwrap();
                 commitments.push(asset_data.commitment);
@@ -1050,7 +1004,6 @@ fn settlement_verification() {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         commitments.push(ad.commitment);
@@ -1147,13 +1100,12 @@ fn settlement_verification() {
             .unwrap();
         let proving_time = clock.elapsed();
 
-        let (enc_keys, med_keys) = if !reveal_asset_id {
-            (vec![], vec![])
+        let enc_keys = if !reveal_asset_id {
+            vec![]
         } else {
-            // When asset IDs are revealed, provide encryption keys and mediator keys for verification
+            // When asset IDs are revealed, provide encryption keys for verification
             // enc_keys: one Vec<Affine> per revealed asset leg
-            // med_keys: one Vec<(u8, Affine)> per revealed asset leg (empty if no mediators)
-            (vec![vec![pk_a_e.0], vec![pk_a_e.0]], vec![vec![], vec![]])
+            vec![vec![pk_a_e.0], vec![pk_a_e.0]]
         };
 
         let clock = Instant::now();
@@ -1163,7 +1115,6 @@ fn settlement_verification() {
                 vec![leg_enc1.clone(), leg_enc2.clone()],
                 &root,
                 enc_keys.clone(),
-                med_keys.clone(),
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1184,7 +1135,6 @@ fn settlement_verification() {
                 vec![leg_enc1.clone(), leg_enc2.clone()],
                 &root,
                 enc_keys,
-                med_keys,
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1297,18 +1247,15 @@ fn settlement_verification() {
             .unwrap();
         let proving_time = clock.elapsed();
 
-        let (enc_keys, med_keys) = if !reveal_asset_id {
-            (vec![], vec![])
+        let enc_keys = if !reveal_asset_id {
+            vec![]
         } else {
-            (
-                vec![
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                ],
-                vec![vec![], vec![], vec![], vec![]],
-            )
+            vec![
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+            ]
         };
 
         let clock = Instant::now();
@@ -1323,7 +1270,6 @@ fn settlement_verification() {
                 ],
                 &root,
                 enc_keys.clone(),
-                med_keys.clone(),
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1349,7 +1295,6 @@ fn settlement_verification() {
                 ],
                 &root,
                 enc_keys,
-                med_keys,
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1449,19 +1394,16 @@ fn settlement_verification() {
             .unwrap();
         let proving_time = clock.elapsed();
 
-        let (enc_keys, med_keys) = if !reveal_asset_id {
-            (vec![], vec![])
+        let enc_keys = if !reveal_asset_id {
+            vec![]
         } else {
-            (
-                vec![
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                    vec![pk_a_e.0],
-                ],
-                vec![vec![], vec![], vec![], vec![], vec![]],
-            )
+            vec![
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+                vec![pk_a_e.0],
+            ]
         };
 
         let clock = Instant::now();
@@ -1477,7 +1419,6 @@ fn settlement_verification() {
                 ],
                 &root,
                 enc_keys.clone(),
-                med_keys.clone(),
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1504,7 +1445,6 @@ fn settlement_verification() {
                 ],
                 &root,
                 enc_keys,
-                med_keys,
                 vec![],
                 nonce,
                 &asset_tree_params,
@@ -1576,7 +1516,6 @@ fn batch_settlement_verification() {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         commitments.push(ad.commitment);
@@ -1674,7 +1613,6 @@ fn batch_settlement_verification() {
                 &root,
                 vec![],
                 vec![],
-                vec![],
                 &nonces[i],
                 &asset_tree_params,
                 &asset_comm_params,
@@ -1695,7 +1633,6 @@ fn batch_settlement_verification() {
             .verify_and_return_tuples(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 &nonces[i],
@@ -1735,7 +1672,6 @@ fn batch_settlement_verification() {
             .verify_and_return_tuples(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 &nonces[i],
@@ -1817,7 +1753,6 @@ fn large_settlement_verification() {
         enc_keys.clone(),
         med_keys.clone(),
         &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
     )
     .unwrap();
 
@@ -1901,7 +1836,6 @@ fn large_settlement_verification() {
             &root,
             vec![],
             vec![],
-            vec![],
             nonce,
             &asset_tree_params,
             &asset_comm_params,
@@ -1967,7 +1901,6 @@ fn combined_settlement_verification() {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         commitments.push(ad.commitment);
@@ -2092,7 +2025,6 @@ fn combined_settlement_verification() {
                 &root,
                 vec![],
                 vec![],
-                vec![],
                 &nonces[i],
                 &asset_tree_params,
                 &asset_comm_params,
@@ -2135,7 +2067,6 @@ fn combined_settlement_verification() {
             .verify_sigma_protocols_and_enforce_constraints::<PallasParams, VestaParams>(
                 all_leg_encs[i].clone(),
                 &root,
-                vec![],
                 vec![],
                 vec![],
                 &nonces[i],
@@ -2226,7 +2157,6 @@ fn six_leg_alternating_settlement() {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         commitments.push(asset_data.commitment);
@@ -2317,7 +2247,6 @@ fn six_leg_alternating_settlement() {
             leg_encs.clone(),
             &root,
             vec![vec![pk_a_e.0], vec![pk_a_e.0], vec![pk_a_e.0]],
-            vec![vec![], vec![], vec![]],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2382,7 +2311,6 @@ fn six_leg_grouped_settlement() {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         commitments.push(asset_data.commitment);
@@ -2473,7 +2401,6 @@ fn six_leg_grouped_settlement() {
             leg_encs.clone(),
             &root,
             vec![vec![pk_a_e.0], vec![pk_a_e.0], vec![pk_a_e.0]],
-            vec![vec![], vec![], vec![]],
             vec![],
             nonce,
             &asset_tree_params,
@@ -2534,18 +2461,13 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
         .collect::<Vec<_>>();
 
     let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-    let med_keys: Vec<_> = keys_mediator
-        .iter()
-        .enumerate()
-        .map(|(i, (_, k))| (i as u8, k.0))
-        .collect();
+    let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
 
     let asset_data = AssetData::new(
         asset_id,
         enc_keys.clone(),
         med_keys.clone(),
         &asset_comm_params,
-        asset_tree_params.odd_parameters.sl_params.delta,
     )
     .unwrap();
 
@@ -2756,7 +2678,7 @@ proptest! {
 
         let enc_keys: Vec<_> = if has_enc_keys { vec![enc_pk] } else { vec![] };
         let med_keys: Vec<_> = if has_mediators {
-            vec![(0u8, med_pk)]
+            vec![med_pk]
         } else {
             vec![]
         };
@@ -2812,7 +2734,16 @@ proptest! {
 
         assert_eq!(leg_enc.eph_pk_enc_keys.len(), enc_keys.len());
         assert_eq!(leg_enc.eph_pk_public_enc_keys.len(), public_enc_keys.len());
-        assert_eq!(leg_enc.mediators.len(), med_keys.len());
+        // Mediator entries are only created when the asset-id is hidden. A revealed-asset leg carries
+        // `None`, not an empty vec, and takes its mediators from the asset's registered ones.
+        if reveal_asset_id {
+            assert!(leg_enc.mediators.is_none());
+        } else {
+            assert_eq!(
+                leg_enc.mediators.as_ref().map(|m| m.len()),
+                Some(med_keys.len())
+            );
+        }
 
         assert!(
             leg_enc
@@ -2825,9 +2756,6 @@ proptest! {
                 .is_err()
         );
 
-        for (idx, _) in &med_keys {
-            assert!((*idx as usize) < enc_keys.len());
-        }
     }
 }
 
@@ -2878,9 +2806,7 @@ proptest! {
             .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-        let med_keys: Vec<_> = keys_mediator.iter().enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_enc_keys.max(1), k.0))
-            .collect();
+        let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
 
         let pub_enc_keys: Vec<_> = if has_public_enc_keys {
             vec![keygen_enc(&mut rng, enc_key_gen).1 .0]
@@ -2897,7 +2823,6 @@ proptest! {
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         ).unwrap();
 
         let set = vec![asset_data.commitment];
@@ -2947,7 +2872,7 @@ proptest! {
         }
 
         // shorter proof.resp_eph_pk_meds
-        if !leg_enc.mediators.is_empty() {
+        if leg_enc.num_mediators() > 0 {
             let mut p = proof.clone();
             p.resp_eph_pk_meds.pop();
             verify_bad_proof(&mut rng, &mut p);
@@ -3059,8 +2984,7 @@ proptest! {
         let enc_keys = keys_enc.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
         let med_keys = keys_mediator
             .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_enc_keys, k.0))
+            .map(|(_, k)| k.0)
             .collect::<Vec<_>>();
 
         let leg = Leg::new(
@@ -3106,7 +3030,6 @@ proptest! {
                     leg_enc.clone(),
                     asset_id,
                     enc_keys.clone(),
-                    med_keys.clone(),
                     vec![],
                     nonce,
                     &pc_gens,
@@ -3135,7 +3058,6 @@ proptest! {
                 enc_keys.clone(),
                 med_keys.clone(),
                 &asset_comm_params,
-                asset_tree_params.odd_parameters.sl_params.delta,
             )
             .unwrap();
             let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
@@ -3205,11 +3127,10 @@ proptest! {
 
 #[test]
 fn leg_creator_tries_to_portray_mediator_as_auditor() {
-    // A leg creator registers an asset whose sole mediator uses encryption-key index 0, then proves
-    // against that leaf while presenting the mediator key as a second auditor and claiming zero
-    // mediators. Under `index + 1` the mediator contributes `idx_gen(0) * 1`, not the identity, so the
-    // mediated leaf and the all-auditor leaf are distinct commitments and the re-labelled layout is not
-    // the registered leaf.
+    // A leg creator registers an asset with a sole mediator, then proves against that leaf while
+    // presenting the mediator key as a second auditor and claiming zero mediators. Both layouts commit
+    // the same point block, so the mediator count under `count_gen` is what keeps the mediated leaf and
+    // the all-auditor leaf distinct and the re-labelled layout is not the registered leaf.
 
     let mut rng = rand::thread_rng();
     const NUM_GENS: usize = 1 << 12;
@@ -3229,38 +3150,23 @@ fn leg_creator_tries_to_portray_mediator_as_auditor() {
         2,
         &asset_tree_params.even_parameters.bp_gens(),
     );
-    let delta = asset_tree_params.odd_parameters.sl_params.delta;
 
     let asset_id = 1;
     let (_, ek0) = keygen_enc(&mut rng, enc_key_gen);
     let (_, mk0) = keygen_sig(&mut rng, sig_key_gen);
 
-    // Mediated layout (1 enc, 1 mediator at index 0) vs mediator-less layout (2 enc, 0 mediators).
-    let asset_a = AssetData::new(
-        asset_id,
-        vec![ek0.0],
-        vec![(0u8, mk0.0)],
-        &asset_comm_params,
-        delta,
-    )
-    .unwrap();
-    let asset_b = AssetData::new(
-        asset_id,
-        vec![ek0.0, mk0.0],
-        vec![],
-        &asset_comm_params,
-        delta,
-    )
-    .unwrap();
+    // Mediated layout (1 enc, 1 mediator) vs mediator-less layout (2 enc, 0 mediators).
+    let asset_a = AssetData::new(asset_id, vec![ek0.0], vec![mk0.0], &asset_comm_params).unwrap();
+    let asset_b = AssetData::new(asset_id, vec![ek0.0, mk0.0], vec![], &asset_comm_params).unwrap();
 
     assert_ne!(
         asset_a.commitment, asset_b.commitment,
-        "index+1 must keep the mediated leaf distinct from the extra-auditor layout"
+        "the mediator count must keep the mediated leaf distinct from the extra-auditor layout"
     );
-    // The divergence is exactly the index-generator term for the mediator at index 0.
+    // Both layouts commit the same point block, so the divergence is exactly the mediator-count term.
     assert_eq!(
         (asset_a.commitment.into_group() - asset_b.commitment).into_affine(),
-        asset_comm_params.idx_gen(0)
+        asset_comm_params.count_gen()
     );
 }
 
@@ -3372,12 +3278,8 @@ mod input_sanitation_disabled {
             .map(|_| keygen_sig(&mut rng, sig_key_gen))
             .collect::<Vec<_>>();
         let keys_auditor = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
-        // Each mediator along with its index for encryption key
-        let keys_mediator = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
-            .collect::<Vec<_>>();
+        // Mediator affirmation keys
+        let keys_mediator = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
 
         // Create asset_data with one asset_id
         let asset_data = AssetData::new(
@@ -3385,7 +3287,6 @@ mod input_sanitation_disabled {
             keys_auditor.clone(),
             keys_mediator.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3497,11 +3398,10 @@ mod input_sanitation_disabled {
             .iter()
             .map(|(_, k)| k.0)
             .collect::<Vec<_>>();
-        // Each mediator along with its index for encryption key
+        // Mediator affirmation keys
         let different_keys_mediator = different_keys_mediator
             .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8 % num_auditors, k.0))
+            .map(|(_, k)| k.0)
             .collect::<Vec<_>>();
 
         // Create a leg with different auditor/mediator keys than those in asset_data
@@ -3593,18 +3493,13 @@ mod input_sanitation_disabled {
             .collect::<Vec<_>>();
 
         let enc_keys: Vec<_> = keys_enc.iter().map(|(_, k)| k.0).collect();
-        let med_keys: Vec<_> = keys_mediator
-            .iter()
-            .enumerate()
-            .map(|(i, (_, k))| (i as u8, k.0))
-            .collect();
+        let med_keys: Vec<_> = keys_mediator.iter().map(|(_, k)| k.0).collect();
 
         let asset_data = AssetData::new(
             asset_id,
             enc_keys.clone(),
             med_keys.clone(),
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3816,7 +3711,6 @@ mod input_sanitation_disabled {
             enc_keys_asset.clone(),
             vec![],
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
         let asset_data_2 = AssetData::new(
@@ -3824,7 +3718,6 @@ mod input_sanitation_disabled {
             enc_keys_asset.clone(),
             vec![],
             &asset_comm_params,
-            asset_tree_params.odd_parameters.sl_params.delta,
         )
         .unwrap();
 
@@ -3910,7 +3803,6 @@ mod input_sanitation_disabled {
                 &root,
                 vec![],
                 vec![],
-                vec![],
                 nonce,
                 &asset_tree_params,
                 &asset_comm_params,
@@ -3930,7 +3822,6 @@ mod input_sanitation_disabled {
                     &mut rng,
                     vec![leg_enc_1.clone(), leg_enc_2.clone()],
                     &root,
-                    vec![],
                     vec![],
                     vec![],
                     nonce,
@@ -3954,8 +3845,6 @@ mod input_sanitation_disabled {
                 resp_eph_pk_r_v: p.resp_eph_pk_r_v.clone(),
                 resp_eph_pk_s_r: p.resp_eph_pk_s_r.clone(),
                 resp_eph_pk_r_s: p.resp_eph_pk_r_s.clone(),
-                resp_ct_meds: vec![],
-                resp_eph_pk_meds: vec![],
                 resp_eph_pk_enc: vec![],
                 resp_eph_pk_public_enc: vec![],
                 comm_r_i_amount: p.comm_r_i_amount,
@@ -3970,7 +3859,6 @@ mod input_sanitation_disabled {
                     &mut rng,
                     vec![leg_enc_1.clone(), leg_enc_2.clone()],
                     &root,
-                    vec![],
                     vec![],
                     vec![],
                     nonce,
