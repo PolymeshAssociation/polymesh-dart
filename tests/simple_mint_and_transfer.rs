@@ -1103,6 +1103,7 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
         &issuer_acct.keys(),
         &leg_ref,
         &leg_enc,
+        500,
         &mut asset_state,
         account_tree.prover_account_tree(),
     )?;

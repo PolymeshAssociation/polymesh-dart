@@ -88,7 +88,7 @@ impl<
     /// Check leg references in affirmation proofs.
     ///
     /// Returns `true` if all leg references match the settlement legs.
-    pub fn check_leg_references(&self) -> bool {
+    pub fn check_leg_references(&self, asset_lookup: &AssetKeysLookup) -> bool {
         // Check that the number of legs in the settlement matches the number of leg affirmations.
         if self.settlement.legs.len() != self.leg_affirmations.len() {
             return false;
@@ -111,7 +111,7 @@ impl<
                 return false;
             }
             // Check the mediator count matches the leg's mediator count.
-            if let Some(mediator_count) = leg.mediator_count().ok() {
+            if let Some(mediator_count) = leg.mediator_count(asset_lookup).ok() {
                 if mediator_count != leg_aff.mediators.len() {
                     return false;
                 }

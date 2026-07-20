@@ -159,11 +159,8 @@ impl<
         challenge: &F0,
     ) -> Result<Option<BalanceChangeSplitProof<F0, G0>>> {
         if let Some(bp) = balance_prover {
-            let (partial, resp_ct_amount) = bp.gen_proof(challenge)?;
-            Ok(Some(BalanceChangeSplitProof {
-                partial,
-                resp_ct_amount,
-            }))
+            let partial = bp.gen_proof(challenge)?;
+            Ok(Some(BalanceChangeSplitProof { partial }))
         } else {
             Ok(None)
         }
@@ -227,22 +224,28 @@ impl<
     )> {
         self.host.pre_finalize_checks()?;
 
-        let num_balance_decreases = self.host.balance_changes.len();
-        if k_amounts.len() != num_balance_decreases {
+        let num_ct_amounts = LegProverConfig::num_ct_amounts(&self.host.legs);
+        if k_amounts.len() != num_ct_amounts {
             return Err(Error::ProofGenerationError(format!(
-                "k_amounts length {} does not match number of balance-changing legs {}",
+                "k_amounts length {} does not match number of legs needing ct_amount {}",
                 k_amounts.len(),
-                num_balance_decreases
+                num_ct_amounts
             )));
         }
 
-        let num_hidden_asset_ids = LegProverConfig::num_hidden_asset_ids(&self.host.legs);
-
-        if k_asset_ids.len() != num_hidden_asset_ids {
+        let (asset_id, num_hidden_asset_ids) =
+            LegProverConfig::asset_id_and_hidden_count(&self.host.legs)?;
+        let is_asset_id_revealed = asset_id.is_some();
+        let expected_blindings_asset_ids = if is_asset_id_revealed {
+            0
+        } else {
+            num_hidden_asset_ids
+        };
+        if k_asset_ids.len() != expected_blindings_asset_ids {
             return Err(Error::ProofGenerationError(format!(
                 "k_asset_ids length {} does not match expected {}",
                 k_asset_ids.len(),
-                num_hidden_asset_ids
+                expected_blindings_asset_ids
             )));
         }
 
@@ -261,6 +264,7 @@ impl<
                 account_comm_key,
                 enc_gen,
                 k_asset_ids,
+                k_amounts,
             )?;
 
         // Create balance prover after CommonAffirmationSplitProtocol init
@@ -272,8 +276,7 @@ impl<
                 self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
-                enc_gen,
-                k_amounts,
+                inner.balance_amount_blindings(),
                 &mut even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
@@ -314,22 +317,28 @@ impl<
     )> {
         self.host.pre_finalize_checks()?;
 
-        let num_balance_decreases = self.host.balance_changes.len();
-        if k_amounts.len() != num_balance_decreases {
+        let num_ct_amounts = LegProverConfig::num_ct_amounts(&self.host.legs);
+        if k_amounts.len() != num_ct_amounts {
             return Err(Error::ProofGenerationError(format!(
-                "k_amounts length {} does not match number of balance-changing legs {}",
+                "k_amounts length {} does not match number of legs needing ct_amount {}",
                 k_amounts.len(),
-                num_balance_decreases
+                num_ct_amounts
             )));
         }
 
-        let num_hidden_asset_ids = LegProverConfig::num_hidden_asset_ids(&self.host.legs);
-
-        if k_asset_ids.len() != num_hidden_asset_ids {
+        let (asset_id, num_hidden_asset_ids) =
+            LegProverConfig::asset_id_and_hidden_count(&self.host.legs)?;
+        let is_asset_id_revealed = asset_id.is_some();
+        let expected_k_asset_ids = if is_asset_id_revealed {
+            0
+        } else {
+            num_hidden_asset_ids
+        };
+        if k_asset_ids.len() != expected_k_asset_ids {
             return Err(Error::ProofGenerationError(format!(
                 "k_asset_ids length {} does not match expected {}",
                 k_asset_ids.len(),
-                num_hidden_asset_ids
+                expected_k_asset_ids
             )));
         }
 
@@ -351,6 +360,7 @@ impl<
                 account_comm_key,
                 enc_gen,
                 k_asset_ids,
+                k_amounts,
                 even_prover,
             )?;
 
@@ -363,8 +373,7 @@ impl<
                 self.host.updated_account.balance(),
                 inner.old_balance_blinding(),
                 inner.new_balance_blinding(),
-                enc_gen,
-                k_amounts,
+                inner.balance_amount_blindings(),
                 even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
@@ -490,7 +499,9 @@ impl<
 
         let num_balance_decreases = LegVerifierConfig::num_balance_changes(&self.legs);
 
-        let num_hidden_asset_ids = LegVerifierConfig::num_hidden_asset_ids(&self.legs);
+        let (asset_id, num_hidden) = LegVerifierConfig::asset_id_and_hidden_count(&self.legs)?;
+        let is_asset_id_revealed = asset_id.is_some();
+        let num_hidden_asset_ids = if is_asset_id_revealed { 0 } else { num_hidden };
 
         if proof.common_proof.auth_proof.partial_ct_asset_ids.len() != num_hidden_asset_ids {
             return Err(Error::ProofVerificationError(format!(
@@ -508,30 +519,13 @@ impl<
             )));
         }
 
-        if proof.common_proof.auth_proof.partial_ct_amounts.len() != num_balance_decreases {
+        // partial_ct_amounts / resp_ct_amount are sized over needs_ct_amount legs and checked by the
+        // split verifier; here only the presence of a balance proof is checked.
+        if num_balance_decreases > 0 && proof.balance_proof.is_none() {
             return Err(Error::ProofVerificationError(format!(
-                "Invalid common_proof.auth_proof.partial_ct_amounts length. Expected {}, got {}",
-                num_balance_decreases,
-                proof.common_proof.auth_proof.partial_ct_amounts.len()
+                "{num_balance_decreases} legs with balance change but no balance change proof provided"
             )));
         }
-
-        if num_balance_decreases > 0 {
-            if let Some(balance_proof) = &proof.balance_proof {
-                if balance_proof.resp_ct_amount.len() != num_balance_decreases {
-                    return Err(Error::ProofVerificationError(format!(
-                        "{num_balance_decreases} legs with balance change but balance change proof for {} legs provided",
-                        balance_proof.resp_ct_amount.len()
-                    )));
-                }
-            } else {
-                return Err(Error::ProofVerificationError(format!(
-                    "{num_balance_decreases} legs with balance change but no balance change proof provided"
-                )));
-            }
-        }
-
-        let is_asset_id_revealed = num_hidden_asset_ids != self.legs.len();
         let expected_host_comm_resp_len = if is_asset_id_revealed {
             NUM_GENERATORS - 2
         } else {
@@ -611,13 +605,7 @@ impl<
         )?;
 
         if let Some(balance_proof) = &proof.balance_proof {
-            let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
-            verifier.init_balance_change_verification(
-                &proof.common_proof,
-                balance_proof,
-                enc_gen,
-                B_blinding,
-            )?;
+            verifier.init_balance_change_verification(&proof.common_proof, balance_proof)?;
         }
 
         Ok(verifier)
@@ -656,12 +644,9 @@ impl<
             )?;
 
         if let Some(balance_proof) = &proof.balance_proof {
-            let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
             verifier.init_balance_change_verification_with_given_verifier(
                 &proof.common_proof,
                 balance_proof,
-                enc_gen,
-                B_blinding,
                 even_verifier,
             )?;
         }
@@ -700,8 +685,6 @@ impl<
             verifier.init_balance_change_verification_with_given_verifier(
                 &proof.common_proof,
                 balance_proof,
-                enc_gen,
-                B_blinding,
                 even_verifier,
             )?;
         }
@@ -984,6 +967,7 @@ impl<
                     &mut odd_prover,
                     account_tree_params,
                     rng,
+                    None,
                 )?;
 
             add_to_transcript!(
@@ -1324,6 +1308,17 @@ impl<
             )));
         }
 
+        // Defense in depth. The chain should reject repeated nullifiers but we reject here as well.
+        let mut seen_nullifiers = Vec::with_capacity(account_verifiers.len());
+        for verifier in &account_verifiers {
+            if seen_nullifiers.contains(&verifier.nullifier) {
+                return Err(Error::ProofVerificationError(
+                    "Repeated nullifier in multi-asset state transition proof".to_string(),
+                ));
+            }
+            seen_nullifiers.push(verifier.nullifier);
+        }
+
         // Verify sigma protocols per account
         for (i, (acct_verifier, split_verifier)) in account_verifiers
             .into_iter()
@@ -1496,8 +1491,16 @@ mod tests {
             carol_receives_comm,
             nonce,
         );
-        split_builder.add_receive_affirmation((leg_enc_core_1.clone(), eph_pk_1.clone()));
-        split_builder.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_2.clone()));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_1.clone(),
+            alice_send_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_2.clone(),
+            bob_send_amount,
+        ));
 
         let start = Instant::now();
         let (
@@ -1533,11 +1536,13 @@ mod tests {
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_1.clone()),
+                    amount: alice_send_amount,
                     has_balance_changed: false,
                 },
                 LegProverConfig {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_2.clone()),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 },
             ],
@@ -1579,7 +1584,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         split_proof
             .common_proof
             .auth_proof
@@ -1649,9 +1655,9 @@ mod tests {
         let (_, _, (_, (_, pk_auditor_e))) =
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
-        let asset_id = 1u32;
-        let alice_to_bob_amount = 100u64;
-        let carol_to_alice_amount = 150u64;
+        let asset_id = 1;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
 
         // Create legs
         let leg_1 = Leg::new(
@@ -1725,11 +1731,16 @@ mod tests {
             alice_updated_comm,
             nonce,
         );
-        split_builder.add_send_affirmation(
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
             alice_to_bob_amount,
-            (leg_enc_core_1.clone(), eph_pk_s_1.clone()),
-        );
-        split_builder.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
 
         let start = Instant::now();
         let (
@@ -1765,11 +1776,13 @@ mod tests {
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
                     has_balance_changed: true,
                 },
                 LegProverConfig {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
                     has_balance_changed: false,
                 },
             ],
@@ -1811,7 +1824,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .path
-            .get_rerandomized_leaf();
+            .get_rerandomized_leaf()
+            .unwrap();
         split_proof
             .common_proof
             .auth_proof
@@ -1856,8 +1870,898 @@ mod tests {
             .unwrap();
 
         verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+    }
 
-        println!("Split multi-leg sender and receiver: verification passed!");
+    #[test]
+    fn test_split_multi_leg_mixed_reveal() {
+        // One account in two legs of the same asset, leg 1 reveals the asset id and leg 2 hides it.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
+
+        // leg_1: Alice -> Bob, asset-id revealed
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    reveal_asset_id: true,
+                    ..LegEncConfig::default()
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // leg_2: Carol -> Alice, asset-id hidden
+        let leg_2 = Leg::new(
+            pk_carol_e.0,
+            pk_alice_e.0,
+            carol_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let sk_alice_scalar = sk_alice.0;
+        let sk_alice_e_scalar = sk_alice_e.0;
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let mut alice_updated = alice_account.clone();
+        alice_updated.balance -= alice_to_bob_amount;
+        alice_updated.counter += 2;
+        alice_updated.refresh_randomness_for_state_change();
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"test-nonce";
+
+        let k_amount = PallasFr::rand(&mut rng); // for the revealed send leg (needs_ct_amount)
+
+        let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
+        let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
+        assert!(
+            leg_enc_core_1.is_asset_id_revealed(),
+            "leg_1 must be revealed"
+        );
+        assert!(
+            !leg_enc_core_2.is_asset_id_revealed(),
+            "leg_2 must be hidden"
+        );
+
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            alice_account.clone(),
+            alice_updated.clone(),
+            alice_updated_comm,
+            nonce,
+        );
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
+            alice_to_bob_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &[k_amount],
+                &[],
+            )
+            .unwrap();
+
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_alice_scalar,
+            sk_alice_e_scalar,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_amount],
+            vec![],
+            vec![
+                LegProverConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
+                    has_balance_changed: true,
+                },
+                LegProverConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
+                    has_balance_changed: false,
+                },
+            ],
+            &re_randomized_leaf,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, nullifier, nonce);
+        alice_verifier.add_send_affirmation((leg_enc_core_1.clone(), eph_pk_s_1.clone()));
+        alice_verifier.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        split_proof
+            .common_proof
+            .auth_proof
+            .verify(
+                vec![
+                    LegVerifierConfig {
+                        encryption: leg_enc_core_1.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                        has_balance_decreased: Some(true),
+                        has_counter_decreased: Some(false),
+                    },
+                    LegVerifierConfig {
+                        encryption: leg_enc_core_2.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                        has_balance_decreased: None,
+                        has_counter_decreased: Some(false),
+                    },
+                ],
+                &re_randomized_leaf_v,
+                &alice_updated_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+                b_blinding,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let (even_tuple, odd_tuple) = alice_verifier
+            .verify_split_with_tuples::<_, PallasParams, VestaParams>(
+                &split_proof,
+                &account_tree_root,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &mut rng,
+                None,
+            )
+            .unwrap();
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+    }
+
+    #[test]
+    fn split_cross_asset_hidden_leg_rejected() {
+        // Malicious prover (split): account and the revealed leg are asset 1, but the hidden leg
+        // encrypts a different asset id.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let revealed_asset_id = 1;
+        let hidden_asset_id = 2;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
+
+        // leg_1: Alice -> Bob, asset-id revealed
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            revealed_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    reveal_asset_id: true,
+                    ..LegEncConfig::default()
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // leg_2: Carol -> Alice, asset-id hidden
+        let leg_2 = Leg::new(
+            pk_carol_e.0,
+            pk_alice_e.0,
+            carol_to_alice_amount,
+            hidden_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let sk_alice_scalar = sk_alice.0;
+        let sk_alice_e_scalar = sk_alice_e.0;
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, revealed_asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let mut alice_updated = alice_account.clone();
+        alice_updated.balance -= alice_to_bob_amount;
+        alice_updated.counter += 2;
+        alice_updated.refresh_randomness_for_state_change();
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"test-nonce";
+
+        let k_amount = PallasFr::rand(&mut rng);
+
+        let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
+        let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
+
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            alice_account.clone(),
+            alice_updated.clone(),
+            alice_updated_comm,
+            nonce,
+        );
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
+            alice_to_bob_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &[k_amount],
+                &[],
+            )
+            .unwrap();
+
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_alice_scalar,
+            sk_alice_e_scalar,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_amount],
+            vec![],
+            vec![
+                LegProverConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
+                    has_balance_changed: true,
+                },
+                LegProverConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
+                    has_balance_changed: false,
+                },
+            ],
+            &re_randomized_leaf,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        let result = split_proof.common_proof.auth_proof.verify(
+            vec![
+                LegVerifierConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: Some(false),
+                },
+                LegVerifierConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    has_balance_decreased: None,
+                    has_counter_decreased: Some(false),
+                },
+            ],
+            &re_randomized_leaf_v,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+            None,
+        );
+        // Only the device auth proof rejects: in mixed mode the host carries no asset-id binding for
+        // hidden legs (delegated to the device), so the host verify_split_with_tuples accepts this proof.
+        assert!(
+            result.is_err(),
+            "auth-proof verification must reject a hidden leg with a different asset id"
+        );
+    }
+
+    #[test]
+    fn split_mixed_mode_host_sigma_does_not_bind_hidden_asset_id() {
+        // Mixed mode: the revealed leg uses asset 1 while the hidden leg encrypts asset 2.
+        // The host split proof accepts this shape, but the affirmation proof must reject it.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let revealed_asset_id = 1;
+        let hidden_asset_id = 2;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
+
+        // Alice -> Bob with asset id revealed.
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            revealed_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    reveal_asset_id: true,
+                    ..LegEncConfig::default()
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Carol -> Alice with a different hidden asset id.
+        let leg_2 = Leg::new(
+            pk_carol_e.0,
+            pk_alice_e.0,
+            carol_to_alice_amount,
+            hidden_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let sk_alice_scalar = sk_alice.0;
+        let sk_alice_e_scalar = sk_alice_e.0;
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, revealed_asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let mut alice_updated = alice_account.clone();
+        alice_updated.balance -= alice_to_bob_amount;
+        alice_updated.counter += 2;
+        alice_updated.refresh_randomness_for_state_change();
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"test-nonce";
+
+        let k_amount = PallasFr::rand(&mut rng);
+
+        let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
+        let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
+
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            alice_account.clone(),
+            alice_updated.clone(),
+            alice_updated_comm,
+            nonce,
+        );
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
+            alice_to_bob_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &[k_amount],
+                &[],
+            )
+            .unwrap();
+
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_alice_scalar,
+            sk_alice_e_scalar,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_amount],
+            vec![],
+            vec![
+                LegProverConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
+                    has_balance_changed: true,
+                },
+                LegProverConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
+                    has_balance_changed: false,
+                },
+            ],
+            &re_randomized_leaf,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        let mut host_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, nullifier, nonce);
+        host_verifier.add_send_affirmation((leg_enc_core_1.clone(), eph_pk_s_1.clone()));
+        host_verifier.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+        let (even_tuple, odd_tuple) = host_verifier
+            .verify_split_with_tuples::<_, PallasParams, VestaParams>(
+                &split_proof,
+                &account_tree_root,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &mut rng,
+                None,
+            )
+            .unwrap();
+        assert!(
+            verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).is_ok(),
+            "host split sigma currently accepts mixed-mode cross-asset (delegated gap)"
+        );
+
+        // The affirmation proof checks the hidden-leg asset id.
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        let auth_res = split_proof.common_proof.auth_proof.verify(
+            vec![
+                LegVerifierConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: Some(false),
+                },
+                LegVerifierConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    has_balance_decreased: None,
+                    has_counter_decreased: Some(false),
+                },
+            ],
+            &re_randomized_leaf_v,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+            None,
+        );
+        assert!(
+            auth_res.is_err(),
+            "device auth proof is the ONLY layer binding hidden-leg asset-id in mixed mode"
+        );
+    }
+
+    #[test]
+    fn split_cross_asset_hidden_leg_delegation_contract() {
+        // Same mixed-mode cross-asset setup as above, checked through the public split verifier.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let revealed_asset_id = 1;
+        let hidden_asset_id = 2;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
+
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            revealed_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    reveal_asset_id: true,
+                    ..LegEncConfig::default()
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let leg_2 = Leg::new(
+            pk_carol_e.0,
+            pk_alice_e.0,
+            carol_to_alice_amount,
+            hidden_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, revealed_asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let mut alice_updated = alice_account.clone();
+        alice_updated.balance -= alice_to_bob_amount;
+        alice_updated.counter += 2;
+        alice_updated.refresh_randomness_for_state_change();
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"test-nonce";
+
+        let k_amount = PallasFr::rand(&mut rng);
+
+        let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
+        let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
+
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            alice_account.clone(),
+            alice_updated.clone(),
+            alice_updated_comm,
+            nonce,
+        );
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
+            alice_to_bob_amount,
+        ));
+        split_builder.add_receive_affirmation((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &[k_amount],
+                &[],
+            )
+            .unwrap();
+
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_alice.0,
+            sk_alice_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_amount],
+            vec![],
+            vec![
+                LegProverConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    amount: alice_to_bob_amount,
+                    has_balance_changed: true,
+                },
+                LegProverConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    amount: carol_to_alice_amount,
+                    has_balance_changed: false,
+                },
+            ],
+            &re_randomized_leaf,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        // The public host verifier accepts this mixed-mode split proof.
+        let mut host_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, nullifier, nonce);
+        host_verifier.add_send_affirmation((leg_enc_core_1.clone(), eph_pk_s_1.clone()));
+        host_verifier.add_receive_affirmation((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+        let host_result = host_verifier.verify_split::<_, PallasParams, VestaParams>(
+            &split_proof,
+            &account_tree_root,
+            &account_tree_params,
+            &account_comm_key,
+            enc_gen,
+            &mut rng,
+            None,
+        );
+        assert!(
+            host_result.is_ok(),
+            "DELEGATION CONTRACT: host-only verify_split is expected to ACCEPT a cross-asset hidden \
+             leg in mixed mode (binding delegated to device). If this now fails, the host gained the \
+             binding and the delegation seam is closed -- update this test."
+        );
+
+        // The affirmation proof rejects the hidden leg with the wrong asset id.
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        let auth_result = split_proof.common_proof.auth_proof.verify(
+            vec![
+                LegVerifierConfig {
+                    encryption: leg_enc_core_1.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: Some(false),
+                },
+                LegVerifierConfig {
+                    encryption: leg_enc_core_2.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                    has_balance_decreased: None,
+                    has_counter_decreased: Some(false),
+                },
+            ],
+            &re_randomized_leaf_v,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+            None,
+        );
+        assert!(
+            auth_result.is_err(),
+            "device auth proof MUST reject a hidden leg whose asset-id differs from the revealed asset-id"
+        );
     }
 
     #[test]
@@ -1964,6 +2868,7 @@ mod tests {
 
             // Auth random keys
             let k_amount_1 = PallasFr::rand(&mut rng);
+            let k_amount_2 = PallasFr::rand(&mut rng); // for receive leg (needed when asset-id revealed)
             let k_asset_id_1 = PallasFr::rand(&mut rng);
             let k_asset_id_2 = PallasFr::rand(&mut rng);
 
@@ -1992,13 +2897,11 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-            split_builder_1.add_send_affirmation(
+            split_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 alice_send_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut split_builder_2 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2015,6 +2918,7 @@ mod tests {
             split_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                bob_send_amount,
             ));
 
             // Host protocol init
@@ -2035,7 +2939,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[k_amount_1], &[]],
+                    &[
+                        &[k_amount_1],
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_2)
+                        } else {
+                            &[]
+                        },
+                    ],
                     &[&k_asset_ids_1[..], &k_asset_ids_2[..]],
                 )
                 .unwrap();
@@ -2071,6 +2982,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: true,
                 }],
                 &re_rand_leaf_1,
@@ -2091,13 +3003,18 @@ mod tests {
                 sk_alice_e_scalar,
                 auth_rerand_2,
                 auth_rand_new_comm_2,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_2]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 }],
                 &re_rand_leaf_2,
@@ -2417,7 +3334,9 @@ mod tests {
 
             // Auth random keys
             let k_amount_alice = PallasFr::rand(&mut rng);
+            let k_amount_alice_2 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_amount_bob = PallasFr::rand(&mut rng);
+            let k_amount_bob_1 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_asset_id_alice_1 = PallasFr::rand(&mut rng);
             let k_asset_id_alice_2 = PallasFr::rand(&mut rng);
             let k_asset_id_bob_1 = PallasFr::rand(&mut rng);
@@ -2458,13 +3377,11 @@ mod tests {
                 alice_account_1_updated_comm,
                 alice_nonce,
             );
-            alice_split_builder_1.add_send_affirmation(
+            alice_split_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 alice_send_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut alice_split_builder_2 = AccountStateTransitionSplitProofBuilder::<
                 L,
@@ -2481,6 +3398,7 @@ mod tests {
             alice_split_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                bob_send_amount,
             ));
 
             let start = Instant::now();
@@ -2500,7 +3418,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[k_amount_alice], &[]],
+                    &[
+                        &[k_amount_alice],
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_alice_2)
+                        } else {
+                            &[]
+                        },
+                    ],
                     &[&k_asset_ids_alice_1[..], &k_asset_ids_alice_2[..]],
                 )
                 .unwrap();
@@ -2534,6 +3459,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: true,
                 }],
                 &alice_re_rand_leaf_1,
@@ -2554,13 +3480,18 @@ mod tests {
                 sk_alice_e_scalar,
                 alice_auth_rerand_2,
                 alice_auth_rand_new_comm_2,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_alice_2]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_alice_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: false,
                 }],
                 &alice_re_rand_leaf_2,
@@ -2616,6 +3547,7 @@ mod tests {
             bob_split_builder_1.add_receive_affirmation((
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                alice_send_amount,
             ));
 
             let mut bob_split_builder_2 = AccountStateTransitionSplitProofBuilder::<
@@ -2630,13 +3562,11 @@ mod tests {
                 bob_account_2_updated_comm,
                 bob_nonce,
             );
-            bob_split_builder_2.add_send_affirmation(
+            bob_split_builder_2.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 bob_send_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let start = Instant::now();
             let (bob_host_protocol, mut bob_even_prover, bob_odd_prover) =
@@ -2655,7 +3585,14 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[&[], &[k_amount_bob]],
+                    &[
+                        if reveal_asset_id {
+                            core::slice::from_ref(&k_amount_bob_1)
+                        } else {
+                            &[]
+                        },
+                        &[k_amount_bob],
+                    ],
                     &[&k_asset_ids_bob_1[..], &k_asset_ids_bob_2[..]],
                 )
                 .unwrap();
@@ -2682,13 +3619,18 @@ mod tests {
                 sk_bob_e_scalar,
                 bob_auth_rerand_1,
                 bob_auth_rand_new_comm_1,
-                vec![],
+                if reveal_asset_id {
+                    vec![k_amount_bob_1]
+                } else {
+                    vec![]
+                },
                 k_asset_ids_bob_1.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
+                    amount: alice_send_amount,
                     has_balance_changed: false,
                 }],
                 &bob_re_rand_leaf_1,
@@ -2716,6 +3658,7 @@ mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
+                    amount: bob_send_amount,
                     has_balance_changed: true,
                 }],
                 &bob_re_rand_leaf_2,
@@ -3023,5 +3966,197 @@ mod tests {
 
         test_with_config(false);
         test_with_config(true);
+    }
+
+    #[cfg(feature = "nightly_mocking_tests")]
+    #[test]
+    fn split_using_other_account_encryption_key() {
+        // Split affirmation must reject when the debited account key is Eve's but the leg sender key
+        // used by the auth proof is Alice's.
+        use ark_ff::Field;
+        use mocktopus::mocking::{MockResult, Mockable};
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        // Alice is the leg sender, Eve is the debited account, Bob is the receiver.
+        let (
+            ((_sk_a, _pk_a), (sk_a_e, pk_a_e)),
+            ((sk_e, pk_e), (sk_e_e, pk_e_e)),
+            ((_, _), (_, pk_b_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let amount = 100;
+
+        // The leg is sent by Alice, not Eve.
+        let leg = Leg::new(
+            pk_a_e.0,
+            pk_b_e.0,
+            amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, _) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+        let (leg_enc_core, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+
+        // Eve is the debited account.
+        let e_id = PallasFr::rand(&mut rng);
+        let (mut e_account, _, _, _) = new_account(&mut rng, asset_id, pk_e, pk_e_e, e_id);
+        e_account.balance = 1000;
+
+        let mut e_updated = e_account.clone();
+        e_updated.balance -= amount;
+        e_updated.counter += 1;
+        e_updated.refresh_randomness_for_state_change();
+        let e_account_comm = e_account.commit(account_comm_key.clone()).unwrap();
+        let e_updated_comm = e_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(e_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let e_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"test-nonce";
+
+        let k_amount = PallasFr::rand(&mut rng);
+        let k_asset_id = PallasFr::rand(&mut rng);
+
+        // Build the host proof for Eve's account.
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            e_account.clone(), e_updated.clone(), e_updated_comm, nonce
+        );
+        split_builder.add_send_affirmation((leg_enc_core.clone(), eph_pk_s.clone(), amount));
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                e_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &[k_amount],
+                &[k_asset_id],
+            )
+            .unwrap();
+
+        // Make the auth proof use Eve's account key and Alice's inverse key.
+        let sk_enc_inv_alice = sk_a_e.0.inverse().unwrap();
+        AuthProofAffirmation::<ark_pallas::Affine>::sk_enc_inverse
+            .mock_safe(move |_sk_enc| MockResult::Return(Ok(sk_enc_inv_alice)));
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_e.0,
+            sk_e_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            vec![k_amount],
+            vec![k_asset_id],
+            vec![LegProverConfig {
+                encryption: leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                amount,
+                has_balance_changed: true,
+            }],
+            &re_randomized_leaf,
+            &e_updated_comm.0,
+            nullifier,
+            nonce,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+        // Stop mocking before verification.
+        AuthProofAffirmation::<ark_pallas::Affine>::sk_enc_inverse.clear_mock();
+
+        assert!(balance_proof.is_some());
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        let mut e_verifier =
+            AccountStateTransitionProofVerifier::init(e_updated_comm, nullifier, nonce);
+        e_verifier.add_send_affirmation((leg_enc_core.clone(), eph_pk_s.clone()));
+
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+
+        // Check the auth proof first.
+        let auth_ok = split_proof
+            .common_proof
+            .auth_proof
+            .verify(
+                vec![LegVerifierConfig {
+                    encryption: leg_enc_core.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: Some(false),
+                }],
+                &re_randomized_leaf_v,
+                &e_updated_comm.0,
+                nullifier,
+                nonce,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+                b_blinding,
+                enc_gen,
+                None,
+            )
+            .is_ok();
+
+        // Then check the host side split proof and tuples.
+        let sigma_and_bp_ok = match e_verifier
+            .verify_split_with_tuples::<_, PallasParams, VestaParams>(
+                &split_proof,
+                &account_tree_root,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &mut rng,
+                None,
+            ) {
+            Ok((even_tuple, odd_tuple)) => {
+                verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params)
+                    .is_ok()
+            }
+            Err(_) => false,
+        };
+
+        let accepted = auth_ok && sigma_and_bp_ok;
+        assert!(!accepted);
     }
 }

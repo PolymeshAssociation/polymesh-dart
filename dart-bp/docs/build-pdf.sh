@@ -24,6 +24,7 @@ fontsize: 11pt
 urlcolor: blue
 header-includes: |
   \usepackage{amsmath}
+  \setcounter{MaxMatrixCols}{20}
   \usepackage{amssymb}
   \usepackage{mathtools}
   \usepackage{algorithm}

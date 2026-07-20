@@ -3,11 +3,14 @@ pub mod mediator;
 
 pub mod public_asset_leg_proof;
 pub mod settlement_proof;
+/// PoC: chunked settlement proof for evaluating the verifier-first chunking optimization.
+#[cfg(feature = "std")]
+pub mod settlement_proof_chunked;
 #[cfg(test)]
 pub mod tests;
 
 pub use self::leg_proof::LegCreationProof;
-pub use self::mediator::MediatorTxnProof;
+pub use self::mediator::{MediatorTxnOldProof, MediatorTxnProof};
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
@@ -16,7 +19,7 @@ use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
 use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::vec::Vec;
+use ark_std::{string::ToString, vec::Vec};
 use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use core::iter;
@@ -32,7 +35,9 @@ pub const LEG_TXN_EVEN_LABEL: &[u8; 18] = b"leg-txn-even-level";
 pub const LEG_TXN_CHALLENGE_LABEL: &[u8; 17] = b"leg-txn-challenge";
 pub const LEG_TXN_INSTANCE_LABEL: &[u8; 22] = b"leg-txn-extra-instance";
 
-// Because of the way we organize keys, its better to have a single encryption key shared among all mediators. This is more efficient except when a mediator is removed which is rare
+// Because of the way we organize keys, its better to have a single encryption key shared among all mediators.
+// This is more efficient except when a mediator is removed which is rare. Also better for asset-id
+// privacy since an uncommon indexing will reveal the asset during proof
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AssetCommitmentParams<
@@ -40,8 +45,26 @@ pub struct AssetCommitmentParams<
     G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
 > {
     pub j_0: Affine<G0>,
-    pub j_1: Affine<G0>,
+    /// Generators for the leaf commitment. The first `2 * (1 + num_enc_keys + num_med_keys)`
+    /// generators commit both coordinates of the asset-id point, the auditor encryption keys and the
+    /// mediator affirmation keys (the "point block"), 2 generators per point. One trailing generator
+    /// at index `2 * (1 + num_enc_keys + num_med_keys)` commits the mediator count.
     pub comm_key: Vec<Affine<G1>>,
+    /// Maximum number of (auditor/mediator shared) encryption keys these params are sized for.
+    pub num_enc_keys: u32,
+    /// Maximum number of mediator keys these params are sized for.
+    pub num_med_keys: u32,
+}
+
+impl<
+    G0: SWCurveConfig + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
+> AssetCommitmentParams<G0, G1>
+{
+    /// Index of the generator committing the mediator count.
+    pub fn count_gen(&self) -> Affine<G1> {
+        self.comm_key[2 * (1 + self.num_enc_keys as usize + self.num_med_keys as usize)]
+    }
 }
 
 impl<
@@ -52,16 +75,27 @@ impl<
         + Copy,
 > AssetCommitmentParams<PallasConfig, G1>
 {
-    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key
+    /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key.
+    /// `num_enc_keys` and `num_med_keys` are the maximum auditor/mediator counts the params are sized for.
     pub fn new(
         label: &[u8],
-        num_keys: u32,
+        num_enc_keys: u32,
+        num_med_keys: u32,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
-        let j_1 = hash_to_pallas(label, b" : j_1").into_affine();
-        let comm_key = bp_gens_for_vec_commitment(num_keys + 1, leaf_layer_bp_gens).collect();
-        Self { j_0, j_1, comm_key }
+        // For committing (x,y) coords of asset-id point and enc and mediator keys and one for count
+        let comm_key = bp_gens_for_vec_commitment(
+            2 * (1 + num_enc_keys + num_med_keys) + 1,
+            leaf_layer_bp_gens,
+        )
+        .collect();
+        Self {
+            j_0,
+            comm_key,
+            num_enc_keys,
+            num_med_keys,
+        }
     }
 }
 
@@ -79,13 +113,16 @@ pub struct AssetData<
     /// Encryption keys shared between auditors and mediators
     pub enc_keys: Vec<Affine<G0>>,
     /// Affirmation keys of mediators. These are not shared and each mediator has access to one of the encryption keys.
-    /// (index in enc_keys, affirmation-key)
-    pub med_keys: Vec<(u8, Affine<G0>)>,
-    /// A non-hiding commitment to asset-id and keys. Created by taking x-coordinates of the points returned by [`AssetData::points`] and
+    pub med_keys: Vec<Affine<G0>>,
+    /// A non-hiding commitment to asset-id and keys. Created by taking both coordinates of the points returned by [`AssetData::points`] and
     /// committing to them in a non-hiding Pedersen commitment, using the same commitment key as used in BP.
     pub commitment: Affine<G1>,
 }
 
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 impl<
     F0: PrimeField,
     F1: PrimeField,
@@ -96,32 +133,35 @@ impl<
     pub fn new(
         id: AssetId,
         enc_keys: Vec<Affine<G0>>,
-        med_keys: Vec<(u8, Affine<G0>)>,
+        med_keys: Vec<Affine<G0>>,
         params: &AssetCommitmentParams<G0, G1>,
-        delta: Affine<G0>,
     ) -> Result<Self> {
-        let total_keys = enc_keys.len() + med_keys.len();
-        if params.comm_key.len() < total_keys + 1 {
+        let n = enc_keys.len();
+        let m = med_keys.len();
+        if n > params.num_enc_keys as usize || m > params.num_med_keys as usize {
             return Err(Error::InsufficientCommitmentKeyLength(
                 params.comm_key.len(),
-                total_keys + 1,
+                2 * (1 + params.num_enc_keys as usize + params.num_med_keys as usize) + 1,
             ));
         }
-        for (idx, _) in &med_keys {
-            if *idx as usize >= enc_keys.len() {
-                return Err(Error::InvalidKeyIndex(*idx as usize));
-            }
-        }
-
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
-        // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive
+        // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive.
+        // Point block: both coordinates of [asset_id, auditor pks, mediator pks] under
+        // comm_key[0 .. 2*(1+n+m)], 2 generators per point. Committing both coordinates pins each
+        // point (committing only the x-coordinate would leave the y-sign free).
         let points = Self::_points(id, &enc_keys, &med_keys, params);
-        let x_coords = points
-            .into_iter()
-            .map(|p| (delta + p).into_affine().x)
-            .collect::<Vec<_>>();
-        let commitment =
-            G1::msm(&params.comm_key[..(total_keys + 1)], x_coords.as_slice()).unwrap();
+        let num_points = points.len();
+        let mut gens = params.comm_key[..2 * num_points].to_vec();
+        let mut scalars = Vec::with_capacity(2 * num_points + 1);
+        for p in &points {
+            let (x, y) = p.xy().ok_or(Error::PointAtIdentity)?;
+            scalars.push(x);
+            scalars.push(y);
+        }
+        // Mediator count under the trailing generator.
+        gens.push(params.count_gen());
+        scalars.push(F1::from(m as u64));
+        let commitment = G1::msm(&gens, scalars.as_slice()).unwrap();
         Ok(Self {
             id,
             enc_keys,
@@ -134,25 +174,19 @@ impl<
         Self::_points(self.id, &self.enc_keys, &self.med_keys, params)
     }
 
-    /// Return 1 point per key and role combined. The idea is to have 1 point per auditor/mediator and the
-    /// point should encapsulate all info about that auditor/mediator
-    /// Points are as list `[<asset_id * j_0, j_0 * role + en_1, j_0 * role + en_2, ..., j_0 * role + en_n, j_0 * role + j_1 * med_1_en + med_1, j_0 * role + j_1 * med_2_en + med_2, ..., j_0 * role + j_1 * med_m_en + med_m>]`
-    /// where `en_i` are the encryption keys, `med_i` are the mediator affirmation keys, `role = 0` for encryption keys
-    /// and `role = 1` for mediator keys and `med_i_en` refers to the index of encryption key help by `i`-th mediator. This index is
-    /// in the list of encryption keys `en_i`
+    /// Points `[(asset_id + 1) * j_0, en_1, ..., en_n, med_1, ..., med_m]`, mediator keys as bare
+    /// points. The asset-id scalar is offset by 1 so the asset-id point is never the identity (which
+    /// the leaf commitment rejects) even for `asset_id == 0`. The point relation in the leg proof
+    /// subtracts `j_0` so the asset-id it binds to the ciphertext stays the un-offset `asset_id`.
     fn _points(
         asset_id: AssetId,
         enc_keys: &[Affine<G0>],
-        med_keys: &[(u8, Affine<G0>)],
+        med_keys: &[Affine<G0>],
         params: &AssetCommitmentParams<G0, G1>,
     ) -> Vec<Affine<G0>> {
-        iter::once((params.j_0 * G0::ScalarField::from(asset_id)).into_affine())
-            // For encryption keys, role = 0 and thus point is just the key itself
-            .chain(enc_keys.into_iter().map(|k| *k))
-            // For mediator keys, role = 1 and thus point is the key + j_0 + j_1 * index where index corresponds to the encryption key of this mediator
-            .chain(med_keys.into_iter().map(|(i, k)| {
-                (params.j_0 + params.j_1 * G0::ScalarField::from(*i) + *k).into_affine()
-            }))
+        iter::once((params.j_0 * (G0::ScalarField::from(asset_id + 1))).into_affine())
+            .chain(enc_keys.iter().copied())
+            .chain(med_keys.iter().copied())
             .collect()
     }
 
@@ -191,12 +225,10 @@ pub struct Leg<G: AffineRepr> {
     /// Encryption keys for which `LegCore` will be encrypted.
     /// These keys are whats stored along the asset-id in [`AssetData`] and are hidden from verifier unless explicitly revealed
     pub enc_keys: Vec<G>,
-    /// Mediator affirmation keys
-    /// List of pairs of the form `(enc-key-index, mediator-affirmation-key)` where `enc-key-index` is the index
-    /// of key in `enc_keys` used when encrypting `mediator-affirmation-key`
-    /// These keys are whats stored along the asset-id in [`AssetData`] and are hidden from verifier unless explicitly revealed
+    /// Mediator affirmation keys. These are not shared and each mediator has access to one of the encryption keys.
+    /// These keys are whats stored along the asset-id in [`AssetData`] and are hidden from verifier unless explicitly revealed.
     /// A leg cannot have zero encryption keys but non-zero mediator affirmation keys.
-    pub med_keys: Vec<(u8, G)>,
+    pub med_keys: Vec<G>,
     /// Encryption keys for which [`LegCore`] will be encrypted.
     /// These keys are not stored along the asset-id in [`AssetData`] but provided by the leg creator and are always revealed to the verifier
     pub public_enc_keys: Vec<G>,
@@ -330,7 +362,9 @@ pub struct LegEncryptionRandomness<F: PrimeField> {
     pub r3: F,
     pub r4: Option<F>,
     /// Randomness used for creating ephemeral public keys for encryption keys corresponding to mediators.
-    pub r_meds: Vec<F>,
+    /// This is None when asset-id is revealed as mediator affirmation keys don't need to be hidden.
+    /// When no mediators (asset-id hidden), its an empty vec.
+    pub r_meds: Option<Vec<F>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -374,15 +408,68 @@ impl<G: AffineRepr> LegEncryptionCore<G> {
     }
 }
 
+/// Mediator entry: `ct_med = enc_key_gen * mu + K`, `eph_pk_med_keys[k] = enc_keys[k] * mu` for
+/// every encryption key `k`.
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MediatorEncryption<G: AffineRepr> {
+    /// Ephemeral public keys, one per encryption key from [`AssetData`].
+    pub eph_pk_med_keys: Vec<G>,
+    /// Encryption of the mediator affirmation key.
+    pub ct_med: G,
+}
+
+impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryption<G> {
+    /// Recover the mediator's affirmation key from `ct_med` using the mediator's encryption key
+    /// `sk_enc` and its `index` in `eph_pk_med_keys`.
+    pub fn affirmation_key(&self, sk_enc: &F, index: usize) -> Result<G> {
+        let eph_pk = self
+            .eph_pk_med_keys
+            .get(index)
+            .ok_or(Error::InvalidKeyIndex(index))?;
+        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let r_enc_gen = *eph_pk * sk_enc_inv;
+        sk_enc_inv.zeroize();
+        Ok((self.ct_med.into_group() - r_enc_gen).into_affine())
+    }
+
+    /// First index whose decryption under `sk_enc` equals `affirmation_key`.
+    pub fn find_key_index(&self, sk_enc: &F, affirmation_key: &G) -> Result<usize> {
+        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let ct_med = self.ct_med.into_group();
+        let idx = self
+            .eph_pk_med_keys
+            .iter()
+            .position(|eph_pk| (ct_med - (*eph_pk * sk_enc_inv)).into_affine() == *affirmation_key);
+        sk_enc_inv.zeroize();
+        idx.ok_or_else(|| {
+            Error::ProofGenerationError("No mediator encryption key matches".to_string())
+        })
+    }
+}
+
+/// Mediator entry of the scheme that predates the broadcast one, where the affirmation key is
+/// encrypted to a single encryption key identified by its index in [`AssetData`]. Kept so legs
+/// created under that scheme can still be affirmed, using [`crate::leg::mediator::MediatorTxnOldProof`].
+#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct MediatorEncryptionOld<G: AffineRepr> {
     /// The index corresponds to the encryption key from [`AssetData`].
     pub enc_key_index: u8,
-    /// Ephemeral encryption public keys for mediators in the order they appear in `ct_meds`.
+    /// Ephemeral encryption public key of the mediator.
     pub eph_pk_med_key: G,
-    /// Encryption of mediator affirmation keys in the order they appear in [`AssetData`].
-    /// These only need to be decrypted by the corresponding mediator and none other.
+    /// Encryption of the mediator affirmation key. Only the mediator holding the encryption key at
+    /// `enc_key_index` needs to decrypt it.
     pub ct_med: G,
+}
+
+impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryptionOld<G> {
+    /// Recover the mediator's affirmation key from `ct_med` using the mediator's encryption key
+    /// `sk_enc` (the secret of the encryption key at `enc_key_index` in [`AssetData`]).
+    pub fn affirmation_key(&self, sk_enc: &F) -> Result<G> {
+        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let r_enc_gen = self.eph_pk_med_key * sk_enc_inv;
+        sk_enc_inv.zeroize();
+        Ok((self.ct_med.into_group() - r_enc_gen).into_affine())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -408,7 +495,8 @@ pub struct LegEncryption<G: AffineRepr> {
     pub eph_pk_enc_keys: Vec<EphemeralPublicKey<G>>,
     /// Ephemeral public keys of auditors in the order they were passed by leg creator.
     pub eph_pk_public_enc_keys: Vec<EphemeralPublicKey<G>>,
-    pub mediators: Vec<MediatorEncryption<G>>,
+    /// This is None when asset-id is revealed. When no mediators, its an empty vec
+    pub mediators: Option<Vec<MediatorEncryption<G>>>,
 }
 
 impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
@@ -424,7 +512,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         amount: Balance,
         asset_id: AssetId,
         enc_keys: Vec<G>,
-        med_keys: Vec<(u8, G)>,
+        med_keys: Vec<G>,
         public_enc_keys: Vec<G>,
     ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
@@ -438,11 +526,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             // Not allowing sender and receiver to be the same key to be consistent with non-confidential assets
             if pk_s_e == pk_r_e {
                 return Err(Error::SameSenderAndReceiverNotAllowed());
-            }
-            for (idx, _) in &med_keys {
-                if *idx as usize >= enc_keys.len() {
-                    return Err(Error::InvalidKeyIndex(*idx as usize));
-                }
             }
         }
         Ok(Self {
@@ -478,72 +561,132 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let pk_s_enc = self.core.pk_s;
         let pk_r_enc = self.core.pk_r;
 
-        let ct_s = (enc_key_gen * r1 + pk_s_enc).into_affine();
-        let ct_r = (enc_key_gen * r2 + pk_r_enc).into_affine();
-        let ct_amount = (enc_key_gen * r3 + enc_gen * amount).into_affine();
+        // Per-mediator randomness. Mediator ciphertext are only created when asset-id is hidden.
+        let r_meds: Option<Vec<F>> = (!config.reveal_asset_id)
+            .then(|| (0..self.med_keys.len()).map(|_| F::rand(rng)).collect());
 
-        // Encrypt asset-id if it isn't revealed
+        let mut proj: Vec<G::Group> = Vec::new();
+        proj.push(enc_key_gen * r1 + pk_s_enc); // ct_s
+        proj.push(enc_key_gen * r2 + pk_r_enc); // ct_r
+        proj.push(enc_key_gen * r3 + enc_gen * amount); // ct_amount
+        if !config.reveal_asset_id {
+            proj.push(enc_key_gen * r4.unwrap() + enc_gen * asset_id); // ct_asset_id
+        }
+        proj.push(pk_s_enc * r1); // eph_pk_s.r1
+        proj.push(pk_s_enc * r3); // eph_pk_s.r3
+        if let Some(r) = r4 {
+            proj.push(pk_s_enc * r); // eph_pk_s.r4
+        }
+        if config.parties_see_each_other {
+            proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
+        }
+        proj.push(pk_r_enc * r2); // eph_pk_r.r2
+        proj.push(pk_r_enc * r3); // eph_pk_r.r3
+        if let Some(r) = r4 {
+            proj.push(pk_r_enc * r); // eph_pk_r.r4
+        }
+        if config.parties_see_each_other {
+            proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
+        }
+        for pk in self.enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
+            if let Some(r) = r4 {
+                proj.push(*pk * r);
+            }
+        }
+        for pk in self.public_enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
+            if let Some(r) = r4 {
+                proj.push(*pk * r);
+            }
+        }
+        // Mediator entries: one ephemeral per encryption key plus `ct_med`, all in the same batch.
+        let med_offset = proj.len();
+        let num_enc = self.enc_keys.len();
+        if let Some(r_meds) = r_meds.as_ref() {
+            for i in 0..self.med_keys.len() {
+                for pk in self.enc_keys.iter() {
+                    proj.push(*pk * r_meds[i]); // eph_pk_med_keys[k]
+                }
+                proj.push(enc_key_gen * r_meds[i] + self.med_keys[i]); // ct_med
+            }
+        }
+
+        let aff = G::Group::normalize_batch(&proj);
+
+        let mut k = 0usize;
+        macro_rules! next {
+            () => {{
+                let v = aff[k];
+                k += 1;
+                v
+            }};
+        }
+
+        let ct_s = next!();
+        let ct_r = next!();
+        let ct_amount = next!();
         let ct_asset_id = if config.reveal_asset_id {
             AssetIdEncryption::Revealed(self.core.asset_id)
         } else {
-            AssetIdEncryption::Ciphertext(
-                (enc_key_gen * r4.unwrap() + enc_gen * asset_id).into_affine(),
-            )
+            AssetIdEncryption::Ciphertext(next!())
         };
 
-        // If parties are allowed to see each other create ephemeral public keys for those parts else skip
-        let cross_pk = if config.parties_see_each_other {
-            (
-                Some((pk_s_enc * r2).into_affine()),
-                Some((pk_r_enc * r1).into_affine()),
-            )
-        } else {
-            (None, None)
+        let mut eph_pk_s = SenderEphemeralPublicKey::<G> {
+            r1: next!(),
+            r2: None,
+            r3: next!(),
+            r4: (!config.reveal_asset_id).then(|| next!()),
         };
+        eph_pk_s.r2 = config.parties_see_each_other.then(|| next!());
 
-        let eph_pk_s = SenderEphemeralPublicKey::<G> {
-            r1: (pk_s_enc * r1).into_affine(),
-            r2: cross_pk.0,
-            r3: (pk_s_enc * r3).into_affine(),
-            r4: r4.map(|r| (pk_s_enc * r).into_affine()),
+        let mut eph_pk_r = ReceiverEphemeralPublicKey::<G> {
+            r1: None,
+            r2: next!(),
+            r3: next!(),
+            r4: (!config.reveal_asset_id).then(|| next!()),
         };
+        eph_pk_r.r1 = config.parties_see_each_other.then(|| next!());
 
-        let eph_pk_r = ReceiverEphemeralPublicKey::<G> {
-            r1: cross_pk.1,
-            r2: (pk_r_enc * r2).into_affine(),
-            r3: (pk_r_enc * r3).into_affine(),
-            r4: r4.map(|r| (pk_r_enc * r).into_affine()),
-        };
+        let enc_keys: Vec<EphemeralPublicKey<G>> = self
+            .enc_keys
+            .iter()
+            .map(|_| EphemeralPublicKey::<G> {
+                r1: next!(),
+                r2: next!(),
+                r3: next!(),
+                r4: r4.map(|_| next!()),
+            })
+            .collect();
 
-        let enc_keys = self.enc_keys.iter().map(|pk| EphemeralPublicKey::<G> {
-            r1: (*pk * r1).into_affine(),
-            r2: (*pk * r2).into_affine(),
-            r3: (*pk * r3).into_affine(),
-            r4: r4.map(|r| (*pk * r).into_affine()),
-        });
-
-        let public_enc_keys = self
+        let public_enc_keys: Vec<EphemeralPublicKey<G>> = self
             .public_enc_keys
             .iter()
-            .map(|pk| EphemeralPublicKey::<G> {
-                r1: (*pk * r1).into_affine(),
-                r2: (*pk * r2).into_affine(),
-                r3: (*pk * r3).into_affine(),
-                r4: r4.map(|r| (*pk * r).into_affine()),
-            });
+            .map(|_| EphemeralPublicKey::<G> {
+                r1: next!(),
+                r2: next!(),
+                r3: next!(),
+                r4: r4.map(|_| next!()),
+            })
+            .collect();
 
-        let mut r_meds = Vec::with_capacity(self.med_keys.len());
-        let mut ct_meds = Vec::with_capacity(self.med_keys.len());
+        debug_assert_eq!(k, med_offset);
 
-        for i in 0..self.med_keys.len() {
-            let r = F::rand(rng);
-            ct_meds.push(MediatorEncryption {
-                enc_key_index: self.med_keys[i].0,
-                eph_pk_med_key: (self.enc_keys[self.med_keys[i].0 as usize] * r).into_affine(),
-                ct_med: (enc_key_gen * r + self.med_keys[i].1).into_affine(),
-            });
-            r_meds.push(r);
-        }
+        let ct_meds: Option<Vec<MediatorEncryption<G>>> = r_meds.as_ref().map(|_| {
+            (0..self.med_keys.len())
+                .map(|i| {
+                    let base = med_offset + i * (num_enc + 1);
+                    MediatorEncryption {
+                        eph_pk_med_keys: aff[base..base + num_enc].to_vec(),
+                        ct_med: aff[base + num_enc],
+                    }
+                })
+                .collect()
+        });
 
         Zeroize::zeroize(&mut amount);
         Zeroize::zeroize(&mut asset_id);
@@ -560,8 +703,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                     eph_pk_s,
                     eph_pk_r,
                 },
-                eph_pk_enc_keys: enc_keys.collect(),
-                eph_pk_public_enc_keys: public_enc_keys.collect(),
+                eph_pk_enc_keys: enc_keys,
+                eph_pk_public_enc_keys: public_enc_keys,
                 mediators: ct_meds,
             },
             LegEncryptionRandomness {
@@ -615,13 +758,17 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             .ct_participant(is_sender)
     }
 
+    /// Number of mediator entries. Zero when asset-id is revealed as no entries are created then;
+    /// dispatch on [`LegEncryption::is_asset_id_revealed`] rather than this when the mediator count
+    /// of the asset is needed.
     pub fn num_mediators(&self) -> usize {
-        self.mediators.len()
+        self.mediators.as_ref().map(|m| m.len()).unwrap_or(0)
     }
 
     pub fn mediator_encryption(&self, index: usize) -> Result<&MediatorEncryption<G>> {
         self.mediators
-            .get(index)
+            .as_ref()
+            .and_then(|m| m.get(index))
             .ok_or_else(|| Error::MediatorNotFoundAtIndex(index))
     }
 
@@ -709,7 +856,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
 
-        let sk_enc_inv = sk_enc
+        let mut sk_enc_inv = sk_enc
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
@@ -738,6 +885,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             )
             .into_affine()
         });
+        sk_enc_inv.zeroize();
 
         Ok((sender, receiver, asset_id, amount))
     }
@@ -764,7 +912,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
         let max_amount = max_amount.unwrap_or(MAX_BALANCE);
 
-        let sk_enc_inv = sk_enc
+        let mut sk_enc_inv = sk_enc
             .inverse()
             .ok_or_else(|| Error::InvalidSecretKey("Inverse failed".into()))?;
 
@@ -793,6 +941,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             )
             .into_affine()
         });
+        sk_enc_inv.zeroize();
 
         Ok((sender, receiver, asset_id, amount))
     }

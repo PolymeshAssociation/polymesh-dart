@@ -5,6 +5,7 @@ use polymesh_dart_bp::{
     account::common::leg_link::LegProverConfig as BPLegProverConfig,
     leg::{LegEncryptionCore, PartyEphemeralPublicKey},
 };
+use polymesh_dart_common::Balance;
 
 use super::*;
 use crate::Error;
@@ -20,6 +21,7 @@ pub type BPAuthProofFeePayment =
 pub struct LegProverConfig {
     encryption: WrappedCanonical<LegEncryptionCore<PallasA>>,
     party_eph_pk: WrappedCanonical<PartyEphemeralPublicKey<PallasA>>,
+    amount: Balance,
     has_balance_changed: bool,
 }
 
@@ -28,6 +30,7 @@ impl LegProverConfig {
         Ok(Self {
             encryption: WrappedCanonical::wrap(&config.encryption)?,
             party_eph_pk: WrappedCanonical::wrap(&config.party_eph_pk)?,
+            amount: config.amount,
             has_balance_changed: config.has_balance_changed,
         })
     }
@@ -36,6 +39,7 @@ impl LegProverConfig {
         Ok(BPLegProverConfig {
             encryption: self.encryption.decode()?,
             party_eph_pk: self.party_eph_pk.decode()?,
+            amount: self.amount,
             has_balance_changed: self.has_balance_changed,
         })
     }

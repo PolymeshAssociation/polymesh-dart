@@ -29,7 +29,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance};
+use polymesh_dart_common::{AssetId, Balance, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::PokDiscreteLogProtocol;
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
@@ -127,12 +127,26 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if increase_bal_by > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(increase_bal_by));
+            }
+            if account.balance + increase_bal_by != updated_account.balance {
+                return Err(Error::AmountTooLarge(updated_account.balance));
+            }
+            if updated_account.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(updated_account.balance));
+            }
+        }
+
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -172,6 +186,9 @@ impl<
 
         let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
+
+        // NOTE: There is no range proof on the amount increase_bal_by as the chain tracks each
+        // issuer/minter's mints and does not allow it to mint more than `MAX_BALANCE`, in total as well.
 
         // Schnorr commitment for proving correctness of re-randomized leaf (re-randomized account state)
         let t_acc_old = SchnorrCommitment::new(
@@ -511,6 +528,11 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        // The following is just defense in depth. The chain will never pass increase_bal_by > MAX_FEE_BALANCE
+        if increase_bal_by > MAX_BALANCE {
+            return Err(Error::AmountTooLarge(increase_bal_by));
+        }
+
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -626,7 +648,7 @@ impl<
 
         let issuer_pk_proj = issuer_aff_pk.into_group();
         let issuer_pk_enc_proj = issuer_enc_pk.into_group();
-        let y = self.re_randomized_path.path.get_rerandomized_leaf()
+        let y = self.re_randomized_path.path.get_rerandomized_leaf()?
             - asset_id_comm
             - issuer_pk_proj
             - issuer_pk_enc_proj
@@ -1243,6 +1265,8 @@ mod tests {
 
     #[test]
     fn mint_state_amount_boundaries() {
+        // Pure boundary check on get_state_for_mint: minting +1 at MAX_BALANCE overflows (err), while
+        // at MAX_BALANCE-1 it just fits (ok). No proof, just the state-helper guard.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -1256,7 +1280,11 @@ mod tests {
 
         let mut account_at_max = account.clone();
         account_at_max.balance = MAX_BALANCE;
-        assert!(account_at_max.get_state_for_mint(1).is_err());
+        assert_err!(
+            account_at_max.get_state_for_mint(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
 
         let mut account_at_boundary = account;
         account_at_boundary.balance = MAX_BALANCE - 1;
@@ -1662,6 +1690,8 @@ mod tests {
 
     #[test]
     fn increase_supply_txn_rejects_wrong_amount_and_nullifier() {
+        // Honest mint proof verifies, but re-verifying it against a wrong issued amount (+1) or a random
+        // nullifier must both be rejected.
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -1794,6 +1824,8 @@ mod tests {
 
         #[test]
         fn mint_with_mocked_nullifier_input_fails_verification() {
+            // Prover mocks the nullifier to use current_rho+1, so the published nullifier no longer
+            // matches the committed account's rho; verification must reject.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -1895,6 +1927,8 @@ mod tests {
 
         #[test]
         fn mint_with_mocked_updated_randomness_relation_inputs_fails_verification() {
+            // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
+            // and updated randomness+1 instead of the real values; verification must reject.
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;

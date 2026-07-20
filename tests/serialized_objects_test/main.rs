@@ -7,7 +7,7 @@ mod leg;
 mod split;
 mod utils;
 
-// Run as `cargo test --test serialized_objects_test generate_v1_serialized_objects -- --ignored`
+// Run as `cargo test -r --test serialized_objects_test generate_v1_serialized_objects -- --ignored`
 #[test]
 #[ignore = "Run explicitly to regenerate test vectors"]
 fn generate_v1_serialized_objects() {
@@ -34,6 +34,7 @@ fn generate_v1_serialized_objects() {
     leg::gen_settlement_proof_parties_hidden();
     leg::gen_leg_encrypted();
     leg::gen_mediator_encryption();
+    leg::gen_mediator_proof();
     split::gen_fee_reg_split();
     split::gen_fee_topup_split();
     split::gen_fee_payment_split();

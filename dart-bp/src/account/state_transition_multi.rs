@@ -147,6 +147,7 @@ impl<
                     odd_prover,
                     account_tree_params,
                     rng,
+                    None,
                 )?;
 
             add_to_transcript!(
@@ -303,6 +304,17 @@ impl<
             )));
         }
 
+        // Defense in depth. The chain should reject repeated nullifiers but we reject here as well.
+        let mut seen_nullifiers = Vec::with_capacity(account_verifiers.len());
+        for verifier in &account_verifiers {
+            if seen_nullifiers.contains(&verifier.nullifier) {
+                return Err(Error::ProofVerificationError(
+                    "Repeated nullifier in multi-asset state transition proof".to_string(),
+                ));
+            }
+            seen_nullifiers.push(verifier.nullifier);
+        }
+
         add_to_transcript!(even_verifier.transcript(), ROOT_LABEL, tree_root,);
 
         // Verify batched curve tree operations
@@ -364,7 +376,6 @@ mod tests {
     #![allow(deprecated)]
 
     use super::*;
-    use crate::account::AccountCommitmentKeyTrait;
     use crate::account::state::AccountStateBuilder;
     use crate::account::state_transition::{
         AccountStateTransitionProofBuilder, AccountStateTransitionProofVerifier,
@@ -372,6 +383,7 @@ mod tests {
     use crate::account::tests::{
         get_batched_tree_with_account_comms, setup_gens_new, setup_leg_with_conf,
     };
+    use crate::account::{AccountCommitmentKeyTrait, AccountTxnWitness};
     use crate::account_registration::tests::new_account;
     use crate::leg::LegEncConfig;
     use crate::leg::tests::setup_keys;
@@ -546,20 +558,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_1.clone(),
-                alice_account_1_updated.clone(),
-                alice_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_1.clone(),
+                    alice_account_1_updated.clone(),
+                    alice_account_1_updated_comm,
+                ),
                 alice_nonce,
             );
-            alice_builder_1.add_send_affirmation(
+            alice_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 alice_send_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             // Alice's builder for asset 2 account
             let mut alice_builder_2 = AccountStateTransitionProofBuilder::<
@@ -569,16 +581,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_2.clone(),
-                alice_account_2_updated.clone(),
-                alice_account_2_after_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_2.clone(),
+                    alice_account_2_updated.clone(),
+                    alice_account_2_after_comm,
+                ),
                 alice_nonce,
             );
             alice_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                bob_send_amount,
             ));
 
             // Bob's builder for asset 1 account
@@ -589,16 +604,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_1.clone(),
-                bob_account_1_updated.clone(),
-                bob_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_1.clone(),
+                    bob_account_1_updated.clone(),
+                    bob_account_1_updated_comm,
+                ),
                 bob_nonce,
             );
             bob_builder_1.add_receive_affirmation((
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                alice_send_amount,
             ));
 
             // Bob's builder for asset 2 account
@@ -609,20 +627,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_2.clone(),
-                bob_account_2_updated.clone(),
-                bob_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_2.clone(),
+                    bob_account_2_updated.clone(),
+                    bob_account_2_updated_comm,
+                ),
                 bob_nonce,
             );
-            bob_builder_2.add_send_affirmation(
+            bob_builder_2.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 bob_send_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             // Alice create multi-asset proof
             let start = Instant::now();
@@ -820,6 +838,39 @@ mod tests {
             println!(
                 "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
                 proving_time, verification_time, verification_time_rmc, proof_size
+            );
+
+            // Repeating an old account across slots yields a repeated nullifier and must be rejected.
+            let mut dup_verifier_1 = AccountStateTransitionProofVerifier::init(
+                bob_account_1_updated_comm,
+                bob_nullifier_1,
+                bob_nonce,
+            );
+            dup_verifier_1.add_receive_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            let mut dup_verifier_2 = AccountStateTransitionProofVerifier::init(
+                bob_account_1_updated_comm,
+                bob_nullifier_1,
+                bob_nonce,
+            );
+            dup_verifier_2.add_receive_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            assert!(
+                multi_asset_proof
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        vec![dup_verifier_1, dup_verifier_2],
+                        &account_tree_root,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
             );
         };
 
@@ -1193,20 +1244,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_1.clone(),
-                alice_account_1_updated.clone(),
-                alice_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_1.clone(),
+                    alice_account_1_updated.clone(),
+                    alice_account_1_updated_comm,
+                ),
                 nonce_alice,
             );
-            alice_builder_1.add_send_affirmation(
+            alice_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_1_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut alice_builder_2 = AccountStateTransitionProofBuilder::<
                 L,
@@ -1215,16 +1266,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_2.clone(),
-                alice_account_2_updated.clone(),
-                alice_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_2.clone(),
+                    alice_account_2_updated.clone(),
+                    alice_account_2_updated_comm,
+                ),
                 nonce_alice,
             );
             alice_builder_2.add_receive_affirmation((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                leg_2_amount,
             ));
 
             let mut alice_builder_3 = AccountStateTransitionProofBuilder::<
@@ -1234,20 +1288,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_3.clone(),
-                alice_account_3_updated.clone(),
-                alice_account_3_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_3.clone(),
+                    alice_account_3_updated.clone(),
+                    alice_account_3_updated_comm,
+                ),
                 nonce_alice,
             );
-            alice_builder_3.add_sender_reverse(
+            alice_builder_3.add_sender_reverse((
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_3_amount,
-                (
-                    leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut alice_builder_4 = AccountStateTransitionProofBuilder::<
                 L,
@@ -1256,16 +1310,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_4.clone(),
-                alice_account_4_updated.clone(),
-                alice_account_4_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_4.clone(),
+                    alice_account_4_updated.clone(),
+                    alice_account_4_updated_comm,
+                ),
                 nonce_alice,
             );
             alice_builder_4.add_receiver_reverse((
                 leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                leg_4_amount,
             ));
 
             let mut alice_builder_5 = AccountStateTransitionProofBuilder::<
@@ -1275,16 +1332,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_5.clone(),
-                alice_account_5_updated.clone(),
-                alice_account_5_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_5.clone(),
+                    alice_account_5_updated.clone(),
+                    alice_account_5_updated_comm,
+                ),
                 nonce_alice,
             );
             alice_builder_5.add_sender_counter_update((
                 leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                leg_5_amount,
             ));
 
             let mut alice_builder_6 = AccountStateTransitionProofBuilder::<
@@ -1294,20 +1354,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_6.clone(),
-                alice_account_6_updated.clone(),
-                alice_account_6_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_6.clone(),
+                    alice_account_6_updated.clone(),
+                    alice_account_6_updated_comm,
+                ),
                 nonce_alice,
             );
-            alice_builder_6.add_claim_received(
+            alice_builder_6.add_claim_received((
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_6_amount,
-                (
-                    leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
+            ));
 
             // Alice creates multi-asset proof with all 6 accounts
             let start = Instant::now();
@@ -1514,16 +1574,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_1.clone(),
-                bob_account_1_updated.clone(),
-                bob_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_1.clone(),
+                    bob_account_1_updated.clone(),
+                    bob_account_1_updated_comm,
+                ),
                 nonce_bob,
             );
             bob_builder_1.add_receive_affirmation((
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                leg_1_amount,
             ));
 
             let mut bob_builder_2 = AccountStateTransitionProofBuilder::<
@@ -1533,20 +1596,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_2.clone(),
-                bob_account_2_updated.clone(),
-                bob_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_2.clone(),
+                    bob_account_2_updated.clone(),
+                    bob_account_2_updated_comm,
+                ),
                 nonce_bob,
             );
-            bob_builder_2.add_send_affirmation(
+            bob_builder_2.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_2_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut bob_builder_3 = AccountStateTransitionProofBuilder::<
                 L,
@@ -1555,16 +1618,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_3.clone(),
-                bob_account_3_updated.clone(),
-                bob_account_3_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_3.clone(),
+                    bob_account_3_updated.clone(),
+                    bob_account_3_updated_comm,
+                ),
                 nonce_bob,
             );
             bob_builder_3.add_receiver_reverse((
                 leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+                leg_3_amount,
             ));
 
             let mut bob_builder_4 = AccountStateTransitionProofBuilder::<
@@ -1574,20 +1640,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_4.clone(),
-                bob_account_4_updated.clone(),
-                bob_account_4_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_4.clone(),
+                    bob_account_4_updated.clone(),
+                    bob_account_4_updated_comm,
+                ),
                 nonce_bob,
             );
-            bob_builder_4.add_sender_reverse(
+            bob_builder_4.add_sender_reverse((
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_4_amount,
-                (
-                    leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut bob_builder_5 = AccountStateTransitionProofBuilder::<
                 L,
@@ -1596,20 +1662,20 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_5.clone(),
-                bob_account_5_updated.clone(),
-                bob_account_5_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_5.clone(),
+                    bob_account_5_updated.clone(),
+                    bob_account_5_updated_comm,
+                ),
                 nonce_bob,
             );
-            bob_builder_5.add_claim_received(
+            bob_builder_5.add_claim_received((
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_5_amount,
-                (
-                    leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
+            ));
 
             let mut bob_builder_6 = AccountStateTransitionProofBuilder::<
                 L,
@@ -1618,16 +1684,19 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_6.clone(),
-                bob_account_6_updated.clone(),
-                bob_account_6_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_6.clone(),
+                    bob_account_6_updated.clone(),
+                    bob_account_6_updated_comm,
+                ),
                 nonce_bob,
             );
             bob_builder_6.add_sender_counter_update((
                 leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+                leg_6_amount,
             ));
 
             // Bob creates multi-asset proof with all 6 accounts
@@ -2069,42 +2138,36 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_1.clone(),
-                alice_account_1_updated.clone(),
-                alice_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_1.clone(),
+                    alice_account_1_updated.clone(),
+                    alice_account_1_updated_comm,
+                ),
                 nonce_alice,
             );
             // Add all 4 operations for asset 1
-            alice_builder_1.add_send_affirmation(
+            alice_builder_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_1_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
-            alice_builder_1.add_claim_received(
+            ));
+            alice_builder_1.add_claim_received((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_2_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
-            alice_builder_1.add_send_affirmation(
+            ));
+            alice_builder_1.add_send_affirmation((
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_3_amount,
-                (
-                    leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
-            alice_builder_1.add_claim_received(
+            ));
+            alice_builder_1.add_claim_received((
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_4_amount,
-                (
-                    leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
+            ));
 
             let mut alice_builder_2 = AccountStateTransitionProofBuilder::<
                 L,
@@ -2113,27 +2176,25 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_2.clone(),
-                alice_account_2_updated.clone(),
-                alice_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_2.clone(),
+                    alice_account_2_updated.clone(),
+                    alice_account_2_updated_comm,
+                ),
                 nonce_alice,
             );
-            alice_builder_2.add_irreversible_send(
+            alice_builder_2.add_irreversible_send((
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_5_amount,
-                (
-                    leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
-            alice_builder_2.add_irreversible_receive(
+            ));
+            alice_builder_2.add_irreversible_receive((
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_6_amount,
-                (
-                    leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
+            ));
 
             // Alice creates multi-asset proof with both accounts
             let start = Instant::now();
@@ -2166,41 +2227,35 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_1.clone(),
-                bob_account_1_updated.clone(),
-                bob_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_1.clone(),
+                    bob_account_1_updated.clone(),
+                    bob_account_1_updated_comm,
+                ),
                 nonce_bob,
             );
-            bob_builder_1.add_claim_received(
+            bob_builder_1.add_claim_received((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_1_amount,
-                (
-                    leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
-            bob_builder_1.add_send_affirmation(
+            ));
+            bob_builder_1.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_2_amount,
-                (
-                    leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
-            bob_builder_1.add_claim_received(
+            ));
+            bob_builder_1.add_claim_received((
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_3_amount,
-                (
-                    leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
-            bob_builder_1.add_send_affirmation(
+            ));
+            bob_builder_1.add_send_affirmation((
+                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_4_amount,
-                (
-                    leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let mut bob_builder_2 = AccountStateTransitionProofBuilder::<
                 L,
@@ -2209,27 +2264,25 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_bob.0,
-                sk_bob_e.0,
-                bob_account_2.clone(),
-                bob_account_2_updated.clone(),
-                bob_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_bob.0,
+                    sk_bob_e.0,
+                    bob_account_2.clone(),
+                    bob_account_2_updated.clone(),
+                    bob_account_2_updated_comm,
+                ),
                 nonce_bob,
             );
-            bob_builder_2.add_irreversible_receive(
+            bob_builder_2.add_irreversible_receive((
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                 leg_5_amount,
-                (
-                    leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
-                ),
-            );
-            bob_builder_2.add_irreversible_send(
+            ));
+            bob_builder_2.add_irreversible_send((
+                leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                 leg_6_amount,
-                (
-                    leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
-                    leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-                ),
-            );
+            ));
 
             let start = Instant::now();
             let (bob_proof, bob_nullifiers) = MultiAssetStateTransitionProof::<
@@ -2484,6 +2537,8 @@ mod tests {
 
     #[test]
     fn test_multi_asset_six_legs_mixed_revealed() {
+        // Alice across 6 legs / 3 assets where only legs 1 & 3 reveal the asset-id and the rest hide it (hidden legs need
+        // a curve-tree asset membership proof); checks the batched multi-account proof handles the mixed reveal pattern.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 14;
@@ -2686,62 +2741,68 @@ mod tests {
 
         let mut alice_proof_builder_1 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_1.clone(),
-                alice_account_1_updated.clone(),
-                alice_account_1_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_1.clone(),
+                    alice_account_1_updated.clone(),
+                    alice_account_1_updated_comm,
+                ),
                 alice_nonce,
             );
-        alice_proof_builder_1.add_send_affirmation(
+        alice_proof_builder_1.add_send_affirmation((
+            leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             leg_1_amount,
-            (
-                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
         alice_proof_builder_1.add_receive_affirmation((
             leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            leg_2_amount,
         ));
 
         let mut alice_proof_builder_2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_2.clone(),
-                alice_account_2_updated.clone(),
-                alice_account_2_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_2.clone(),
+                    alice_account_2_updated.clone(),
+                    alice_account_2_updated_comm,
+                ),
                 alice_nonce,
             );
         alice_proof_builder_2.add_receive_affirmation((
             leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            leg_3_amount,
         ));
-        alice_proof_builder_2.add_send_affirmation(
+        alice_proof_builder_2.add_send_affirmation((
+            leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             leg_4_amount,
-            (
-                leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
 
         let mut alice_proof_builder_3 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_3.clone(),
-                alice_account_3_updated.clone(),
-                alice_account_3_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_3.clone(),
+                    alice_account_3_updated.clone(),
+                    alice_account_3_updated_comm,
+                ),
                 alice_nonce,
             );
         alice_proof_builder_3.add_receive_affirmation((
             leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            leg_5_amount,
         ));
         alice_proof_builder_3.add_receive_affirmation((
             leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            leg_6_amount,
         ));
 
         let start = Instant::now();

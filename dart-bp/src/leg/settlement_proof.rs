@@ -221,6 +221,7 @@ impl<
                     odd_prover,
                     tree_parameters,
                     rng,
+                    None,
                 )?;
 
             add_to_transcript!(
@@ -242,17 +243,18 @@ impl<
 
         debug_assert!(all_rerandomized_leaves.len() == num_hidden_asset_legs);
 
-        // Create individual leg proofs, based on asset-id visibility
+        // Create individual leg proofs, based on asset-id visibility.
         let mut leg_proofs = Vec::with_capacity(num_legs);
         let mut hidden_asset_idx = 0;
+        let mut asset_data_iter = asset_data.into_iter();
 
-        for i in 0..num_legs {
-            let leg_proof = if leg_encs[i].is_asset_id_revealed() {
+        for ((leg, leg_enc), leg_enc_rand) in legs.into_iter().zip(leg_encs).zip(leg_enc_rands) {
+            let leg_proof = if leg_enc.is_asset_id_revealed() {
                 let proof = PublicAssetLegCreationProof::new_with_given_prover_inner(
                     rng,
-                    legs[i].clone(),
-                    leg_encs[i].clone(),
-                    leg_enc_rands[i].clone(),
+                    leg,
+                    leg_enc,
+                    leg_enc_rand,
                     &tree_parameters.odd_parameters.pc_gens(),
                     &tree_parameters.odd_parameters.bp_gens(),
                     enc_key_gen,
@@ -262,15 +264,18 @@ impl<
                 LegProof::RevealedAssetProof(proof)
             } else {
                 let (rerandomized_leaf, randomizer) = all_rerandomized_leaves[hidden_asset_idx];
+                let asset_data = asset_data_iter
+                    .next()
+                    .expect("asset_data length validated to equal hidden-asset legs");
                 let proof =
                     LegCreationProof::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
                         rng,
-                        legs[i].clone(),
-                        leg_encs[i].clone(),
-                        leg_enc_rands[i].clone(),
+                        leg,
+                        leg_enc,
+                        leg_enc_rand,
                         rerandomized_leaf,
                         randomizer,
-                        asset_data[hidden_asset_idx].clone(),
+                        asset_data,
                         tree_parameters,
                         asset_comm_params,
                         enc_key_gen,
@@ -293,9 +298,9 @@ impl<
         })
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify<
         R: CryptoRngCore,
@@ -307,7 +312,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -329,7 +333,6 @@ impl<
                 leg_encs,
                 asset_tree_root,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 nonce,
                 tree_parameters,
@@ -343,9 +346,9 @@ impl<
         handle_verification_tuples(even_tuple, odd_tuple, tree_parameters, rmc)
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify_and_return_tuples<
         R: CryptoRngCore,
@@ -356,7 +359,6 @@ impl<
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
         enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
         public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
@@ -375,7 +377,6 @@ impl<
             leg_encs,
             asset_tree_root,
             enc_keys,
-            med_keys,
             public_enc_keys,
             nonce,
             tree_parameters,
@@ -400,9 +401,9 @@ impl<
         )
     }
 
-    /// `enc_keys` and `med_keys` are the encryption (auditor) and mediator keys associated with the assets
+    /// `enc_keys` are the encryption (auditor) keys associated with the assets
     /// which are revealed as some leg encryptions reveal asset-id and some don't in `leg_encs`
-    /// `public_enc_keys` and `public_med_keys` are the extra encryption (auditor) and mediator keys
+    /// `public_enc_keys` are the extra encryption (auditor) keys
     /// specified by leg creator and are always known to the verifier
     pub fn verify_sigma_protocols_and_enforce_constraints<
         Parameters0: DiscreteLogParameters,
@@ -411,9 +412,8 @@ impl<
         &self,
         leg_encs: Vec<LegEncryption<Affine<G0>>>,
         asset_tree_root: &Root<L, M, G1, G0>,
-        enc_keys: Vec<Vec<Affine<G0>>>,
-        med_keys: Vec<Vec<(u8, Affine<G0>)>>, // (index in enc_keys, mediator affirmation key)
-        public_enc_keys: Vec<Vec<Affine<G0>>>,
+        mut enc_keys: Vec<Vec<Affine<G0>>>,
+        mut public_enc_keys: Vec<Vec<Affine<G0>>>,
         nonce: &[u8],
         tree_parameters: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
         asset_comm_params: &AssetCommitmentParams<G0, G1>,
@@ -463,13 +463,6 @@ impl<
                 num_revealed_asset_legs
             )));
         }
-        if num_revealed_asset_legs != med_keys.len() {
-            return Err(Error::ProofVerificationError(format!(
-                "Number of mediator key vectors ({}) does not equal number of revealed asset-id legs ({})",
-                med_keys.len(),
-                num_revealed_asset_legs
-            )));
-        }
 
         add_to_transcript!(
             odd_verifier.transcript(),
@@ -515,22 +508,22 @@ impl<
         let mut hidden_asset_idx = 0;
         let mut revealed_asset_idx = 0;
 
-        for i in 0..num_legs {
+        for (i, (leg_proof, leg_enc)) in self.leg_proofs.iter().zip(leg_encs).enumerate() {
             let leg_public_enc_keys = if public_enc_keys.is_empty() {
                 vec![]
             } else {
-                public_enc_keys[i].clone()
+                core::mem::take(&mut public_enc_keys[i])
             };
 
-            match &self.leg_proofs[i] {
+            match leg_proof {
                 LegProof::HiddenAssetProof(proof) => {
-                    if leg_encs[i].is_asset_id_revealed() {
+                    if leg_enc.is_asset_id_revealed() {
                         return Err(Error::ProofVerificationError(format!(
                             "Leg {i} is not a hidden asset-id leg"
                         )));
                     }
                     proof.verify_sigma_protocols_and_enforce_constraints_with_rerandomized_leaf::<Parameters0, Parameters1>(
-                        leg_encs[i].clone(),
+                        leg_enc,
                         all_rerandomized_leaves[hidden_asset_idx],
                         leg_public_enc_keys,
                         tree_parameters,
@@ -545,22 +538,21 @@ impl<
                     hidden_asset_idx += 1;
                 }
                 LegProof::RevealedAssetProof(proof) => {
-                    if !leg_encs[i].is_asset_id_revealed() {
+                    if !leg_enc.is_asset_id_revealed() {
                         return Err(Error::ProofVerificationError(format!(
                             "Leg {i} is not a revealed asset-id leg"
                         )));
                     }
 
-                    let revealed_asset_id = leg_encs[i].asset_id().ok_or_else(|| {
+                    let revealed_asset_id = leg_enc.asset_id().ok_or_else(|| {
                         Error::ProofVerificationError(
                             "Revealed asset-id leg must have a public asset_id".to_string(),
                         )
                     })?;
                     proof.verify_sigma_protocols_and_enforce_constraints_inner(
-                        leg_encs[i].clone(),
+                        leg_enc,
                         revealed_asset_id,
-                        enc_keys[revealed_asset_idx].clone(),
-                        med_keys[revealed_asset_idx].clone(),
+                        core::mem::take(&mut enc_keys[revealed_asset_idx]),
                         leg_public_enc_keys,
                         &tree_parameters.odd_parameters.pc_gens(),
                         &tree_parameters.odd_parameters.bp_gens(),

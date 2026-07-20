@@ -111,7 +111,7 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
+        mut keys: Vec<((G, G::ScalarField), (G, G::ScalarField))>,
         nonce: &[u8],
         sig_key_gen: G,
         enc_key_gen: G,
@@ -141,10 +141,12 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         r_enc.zeroize();
 
         let mut c = challenge;
-        for ((_, s), (_, e)) in keys.into_iter() {
-            s_sig += c * s;
-            s_enc += c * e;
+        for ((_, s), (_, e)) in keys.iter_mut() {
+            s_sig += c * *s;
+            s_enc += c * *e;
             c = c * challenge;
+            s.zeroize();
+            e.zeroize();
         }
 
         Ok(Self {
@@ -174,6 +176,11 @@ impl<G: AffineRepr> InvestorKeyRegProof<G> {
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
+        for (a, e) in pub_keys.iter() {
+            if a.is_zero() || e.is_zero() {
+                return Err(Error::PointAtIdentity);
+            }
+        }
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
         add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;
@@ -238,7 +245,7 @@ impl<G: AffineRepr> AudMedRegProof<G> {
 
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
-        keys: Vec<(G, G::ScalarField)>,
+        mut keys: Vec<(G, G::ScalarField)>,
         nonce: &[u8],
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
@@ -258,9 +265,10 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         let mut s = r;
         r.zeroize();
         let mut c = challenge;
-        for (_, e) in keys.into_iter() {
-            s += c * e;
+        for (_, e) in keys.iter_mut() {
+            s += c * *e;
             c = c * challenge;
+            e.zeroize();
         }
 
         Ok(Self { t, s })
@@ -278,6 +286,11 @@ impl<G: AffineRepr> AudMedRegProof<G> {
         enc_key_gen: G,
         mut transcript: MerlinTranscript,
     ) -> Result<()> {
+        for k in pub_keys.iter() {
+            if k.is_zero() {
+                return Err(Error::PointAtIdentity);
+            }
+        }
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
 
         add_slice_to_transcript(&mut transcript, b"keys", &pub_keys)?;
@@ -316,6 +329,7 @@ pub mod tests {
 
     #[test]
     fn investor_key_reg_proof() {
+        // Happy path for the investor (sig+enc) key-registration proof, plus rejection when given too few keys, a wrong pubkey, or swapped generators.
         let mut rng = rand::thread_rng();
 
         let num_investors = 5;
@@ -360,6 +374,7 @@ pub mod tests {
 
     #[test]
     fn investor_key_reg_proof_order() {
+        // Like investor_key_reg_proof but checks the proof binds the ORDER of the keys: swapping two pubkeys, or duplicating one, must fail verification.
         let mut rng = rand::thread_rng();
         let nonce = b"test_nonce_1";
 
@@ -400,6 +415,7 @@ pub mod tests {
 
     #[test]
     fn aud_med_key_reg_proof() {
+        // Happy path for the auditor/mediator (enc-key-only) registration proof, plus rejection on too few keys, a wrong pubkey, or a wrong generator.
         let mut rng = rand::thread_rng();
 
         let num_aud_med = 5;
@@ -440,6 +456,7 @@ pub mod tests {
 
     #[test]
     fn aud_med_key_reg_proof_order() {
+        // Like aud_med_key_reg_proof but checks the proof binds key ORDER: swapping two pubkeys, or duplicating one, must fail verification.
         let mut rng = rand::thread_rng();
         let nonce = b"test_nonce_3";
 

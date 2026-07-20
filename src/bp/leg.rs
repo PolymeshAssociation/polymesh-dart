@@ -284,7 +284,7 @@ impl Leg {
         rng: &mut R,
         config: bp_leg::LegEncConfig,
         asset_enc_keys: Vec<PallasA>,
-        asset_med_keys: Vec<(u8, PallasA)>,
+        asset_med_keys: Vec<PallasA>,
         public_enc_keys: Vec<PallasA>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
         let leg = bp_leg::Leg::new(
@@ -493,17 +493,20 @@ impl<
         }
     }
 
-    pub fn mediator_count(&self) -> Result<usize, Error> {
+    pub fn mediator_count(&self, asset_lookup: &AssetKeysLookup) -> Result<usize, Error> {
         match self {
             Self::HiddenAssetId(p) => p.mediator_count(),
-            Self::RevealedAssetId(p) => p.mediator_count(),
+            Self::RevealedAssetId(p) => p.mediator_count(asset_lookup),
         }
     }
 
-    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
+    pub fn get_mediator_ids(
+        &self,
+        asset_lookup: &AssetKeysLookup,
+    ) -> Result<Vec<MediatorId>, Error> {
         match self {
             Self::HiddenAssetId(p) => p.get_mediator_ids(),
-            Self::RevealedAssetId(p) => p.get_mediator_ids(),
+            Self::RevealedAssetId(p) => p.get_mediator_ids(asset_lookup),
         }
     }
 
@@ -542,7 +545,7 @@ impl<
                 let even_tuple = VerificationTuple {
                     proof_dependent_points: vec![],
                     proof_dependent_scalars: vec![],
-                    proof_independent_scalars: vec![],
+                    fixed_point_scalars: vec![],
                 };
                 Ok((even_tuple, odd_tuple))
             }
@@ -686,13 +689,16 @@ impl<
     }
 
     /// Get leg and sender, receiver and mediator affirmation counts.
-    pub fn count_leg_affirmations(&self) -> Result<SettlementCounts, Error> {
+    pub fn count_leg_affirmations(
+        &self,
+        asset_lookup: &AssetKeysLookup,
+    ) -> Result<SettlementCounts, Error> {
         let mut leg_count: u64 = 0;
         let mut mediator_count = 0;
 
         for leg_aff in &self.legs {
             leg_count += 1;
-            mediator_count += leg_aff.mediator_count()? as u64;
+            mediator_count += leg_aff.mediator_count(asset_lookup)? as u64;
         }
 
         Ok(SettlementCounts {
@@ -802,10 +808,10 @@ impl<
         let mut odd_tuples = Vec::with_capacity(batch_size);
         for (even, odd) in tuples {
             // If any tuple is empty which can happen when asset id is revealed
-            if !even.proof_independent_scalars.is_empty() {
+            if !even.fixed_point_scalars.is_empty() {
                 even_tuples.push(even);
             }
-            if !odd.proof_independent_scalars.is_empty() {
+            if !odd.fixed_point_scalars.is_empty() {
                 odd_tuples.push(odd);
             }
         }
@@ -988,7 +994,7 @@ impl<
                     .collect::<Result<_, _>>()?;
                 proof.verify(
                     rng,
-                    leg_enc.clone(),
+                    leg_enc,
                     &root,
                     public_enc_keys,
                     ctx,
@@ -1030,7 +1036,7 @@ impl<
             .collect::<Result<_, _>>()?;
 
         let tuples = proof.verify_and_return_tuples(
-            leg_enc.clone(),
+            leg_enc,
             &root,
             public_enc_keys,
             ctx,
@@ -1108,12 +1114,20 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         })
     }
 
-    pub fn mediator_count(&self) -> Result<usize, Error> {
-        self.leg_enc.mediator_count()
+    /// Legs with a revealed asset-id carry no mediator entries so the asset's registered mediators
+    /// are used.
+    pub fn mediator_count(&self, asset_lookup: &AssetKeysLookup) -> Result<usize, Error> {
+        let (_, med_keys) = asset_lookup.get_keys(self.asset_id)?;
+        Ok(med_keys.len())
     }
 
-    pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
-        self.leg_enc.get_mediator_ids()
+    pub fn get_mediator_ids(
+        &self,
+        asset_lookup: &AssetKeysLookup,
+    ) -> Result<Vec<MediatorId>, Error> {
+        Ok((0..self.mediator_count(asset_lookup)?)
+            .map(|idx| idx as MediatorId)
+            .collect())
     }
 
     pub fn verify<R: RngCore + CryptoRng>(
@@ -1127,7 +1141,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             return Err(Error::CryptoError("Asset ID mismatch".to_string()));
         }
 
-        let (enc_keys, med_keys) = asset_lookup.get_keys(self.asset_id)?;
+        let (enc_keys, _) = asset_lookup.get_keys(self.asset_id)?;
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
         let leaf_level_bp_gens = get_leaf_level_bp_gens();
         log::debug!("Verify leg with revealed asset id: {:?}", leg_enc);
@@ -1145,7 +1159,6 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
                 leg_enc,
                 self.asset_id,
                 enc_keys,
-                med_keys,
                 public_enc_keys,
                 ctx,
                 leaf_level_pc_gens,
@@ -1166,7 +1179,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<VerificationTuple<PallasA>, Error> {
-        let (enc_keys, med_keys) = asset_lookup.get_keys(self.asset_id)?;
+        let (enc_keys, _) = asset_lookup.get_keys(self.asset_id)?;
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
         let leaf_level_bp_gens = get_leaf_level_bp_gens();
         let leg_enc = self.leg_enc.decode()?;
@@ -1182,7 +1195,6 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             leg_enc,
             self.asset_id,
             enc_keys,
-            med_keys,
             public_enc_keys,
             ctx,
             leaf_level_pc_gens,
@@ -1221,6 +1233,8 @@ pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>
 
 pub type WrappedMediatorEncryption = WrappedCanonical<bp_leg::MediatorEncryption<PallasA>>;
 
+pub type WrappedMediatorEncryptionOld = WrappedCanonical<bp_leg::MediatorEncryptionOld<PallasA>>;
+
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1237,6 +1251,15 @@ pub struct LegEncrypted(WrappedLegEncryption);
 #[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct MediatorEncryption(WrappedMediatorEncryption);
 
+/// Represents an encrypted mediator entry of a leg created before the broadcast scheme. Stored
+/// onchain by those legs; affirmed with [`MediatorAffirmationProof::new_old`].
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
+pub struct MediatorEncryptionOld(WrappedMediatorEncryptionOld);
+
 impl LegEncrypted {
     pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {
         Ok(Self(WrappedCanonical::wrap(&leg_enc)?))
@@ -1244,6 +1267,10 @@ impl LegEncrypted {
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
         self.0.decode()
+    }
+
+    pub fn is_asset_id_revealed(&self) -> Result<bool, Error> {
+        Ok(self.decode()?.is_asset_id_revealed())
     }
 
     pub fn mediator_count(&self) -> Result<usize, Error> {
@@ -1269,10 +1296,13 @@ impl LegEncrypted {
     }
 
     /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
+    /// Every mediator entry is encrypted to every asset encryption key, so an encryption key alone
+    /// doesn't identify a mediator.
     pub fn try_decrypt_with_key(
         &self,
         keys: &EncryptionKeyPair,
         key_index: Option<usize>,
+        affirmation_key: Option<&AccountPublicKey>,
         max_asset_id: Option<AssetId>,
     ) -> Result<(Leg, LegRole), Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
@@ -1314,12 +1344,16 @@ impl LegEncrypted {
             }
         };
 
-        // Check if this key index is in the mediator keys
-        let is_mediator = leg_enc
-            .mediators
-            .iter()
-            .position(|m| m.enc_key_index as usize == key_index);
-        let leg_role = if let Some(key_index) = is_mediator {
+        let index = match (affirmation_key, leg_enc.mediators.as_ref()) {
+            (Some(affirmation_key), Some(mediators)) => {
+                let affirmation_key = affirmation_key.get_affine()?;
+                mediators
+                    .iter()
+                    .position(|m| m.find_key_index(&keys.secret.0.0, &affirmation_key).is_ok())
+            }
+            _ => None,
+        };
+        let leg_role = if let Some(key_index) = index {
             LegRole::mediator(key_index as u8)
         } else {
             LegRole::auditor(key_index as u8)
@@ -1392,13 +1426,36 @@ impl LegEncrypted {
                 index: Some(idx),
             } => {
                 let leg_enc = self.decode()?;
-                let med_enc = leg_enc.mediator_encryption(idx as usize)?;
-                leg_enc.decrypt_given_key(
-                    &keys.enc.secret.0.0,
-                    false,
-                    med_enc.enc_key_index as usize,
-                    enc_gen,
-                )?
+                match leg_enc.mediators.as_ref() {
+                    Some(_) => {
+                        let med_enc = leg_enc.mediator_encryption(idx as usize)?;
+                        // The mediator's entry is encrypted to every asset encryption key. The index
+                        // of the one it holds is found by trial decryption.
+                        let i = med_enc.find_key_index(
+                            &keys.enc.secret.0.0,
+                            &keys.acct.public.get_affine()?,
+                        )?;
+                        leg_enc.decrypt_given_key(&keys.enc.secret.0.0, false, i, enc_gen)?
+                    }
+                    // A leg with a revealed asset-id has no mediator entry, so the mediator reads it
+                    // with its encryption key like an auditor.
+                    None => {
+                        let mut decrypted = None;
+                        for i in 0..leg_enc.eph_pk_enc_keys.len() {
+                            if let Ok(res) =
+                                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, false, i, enc_gen)
+                            {
+                                decrypted = Some(res);
+                                break;
+                            }
+                        }
+                        decrypted.ok_or_else(|| {
+                            Error::LegDecryptionError(
+                                "Failed to decrypt leg with mediator's encryption key".to_string(),
+                            )
+                        })?
+                    }
+                }
             }
             _ => {
                 return Err(Error::LegDecryptionError(
@@ -1421,6 +1478,16 @@ impl MediatorEncryption {
     }
 
     pub fn decode(&self) -> Result<bp_leg::MediatorEncryption<PallasA>, Error> {
+        self.0.decode()
+    }
+}
+
+impl MediatorEncryptionOld {
+    pub fn new(mediators_enc: bp_leg::MediatorEncryptionOld<PallasA>) -> Result<Self, Error> {
+        Ok(Self(WrappedCanonical::wrap(&mediators_enc)?))
+    }
+
+    pub fn decode(&self) -> Result<bp_leg::MediatorEncryptionOld<PallasA>, Error> {
         self.0.decode()
     }
 }

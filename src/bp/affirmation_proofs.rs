@@ -128,8 +128,7 @@ macro_rules! with_balance {
                 let (protocol, mut even_prover, odd_prover, nullifier) =
                     $BPProto::init::<_, C::DLogParams0, C::DLogParams1>(
                         rng,
-                        amount,
-                        (leg_enc_core.clone(), eph_pk.clone()),
+                        (leg_enc_core.clone(), eph_pk.clone(), amount),
                         &state_change.current_state,
                         &state_change.new_state,
                         state_change.new_commitment,
@@ -154,6 +153,7 @@ macro_rules! with_balance {
                         party_eph_pk: polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
                             eph_pk.clone(),
                         ),
+                        amount,
                         has_balance_changed: true,
                     };
 
@@ -344,7 +344,7 @@ macro_rules! with_balance {
                                 )
                             })?
                             .path
-                            .get_rerandomized_leaf();
+                            .get_rerandomized_leaf()?;
 
                         proof.common.auth_proof.verify(
                             vec![bp_account::LegVerifierConfig {
@@ -364,7 +364,7 @@ macro_rules! with_balance {
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
                             enc_gen,
-                            None,
+                            Some(even_rmc),
                         )?;
 
                         let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(
@@ -458,6 +458,7 @@ macro_rules! no_balance {
                 account_state: &mut AccountAssetState,
                 leg_ref: &LegRef,
                 leg_enc: &LegEncrypted,
+                amount: Balance,
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
                 let state_change = account_state.$state_method()?;
@@ -472,8 +473,10 @@ macro_rules! no_balance {
                 let leg_enc_inner = leg_enc.decode()?;
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
+                let k_amount = PallasScalar::rand(rng);
+                let is_asset_id_revealed = leg_enc_core.is_asset_id_revealed();
                 // k_asset_id is needed only when asset-id is hidden in the leg.
-                let k_asset_id = if leg_enc_core.is_asset_id_revealed() {
+                let k_asset_id = if is_asset_id_revealed {
                     None
                 } else {
                     Some(PallasScalar::rand(rng))
@@ -482,7 +485,7 @@ macro_rules! no_balance {
                 let (protocol, mut even_prover, odd_prover, nullifier) =
                     $BPProto::init::<_, C::DLogParams0, C::DLogParams1>(
                         rng,
-                        (leg_enc_core.clone(), eph_pk.clone()),
+                        (leg_enc_core.clone(), eph_pk.clone(), amount),
                         &state_change.current_state,
                         &state_change.new_state,
                         state_change.new_commitment,
@@ -493,6 +496,7 @@ macro_rules! no_balance {
                         dart_gens().account_comm_key(),
                         dart_gens().leg_asset_value_gen(),
                         k_asset_id,
+                        k_amount,
                     )?;
 
                 let challenge_h = even_prover
@@ -506,6 +510,7 @@ macro_rules! no_balance {
                         party_eph_pk: polymesh_dart_bp::leg::PartyEphemeralPublicKey::$EphPkVariant(
                             eph_pk.clone(),
                         ),
+                        amount,
                         has_balance_changed: false,
                     };
 
@@ -517,7 +522,12 @@ macro_rules! no_balance {
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
                     updated_account_commitment: updated_commitment.into(),
                     nullifier: CompressedAffine::try_from(nullifier)?,
-                    k_amounts: vec![],
+                    // ct_amount (hence k_amount) is needed only when this leg reveals its asset-id.
+                    k_amounts: if is_asset_id_revealed {
+                        vec![WrappedCanonical::wrap(&k_amount)?]
+                    } else {
+                        vec![]
+                    },
                     k_asset_ids: match k_asset_id {
                         Some(k) => vec![WrappedCanonical::wrap(&k)?],
                         None => vec![],
@@ -608,6 +618,7 @@ macro_rules! no_balance {
                 keys: &AccountKeys,
                 leg_ref: &LegRef,
                 leg_enc: &LegEncrypted,
+                amount: Balance,
                 account_asset: &mut AccountAssetState,
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
@@ -615,7 +626,7 @@ macro_rules! no_balance {
                 let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
 
                 let (protocol, device_request) =
-                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, &tree_lookup)?;
+                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
@@ -695,7 +706,7 @@ macro_rules! no_balance {
                                 )
                             })?
                             .path
-                            .get_rerandomized_leaf();
+                            .get_rerandomized_leaf()?;
 
                         proof.common.auth_proof.verify(
                             vec![bp_account::LegVerifierConfig {

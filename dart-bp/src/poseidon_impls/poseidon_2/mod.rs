@@ -247,19 +247,18 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
         for i in 0..t {
-            output_vars[i] = output_vars[i].clone().simplify();
+            output_vars[i] = core::mem::take(&mut output_vars[i]).simplify();
         }
     }
 
     let p_end = params.rounds_f_beginning + params.rounds_p;
     // Partial rounds
     for r in params.rounds_f_beginning..p_end {
-        output_vars[0] =
-            output_vars[0].clone() + LinearCombination::from(params.round_constants[r][0]);
+        output_vars[0] += params.round_constants[r][0];
         output_vars[0] = sbox_p_constraints(cs, &output_vars[0], params)?;
         matmul_internal_constraints(&mut output_vars, params);
         for i in 0..t {
-            output_vars[i] = output_vars[i].clone().simplify();
+            output_vars[i] = core::mem::take(&mut output_vars[i]).simplify();
         }
     }
 
@@ -269,7 +268,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
         for i in 0..t {
-            output_vars[i] = output_vars[i].clone().simplify();
+            output_vars[i] = core::mem::take(&mut output_vars[i]).simplify();
         }
     }
     Ok(output_vars)
@@ -301,7 +300,7 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
 
 fn apply_round_constants<F: PrimeField>(vars: &mut [LinearCombination<F>], round_constants: &[F]) {
     for (v, rc) in vars.iter_mut().zip(round_constants.iter()) {
-        *v = v.clone() + LinearCombination::from(*rc);
+        *v += *rc;
     }
 }
 
@@ -351,15 +350,18 @@ fn matmul_external_constraints<F: PrimeField>(
     debug_assert!(t == 2 || t == 3);
     match t {
         2 => {
-            let sum = input[0].clone() + input[1].clone();
-            input[0] = input[0].clone() + sum.clone();
-            input[1] = input[1].clone() + sum;
+            let mut sum = input[0].clone();
+            sum += &input[1];
+            input[0] += &sum;
+            input[1] += sum;
         }
         3 => {
-            let sum = input[0].clone() + input[1].clone() + input[2].clone();
-            input[0] = input[0].clone() + sum.clone();
-            input[1] = input[1].clone() + sum.clone();
-            input[2] = input[2].clone() + sum;
+            let mut sum = input[0].clone();
+            sum += &input[1];
+            sum += &input[2];
+            input[0] += &sum;
+            input[1] += &sum;
+            input[2] += sum;
         }
         _ => unreachable!(),
     }
@@ -373,17 +375,20 @@ fn matmul_internal_constraints<F: PrimeField>(
     debug_assert!(t == 2 || t == 3);
     match t {
         2 => {
-            let sum = input[0].clone() + input[1].clone();
-            input[0] = input[0].clone() + sum.clone();
-            let double = input[1].clone() * F::from(2u64);
-            input[1] = double + sum;
+            let mut sum = input[0].clone();
+            sum += &input[1];
+            input[0] += &sum;
+            input[1] *= F::from(2u64);
+            input[1] += sum;
         }
         3 => {
-            let sum = input[0].clone() + input[1].clone() + input[2].clone();
-            input[0] = input[0].clone() + sum.clone();
-            input[1] = input[1].clone() + sum.clone();
-            let double = input[2].clone() * F::from(2u64);
-            input[2] = double + sum;
+            let mut sum = input[0].clone();
+            sum += &input[1];
+            sum += &input[2];
+            input[0] += &sum;
+            input[1] += &sum;
+            input[2] *= F::from(2u64);
+            input[2] += sum;
         }
         _ => unreachable!(),
     }
@@ -473,7 +478,7 @@ mod tests {
 
             println!(
                 "For Poseidon2 perm width={width}, d={degree} full rounds {full_rounds}, partial rounds {partial_rounds}, no of constraints is {}",
-                &prover.number_of_constraints()
+                &prover.num_multipliers()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();
@@ -537,7 +542,7 @@ mod tests {
             println!(
                 "For Poseidon2 hash 2:1 rounds {}, no of constraints is {}",
                 full_rounds + partial_rounds,
-                &prover.number_of_constraints()
+                &prover.num_multipliers()
             );
 
             let proof = prover.prove(&bp_gens).unwrap();

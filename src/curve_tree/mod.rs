@@ -14,7 +14,7 @@ pub use curve_tree_relations::{
 };
 
 use polymesh_dart_bp::leg as bp_leg;
-use polymesh_dart_common::MAX_ASSET_KEYS;
+use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -49,7 +49,8 @@ lazy_static::lazy_static! {
     static ref ASSET_COMMITMENT_PARAMETERS: AssetCommitmentParameters<AssetTreeConfig> =
         AssetCommitmentParameters::<AssetTreeConfig>::new(
             ASSET_COMMITMENT_PARAMETERS_LABEL,
-            MAX_ASSET_KEYS,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &ASSET_CURVE_TREE_PARAMETERS.even_parameters.bp_gens(),
         );
     static ref ACCOUNT_CURVE_TREE_PARAMETERS: CurveTreeParameters<AccountTreeConfig> = AccountTreeConfig::build_parameters();
@@ -245,7 +246,8 @@ pub fn get_asset_commitment_parameters() -> &'static AssetCommitmentParameters<A
             let tree_parameters = get_asset_curve_tree_parameters();
             let parameters = AssetCommitmentParameters::<AssetTreeConfig>::new(
                 ASSET_COMMITMENT_PARAMETERS_LABEL,
-                MAX_ASSET_KEYS,
+                MAX_ASSET_ENC_KEYS,
+                MAX_ASSET_MEDIATORS,
                 &tree_parameters.even_parameters.bp_gens(),
             );
             set_asset_commitment_parameters(parameters);
@@ -887,6 +889,13 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
     >(
         &self,
     ) -> Result<RootNode<L, M, P0, P1>, Error> {
+        // Defense in depth: The chain should never have a malformed root, neither it should accept
+        // a root from somewhere untrusted.
+        if self.x_coord_children.len() > L {
+            return Err(Error::CurveTreeInvalidChildIndex(
+                self.x_coord_children.len() as ChildIndex,
+            ));
+        }
         let mut commitments = [Affine::<P0>::zero(); M];
         for (self_com, commitment) in self.commitments.iter().zip(commitments.iter_mut()) {
             *commitment = self_com.try_into()?;
@@ -1342,5 +1351,26 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeUpdater<L, M, 
         *inner = CompressedInner::compress(&tmp_inner)?;
 
         Ok(new_x_coords)
+    }
+}
+
+#[cfg(test)]
+mod h6_regression_tests {
+    use super::*;
+    use polymesh_dart_common::{ASSET_TREE_L, ASSET_TREE_M};
+
+    #[test]
+    fn overlong_compressed_root_returns_err_not_panic() {
+        // A malformed `CompressedCurveTreeRoot`  whose decoded `x_coord_children` has more than `L`
+        // entries must be rejected.
+        let mut root =
+            CompressedCurveTreeRoot::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(2);
+        // One more child than the fixed branching factor `L` is what triggers the OOB index.
+        root.x_coord_children =
+            vec![[CompressedBaseField::default(); ASSET_TREE_M]; ASSET_TREE_L + 1];
+
+        // Must not panic; must return the invalid-child-index error.
+        let res = root.root_node();
+        assert!(matches!(res, Err(Error::CurveTreeInvalidChildIndex(_))));
     }
 }

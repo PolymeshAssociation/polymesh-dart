@@ -220,7 +220,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             &self.partial_updated_account_commitment,
             &self.t_updated_account_commitment,
             &self.resp_updated_account_commitment,
-            &challenge,
+            challenge,
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,

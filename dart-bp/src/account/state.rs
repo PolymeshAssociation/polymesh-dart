@@ -28,7 +28,7 @@ pub(crate) const CURRENT_RHO_GEN_INDEX: usize = 5;
 pub(crate) const RANDOMNESS_GEN_INDEX: usize = 6;
 pub(crate) const CURRENT_RANDOMNESS_GEN_INDEX: usize = 7;
 pub(crate) const ID_GEN_INDEX: usize = 8;
-pub(crate) const SK_ENC_INV_GEN_INDEX: usize = 9;
+pub(crate) const SK_ENC_GEN_INDEX: usize = 9;
 
 /// This trait is used to abstract over the account commitment key. It allows us to use different
 /// generators for the account commitment key while still providing the same interface.
@@ -220,7 +220,7 @@ impl<G: AffineRepr> AccountCommitmentKeyTrait<G> for [G; NUM_GENERATORS] {
     }
 
     fn sk_enc_gen(&self) -> G {
-        self[SK_ENC_INV_GEN_INDEX]
+        self[SK_ENC_GEN_INDEX]
     }
 }
 
@@ -244,6 +244,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for minting (increase balance)
     pub fn update_for_mint(&mut self, amount: u64) -> Result<()> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount + self.state.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.state.balance));
         }
@@ -253,6 +254,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for sending (decrease balance, increment counter)
     pub fn update_for_send(&mut self, amount: u64) -> Result<()> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount > self.state.balance {
             return Err(Error::AmountTooLarge(amount));
         }
@@ -268,13 +270,16 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for claiming received amount (increase balance, decrement counter)
     pub fn update_for_claiming_received(&mut self, amount: u64) -> Result<()> {
-        if self.state.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.state.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if self.state.counter == 0 {
+                return Err(Error::ProofOfBalanceError(
+                    "Counter must be greater than 0".to_string(),
+                ));
+            }
+            if amount + self.state.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(amount + self.state.balance));
+            }
         }
         self.state.balance += amount;
         self.state.counter -= 1;
@@ -283,13 +288,16 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for reversing a send (increase balance, decrement counter)
     pub fn update_for_reversing_send(&mut self, amount: u64) -> Result<()> {
-        if self.state.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.state.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if self.state.counter == 0 {
+                return Err(Error::ProofOfBalanceError(
+                    "Counter must be greater than 0".to_string(),
+                ));
+            }
+            if amount + self.state.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(amount + self.state.balance));
+            }
         }
         self.state.balance += amount;
         self.state.counter -= 1;
@@ -302,6 +310,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
         decrease_counter_by: Option<PendingTxnCounter>,
     ) -> Result<()> {
         let decrease_counter_by = decrease_counter_by.unwrap_or(1);
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if self.state.counter < decrease_counter_by {
             return Err(Error::ProofOfBalanceError(
                 "Counter cannot be decreased below zero".to_string(),
@@ -313,6 +322,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for irreversible send (decrease balance only, no counter change)
     pub fn update_for_irreversible_send(&mut self, amount: u64) -> Result<()> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount > self.state.balance {
             return Err(Error::AmountTooLarge(amount));
         }
@@ -322,6 +332,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
 
     /// Update state for irreversible receive (increase balance only, no counter change)
     pub fn update_for_irreversible_receive(&mut self, amount: u64) -> Result<()> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount + self.state.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.state.balance));
         }
@@ -408,6 +419,7 @@ where
         rho_randomness: G::ScalarField,
         poseidon_config: Poseidon2Params<G::ScalarField>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if asset_id > MAX_ASSET_ID {
             return Err(Error::AssetIdTooLarge(asset_id));
         }
@@ -496,6 +508,7 @@ where
     }
 
     pub fn get_state_for_mint(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
@@ -506,6 +519,7 @@ where
     }
 
     pub fn get_state_for_send(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount > self.balance {
             return Err(Error::AmountTooLarge(amount));
         }
@@ -524,13 +538,16 @@ where
     }
 
     pub fn get_state_for_claiming_received(&self, amount: u64) -> Result<Self> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if self.counter == 0 {
+                return Err(Error::ProofOfBalanceError(
+                    "Counter must be greater than 0".to_string(),
+                ));
+            }
+            if amount + self.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(amount + self.balance));
+            }
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -540,13 +557,16 @@ where
     }
 
     pub fn get_state_for_reversing_send(&self, amount: u64) -> Result<Self> {
-        if self.counter == 0 {
-            return Err(Error::ProofOfBalanceError(
-                "Counter must be greater than 0".to_string(),
-            ));
-        }
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            if self.counter == 0 {
+                return Err(Error::ProofOfBalanceError(
+                    "Counter must be greater than 0".to_string(),
+                ));
+            }
+            if amount + self.balance > MAX_BALANCE {
+                return Err(Error::AmountTooLarge(amount + self.balance));
+            }
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -560,6 +580,7 @@ where
         decrease_counter_by: Option<PendingTxnCounter>,
     ) -> Result<Self> {
         let decrease_counter_by = decrease_counter_by.unwrap_or(1);
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if self.counter < decrease_counter_by {
             return Err(Error::ProofOfBalanceError(
                 "Counter cannot be decreased below zero".to_string(),
@@ -572,6 +593,7 @@ where
     }
 
     pub fn get_state_for_irreversible_send(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount > self.balance {
             return Err(Error::AmountTooLarge(amount));
         }
@@ -582,6 +604,7 @@ where
     }
 
     pub fn get_state_for_irreversible_receive(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
@@ -592,6 +615,7 @@ where
     }
 
     pub fn get_state_for_deposit(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount + self.balance > MAX_BALANCE {
             return Err(Error::AmountTooLarge(amount + self.balance));
         }
@@ -602,6 +626,7 @@ where
     }
 
     pub fn get_state_for_withdraw(&self, amount: u64) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if amount > self.balance {
             return Err(Error::AmountTooLarge(amount));
         }
@@ -691,6 +716,8 @@ mod tests {
             counter in 0..100 as PendingTxnCounter,
             txn_kind in select(TXN_KINDS.to_vec()),
         ) {
+            // Over random balance/amount/counter, sweeps all 7 txn kinds calling the AccountState `get_state_for_*`
+            // methods directly: asserts the resulting balance/counter and that illegal cases (e.g. claim/reverse at counter 0) error.
             prop_assume!(amount <= balance);
             let state = test_account_state(balance, counter);
 
@@ -707,7 +734,7 @@ mod tests {
                 }
                 2 => {
                     if counter == 0 {
-                        assert!(state.get_state_for_claiming_received(amount).is_err());
+                        assert_err!(state.get_state_for_claiming_received(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         let s = state.get_state_for_claiming_received(amount).unwrap();
                         assert_eq!(s.balance(), balance + amount);
@@ -716,7 +743,7 @@ mod tests {
                 }
                 3 => {
                     if state.counter < counter {
-                        assert!(state.get_state_for_decreasing_counter(Some(counter)).is_err());
+                        assert_err!(state.get_state_for_decreasing_counter(Some(counter)), Error::ProofOfBalanceError(_), "Counter cannot be decreased below zero");
                     } else {
                         let s = state.get_state_for_decreasing_counter(Some(counter)).unwrap();
                         assert_eq!(s.balance(), balance);
@@ -725,7 +752,7 @@ mod tests {
                 }
                 4 => {
                     if counter == 0 {
-                        assert!(state.get_state_for_reversing_send(amount).is_err());
+                        assert_err!(state.get_state_for_reversing_send(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         let s = state.get_state_for_reversing_send(amount).unwrap();
                         assert_eq!(s.balance(), balance + amount);
@@ -753,6 +780,8 @@ mod tests {
             counter in 0..100 as PendingTxnCounter,
             txn_kind in select(TXN_KINDS.to_vec())
         ) {
+            // Same 7-txn-kind matrix as prop_account_state_transaction_type_matrix but driven through
+            // AccountStateBuilder (init/update_for_*/finalize) instead of the direct get_state_for_* calls.
             prop_assume!(amount <= balance);
             let state = test_account_state(balance, counter);
 
@@ -774,7 +803,7 @@ mod tests {
                 2 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if counter == 0 {
-                        assert!(b.update_for_claiming_received(amount).is_err());
+                        assert_err!(b.update_for_claiming_received(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         b.update_for_claiming_received(amount).unwrap();
                         let s = b.finalize();
@@ -785,7 +814,7 @@ mod tests {
                 3 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if state.counter < counter {
-                        assert!(b.update_for_decreasing_counter(Some(counter)).is_err());
+                        assert_err!(b.update_for_decreasing_counter(Some(counter)), Error::ProofOfBalanceError(_), "Counter cannot be decreased below zero");
                     } else {
                         b.update_for_decreasing_counter(Some(counter)).unwrap();
                         let s = b.finalize();
@@ -796,7 +825,7 @@ mod tests {
                 4 => {
                     let mut b = AccountStateBuilder::init(state.clone());
                     if counter == 0 {
-                        assert!(b.update_for_reversing_send(amount).is_err());
+                        assert_err!(b.update_for_reversing_send(amount), Error::ProofOfBalanceError(_), "Counter must be greater than 0");
                     } else {
                         b.update_for_reversing_send(amount).unwrap();
                         let s = b.finalize();

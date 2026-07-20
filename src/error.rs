@@ -136,6 +136,10 @@ pub enum Error {
     /// Error during crypto operation.
     #[error("Error during crypto operation: {0}")]
     CryptoError(String),
+
+    /// The proof doesn't match the leg's asset-id kind.
+    #[error("The proof doesn't match the leg's asset-id kind")]
+    InvalidProofType,
 }
 
 impl From<UtilsError> for Error {

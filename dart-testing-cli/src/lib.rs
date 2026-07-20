@@ -1134,7 +1134,7 @@ impl DartTestingDb {
         for (leg_index, leg_proof) in settlement.legs.iter().enumerate() {
             // For encrypted leg, try SCALE encoding first
             let encrypted_leg = leg_proof.leg_enc().encode();
-            let has_mediator = leg_proof.mediator_count()? > 0;
+            let has_mediator = leg_proof.mediator_count(&asset_lookup)? > 0;
             let mediator_status = if has_mediator { Some("Pending") } else { None };
 
             self.conn.execute(
@@ -1261,13 +1261,14 @@ impl DartTestingDb {
             leg_index,
             LegRole::sender(),
             proof_action,
-            |account_keys, leg_ref, leg_enc, _leg, account_state, account_tree, rng| {
+            |account_keys, leg_ref, leg_enc, leg, account_state, account_tree, rng| {
                 // Create sender counter update proof
                 Ok(SenderCounterUpdateProof::<()>::new(
                     rng,
                     &account_keys,
                     &leg_ref,
                     &leg_enc,
+                    leg.amount(),
                     account_state,
                     account_tree,
                 )?)
@@ -1399,6 +1400,7 @@ impl DartTestingDb {
                     &account_keys,
                     &leg_ref,
                     &leg_enc,
+                    amount,
                     asset_state,
                     account_tree,
                 )?)

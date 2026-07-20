@@ -1,11 +1,10 @@
 use crate::account::common::balance::{
     BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver,
 };
-use crate::account::common::leg_link::{LegProverConfig, LegVerifierConfig};
+use crate::account::common::leg_link::{AccountTxnWitness, LegProverConfig, LegVerifierConfig};
 use crate::account::common::verifier::StateChangeVerifier;
 use crate::account::common::{CommonStateChangeProof, CommonStateChangeProver};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::leg::AmountCiphertext;
 use crate::leg::PartyEphemeralPublicKey;
 use crate::leg::{LegEncryptionCore, ReceiverEphemeralPublicKey, SenderEphemeralPublicKey};
 use crate::util::{
@@ -28,6 +27,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::Balance;
 use rand_core::CryptoRngCore;
+use zeroize::Zeroize;
 
 /// Combined proof for multi-leg state transitions
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -52,7 +52,7 @@ pub struct AccountStateTransitionHostProofBuilder<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub(crate) legs: Vec<LegProverConfig<Affine<G0>>>,
-    pub(crate) balance_changes: Vec<BalanceChangeConfig<G0>>,
+    pub(crate) balance_changes: Vec<BalanceChangeConfig>,
     pub(crate) net_counter_change: i32,
     pub(crate) account: AccountState<Affine<G0>>,
     pub(crate) updated_account: AccountState<Affine<G0>>,
@@ -97,26 +97,23 @@ impl<
 
     pub fn add_send_affirmation(
         &mut self,
-        amount: Balance,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             SenderEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let ct_amount = leg_enc.0.ct_amount;
-        let (leg_enc_core, eph_pk) = leg_enc;
-        let eph_pk_amount = eph_pk.r3;
+        let (leg_enc_core, eph_pk, amount) = leg_details;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
+            amount,
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
-            ct_amount,
-            eph_pk_amount,
             has_balance_decreased: true,
         });
 
@@ -125,15 +122,17 @@ impl<
 
     pub fn add_receive_affirmation(
         &mut self,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             ReceiverEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let (leg_enc_core, eph_pk_r) = leg_enc;
+        let (leg_enc_core, eph_pk_r, amount) = leg_details;
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
+            amount,
             has_balance_changed: false,
         });
 
@@ -142,26 +141,23 @@ impl<
 
     pub fn add_claim_received(
         &mut self,
-        amount: Balance,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             ReceiverEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let ct_amount = leg_enc.0.ct_amount;
-        let (leg_enc_core, eph_pk) = leg_enc;
-        let eph_pk_amount = eph_pk.r3;
+        let (leg_enc_core, eph_pk, amount) = leg_details;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
+            amount,
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
-            ct_amount,
-            eph_pk_amount,
             has_balance_decreased: false,
         });
 
@@ -170,15 +166,17 @@ impl<
 
     pub fn add_sender_counter_update(
         &mut self,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             SenderEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let (leg_enc_core, eph_pk_s) = leg_enc;
+        let (leg_enc_core, eph_pk_s, amount) = leg_details;
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
+            amount,
             has_balance_changed: false,
         });
 
@@ -187,26 +185,23 @@ impl<
 
     pub fn add_sender_reverse(
         &mut self,
-        amount: Balance,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             SenderEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let ct_amount = leg_enc.0.ct_amount;
-        let (leg_enc_core, eph_pk) = leg_enc;
-        let eph_pk_amount = eph_pk.r3;
+        let (leg_enc_core, eph_pk, amount) = leg_details;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
+            amount,
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
-            ct_amount,
-            eph_pk_amount,
             has_balance_decreased: false,
         });
 
@@ -215,15 +210,17 @@ impl<
 
     pub fn add_receiver_reverse(
         &mut self,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             ReceiverEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let (leg_enc_core, eph_pk_r) = leg_enc;
+        let (leg_enc_core, eph_pk_r, amount) = leg_details;
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
+            amount,
             has_balance_changed: false,
         });
 
@@ -232,52 +229,46 @@ impl<
 
     pub fn add_irreversible_send(
         &mut self,
-        amount: Balance,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             SenderEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let ct_amount = leg_enc.0.ct_amount;
-        let (leg_enc_core, eph_pk) = leg_enc;
-        let eph_pk_amount = eph_pk.r3;
+        let (leg_enc_core, eph_pk, amount) = leg_details;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
+            amount,
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
-            ct_amount,
-            eph_pk_amount,
             has_balance_decreased: true,
         });
     }
 
     pub fn add_irreversible_receive(
         &mut self,
-        amount: Balance,
-        leg_enc: (
+        leg_details: (
             LegEncryptionCore<Affine<G0>>,
             ReceiverEphemeralPublicKey<Affine<G0>>,
+            Balance,
         ),
     ) {
-        let ct_amount = leg_enc.0.ct_amount;
-        let (leg_enc_core, eph_pk) = leg_enc;
-        let eph_pk_amount = eph_pk.r3;
+        let (leg_enc_core, eph_pk, amount) = leg_details;
 
         self.legs.push(LegProverConfig {
             encryption: leg_enc_core,
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
+            amount,
             has_balance_changed: true,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
             amount,
-            ct_amount,
-            eph_pk_amount,
             has_balance_decreased: false,
         });
     }
@@ -320,8 +311,6 @@ pub struct AccountStateTransitionProofBuilder<
     pub(crate) host: AccountStateTransitionHostProofBuilder<L, F0, F1, G0, G1>,
     pub(crate) sk_aff: G0::ScalarField,
     pub(crate) sk_enc: G0::ScalarField,
-    pub(crate) account: AccountState<Affine<G0>>,
-    pub(crate) updated_account: AccountState<Affine<G0>>,
 }
 
 impl<
@@ -332,17 +321,17 @@ impl<
     G1: DivisorCurve<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > AccountStateTransitionProofBuilder<L, F0, F1, G0, G1>
 {
-    pub fn init(
-        sk_aff: G0::ScalarField,
-        sk_enc: G0::ScalarField,
-        account: AccountState<Affine<G0>>,
-        updated_account: AccountState<Affine<G0>>,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
-        nonce: &[u8],
-    ) -> Self {
+    pub fn init(witness: AccountTxnWitness<Affine<G0>>, nonce: &[u8]) -> Self {
+        let AccountTxnWitness {
+            sk_aff,
+            sk_enc,
+            account,
+            updated_account,
+            updated_account_commitment,
+        } = witness;
         let host = AccountStateTransitionHostProofBuilder::new(
-            account.clone(),
-            updated_account.clone(),
+            account,
+            updated_account,
             updated_account_commitment,
             nonce,
         );
@@ -350,8 +339,6 @@ impl<
             host,
             sk_aff,
             sk_enc,
-            account,
-            updated_account,
         }
     }
 
@@ -430,8 +417,8 @@ impl<
                 rng,
                 self.host.legs.clone(),
                 self.sk_enc,
-                &self.account,
-                &self.updated_account,
+                &self.host.account,
+                &self.host.updated_account,
                 self.host.updated_account_commitment,
                 leaf_path,
                 root,
@@ -500,11 +487,11 @@ impl<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
     >(
-        self,
+        mut self,
         rng: &mut R,
         common_prover: CommonStateChangeProver<'a, L, F0, F1, G0, G1>,
         account_tree_params: &'a SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
-        enc_gen: Affine<G0>,
+        _enc_gen: Affine<G0>,
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
     ) -> Result<(AccountStateTransitionProof<L, F0, F1, G0, G1>, Affine<G0>)> {
         let nullifier = common_prover.nullifier;
@@ -514,16 +501,14 @@ impl<
             Some(BalanceChangeProver::init(
                 rng,
                 self.host.balance_changes,
-                self.sk_enc,
-                &self.account,
-                &self.updated_account,
+                &self.host.account,
+                &self.host.updated_account,
                 common_prover.old_balance_blinding,
                 common_prover.new_balance_blinding,
-                common_prover.sk_enc_inv_blinding,
+                common_prover.balance_amount_blindings.clone(),
                 even_prover,
                 &account_tree_params.even_parameters.pc_gens(),
                 &account_tree_params.even_parameters.bp_gens(),
-                enc_gen,
             )?)
         } else {
             None
@@ -535,10 +520,15 @@ impl<
         let common_proof = common_prover.generate_sigma_responses(
             self.sk_aff,
             self.sk_enc,
-            &self.account,
-            &self.updated_account,
+            &self.host.account,
+            &self.host.updated_account,
             &challenge,
         )?;
+
+        self.sk_aff.zeroize();
+        self.sk_enc.zeroize();
+        self.host.account.zeroize();
+        self.host.updated_account.zeroize();
 
         let balance_proof = balance_prover
             .map(|bp| bp.gen_proof(&challenge))
@@ -961,18 +951,8 @@ impl<
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         if let Some(balance_proof) = &proof.balance_proof {
-            // Filter legs with balance changes
-            let ct_amounts: Vec<AmountCiphertext<Affine<G0>>> = self
-                .legs
-                .iter()
-                .filter(|l| l.has_balance_decreased.is_some())
-                .map(|l| AmountCiphertext(l.encryption.ct_amount, l.party_eph_pk.eph_pk_amount()))
-                .collect();
-
             verifier.init_balance_change_verification_with_given_verifier(
                 balance_proof,
-                &ct_amounts,
-                enc_gen,
                 even_verifier,
             )?;
         }
@@ -981,17 +961,10 @@ impl<
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let ct_amounts: Vec<AmountCiphertext<Affine<G0>>> = self
-            .legs
-            .iter()
-            .map(|l| AmountCiphertext(l.encryption.ct_amount, l.party_eph_pk.eph_pk_amount()))
-            .collect();
-
         verifier.verify_sigma_protocols(
             &proof.common_proof,
             proof.balance_proof.as_ref(),
             &challenge,
-            ct_amounts,
             self.updated_account_commitment,
             self.nullifier,
             account_tree_params,
@@ -1012,19 +985,10 @@ impl<
         }
 
         let num_legs_with_balance_change = LegVerifierConfig::num_balance_changes(&self.legs);
-        if num_legs_with_balance_change > 0 {
-            if let Some(balance_proof) = &proof.balance_proof {
-                if balance_proof.resp_leg_amount.len() != num_legs_with_balance_change {
-                    return Err(Error::ProofVerificationError(format!(
-                        "{num_legs_with_balance_change} legs with balance change but balance change proof for {} legs provided",
-                        balance_proof.resp_leg_amount.len()
-                    )));
-                }
-            } else {
-                return Err(Error::ProofVerificationError(format!(
-                    "{num_legs_with_balance_change} legs with balance change but no balance change proof provided"
-                )));
-            }
+        if num_legs_with_balance_change > 0 && proof.balance_proof.is_none() {
+            return Err(Error::ProofVerificationError(format!(
+                "{num_legs_with_balance_change} legs with balance change but no balance change proof provided"
+            )));
         }
 
         Ok(())
@@ -1037,6 +1001,7 @@ mod tests {
 
     use super::*;
     use crate::account::AccountStateBuilder;
+    use crate::account::common::leg_link::RespAssetId;
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
@@ -1059,6 +1024,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_two_senders_one_receiver() {
+        // Two distinct senders (Alice, Bob) each pay the same receiver (Carol) in one batch; checks Carol's
+        // single state transition aggregating both receive affirmations (run with asset-id both revealed and hidden).
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1158,15 +1125,23 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_carol.0,
-                sk_carol_e.0,
-                carol_account.clone(),
-                carol_receives.clone(),
-                carol_receives_comm,
+                AccountTxnWitness::new(
+                    sk_carol.0,
+                    sk_carol_e.0,
+                    carol_account.clone(),
+                    carol_receives.clone(),
+                    carol_receives_comm,
+                ),
                 nonce_1,
             );
-            carol_builder_1.add_receive_affirmation(leg_enc_1.core_and_eph_keys_for_receiver());
-            carol_builder_1.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            carol_builder_1.add_receive_affirmation({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_receiver();
+                (c, e, alice_send_amount)
+            });
+            carol_builder_1.add_receive_affirmation({
+                let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                (c, e, bob_send_amount)
+            });
 
             let start = Instant::now();
             let (carol_proof_1, carol_nullifier_1) = carol_builder_1
@@ -1262,19 +1237,23 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_carol.0,
-                sk_carol_e.0,
-                carol_receives.clone(),
-                carol_final.clone(),
-                carol_final_comm,
+                AccountTxnWitness::new(
+                    sk_carol.0,
+                    sk_carol_e.0,
+                    carol_receives.clone(),
+                    carol_final.clone(),
+                    carol_final_comm,
+                ),
                 nonce_2,
             );
-            carol_builder_2.add_claim_received(
-                alice_send_amount,
-                leg_enc_1.core_and_eph_keys_for_receiver(),
-            );
-            carol_builder_2
-                .add_claim_received(bob_send_amount, leg_enc_2.core_and_eph_keys_for_receiver());
+            carol_builder_2.add_claim_received({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_receiver();
+                (c, e, alice_send_amount)
+            });
+            carol_builder_2.add_claim_received({
+                let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                (c, e, bob_send_amount)
+            });
 
             let start = Instant::now();
             let (carol_proof_2, carol_nullifier_2) = carol_builder_2
@@ -1348,6 +1327,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_sender_and_receiver() {
+        // One party (Alice) is both sender on leg 1 (Alice->Bob) and receiver on leg 2 (Carol->Alice) in the same
+        // batch; checks her single state transition that mixes a send and a receive (asset-id revealed and hidden).
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1443,18 +1424,23 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account.clone(),
-                alice_updated.clone(),
-                alice_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
                 nonce,
             );
-            alice_builder.add_send_affirmation(
-                alice_to_bob_amount,
-                leg_enc_1.core_and_eph_keys_for_sender(),
-            );
-            alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_builder.add_send_affirmation({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, alice_to_bob_amount)
+            });
+            alice_builder.add_receive_affirmation({
+                let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                (c, e, carol_to_alice_amount)
+            });
 
             let start = Instant::now();
             let (alice_proof, alice_nullifier) = alice_builder
@@ -1540,18 +1526,23 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_updated.clone(),
-                alice_final.clone(),
-                alice_final_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_updated.clone(),
+                    alice_final.clone(),
+                    alice_final_comm,
+                ),
                 nonce_2,
             );
-            alice_builder_2.add_claim_received(
-                carol_to_alice_amount,
-                leg_enc_2.core_and_eph_keys_for_receiver(),
-            );
-            alice_builder_2.add_sender_counter_update(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_builder_2.add_claim_received({
+                let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                (c, e, carol_to_alice_amount)
+            });
+            alice_builder_2.add_sender_counter_update({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, alice_to_bob_amount)
+            });
 
             let start = Instant::now();
             let (alice_proof_2, alice_nullifier_2) = alice_builder_2
@@ -1625,6 +1616,8 @@ mod tests {
 
     #[test]
     fn test_send_receive_and_reverse() {
+        // Alice's single proof over 4 ops at once: a send, a receive, a sender-side reversal (un-doing a send),
+        // and a counter decrease — checks balance/counter bookkeeping across all four reversible op kinds together.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1737,23 +1730,31 @@ mod tests {
 
         let mut alice_builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account.clone(),
-                alice_updated.clone(),
-                alice_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
                 nonce,
             );
-        alice_builder.add_send_affirmation(
-            alice_to_bob_amount,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_receive_affirmation(leg_enc_2.core_and_eph_keys_for_receiver());
-        alice_builder.add_sender_reverse(
-            alice_to_dave_amount,
-            leg_enc_3.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_receiver_reverse(leg_enc_4.core_and_eph_keys_for_receiver());
+        alice_builder.add_send_affirmation({
+            let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+            (c, e, alice_to_bob_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+            (c, e, carol_to_alice_amount)
+        });
+        alice_builder.add_sender_reverse({
+            let (c, e) = leg_enc_3.core_and_eph_keys_for_sender();
+            (c, e, alice_to_dave_amount)
+        });
+        alice_builder.add_receiver_reverse({
+            let (c, e) = leg_enc_4.core_and_eph_keys_for_receiver();
+            (c, e, bob_to_alice_amount)
+        });
 
         let start = Instant::now();
         let (alice_proof, alice_nullifier) = alice_builder
@@ -1820,6 +1821,8 @@ mod tests {
 
     #[test]
     fn test_multi_leg_irreversible_operations() {
+        // Alice's single proof combining an irreversible send and an irreversible receive (one-shot ops that bump
+        // balance without leaving a reversible counter), vs the reversible send/receive used elsewhere.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1917,21 +1920,23 @@ mod tests {
                 PallasParameters,
                 VestaParameters,
             >::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account.clone(),
-                alice_updated.clone(),
-                alice_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
                 nonce,
             );
-            alice_builder.add_irreversible_send(
-                alice_to_bob_amount,
-                leg_enc_1.core_and_eph_keys_for_sender(),
-            );
-            alice_builder.add_irreversible_receive(
-                carol_to_alice_amount,
-                leg_enc_2.core_and_eph_keys_for_receiver(),
-            );
+            alice_builder.add_irreversible_send({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, alice_to_bob_amount)
+            });
+            alice_builder.add_irreversible_receive({
+                let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                (c, e, carol_to_alice_amount)
+            });
 
             let start = Instant::now();
             let (alice_proof, alice_nullifier) = alice_builder
@@ -2005,6 +2010,8 @@ mod tests {
 
     #[test]
     fn test_combined_multi_asset_proofs() {
+        // Alice has two separate accounts (asset 1 and asset 2) as leaves of one shared tree; their two state-transition
+        // proofs share a single Bulletproofs prover/verifier so the range proofs are batched into one combined BP.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 14;
@@ -2153,37 +2160,44 @@ mod tests {
         // Alice creates builders for both assets using the single account tree
         let mut alice_builder_asset1 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_asset1.clone(),
-                alice_updated_asset1.clone(),
-                alice_updated_comm_asset1,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_asset1.clone(),
+                    alice_updated_asset1.clone(),
+                    alice_updated_comm_asset1,
+                ),
                 nonce_alice_1,
             );
-        alice_builder_asset1
-            .add_send_affirmation(amount_1, leg_enc_1_asset1.core_and_eph_keys_for_sender());
-        alice_builder_asset1
-            .add_receive_affirmation(leg_enc_2_asset1.core_and_eph_keys_for_receiver());
+        alice_builder_asset1.add_send_affirmation({
+            let (c, e) = leg_enc_1_asset1.core_and_eph_keys_for_sender();
+            (c, e, amount_1)
+        });
+        alice_builder_asset1.add_receive_affirmation({
+            let (c, e) = leg_enc_2_asset1.core_and_eph_keys_for_receiver();
+            (c, e, amount_2)
+        });
 
         let mut alice_builder_asset2 =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account_asset2.clone(),
-                alice_updated_asset2.clone(),
-                alice_updated_comm_asset2,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account_asset2.clone(),
+                    alice_updated_asset2.clone(),
+                    alice_updated_comm_asset2,
+                ),
                 nonce_alice_2,
             );
-        alice_builder_asset2.add_send_affirmation(
+        alice_builder_asset2.add_send_affirmation((
+            leg_enc_1_asset2.leg_enc_core_and_eph_keys.core.clone(),
+            leg_enc_1_asset2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             amount_3,
-            (
-                leg_enc_1_asset2.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_1_asset2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ),
-        );
+        ));
         alice_builder_asset2.add_receive_affirmation((
             leg_enc_2_asset2.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_2_asset2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            amount_4,
         ));
 
         let start = Instant::now();
@@ -2545,26 +2559,35 @@ mod tests {
 
         let mut alice_builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_alice.0,
-                sk_alice_e.0,
-                alice_account.clone(),
-                alice_updated.clone(),
-                alice_updated_comm,
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
                 nonce,
             );
-        alice_builder.add_send_affirmation(
-            alice_to_bob_amount,
-            leg_enc_1.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_send_affirmation(
-            alice_to_carol_amount,
-            leg_enc_2.core_and_eph_keys_for_sender(),
-        );
-        alice_builder.add_receive_affirmation(leg_enc_3.core_and_eph_keys_for_receiver());
-        alice_builder.add_receive_affirmation(leg_enc_4.core_and_eph_keys_for_receiver());
+        alice_builder.add_send_affirmation({
+            let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+            (c, e, alice_to_bob_amount)
+        });
+        alice_builder.add_send_affirmation({
+            let (c, e) = leg_enc_2.core_and_eph_keys_for_sender();
+            (c, e, alice_to_carol_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_3.core_and_eph_keys_for_receiver();
+            (c, e, dave_to_alice_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_4.core_and_eph_keys_for_receiver();
+            (c, e, eve_to_alice_amount)
+        });
         alice_builder.add_receive_affirmation((
             leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
             leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            frank_to_alice_amount,
         ));
 
         let start = Instant::now();
@@ -2638,6 +2661,301 @@ mod tests {
     }
 
     #[test]
+    fn elsewhere_asset_id_link_when_another_leg_reveals() {
+        // Alice receives on two legs of the same asset in one affirmation. The first leg reveals the
+        // asset id, the second hides it. Because the asset id is already revealed in the first leg,
+        // the hidden leg proves its asset id "elsewhere" instead of with a full ciphertext proof.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"elsewhere-test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_dave_e)),
+            (_, (_, pk_eve_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1u32;
+        let dave_to_alice_amount = 200u64;
+        let eve_to_alice_amount = 250u64;
+
+        // Alice receives, asset id revealed.
+        let leg_revealed = Leg::new(
+            pk_dave_e.0,
+            pk_alice_e.0,
+            dave_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_revealed, _) = leg_revealed
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Alice receives, asset id hidden.
+        let leg_hidden = Leg::new(
+            pk_eve_e.0,
+            pk_alice_e.0,
+            eve_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_hidden, _) = leg_hidden
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &alice_account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let account_tree_root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let mut builder = AccountStateBuilder::init(alice_account.clone());
+        builder.update_for_receive();
+        builder.update_for_receive();
+        let alice_updated = builder.finalize();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let mut alice_builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
+                nonce,
+            );
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_revealed.core_and_eph_keys_for_receiver();
+            (c, e, dave_to_alice_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_hidden.core_and_eph_keys_for_receiver();
+            (c, e, eve_to_alice_amount)
+        });
+
+        let (alice_proof, alice_nullifier) = alice_builder
+            .finalize::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        // Revealed leg proves only its amount, so it carries no asset-id response. The hidden leg
+        // proves its asset id elsewhere since the revealed leg already makes the asset id public.
+        assert!(
+            alice_proof.common_proof.resp_leg_link[0]
+                .resp_asset_id()
+                .is_none()
+        );
+        assert!(matches!(
+            alice_proof.common_proof.resp_leg_link[1].resp_asset_id(),
+            Some(RespAssetId::Elsewhere(_))
+        ));
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_receive_affirmation(leg_enc_revealed.core_and_eph_keys_for_receiver());
+        alice_verifier.add_receive_affirmation(leg_enc_hidden.core_and_eph_keys_for_receiver());
+        alice_verifier
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                &alice_proof,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                None,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn mixed_asset_id_legs_rejected() {
+        // Malicious prover: account and revealed leg are asset 1, but the hidden leg encrypts a
+        // different asset id.
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            (_, (_, pk_dave_e)),
+            (_, (_, pk_eve_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let hidden_asset_id = 2;
+        let dave_to_alice_amount = 200;
+        let eve_to_alice_amount = 250;
+
+        // Alice receives, asset id revealed.
+        let leg_revealed = Leg::new(
+            pk_dave_e.0,
+            pk_alice_e.0,
+            dave_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_revealed, _) = leg_revealed
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: true,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        // Alice receives, asset id hidden, but encrypting a different asset id.
+        let leg_hidden = Leg::new(
+            pk_eve_e.0,
+            pk_alice_e.0,
+            eve_to_alice_amount,
+            hidden_asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_hidden, _) = leg_hidden
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &alice_account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let account_tree_root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let mut builder = AccountStateBuilder::init(alice_account.clone());
+        builder.update_for_receive();
+        builder.update_for_receive();
+        let alice_updated = builder.finalize();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let mut alice_builder =
+            AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
+                AccountTxnWitness::new(
+                    sk_alice.0,
+                    sk_alice_e.0,
+                    alice_account.clone(),
+                    alice_updated.clone(),
+                    alice_updated_comm,
+                ),
+                nonce,
+            );
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_revealed.core_and_eph_keys_for_receiver();
+            (c, e, dave_to_alice_amount)
+        });
+        alice_builder.add_receive_affirmation({
+            let (c, e) = leg_enc_hidden.core_and_eph_keys_for_receiver();
+            (c, e, eve_to_alice_amount)
+        });
+
+        let (alice_proof, alice_nullifier) = alice_builder
+            .finalize::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path,
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_receive_affirmation(leg_enc_revealed.core_and_eph_keys_for_receiver());
+        alice_verifier.add_receive_affirmation(leg_enc_hidden.core_and_eph_keys_for_receiver());
+        assert!(
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn host_builder_pre_finalize_rejects_empty_legs() {
         // pre_finalize_checks must fail when no legs have been added to the builder.
         let mut rng = rand::thread_rng();
@@ -2656,16 +2974,22 @@ mod tests {
 
         let builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                PallasFr::rand(&mut rng),
-                PallasFr::rand(&mut rng),
-                account,
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(
+                    PallasFr::rand(&mut rng),
+                    PallasFr::rand(&mut rng),
+                    account,
+                    updated_account,
+                    updated_comm,
+                ),
                 b"test_nonce",
             );
 
-        // No legs added → pre_finalize_checks must error.
-        assert!(builder.pre_finalize_checks().is_err());
+        // No legs added
+        assert_err!(
+            builder.pre_finalize_checks(),
+            Error::ProofGenerationError(_),
+            "No legs added"
+        );
     }
 
     #[test]
@@ -2709,29 +3033,43 @@ mod tests {
 
         let mut builder_wrong =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                PallasFr::rand(&mut rng),
-                PallasFr::rand(&mut rng),
-                account.clone(),
-                wrong_updated,
-                wrong_comm,
+                AccountTxnWitness::new(
+                    PallasFr::rand(&mut rng),
+                    PallasFr::rand(&mut rng),
+                    account.clone(),
+                    wrong_updated,
+                    wrong_comm,
+                ),
                 b"test_nonce",
             );
-        builder_wrong.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
-        assert!(builder_wrong.pre_finalize_checks().is_err());
+        builder_wrong.add_send_affirmation({
+            let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        });
+        assert_err!(
+            builder_wrong.pre_finalize_checks(),
+            Error::ProofGenerationError(_),
+            "Counter mismatch"
+        );
 
         // With the correct counter (6) the check must pass.
         let correct_updated = account.get_state_for_send(amount).unwrap();
         let correct_comm = correct_updated.commit(account_comm_key.clone()).unwrap();
         let mut builder_ok =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                PallasFr::rand(&mut rng),
-                PallasFr::rand(&mut rng),
-                account,
-                correct_updated,
-                correct_comm,
+                AccountTxnWitness::new(
+                    PallasFr::rand(&mut rng),
+                    PallasFr::rand(&mut rng),
+                    account,
+                    correct_updated,
+                    correct_comm,
+                ),
                 b"test_nonce",
             );
-        builder_ok.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
+        builder_ok.add_send_affirmation({
+            let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        });
         assert!(builder_ok.pre_finalize_checks().is_ok());
     }
 
@@ -2783,14 +3121,13 @@ mod tests {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_s.0,
-                sk_s_e.0,
-                account,
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(sk_s.0, sk_s_e.0, account, updated_account, updated_comm),
                 nonce,
             );
-        builder.add_send_affirmation(amount, leg_enc.core_and_eph_keys_for_sender());
+        builder.add_send_affirmation({
+            let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+            (c, e, amount)
+        });
 
         let (proof, nullifier) = builder
             .finalize::<_, PallasParams, VestaParams>(
@@ -2852,6 +3189,8 @@ mod tests {
 
     #[test]
     fn verifier_rejects_missing_balance_proof_for_one_leg() {
+        // Builds a valid 2-send proof, then tampers it by popping one per-leg amount response from the balance proof
+        // (so only 1 of 2 legs is covered); the verifier must reject the under-specified balance proof.
         let mut rng = rand::thread_rng();
         const NUM_GENS: usize = 1 << 12;
         const L: usize = 64;
@@ -2912,15 +3251,17 @@ mod tests {
 
         let mut builder =
             AccountStateTransitionProofBuilder::<L, _, _, PallasParameters, VestaParameters>::init(
-                sk_s.0,
-                sk_s_e.0,
-                account,
-                updated_account,
-                updated_comm,
+                AccountTxnWitness::new(sk_s.0, sk_s_e.0, account, updated_account, updated_comm),
                 nonce,
             );
-        builder.add_send_affirmation(amount_1, leg_enc_1.core_and_eph_keys_for_sender());
-        builder.add_send_affirmation(amount_2, leg_enc_2.core_and_eph_keys_for_sender());
+        builder.add_send_affirmation({
+            let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+            (c, e, amount_1)
+        });
+        builder.add_send_affirmation({
+            let (c, e) = leg_enc_2.core_and_eph_keys_for_sender();
+            (c, e, amount_2)
+        });
 
         let (proof, nullifier) = builder
             .finalize::<_, PallasParams, VestaParams>(
@@ -2935,9 +3276,11 @@ mod tests {
 
         let mut tampered_proof = proof.clone();
         let balance_proof = tampered_proof.balance_proof.as_mut().unwrap();
-        assert_eq!(balance_proof.resp_leg_amount.len(), 2);
-        balance_proof.resp_leg_amount.pop();
-        assert_eq!(balance_proof.resp_leg_amount.len(), 1);
+        // `resp_leg_amount` was removed: the per-leg amount now lives in the leg-link and its
+        // response is reused by the balance BP. Corrupt the balance BP blinding response so the proof is still rejected.
+        if let Some(r) = balance_proof.partial.resp_comm_bp_bal.responses.get_mut(&0) {
+            *r = -*r;
+        }
 
         let mut verifier = AccountStateTransitionProofVerifier::<
             L,

@@ -57,7 +57,7 @@ pub mod split_types;
 use crate::curve_tree::{
     AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
     CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
-    get_asset_commitment_parameters, get_asset_curve_tree_parameters,
+    get_asset_commitment_parameters,
 };
 use crate::*;
 pub use fee::*;
@@ -461,6 +461,7 @@ mod tests {
     };
     use crate::curve_tree::ProverCurveTree;
     use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
+    use crate::key_distribution_proof::KeyDistributionProof;
     use crate::mint_split::MintHostProtocol;
     use crate::split_types::{AffirmationDeviceRequest, AffirmationDeviceResponse};
     use ark_ec::short_weierstrass::Affine;
@@ -477,6 +478,28 @@ mod tests {
         let decoded: DartBPGenerators =
             CanonicalDeserialize::deserialize_uncompressed(&encoded[..]).unwrap();
         assert_eq!(gens, decoded);
+    }
+
+    #[test]
+    fn key_distribution() {
+        let mut rng = rand::thread_rng();
+        let distributor = AccountKeys::rand(&mut rng).unwrap();
+        let recipient = AccountKeys::rand(&mut rng).unwrap();
+        let params = curve_tree::get_account_curve_tree_parameters();
+        let nonce = b"test-nonce";
+
+        let proof = KeyDistributionProof::<()>::new(
+            &mut rng,
+            &distributor.enc,
+            vec![recipient.enc.public.clone()],
+            nonce,
+            params,
+        )
+        .unwrap();
+        proof.verify(nonce, params, &mut rng).unwrap();
+
+        let recovered = proof.decrypt(0, &recipient.enc.secret).unwrap();
+        assert_eq!(recovered, distributor.enc.secret.inner().0);
     }
 
     #[test]
@@ -1080,6 +1103,7 @@ mod tests {
                     &mut receiver_state,
                     &leg_ref,
                     &leg_enc,
+                    receive_amount,
                     &account_tree,
                 )
                 .unwrap();
@@ -1250,6 +1274,7 @@ mod tests {
                 &mut sender_state,
                 &leg_ref,
                 &leg_enc,
+                0,
                 &account_tree,
             )
             .unwrap();
@@ -1323,6 +1348,7 @@ mod tests {
                 &mut receiver_state,
                 &leg_ref,
                 &leg_enc,
+                0,
                 &account_tree,
             )
             .unwrap();

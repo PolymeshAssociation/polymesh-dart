@@ -81,11 +81,21 @@ pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
     mocktopus::macros::mockable
 )]
 impl<G: AffineRepr> FeeAccountState<G> {
-    pub fn new<R: CryptoRngCore>(rng: &mut R, pk: G, balance: Balance, asset_id: AssetId) -> Self {
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        pk: G,
+        balance: Balance,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(balance));
+        }
+
         let rho = G::ScalarField::rand(rng);
         let randomness = G::ScalarField::rand(rng);
 
-        Self {
+        Ok(Self {
             pk,
             balance,
             asset_id,
@@ -93,7 +103,7 @@ impl<G: AffineRepr> FeeAccountState<G> {
             initial_randomness: randomness,
             rho,
             randomness,
-        }
+        })
     }
 
     pub fn commit<CK: AccountCommitmentKeyTrait<G>>(
@@ -235,6 +245,10 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
         mut transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         let pk = account.pk;
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if account.balance() > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(account.balance()));
+        }
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -317,6 +331,14 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
         mut transcript: &mut MerlinTranscript,
     ) -> Result<G> {
+        // The following is just defense in depth. The chain will never pass balance > MAX_FEE_BALANCE
+        // and ensures that the "correct" (what was paid for) balance
+        if balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(balance));
+        }
+        if pk.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
@@ -705,6 +727,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -991,7 +1014,7 @@ impl<
         let acc_old = (self
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - reduce
             + (account_comm_key.balance_gen() * F0::from(increase_bal_by)))
@@ -1068,7 +1091,7 @@ impl<
         let acc_old = self
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - reduce
             + (account_comm_key.balance_gen() * increase_bal_by);
@@ -2119,6 +2142,7 @@ impl<
                 odd_prover,
                 account_tree_params,
                 rng,
+                None,
             )?;
 
         let mut transcript = even_prover.transcript();
@@ -2416,8 +2440,9 @@ impl<
     }
 
     /// Get the re-randomized leaf point (needed by the Ledger for its auth proof).
-    pub fn rerandomized_leaf(&self) -> Affine<G0> {
-        self.re_randomized_path.path.get_rerandomized_leaf()
+    pub fn rerandomized_leaf(&self) -> Result<Affine<G0>> {
+        let l = self.re_randomized_path.path.get_rerandomized_leaf()?;
+        Ok(l)
     }
 }
 
@@ -2660,7 +2685,7 @@ impl<
             .partial
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - asset_id_comm
             - (account_comm_key.balance_gen() * fee_amount_f);
@@ -2877,6 +2902,7 @@ impl<
             .re_randomized_path
             .path
             .get_rerandomized_leaf()
+            .expect("rerandomized leaf must be set")
     }
 
     /// Generate the host's proofs and finalize the Bulletproof.
@@ -3060,7 +3086,7 @@ impl<
             updated_account_commitment,
             asset_id_gen,
             balance_gen,
-        );
+        )?;
         comm_old.serialize_compressed(&mut transcript)?;
         comm_new.serialize_compressed(&mut transcript)?;
 
@@ -3120,7 +3146,7 @@ impl<
             updated_account_commitment,
             account_comm_key.asset_id_gen(),
             account_comm_key.balance_gen(),
-        );
+        )?;
 
         self.commitment_proof.host_proof.verify_with_challenge(
             y_old_affine,
@@ -3292,13 +3318,13 @@ impl<
         updated_account_commitment: FeeAccountStateCommitment<Affine<G0>>,
         asset_id_gen: Affine<G0>,
         balance_gen: Affine<G0>,
-    ) -> (Affine<G0>, Affine<G0>) {
+    ) -> Result<(Affine<G0>, Affine<G0>)> {
         let asset_id_comm = (asset_id_gen * F0::from(asset_id)).into_affine();
         let y_old = self
             .partial
             .re_randomized_path
             .path
-            .get_rerandomized_leaf()
+            .get_rerandomized_leaf()?
             .into_group()
             - asset_id_comm
             - (balance_gen * F0::from(fee_amount))
@@ -3315,7 +3341,7 @@ impl<
                 .auth_proof
                 .partial_updated_account_commitment;
         let y_new_affine = y_new.into_affine();
-        (y_old_affine, y_new_affine)
+        Ok((y_old_affine, y_new_affine))
     }
 }
 
@@ -3703,11 +3729,12 @@ pub mod tests {
         pk: VerKey<G>,
         balance: Balance,
     ) -> FeeAccountState<G> {
-        FeeAccountState::new(rng, pk.0, balance, asset_id)
+        FeeAccountState::new(rng, pk.0, balance, asset_id).unwrap()
     }
 
     #[test]
     fn fee_account_init() {
+        // No proofs: just build a fee account, check its asset_id/balance/pk fields are stored, and that it commits without error.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -3723,10 +3750,13 @@ pub mod tests {
         assert_eq!(fee_account.pk, pk_i.0);
 
         fee_account.commit(&account_comm_key).unwrap();
+
+        assert!(FeeAccountState::new(&mut rng, pk_i.0, MAX_FEE_BALANCE + 1, asset_id).is_err());
     }
 
     #[test]
     fn fee_account_registration() {
+        // Single-party (non-split) registration: one prover builds the whole RegTxnProof and the verifier accepts it. The _parallel/_sequential siblings split this across host + Ledger.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -3945,6 +3975,7 @@ pub mod tests {
 
     #[test]
     fn fee_account_topup_txn() {
+        // Single-party topup-in-curve-tree proof: prove + verify (regular and RMC), then check the verifier rejects a wrong increase_bal_by and a random (forged) nullifier.
         let mut rng = rand::thread_rng();
 
         // Setup begins
@@ -4054,40 +4085,38 @@ pub mod tests {
             verifier_time_regular, verifier_time_rmc
         );
 
-        assert!(
-            proof
-                .verify(
-                    pk_i.0,
-                    asset_id,
-                    increase_bal_by + 10,
-                    updated_account_comm,
-                    nullifier,
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by + 10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
 
-        assert!(
-            proof
-                .verify(
-                    pk_i.0,
-                    asset_id,
-                    increase_bal_by,
-                    updated_account_comm,
-                    PallasA::rand(&mut rng),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                pk_i.0,
+                asset_id,
+                increase_bal_by,
+                updated_account_comm,
+                PallasA::rand(&mut rng),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
     }
 
@@ -4457,55 +4486,55 @@ pub mod tests {
             verifier_time_regular, verifier_time_rmc
         );
 
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    fee_amount + 10,
-                    updated_account_comm,
-                    nullifier,
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                asset_id,
+                fee_amount + 10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Nullifier verification failed"
         );
 
-        assert!(
-            proof
-                .verify(
-                    asset_id,
-                    fee_amount,
-                    updated_account_comm,
-                    PallasA::rand(&mut rng),
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                PallasA::rand(&mut rng),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Nullifier verification failed"
         );
 
-        assert!(
-            proof
-                .verify(
-                    asset_id + 1,
-                    fee_amount,
-                    updated_account_comm,
-                    nullifier,
-                    &root,
-                    nonce,
-                    &account_tree_params,
-                    account_comm_key.clone(),
-                    &mut rng,
-                    None,
-                )
-                .is_err()
+        assert_err!(
+            proof.verify(
+                asset_id + 1,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "Nullifier verification failed"
         );
     }
 
@@ -4751,7 +4780,7 @@ pub mod tests {
 
         //  Ledger side: creates AuthProofFeePayment on its own AUTH_TXN_LABEL transcript
         // Ledger needs: sk, auth's share of rerandomization/new_randomness, and public data from Host
-        let rerandomized_leaf = partial.rerandomized_leaf();
+        let rerandomized_leaf = partial.rerandomized_leaf().unwrap();
 
         let sk_gen = account_comm_key.sk_gen();
         let randomness_gen = account_comm_key.randomness_gen();
@@ -5012,6 +5041,7 @@ pub mod tests {
 
     #[test]
     fn fee_account_state_transition_invariants() {
+        // Pure state-helper check (no proofs): after topup then payment, balance arithmetic is right and pk/asset_id are preserved while rho and randomness are freshly re-sampled each step.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -5036,21 +5066,63 @@ pub mod tests {
 
     #[test]
     fn fee_account_state_transition_bounds() {
+        // Boundary check on the state helper (no proofs): topup past MAX_FEE_BALANCE errors, and a payment larger than the balance (would underflow) errors.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
         let (_sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
         let account_at_max = new_fee_account::<_, PallasA>(&mut rng, 1, pk, MAX_FEE_BALANCE);
-        assert!(account_at_max.get_state_for_topup(1).is_err());
+        assert_err!(
+            account_at_max.get_state_for_topup(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
 
         let account_small = new_fee_account::<_, PallasA>(&mut rng, 1, pk, 5);
-        assert!(account_small.get_state_for_payment(6).is_err());
+        assert_err!(
+            account_small.get_state_for_payment(6),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
     }
 
     #[cfg(feature = "ignore_prover_input_sanitation")]
     mod input_sanitation_disabled {
         use super::*;
+
+        #[test]
+        fn fee_account_registration_rejects_out_of_range_balance() {
+            let mut rng = rand::thread_rng();
+            let account_comm_key = setup_comm_key(b"testing");
+            let asset_id = 1;
+            let nonce = b"test-nonce";
+            let bad_balance = MAX_FEE_BALANCE + 1;
+
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, bad_balance);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+            let reg_proof = RegTxnProof::new(
+                &mut rng,
+                sk_i.0,
+                &account,
+                account_comm.clone(),
+                nonce,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            let res = reg_proof.verify(
+                &pk_i.0,
+                bad_balance,
+                asset_id,
+                &account_comm,
+                nonce,
+                account_comm_key,
+                None,
+            );
+            assert!(matches!(res, Err(Error::AmountTooLarge(_))));
+        }
 
         #[test]
         fn increase_balance_more_than_expected_in_topup_txn() {
@@ -5286,6 +5358,7 @@ pub mod tests {
 
             #[test]
             fn fee_account_topup_txn_with_mocked_rho_fails_verification() {
+                // Mock the topup nullifier proof to use a forged rho (so the published nullifier no longer matches the committed account's rho); the verifier must reject the proof.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 13;
@@ -5357,22 +5430,22 @@ pub mod tests {
                 assert_eq!(nullifier, expected_mocked_nullifier);
                 assert_ne!(nullifier, honest_nullifier);
 
-                assert!(
-                    proof
-                        .verify(
-                            pk_i.0,
-                            asset_id,
-                            increase_bal_by,
-                            updated_account_comm,
-                            nullifier,
-                            &root,
-                            nonce,
-                            &account_tree_params,
-                            account_comm_key.clone(),
-                            &mut rng,
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    proof.verify(
+                        pk_i.0,
+                        asset_id,
+                        increase_bal_by,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                        None,
+                    ),
+                    Error::ProofVerificationError(_),
+                    "Nullifier verification failed"
                 );
 
                 let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
@@ -5391,13 +5464,15 @@ pub mod tests {
                     Some((&mut rmc_0, &mut rmc_1)),
                 );
                 let rmc_result = verify_rmc(rmc_0, rmc_1);
-                assert!(verify_result.is_err() || rmc_result.is_err());
+                assert!(verify_result.is_ok());
+                assert!(rmc_result.is_err());
 
                 clear_mocks(&account_comm_key);
             }
 
             #[test]
             fn fee_account_topup_txn_with_mocked_balance_for_range_proof_fails_verification() {
+                // Mock the topup so the range proof is fed new_balance+1 instead of the real updated balance; it no longer matches the committed balance and the verifier must reject.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 13;
@@ -5466,22 +5541,22 @@ pub mod tests {
                     )
                     .unwrap();
 
-                assert!(
-                    proof
-                        .verify(
-                            pk_i.0,
-                            asset_id,
-                            increase_bal_by,
-                            updated_account_comm,
-                            nullifier,
-                            &root,
-                            nonce,
-                            &account_tree_params,
-                            account_comm_key.clone(),
-                            &mut rng,
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    proof.verify(
+                        pk_i.0,
+                        asset_id,
+                        increase_bal_by,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                        None,
+                    ),
+                    Error::ProofVerificationError(_),
+                    "Sigma protocol for Bulletproof commitment failed"
                 );
 
                 let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
@@ -5500,13 +5575,15 @@ pub mod tests {
                     Some((&mut rmc_0, &mut rmc_1)),
                 );
                 let rmc_result = verify_rmc(rmc_0, rmc_1);
-                assert!(verify_result.is_err() || rmc_result.is_err());
+                assert!(verify_result.is_ok());
+                assert!(rmc_result.is_err());
 
                 clear_mocks(&account_comm_key);
             }
 
             #[test]
             fn fee_payment_proof_with_mocked_rho_fails_verification() {
+                // Same forged-rho tampering as the topup version, but on FeePaymentProof: the published nullifier is derived from a fake rho, so verification must fail.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 13;
@@ -5577,21 +5654,21 @@ pub mod tests {
                 assert_eq!(nullifier, expected_mocked_nullifier);
                 assert_ne!(nullifier, honest_nullifier);
 
-                assert!(
-                    proof
-                        .verify(
-                            asset_id,
-                            fee_amount,
-                            updated_account_comm,
-                            nullifier,
-                            &root,
-                            nonce,
-                            &account_tree_params,
-                            account_comm_key.clone(),
-                            &mut rng,
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    proof.verify(
+                        asset_id,
+                        fee_amount,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                        None,
+                    ),
+                    Error::ProofVerificationError(_),
+                    "Nullifier verification failed"
                 );
 
                 let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
@@ -5609,13 +5686,15 @@ pub mod tests {
                     Some((&mut rmc_0, &mut rmc_1)),
                 );
                 let rmc_result = verify_rmc(rmc_0, rmc_1);
-                assert!(verify_result.is_err() || rmc_result.is_err());
+                assert!(verify_result.is_ok());
+                assert!(rmc_result.is_err());
 
                 clear_mocks(&account_comm_key);
             }
 
             #[test]
             fn fee_payment_proof_with_mocked_balance_for_range_proof_fails_verification() {
+                // Like the topup balance-mock but on FeePaymentProof: the range proof gets new_balance+1 instead of the real post-payment balance, so it disagrees with the commitment and verification must fail.
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 13;
@@ -5683,21 +5762,21 @@ pub mod tests {
                 )
                 .unwrap();
 
-                assert!(
-                    proof
-                        .verify(
-                            asset_id,
-                            fee_amount,
-                            updated_account_comm,
-                            nullifier,
-                            &root,
-                            nonce,
-                            &account_tree_params,
-                            account_comm_key.clone(),
-                            &mut rng,
-                            None,
-                        )
-                        .is_err()
+                assert_err!(
+                    proof.verify(
+                        asset_id,
+                        fee_amount,
+                        updated_account_comm,
+                        nullifier,
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        &mut rng,
+                        None,
+                    ),
+                    Error::ProofVerificationError(_),
+                    "Sigma protocol for Bulletproof commitment failed"
                 );
 
                 let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
@@ -5715,7 +5794,8 @@ pub mod tests {
                     Some((&mut rmc_0, &mut rmc_1)),
                 );
                 let rmc_result = verify_rmc(rmc_0, rmc_1);
-                assert!(verify_result.is_err() || rmc_result.is_err());
+                assert!(verify_result.is_ok());
+                assert!(rmc_result.is_err());
 
                 clear_mocks(&account_comm_key);
             }
