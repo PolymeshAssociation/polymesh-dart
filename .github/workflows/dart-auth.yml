@@ -1,0 +1,114 @@
+name: Dart-Auth
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'dart-auth/**'
+      - 'dart-common/**'
+      - 'Cargo.toml'
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-auth-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --package polymesh-dart-auth -- --check
+
+      - name: Build (std)
+        run: cargo build --package polymesh-dart-auth
+
+      - name: Build (no_std, no default features)
+        run: cargo build --package polymesh-dart-auth --no-default-features
+
+      - name: Build (device wire API)
+        run: cargo build --package polymesh-dart-auth --features utoipa
+
+      - name: Build (host wire-type support)
+        run: cargo build --package polymesh-dart-auth --features utoipa,sqlx,bounded
+
+      - name: Run tests
+        run: cargo test --package polymesh-dart-auth --features utoipa,sqlx,bounded
+
+  embedded-thumbv7em:
+    name: Build polymesh-dart-auth device API for thumbv7em-none-eabi (Ledger)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabi
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-thumbv7em-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build device API for thumbv7em-none-eabi
+        run: cargo build --package polymesh-dart-auth --no-default-features --features wrapper --target thumbv7em-none-eabi
+
+  tee-musl:
+    name: Build device API for ${{ matrix.target }} (TEE)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build device API for ${{ matrix.target }}
+        run: cargo build --package polymesh-dart-auth --features wrapper --target ${{ matrix.target }}

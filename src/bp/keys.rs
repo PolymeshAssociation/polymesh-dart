@@ -1,11 +1,7 @@
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info::TypeInfo;
 
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{string::String, vec::Vec};
+use ark_std::vec::Vec;
 
 use blake2::Blake2s256;
 
@@ -21,91 +17,11 @@ use super::encode::*;
 use super::*;
 use crate::*;
 
+pub use polymesh_dart_auth::wrapper::{
+    AccountPublicKey, AccountPublicKeys, AccountSecretKey, EncryptionPublicKey, EncryptionSecretKey,
+};
+
 pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
-
-/// The encryption public key, which can be shared freely.
-#[derive(
-    Copy,
-    Clone,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    Default,
-    TypeInfo,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
-pub struct EncryptionPublicKey(CompressedAffine);
-
-/// FromStr for EncryptionPublicKey
-impl core::str::FromStr for EncryptionPublicKey {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(CompressedAffine::from_str(s)?))
-    }
-}
-
-impl EncryptionPublicKey {
-    /// Creates a `EncryptionPublicKey` from a hex string.
-    pub fn from_str(s: &str) -> Result<Self, Error> {
-        Ok(Self(CompressedAffine::from_str(s)?))
-    }
-
-    /// Converts a `AccountPublicKey` to a hex string.
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
-    }
-
-    /// Creates a `EncryptionPublicKey` from an affine point.
-    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
-        Ok(Self(CompressedAffine::try_from(affine)?))
-    }
-
-    /// Gets the affine point corresponding to the `EncryptionPublicKey`.
-    pub fn get_affine(&self) -> Result<PallasA, Error> {
-        Ok(PallasA::try_from(&self.0)?)
-    }
-
-    /// Creates an `EncryptionPublicKey` from a BP encryption key.
-    pub fn from_bp_key(pk: bp_keys::EncKey<PallasA>) -> Result<Self, Error> {
-        Self::from_affine(pk.0)
-    }
-
-    /// Gets the BP encryption key corresponding to the `EncryptionPublicKey`.
-    pub fn get_bp_key(&self) -> Result<bp_keys::EncKey<PallasA>, Error> {
-        Ok(bp_keys::EncKey(self.get_affine()?))
-    }
-}
-
-/// The encryption secret key, which should be kept private.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    CanonicalSerialize,
-    CanonicalDeserialize,
-    PartialEq,
-    Eq,
-    Zeroize,
-    ZeroizeOnDrop,
-)]
-pub struct EncryptionSecretKey(pub(crate) bp_keys::DecKey<PallasA>);
-
-impl EncryptionSecretKey {
-    /// Gets the inner decryption key.
-    pub fn inner(&self) -> &bp_keys::DecKey<PallasA> {
-        &self.0
-    }
-}
 
 /// The encryption key pair, consisting of the public and secret keys.
 #[derive(
@@ -127,83 +43,6 @@ impl EncryptionKeyPair {
         })
     }
 }
-
-/// The account public key, which can be shared freely.
-#[derive(
-    Copy,
-    Clone,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    Default,
-    TypeInfo,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, format = Binary, examples("0xceae8587b3e968b9669df8eb715f73bcf3f7a9cd3c61c515a4d80f2ca59c8114")))]
-pub struct AccountPublicKey(pub(crate) CompressedAffine);
-
-/// FromStr for AccountPublicKey
-impl core::str::FromStr for AccountPublicKey {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(CompressedAffine::from_str(s)?))
-    }
-}
-
-impl AccountPublicKey {
-    /// Creates a `AccountPublicKey` from a hex string.
-    pub fn from_str(s: &str) -> Result<Self, Error> {
-        Ok(Self(CompressedAffine::from_str(s)?))
-    }
-
-    /// Converts a `AccountPublicKey` to a hex string.
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
-    }
-
-    /// Creates a `AccountPublicKey` from an affine point.
-    pub fn from_affine(affine: PallasA) -> Result<Self, Error> {
-        Ok(Self(CompressedAffine::try_from(affine)?))
-    }
-
-    /// Gets the affine point corresponding to the `AccountPublicKey`.
-    pub fn get_affine(&self) -> Result<PallasA, Error> {
-        Ok(PallasA::try_from(&self.0)?)
-    }
-
-    /// Creates an `AccountPublicKey` from a BP verification key.
-    pub fn from_bp_key(pk: bp_keys::VerKey<PallasA>) -> Result<Self, Error> {
-        Self::from_affine(pk.0)
-    }
-
-    /// Gets the BP verification key corresponding to the `AccountPublicKey`.
-    pub fn get_bp_key(&self) -> Result<bp_keys::VerKey<PallasA>, Error> {
-        Ok(bp_keys::VerKey(self.get_affine()?))
-    }
-}
-
-/// The account secret key, which should be kept private.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    CanonicalSerialize,
-    CanonicalDeserialize,
-    PartialEq,
-    Eq,
-    Zeroize,
-    ZeroizeOnDrop,
-)]
-pub struct AccountSecretKey(pub(crate) bp_keys::SigKey<PallasA>);
 
 /// The account key pair, consisting of the public and secret keys.
 #[derive(
@@ -273,26 +112,6 @@ impl AccountKeyPair {
         )?;
         Ok((state.try_into()?, rho_randomness))
     }
-}
-
-/// The pair of public keys for an account: the encryption public key and the account public key.
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    MaxEncodedLen,
-    Encode,
-    Decode,
-    DecodeWithMemTracking,
-    TypeInfo,
-    PartialEq,
-    Eq,
-    Hash,
-)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct AccountPublicKeys {
-    pub enc: EncryptionPublicKey,
-    pub acct: AccountPublicKey,
 }
 
 /// MasterSeed for generating account keys

@@ -165,6 +165,10 @@ pub enum Error {
     /// Point at identity not allowed
     #[error("Point at identity not allowed")]
     PointAtIdentity,
+
+    /// Auth proof error.
+    #[error("Auth proof error: {0}")]
+    AuthProofError(#[from] polymesh_dart_auth::Error),
 }
 
 impl Error {

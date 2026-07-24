@@ -1,10 +1,6 @@
-use crate::account::{LegProverConfig, LegVerifierConfig};
-use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
-use crate::{
-    ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, error,
-};
+use crate::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
+use crate::leg_config::{LegProverConfig, LegVerifierConfig};
+use crate::{AUTH_TXN_LABEL, Error, NULLIFIER_LABEL, error};
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ff::Field;
@@ -13,6 +9,9 @@ use ark_std::string::ToString;
 use ark_std::{UniformRand, format, vec, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{
+    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
+};
 use rand_core::CryptoRngCore;
 use schnorr_pok::SchnorrResponse;
 use schnorr_pok::discrete_log::{
@@ -64,10 +63,7 @@ pub struct AuthProofAffirmation<G: AffineRepr> {
     pub leg_links: Vec<LegAuthLink<G>>,
 }
 
-#[cfg_attr(
-    all(test, feature = "nightly_mocking_tests"),
-    mocktopus::macros::mockable
-)]
+#[cfg_attr(feature = "nightly_mocking_tests", mocktopus::macros::mockable)]
 impl<G: AffineRepr> AuthProofAffirmation<G> {
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
@@ -718,7 +714,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
     }
 
     /// Just for mocking
-    pub(crate) fn sk_enc_inverse(sk_enc: &G::ScalarField) -> error::Result<G::ScalarField> {
+    pub fn sk_enc_inverse(sk_enc: &G::ScalarField) -> error::Result<G::ScalarField> {
         sk_enc.inverse().ok_or(Error::InvertingZero)
     }
 }
@@ -775,10 +771,9 @@ impl<G: AffineRepr> LegAuthLink<G> {
 }
 
 mod serialization {
-    use crate::auth_proofs::account::{LegAuthLink, RespAssetId};
-    use crate::auth_proofs::*;
+    use super::*;
     use ark_serialize::{Compress, SerializationError, Valid, Validate};
-    use ark_std::io::Read;
+    use ark_std::io::{Read, Write};
 
     impl<G: AffineRepr> CanonicalSerialize for RespAssetId<G> {
         fn serialize_with_mode<W: Write>(
@@ -931,105 +926,5 @@ mod serialization {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::account::PartyEphemeralPublicKey;
-    use crate::keys::keygen_enc;
-    use crate::leg::{Leg, LegEncConfig};
-    use ark_ec::short_weierstrass::Affine;
-    use ark_pallas::{Fr, PallasConfig};
-    use ark_std::UniformRand;
-    use rand::thread_rng;
-
-    #[test]
-    fn affirm_other_account_encryption_key() {
-        // Standalone affirmation auth accepts this proof even when the consumed account key differs
-        // from the leg key. The split verifier is the layer that checks the account leaf against the
-        // proof's partial commitment.
-        let mut rng = thread_rng();
-        // Use independent bases so the mismatch is not hidden by setup.
-        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
-
-        let sk_e = Fr::rand(&mut rng);
-        let sk_enc_e = Fr::rand(&mut rng);
-        // Use a different encryption key for the leg sender.
-        let (sk_enc_a_keys, ek_a) = keygen_enc(&mut rng, enc_key_gen);
-        let sk_enc_a = sk_enc_a_keys.0;
-
-        let amount = 100u64;
-        let asset_id = 7u32;
-        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
-        let leg = Leg::new(ek_a.0, pk_r_e.0, amount, asset_id, vec![], vec![], vec![]).unwrap();
-        let cfg = LegEncConfig {
-            parties_see_each_other: false,
-            reveal_asset_id: false,
-        };
-        let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
-        let (leg_core, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
-
-        // The account leaf commits sk_enc_e, while the proof below is built with sk_enc_a.
-        let rand_old = Fr::rand(&mut rng);
-        let rand_new = Fr::rand(&mut rng);
-        let pk_e = (sk_gen * sk_e + enc_key_gen * sk_enc_e).into_affine();
-        let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
-        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
-        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
-        let nonce = b"acA1_split_gap";
-        let k_amount = Fr::rand(&mut rng);
-        let k_asset_id = Fr::rand(&mut rng);
-
-        let legs = vec![LegProverConfig {
-            encryption: leg_core.clone(),
-            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
-            amount,
-            has_balance_changed: true,
-        }];
-        let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
-            &mut rng,
-            sk_e,
-            sk_enc_a,
-            rand_old,
-            rand_new,
-            vec![k_amount],
-            vec![k_asset_id],
-            legs,
-            &re_rand_leaf,
-            &updated_comm,
-            nullifier,
-            nonce,
-            sk_gen,
-            enc_key_gen,
-            comm_re_rand_gen,
-            enc_gen,
-        )
-        .unwrap();
-
-        let conf = vec![LegVerifierConfig {
-            encryption: leg_core,
-            party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
-            has_balance_decreased: Some(true),
-            has_counter_decreased: Some(false),
-        }];
-        proof
-            .verify(
-                conf,
-                &re_rand_leaf,
-                &updated_comm,
-                nullifier,
-                nonce,
-                sk_gen,
-                enc_key_gen,
-                comm_re_rand_gen,
-                enc_gen,
-                None,
-            )
-            .unwrap();
     }
 }

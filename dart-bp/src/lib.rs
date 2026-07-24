@@ -49,21 +49,20 @@ pub mod documentation {
     pub mod appendix {}
 }
 
-pub const NONCE_LABEL: &'static [u8; 5] = b"nonce";
+pub use polymesh_dart_common::{
+    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, RE_RANDOMIZED_PATH_LABEL,
+    TXN_CHALLENGE_LABEL,
+};
+
 pub const ASSET_ID_LABEL: &'static [u8; 8] = b"asset_id";
-pub const ACCOUNT_COMMITMENT_LABEL: &'static [u8; 18] = b"account_commitment";
-pub const PK_LABEL: &'static [u8; 2] = b"pk";
-pub const PK_ENC_LABEL: &'static [u8; 6] = b"pk_enc";
 pub const ID_LABEL: &'static [u8; 2] = b"id";
 pub const LEG_ENC_LABEL: &'static [u8; 7] = b"leg_enc";
-pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";
 pub const ROOT_LABEL: &'static [u8; 4] = b"root";
 pub const INCREASE_BAL_BY_LABEL: &'static [u8; 15] = b"increase_bal_by";
 pub const UPDATED_ACCOUNT_COMMITMENT_LABEL: &'static [u8; 26] = b"updated_account_commitment";
 // In practice, these will be different for different txns
 pub const TXN_ODD_LABEL: &[u8; 13] = b"txn-odd-level";
 pub const TXN_EVEN_LABEL: &'static [u8; 14] = b"txn-even-level";
-pub const TXN_CHALLENGE_LABEL: &'static [u8; 13] = b"txn-challenge";
 pub const AUTH_PROOF_LABEL: &[u8] = b"auth-proof";
 pub const BALANCE_LABEL: &'static [u8; 7] = b"balance";
 
@@ -74,7 +73,7 @@ mod macros;
 #[macro_use]
 mod test_utils;
 
-pub mod keys;
+pub use polymesh_dart_auth::keys;
 pub mod util;
 
 pub mod account;
@@ -92,6 +91,8 @@ pub mod key_distribution;
 pub mod leg;
 
 pub use error::Error;
+
+pub use polymesh_dart_auth::add_to_transcript;
 
 pub use polymesh_dart_common::{
     AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE, PendingTxnCounter,

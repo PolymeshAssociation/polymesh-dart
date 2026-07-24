@@ -84,7 +84,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CurveTreeLookup<L, M, C
 {
     fn get_path_to_leaf_index(&self, leaf_index: LeafIndex) -> Result<CurveTreePath<L, C>, Error> {
         if let Some(leaf_path) = self.paths.get(&leaf_index) {
-            leaf_path.decode()
+            Ok(leaf_path.decode()?)
         } else {
             Err(Error::LeafIndexNotFound(leaf_index))
         }
@@ -126,7 +126,7 @@ pub struct LeafPathAndRoot<const L: usize, const M: usize, C: CurveTreeConfig> {
 
 impl<const L: usize, const M: usize, C: CurveTreeConfig> LeafPathAndRoot<L, M, C> {
     pub fn get_path(&self) -> Result<CurveTreePath<L, C>, Error> {
-        self.path.decode()
+        Ok(self.path.decode()?)
     }
 }
 

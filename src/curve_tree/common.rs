@@ -1311,7 +1311,7 @@ macro_rules! impl_curve_tree_with_backend {
                 Ok(LeafPathAndRoot {
                     leaf,
                     leaf_index,
-                    path: WrappedCanonical::wrap(&path)?,
+                    path: WrappedCanonical::wrap(&path).map_err(crate::Error::from)?,
                     block_number,
                     root: root.encode(),
                 })

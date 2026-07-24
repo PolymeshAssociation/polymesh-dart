@@ -4,7 +4,6 @@ use crate::add_to_transcript;
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::error::*;
-use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
@@ -12,7 +11,6 @@ use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
-use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
@@ -24,14 +22,12 @@ use bulletproofs::r1cs::{
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::mem;
 use curve_tree_relations::range_proof::range_proof;
-use dock_crypto_utils::aliases::FullDigest;
 use dock_crypto_utils::elgamal::Ciphertext;
 use dock_crypto_utils::ff::inner_product;
-use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::msm::multiply_field_elems_with_same_group_elem;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, NullifierSkGenCounter, SkGenCounter};
+use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitmentProtocol,
@@ -41,7 +37,7 @@ use schnorr_pok::partial::{
     PartialSchnorrResponse,
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 pub const PK_T_LABEL: &'static [u8; 4] = b"pk_t";
 pub const PK_T_GEN_LABEL: &'static [u8; 8] = b"pk_t_gen";
@@ -2097,77 +2093,16 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
     powers
 }
 
-const SEPARATOR: &[u8; 2] = b"//";
-
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
-pub struct MasterSeed(Vec<u8>);
-
-impl MasterSeed {
-    pub fn new(seed: Vec<u8>) -> Self {
-        Self(seed)
-    }
-
-    /// Doesn't include asset-id to allow accounts to share secret keys
-    pub fn derive_keys<G: AffineRepr, D: FullDigest>(
-        &self,
-        path: &[u8],
-        counter: SkGenCounter,
-        j: G,
-        g: G,
-    ) -> ((SigKey<G>, VerKey<G>), (DecKey<G>, EncKey<G>)) {
-        // For creating secret keys, use `seed//path//counter`
-        let mut extended_seed = self.0.to_vec();
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend_from_slice(path);
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend(counter.to_le_bytes());
-
-        let sig_sk = hash_to_field::<G::ScalarField, D>(b"Signing key", &extended_seed);
-        let enc_sk = hash_to_field::<G::ScalarField, D>(b"Encryption key", &extended_seed);
-
-        let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
-        let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
-
-        extended_seed.zeroize();
-        ((sk, vk), (dk, ek))
-    }
-
-    /// Returns `(randomness, rho_randomness)` where `randomness` is for the account commitment
-    /// and `rho_randomness` is used to derive `rho`
-    pub fn derive_account_randomness<G: AffineRepr, D: FullDigest>(
-        &self,
-        path: &[u8],
-        counter_s: SkGenCounter,
-        asset_id: AssetId,
-        counter: NullifierSkGenCounter,
-    ) -> (G::ScalarField, G::ScalarField) {
-        // For creating randomness, use `seed//path//counter_s//asset_id//counter_n`
-        let mut extended_seed = self.0.to_vec();
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend_from_slice(path);
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend(counter_s.to_le_bytes());
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend(asset_id.to_le_bytes().as_slice());
-        extended_seed.extend(SEPARATOR);
-        extended_seed.extend(counter.to_le_bytes());
-        // Need two independent field elements, `randomness`, `rho_randomness`
-        let hasher = <DefaultFieldHasher<D> as HashToField<G::ScalarField>>::new(
-            b"commitment and rho randomness",
-        );
-        let [randomness, rho_randomness]: [G::ScalarField; 2] =
-            hasher.hash_to_field(&extended_seed);
-        extended_seed.zeroize();
-        (randomness, rho_randomness)
-    }
-}
+/// `MasterSeed` lives in `polymesh-dart-auth` (sigma-only, no bulletproofs); re-exported here at
+/// its original path.
+pub use polymesh_dart_auth::keys::MasterSeed;
 
 #[cfg(test)]
 pub mod tests {
     #![allow(deprecated)]
 
     use super::*;
-    use crate::keys::{keygen_enc, keygen_sig};
+    use crate::keys::{EncKey, VerKey, keygen_enc, keygen_sig};
     use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_simple;
     use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
     use crate::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;

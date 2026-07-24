@@ -8,7 +8,7 @@ license = "GPL-3.0"
 repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common"]
+members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-auth"]
 
 [patch.crates-io]
 # Curve tree dependencies
@@ -59,6 +59,7 @@ ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.g
 polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
 polymesh-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
 polymesh-dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
+polymesh-dart-auth = { path = "./dart-auth", version = "0.1.0", default-features = false }
 
 # Common
 rand = { version = "0.8", default-features = false }
@@ -112,6 +113,7 @@ criterion = { version = "0.5", default-features = false, features = ["html_repor
 
 [dependencies]
 polymesh-dart-bp = { workspace = true, default-features = false, optional = true }
+polymesh-dart-auth = { workspace = true, default-features = false, optional = true }
 polymesh-dart-common = { workspace = true, default-features = false }
 
 # common dependencies
@@ -206,16 +208,19 @@ default = [
     "large_baby_steps",
 ]
 
-serde = ["dep:serde", "serde_json", "serde_arrays"]
+serde = ["dep:serde", "serde_json", "serde_arrays", "polymesh-dart-auth?/serde"]
 
-utoipa = ["dep:utoipa", "serde"]
+utoipa = ["dep:utoipa", "serde", "polymesh-dart-auth?/utoipa"]
 
-sqlx = ["dep:sqlx", "sqlx-core"]
+sqlx = ["dep:sqlx", "sqlx-core", "polymesh-dart-auth?/sqlx"]
 
 async_tree = []
 
 backend_bp = [
     "polymesh-dart-bp",
+    "polymesh-dart-auth",
+    "polymesh-dart-auth/wrapper",
+    "polymesh-dart-auth/bounded",
     "ark-ff",
     "ark-ec",
     "ark-serialize",
@@ -245,6 +250,7 @@ std = [
     "serde_json?/std",
     "lazy_static",
     "polymesh-dart-bp?/std",
+    "polymesh-dart-auth?/std",
     "thiserror/std",
     "bounded-collections/std",
     "codec/std",
@@ -258,8 +264,8 @@ verifier_parallel = [
  "polymesh-dart-bp?/verifier_parallel",
 ]
 
-asm = ["polymesh-dart-bp?/asm"]
-parallel = ["rayon", "polymesh-dart-bp?/parallel"]
+asm = ["polymesh-dart-bp?/asm", "polymesh-dart-auth?/asm"]
+parallel = ["rayon", "polymesh-dart-bp?/parallel", "polymesh-dart-auth?/parallel"]
 
 [profile.release]
 opt-level = 3

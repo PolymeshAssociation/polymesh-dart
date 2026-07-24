@@ -1,24 +1,22 @@
-use crate::account::transparent::{
-    EncryptedPublicKey, chal_contrib_pk_enc, init_pk_enc_protocol, reps_pk_enc, verify_pk_enc,
-};
-use crate::auth_proofs::helpers::{init_acc_comm_protocol, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL, helpers};
-use crate::{
-    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, error::Result,
-};
-use ark_ec::AffineRepr;
+use crate::helpers::{init_acc_comm_protocol, verify_acc_comm};
+use crate::{AUTH_TXN_LABEL, Error, NULLIFIER_LABEL, error::Result, helpers};
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::io::Write;
 use ark_std::{UniformRand, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{
+    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
+};
 use rand_core::CryptoRngCore;
 use schnorr_pok::SchnorrResponse;
+use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
     Partial1PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
-
+use zeroize::Zeroize;
 // For new account commitment, auth proof will prove
 // comm_new_1 = G_{Aff} * sk + G_{Enc} * sk_enc + B * r
 // Host will prove
@@ -242,4 +240,166 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
 
         Ok(())
     }
+}
+
+/// Public key of an account encrypted for auditors/mediators using twisted-Elgamal
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedPublicKey<G: AffineRepr> {
+    /// Ephemeral key per auditor/mediator like `r * PK_i`
+    pub eph_pk: Vec<G>,
+    /// Encrypted account public key as `r * G + pk_{acct}`
+    pub encrypted: G,
+}
+
+impl<G: AffineRepr> EncryptedPublicKey<G> {
+    /// Decrypt to the get the public key of account using auditor/mediator secret key
+    pub fn decrypt(&self, index: usize, mut sk: G::ScalarField) -> G {
+        assert!(index < self.eph_pk.len());
+        sk.inverse_in_place().unwrap();
+        let mask = self.eph_pk[index] * sk;
+        sk.zeroize();
+        (self.encrypted - mask).into_affine()
+    }
+}
+
+pub fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
+    rng: &mut R,
+    sk: G::ScalarField,
+    sk_blinding: G::ScalarField,
+    auditor_keys: Vec<G>,
+    sk_gen: G,
+    enc_key_gen: G,
+    mut writer: W,
+) -> Result<(
+    Vec<PokDiscreteLogProtocol<G>>,
+    PokPedersenCommitmentProtocol<G>,
+    EncryptedPublicKey<G>,
+)> {
+    let mut r = G::ScalarField::rand(rng);
+    let mut r_blinding = G::ScalarField::rand(rng);
+    let eph_pk =
+        G::Group::normalize_batch(&auditor_keys.iter().map(|pk| *pk * r).collect::<Vec<_>>());
+    let encrypted = (enc_key_gen * r + sk_gen * sk).into_affine();
+
+    let t_enc =
+        PokPedersenCommitmentProtocol::init(r, r_blinding, &enc_key_gen, sk, sk_blinding, &sk_gen);
+    let t_eph_pk = auditor_keys
+        .iter()
+        .map(|pk| PokDiscreteLogProtocol::init(r, r_blinding, pk))
+        .collect::<Vec<_>>();
+
+    let encrypted_pubkey = EncryptedPublicKey { eph_pk, encrypted };
+    encrypted_pubkey.serialize_compressed(&mut writer)?;
+    t_enc.challenge_contribution(
+        &enc_key_gen,
+        &sk_gen,
+        &encrypted_pubkey.encrypted,
+        &mut writer,
+    )?;
+    for (i, t) in t_eph_pk.iter().enumerate() {
+        t.challenge_contribution(&auditor_keys[i], &encrypted_pubkey.eph_pk[i], &mut writer)?;
+    }
+
+    r.zeroize();
+    r_blinding.zeroize();
+    Ok((t_eph_pk, t_enc, encrypted_pubkey))
+}
+
+pub fn reps_pk_enc<G: AffineRepr>(
+    t_eph_pk: Vec<PokDiscreteLogProtocol<G>>,
+    t_enc: PokPedersenCommitmentProtocol<G>,
+    challenge: &G::ScalarField,
+) -> (
+    Vec<PartialPokDiscreteLog<G>>,
+    Partial1PokPedersenCommitment<G>,
+) {
+    let resp_enc = t_enc.gen_partial1_proof(challenge);
+    let resp_eph_pk = t_eph_pk
+        .into_iter()
+        .map(|t| t.gen_partial_proof())
+        .collect::<Vec<_>>();
+    (resp_eph_pk, resp_enc)
+}
+
+pub fn chal_contrib_pk_enc<G: AffineRepr, W: Write>(
+    resp_eph_pk: &[PartialPokDiscreteLog<G>],
+    resp_enc: &Partial1PokPedersenCommitment<G>,
+    encrypted_pubkey: &EncryptedPublicKey<G>,
+    auditor_keys: &[G],
+    sk_gen: G,
+    enc_key_gen: G,
+    mut writer: W,
+) -> Result<()> {
+    if encrypted_pubkey.eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            encrypted_pubkey.eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
+    if resp_eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            resp_eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
+
+    encrypted_pubkey.serialize_compressed(&mut writer)?;
+    resp_enc.challenge_contribution(
+        &enc_key_gen,
+        &sk_gen,
+        &encrypted_pubkey.encrypted,
+        &mut writer,
+    )?;
+    for (i, r) in resp_eph_pk.iter().enumerate() {
+        r.challenge_contribution(&auditor_keys[i], &encrypted_pubkey.eph_pk[i], &mut writer)?;
+    }
+
+    Ok(())
+}
+
+pub fn verify_pk_enc<G: AffineRepr>(
+    resp_eph_pk: &[PartialPokDiscreteLog<G>],
+    resp_enc: &Partial1PokPedersenCommitment<G>,
+    encrypted_pubkey: &EncryptedPublicKey<G>,
+    auditor_keys: &[G],
+    challenge: &G::ScalarField,
+    sk_response: &G::ScalarField,
+    sk_gen: G,
+    enc_key_gen: G,
+    mut rmc: Option<&mut RandomizedMultChecker<G>>,
+) -> Result<()> {
+    if encrypted_pubkey.eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            encrypted_pubkey.eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
+    if resp_eph_pk.len() != auditor_keys.len() {
+        return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
+            resp_eph_pk.len(),
+            auditor_keys.len(),
+        ));
+    }
+    verify_or_rmc_3!(
+        rmc,
+        resp_enc,
+        "Account public key encryption verification failed",
+        encrypted_pubkey.encrypted,
+        enc_key_gen,
+        sk_gen,
+        challenge,
+        sk_response,
+    );
+    for (i, r) in resp_eph_pk.iter().enumerate() {
+        verify_or_rmc_2!(
+            rmc,
+            r,
+            "Ephemeral public key encryption verification failed",
+            encrypted_pubkey.eph_pk[i],
+            auditor_keys[i],
+            &challenge,
+            &resp_enc.response1,
+        );
+    }
+    Ok(())
 }

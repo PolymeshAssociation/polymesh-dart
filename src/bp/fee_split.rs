@@ -12,6 +12,7 @@ use super::encode::*;
 use super::split_types::*;
 use super::*;
 use crate::*;
+use polymesh_dart_auth::wrapper::{CompressedAffine, WrappedCanonical};
 
 type BPRegTxnProof = bp_fee_account::RegTxnProof<PallasA>;
 type BPRegTxnProofWithoutSkProtocol = bp_fee_account::RegTxnProofWithoutSkProtocol<PallasA>;

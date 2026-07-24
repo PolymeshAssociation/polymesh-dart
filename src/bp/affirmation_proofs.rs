@@ -22,6 +22,7 @@ use super::split_types::*;
 use super::*;
 use crate::Error;
 use crate::curve_tree::CurveTreeLookup;
+use polymesh_dart_auth::wrapper::{CompressedAffine, WrappedCanonical};
 
 macro_rules! bp_types {
     ($proto:ident, $proof:ident) => {
@@ -163,7 +164,9 @@ macro_rules! with_balance {
                     auth_rerandomization: WrappedCanonical::wrap(&protocol.auth_rerandomization())?,
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
-                    updated_account_commitment: updated_commitment.into(),
+                    updated_account_commitment: CompressedAffine::try_from(
+                        updated_commitment.get_affine()?,
+                    )?,
                     nullifier: CompressedAffine::try_from(nullifier)?,
                     k_amounts: vec![WrappedCanonical::wrap(&k_amount)?],
                     k_asset_ids: match k_asset_id {
@@ -520,7 +523,9 @@ macro_rules! no_balance {
                     auth_rerandomization: WrappedCanonical::wrap(&protocol.auth_rerandomization())?,
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
-                    updated_account_commitment: updated_commitment.into(),
+                    updated_account_commitment: CompressedAffine::try_from(
+                        updated_commitment.get_affine()?,
+                    )?,
                     nullifier: CompressedAffine::try_from(nullifier)?,
                     // ct_amount (hence k_amount) is needed only when this leg reveals its asset-id.
                     k_amounts: if is_asset_id_revealed {

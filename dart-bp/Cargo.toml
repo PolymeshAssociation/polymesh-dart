@@ -8,6 +8,7 @@ license = "GPL-3.0"
 
 [dependencies]
 polymesh-dart-common = { workspace = true, default-features = false }
+polymesh-dart-auth = { workspace = true, default-features = false }
 
 rand = { workspace = true, default-features = false }
 rand_core = { workspace = true, default-features = false }
@@ -70,6 +71,7 @@ no_std = []
 large_baby_steps = []
 
 std = [
+	"polymesh-dart-auth/std",
 	"bulletproofs/std",
 	"curve_tree_relations/std",
 	"ark-std/std",
@@ -98,9 +100,10 @@ verifier_parallel = [
 	"ark-dlog-gadget/parallel"
 ]
 
-asm = ["ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
+asm = ["polymesh-dart-auth/asm", "ark-ff/asm", "bulletproofs/asm", "curve_tree_relations/asm"]
 parallel = [
 	"rayon",
+	"polymesh-dart-auth/parallel",
 	"ark-ff/parallel",
 	"ark-std/parallel",
 	"bulletproofs/parallel",
@@ -113,7 +116,7 @@ parallel = [
 ]
 
 # To ignore input sanitation checks run by prover. Useful when running certain tests for failure cases
-ignore_prover_input_sanitation = []
+ignore_prover_input_sanitation = ["polymesh-dart-auth/ignore_prover_input_sanitation"]
 
 # Nightly-only mocking tests (mocktopus requires nightly).
-nightly_mocking_tests = ["dep:mocktopus"]
+nightly_mocking_tests = ["dep:mocktopus", "polymesh-dart-auth/nightly_mocking_tests"]

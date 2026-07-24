@@ -1,0 +1,87 @@
+[package]
+name = "polymesh-dart-auth"
+version = "0.1.0"
+edition = "2024"
+description = "Polymesh DART authorization proofs (sigma-only, no Bulletproofs/curve-tree stack)."
+authors = ["Polymesh Labs"]
+license = "GPL-3.0"
+
+[dependencies]
+polymesh-dart-common = { workspace = true, default-features = false }
+
+rand_core = { workspace = true, default-features = false }
+thiserror = { workspace = true, default-features = false }
+zeroize = { workspace = true, default-features = false }
+
+ark-ff = { workspace = true, default-features = false }
+ark-ec = { workspace = true, default-features = false }
+ark-serialize = { workspace = true, default-features = false }
+ark-std = { workspace = true, default-features = false }
+dock_crypto_utils = { workspace = true, default-features = false }
+schnorr_pok = { workspace = true, default-features = false }
+
+mocktopus = { version = "0.8.0", optional = true }
+
+# wrapper feature deps: the SCALE/serde device wire API (off for Ledger, on for TEE/substrate).
+codec = { workspace = true, default-features = false, features = ["derive"], optional = true }
+scale-info = { workspace = true, default-features = false, features = ["derive"], optional = true }
+hex = { workspace = true, default-features = false, optional = true }
+ark-pallas = { workspace = true, default-features = false, features = ["curve"], optional = true }
+
+# Host-only wire-type support, all off for the device/Ledger/TEE builds.
+serde = { workspace = true, default-features = false, features = ["derive"], optional = true }
+serde_arrays = { workspace = true, default-features = false, optional = true }
+utoipa = { version = "5.4", default-features = false, features = ["macros"], optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["any", "macros"], optional = true }
+bounded-collections = { workspace = true, default-features = false, optional = true }
+
+[dev-dependencies]
+rand = { workspace = true, features = ["std", "std_rng"] }
+ark-pallas = { workspace = true, features = ["curve"] }
+blake2 = { workspace = true }
+
+[features]
+default = ["std"]
+
+# Device wire API (SCALE request/response types + create_* fns). Concrete over Pallas.
+wrapper = ["dep:codec", "dep:scale-info", "dep:hex", "dep:ark-pallas"]
+
+# JSON/serde support for the wrapper wire types (REST/TEE).
+serde = ["dep:serde", "dep:serde_arrays", "serde_arrays/alloc", "wrapper"]
+
+# OpenAPI schema (utoipa::ToSchema) for the wrapper wire types (REST).
+utoipa = ["dep:utoipa", "serde"]
+
+# `BoundedCanonical` and the `BoundedVec` hex-serde impls. Host-only.
+bounded = ["dep:bounded-collections", "wrapper"]
+
+# sqlx BLOB storage impls for `WrappedCanonical`. Host-only.
+sqlx = ["dep:sqlx", "wrapper"]
+
+std = [
+	"ark-std/std",
+	"thiserror/std",
+	"zeroize/std",
+	"polymesh-dart-common/std",
+	"codec?/std",
+	"scale-info?/std",
+	"hex?/std",
+	"ark-pallas?/std",
+	"serde?/std",
+	"bounded-collections?/std",
+]
+
+parallel = [
+	"ark-ff/parallel",
+	"ark-std/parallel",
+	"dock_crypto_utils/parallel",
+	"schnorr_pok/parallel",
+]
+
+asm = ["ark-ff/asm"]
+
+# To ignore input sanitation checks run by prover. Useful when running certain tests for failure cases
+ignore_prover_input_sanitation = []
+
+# Nightly-only mocking tests (mocktopus requires nightly).
+nightly_mocking_tests = ["dep:mocktopus"]

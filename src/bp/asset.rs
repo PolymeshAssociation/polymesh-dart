@@ -119,7 +119,7 @@ impl AssetKeys {
             .mediators
             .iter()
             .map(|account_key| account_key.get_affine())
-            .collect::<Result<_, Error>>()?;
+            .collect::<Result<_, _>>()?;
 
         Ok((enc_keys, med_keys))
     }

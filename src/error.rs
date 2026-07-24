@@ -140,6 +140,10 @@ pub enum Error {
     /// The proof doesn't match the leg's asset-id kind.
     #[error("The proof doesn't match the leg's asset-id kind")]
     InvalidProofType,
+
+    /// Auth proof error.
+    #[error("Auth proof error: {0}")]
+    AuthProofError(#[from] polymesh_dart_auth::Error),
 }
 
 impl From<UtilsError> for Error {
@@ -154,5 +158,17 @@ impl From<UtilsError> for Error {
 impl From<ark_serialize::SerializationError> for Error {
     fn from(err: ark_serialize::SerializationError) -> Self {
         Error::ArkworksSerializationError(err)
+    }
+}
+
+impl From<polymesh_dart_auth::wrapper::Error> for Error {
+    fn from(err: polymesh_dart_auth::wrapper::Error) -> Self {
+        use polymesh_dart_auth::wrapper::Error as W;
+        match err {
+            W::HexDecodeError => Error::HexDecodeError,
+            W::ArkworksSerializationError(e) => Error::ArkworksSerializationError(e),
+            W::ValueExceedsBound => Error::ValueExceedsBound,
+            W::AuthProofError(e) => Error::AuthProofError(e),
+        }
     }
 }

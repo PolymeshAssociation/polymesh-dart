@@ -54,3 +54,11 @@ pub const MAX_FEE_ACCOUNT_REG_PROOFS: u32 = 10;
 pub const MAX_FEE_ACCOUNT_TOPUP_PROOFS: u32 = 10;
 
 pub const MAX_INNER_PROOF_SIZE: u32 = 10 * 1024;
+
+// Fiat-Shamir transcript labels shared between the auth proofs and the heavy proof stack.
+pub const NONCE_LABEL: &'static [u8; 5] = b"nonce";
+pub const ACCOUNT_COMMITMENT_LABEL: &'static [u8; 18] = b"account_commitment";
+pub const PK_LABEL: &'static [u8; 2] = b"pk";
+pub const PK_ENC_LABEL: &'static [u8; 6] = b"pk_enc";
+pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";
+pub const TXN_CHALLENGE_LABEL: &'static [u8; 13] = b"txn-challenge";

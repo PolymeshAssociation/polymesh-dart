@@ -2626,6 +2626,7 @@ dependencies = [
  "lazy_static",
  "log",
  "parity-scale-codec",
+ "polymesh-dart-auth",
  "polymesh-dart-bp",
  "polymesh-dart-common",
  "rand 0.8.5",
@@ -2642,6 +2643,34 @@ dependencies = [
  "sqlx",
  "sqlx-core",
  "test-log",
+ "thiserror",
+ "utoipa",
+ "zeroize",
+]
+
+[[package]]
+name = "polymesh-dart-auth"
+version = "0.1.0"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-pallas",
+ "ark-serialize",
+ "ark-std",
+ "blake2",
+ "bounded-collections",
+ "dock_crypto_utils",
+ "hex",
+ "mocktopus",
+ "parity-scale-codec",
+ "polymesh-dart-common",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "scale-info",
+ "schnorr_pok",
+ "serde",
+ "serde_arrays",
+ "sqlx",
  "thiserror",
  "utoipa",
  "zeroize",
@@ -2669,6 +2698,7 @@ dependencies = [
  "lazy_static",
  "log",
  "mocktopus",
+ "polymesh-dart-auth",
  "polymesh-dart-common",
  "proptest",
  "rand 0.8.5",
@@ -4423,7 +4453,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

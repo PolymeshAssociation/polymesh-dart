@@ -1,8 +1,4 @@
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
-use crate::{
-    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, error::Result,
-};
+use crate::{AUTH_TXN_LABEL, NULLIFIER_LABEL, error::Result};
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -11,6 +7,9 @@ use ark_std::io::Write;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{
+    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
+};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::Partial2PokPedersenCommitment;

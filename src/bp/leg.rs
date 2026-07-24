@@ -1225,7 +1225,7 @@ impl LegEncryptionRandomness {
     }
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryptionRandomness<PallasScalar>, Error> {
-        self.0.decode()
+        Ok(self.0.decode()?)
     }
 }
 
@@ -1266,7 +1266,7 @@ impl LegEncrypted {
     }
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
-        self.0.decode()
+        Ok(self.0.decode()?)
     }
 
     pub fn is_asset_id_revealed(&self) -> Result<bool, Error> {
@@ -1478,7 +1478,7 @@ impl MediatorEncryption {
     }
 
     pub fn decode(&self) -> Result<bp_leg::MediatorEncryption<PallasA>, Error> {
-        self.0.decode()
+        Ok(self.0.decode()?)
     }
 }
 
@@ -1488,6 +1488,6 @@ impl MediatorEncryptionOld {
     }
 
     pub fn decode(&self) -> Result<bp_leg::MediatorEncryptionOld<PallasA>, Error> {
-        self.0.decode()
+        Ok(self.0.decode()?)
     }
 }
