@@ -1,17 +1,15 @@
 use ark_std::vec::Vec;
 use rand_core::{CryptoRng, RngCore};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use polymesh_dart_bp::auth_proofs::{
-    self, account::AuthProofAffirmation as BPAuthProofAffirmation,
+    account::AuthProofAffirmation as BPAuthProofAffirmation,
     fee_account::AuthProofFeePayment as BPAuthProofFeePayment,
 };
 
 use super::split_types::*;
 use super::*;
 use crate::Error;
-
-pub type BPAuthProofOnlySks = auth_proofs::AuthProofOnlySks<PallasA>;
-pub type BPAuthProofOnlySk = auth_proofs::AuthProofOnlySk<PallasA>;
 
 /// Construct `ledger_nonce = challenge_h_bytes || nonce`.
 fn ledger_nonce(challenge_h_bytes: &[u8], nonce: &[u8]) -> Vec<u8> {
@@ -21,17 +19,47 @@ fn ledger_nonce(challenge_h_bytes: &[u8], nonce: &[u8]) -> Vec<u8> {
     n
 }
 
+/// Device signing keys for the two-secret-key auth proofs
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct AuthSigningKeys {
+    pub sk_aff: PallasScalar,
+    pub sk_enc: PallasScalar,
+}
+
+/// Device signing key for the single-secret-key auth proofs
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct AuthSigningKey {
+    pub sk: PallasScalar,
+}
+
+#[cfg(feature = "host_proofs")]
+impl From<&AccountKeys> for AuthSigningKeys {
+    fn from(keys: &AccountKeys) -> Self {
+        Self {
+            sk_aff: keys.acct.secret.0.0,
+            sk_enc: keys.enc.secret.0.0,
+        }
+    }
+}
+
+#[cfg(feature = "host_proofs")]
+impl From<&AccountKeyPair> for AuthSigningKey {
+    fn from(key: &AccountKeyPair) -> Self {
+        Self { sk: key.secret.0.0 }
+    }
+}
+
 /// Create `AuthProofOnlySk` for fee registration and fee topup proofs (1 key).
 pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    key: &AccountKeyPair,
+    key: &AuthSigningKey,
     request: &FeeAccountDeviceRequest,
     sk_gen: PallasA,
 ) -> Result<SingleSkDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk = PallasA::try_from(&request.pk)?;
 
-    let proof = BPAuthProofOnlySk::new(rng, key.secret.0.0, pk, &nonce, &sk_gen)?;
+    let proof = BPAuthProofOnlySk::new(rng, key.sk, pk, &nonce, &sk_gen)?;
 
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
 }
@@ -39,7 +67,7 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofOnlySks` for account registration and mint proofs (2 keys).
 pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    keys: &AccountKeys,
+    keys: &AuthSigningKeys,
     request: &RegistrationDeviceRequest,
     sk_gen: PallasA,
     sk_enc_gen: PallasA,
@@ -50,8 +78,8 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofOnlySks::new(
         rng,
-        keys.acct.secret.0.0,
-        keys.enc.secret.0.0,
+        keys.sk_aff,
+        keys.sk_enc,
         pk_aff,
         pk_enc,
         &nonce,
@@ -65,7 +93,7 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofFeePayment` for fee payment proofs.
 pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    key: &AccountKeyPair,
+    key: &AuthSigningKey,
     request: &FeePaymentDeviceRequest,
     sk_gen: PallasA,
     randomness_gen: PallasA,
@@ -80,7 +108,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofFeePayment::new(
         rng,
-        key.secret.0.0,
+        key.sk,
         auth_rerandomization,
         auth_new_randomness,
         &rerandomized_leaf,
@@ -98,7 +126,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
 /// Create `AuthProofAffirmation` for affirmation/claim/reversal/counter-update proofs.
 pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
-    keys: &AccountKeys,
+    keys: &AuthSigningKeys,
     request: &AffirmationDeviceRequest,
     sk_gen: PallasA,
     enc_key_gen: PallasA,
@@ -131,8 +159,8 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
 
     let proof = BPAuthProofAffirmation::new(
         rng,
-        keys.acct.secret.0.0,
-        keys.enc.secret.0.0,
+        keys.sk_aff,
+        keys.sk_enc,
         auth_rerandomization,
         auth_rand_new_comm,
         k_amounts,

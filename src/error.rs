@@ -18,6 +18,7 @@ pub enum Error {
     ProofGenerationError(String),
 
     /// Curve tree error.
+    #[cfg(feature = "host_proofs")]
     #[error("Curve tree error: {0:?}")]
     CurveTreeError(#[from] curve_tree_relations::error::Error),
 
@@ -38,6 +39,7 @@ pub enum Error {
     BoundedContainerSizeLimitExceeded,
 
     /// Bulletproof r1cs error.
+    #[cfg(feature = "host_proofs")]
     #[error("Bulletproof r1cs error: {0:?}")]
     BulletproofR1CSError(#[from] bulletproofs::errors::R1CSError),
 

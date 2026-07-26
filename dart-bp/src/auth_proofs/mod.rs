@@ -1,11 +1,11 @@
 pub mod account;
 pub mod fee_account;
 pub mod helpers;
+pub mod keys;
+pub mod leg;
 pub mod transparent;
 
-use crate::{
-    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
-};
+use crate::{NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, error::Result};
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
@@ -16,6 +16,18 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog};
+
+#[macro_export]
+macro_rules! add_to_transcript {
+    ($transcript:expr, $($label:expr, $value:expr),* $(,)?) => {
+        let mut buf = ::ark_std::vec![];
+        $(
+            $value.serialize_compressed(&mut buf)?;
+            $transcript.append($label, &buf);
+            buf.clear();
+        )*
+    };
+}
 
 pub const AUTH_TXN_LABEL: &'static [u8; 8] = b"auth-txn";
 pub const NULLIFIER_LABEL: &[u8; 9] = b"nullifier";
@@ -264,15 +276,16 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 pub mod tests {
     use super::*;
     use crate::Error;
+    use crate::account::AccountCommitmentKeyTrait;
     use crate::account::tests::{setup_gens_new, setup_leg_with_conf};
-    use crate::account::{AccountCommitmentKeyTrait, LegProverConfig, LegVerifierConfig};
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::auth_proofs::account::{AuthProofAffirmation, LegAuthLink, RespAssetId};
     use crate::auth_proofs::fee_account::AuthProofFeePayment;
+    use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
     use crate::auth_proofs::transparent::AuthProofTransparent;
     use crate::fee_account::tests::new_fee_account;
     use crate::keys::{keygen_enc, keygen_sig};

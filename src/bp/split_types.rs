@@ -1,16 +1,15 @@
 use ark_std::vec::Vec;
 use codec::{Decode, Encode};
 
-use polymesh_dart_bp::{
-    account::common::leg_link::LegProverConfig as BPLegProverConfig,
-    leg::{LegEncryptionCore, PartyEphemeralPublicKey},
-};
+use polymesh_dart_bp::auth_proofs::leg::LegProverConfig as BPLegProverConfig;
+use polymesh_dart_bp::auth_proofs::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
 use polymesh_dart_common::Balance;
 
 use super::*;
 use crate::Error;
 
-pub use crate::bp::auth_proofs::{BPAuthProofOnlySk, BPAuthProofOnlySks};
+pub type BPAuthProofOnlySks = polymesh_dart_bp::auth_proofs::AuthProofOnlySks<PallasA>;
+pub type BPAuthProofOnlySk = polymesh_dart_bp::auth_proofs::AuthProofOnlySk<PallasA>;
 
 pub type BPAuthProofAffirmation =
     polymesh_dart_bp::auth_proofs::account::AuthProofAffirmation<PallasA>;

@@ -7,11 +7,9 @@ use crate::account::state::NUM_GENERATORS;
 use crate::account::state_transition::{
     AccountStateTransitionHostProofBuilder, AccountStateTransitionProofVerifier,
 };
-use crate::account::{
-    AccountCommitmentKeyTrait, AccountState, AccountStateCommitment, LegProverConfig,
-    LegVerifierConfig,
-};
+use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::account::AuthProofAffirmation;
+use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
 use crate::error::{Error, Result};
 use crate::util::{
     BPProof, get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
@@ -1360,13 +1358,13 @@ impl<
 mod tests {
     use super::*;
     use crate::TXN_CHALLENGE_LABEL;
-    use crate::account::common::leg_link::{LegProverConfig, LegVerifierConfig};
     use crate::account::state_transition::AccountStateTransitionProofVerifier;
     use crate::account::tests::{get_tree_with_commitment, setup_gens_new, setup_leg_with_conf};
     use crate::account::{AccountCommitmentKeyTrait, PartyEphemeralPublicKey};
     use crate::account_registration::tests::new_account;
     use crate::auth_proofs::AUTH_TXN_LABEL;
     use crate::auth_proofs::account::AuthProofAffirmation;
+    use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
     use crate::leg::tests::setup_keys;
     use crate::leg::{Leg, LegEncConfig};
     use crate::util::verify_given_verification_tuples;

@@ -1,5 +1,5 @@
-use crate::account::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
+use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
@@ -21,7 +21,6 @@ use schnorr_pok::discrete_log::{
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
 };
-
 // Auth proof will prove a different relation for ct_amount and ct_asset_id.
 // ct_amount_1 = S[2] * sk_enc^{-1} + B * k_1
 // ct_asset_id_1 = S[3] * sk_enc^{-1} + B * k_2
@@ -934,7 +933,7 @@ mod serialization {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 mod tests {
     use super::*;
     use crate::account::PartyEphemeralPublicKey;

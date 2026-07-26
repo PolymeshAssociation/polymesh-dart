@@ -111,7 +111,7 @@ fn make_affirmation_device_response(
     let comm_re_rand_gen = tree.params().even_parameters.pc_gens().B_blinding;
     create_affirmation_auth_proof(
         &mut rng,
-        keys,
+        &keys.into(),
         request,
         gens.account_comm_key().sk_gen(),
         gens.enc_key_gen(),
@@ -165,7 +165,7 @@ pub fn gen_fee_reg_split() {
     let req: FeeAccountDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
     let device_response = create_fee_account_auth_proof(
         &mut rng,
-        &keys.acct,
+        &(&keys.acct).into(),
         &req,
         dart_gens().account_comm_key().sk_gen(),
     )
@@ -203,7 +203,7 @@ pub fn gen_fee_topup_split() {
     let req: FeeAccountDeviceRequest = load_scale_v1(FEE_TOPUP_SPLIT_REQUEST);
     let device_response = create_fee_account_auth_proof(
         &mut rng,
-        &keys.acct,
+        &(&keys.acct).into(),
         &req,
         dart_gens().account_comm_key().sk_gen(),
     )
@@ -247,7 +247,7 @@ pub fn gen_fee_payment_split() {
     let req: FeePaymentDeviceRequest = load_scale_v1(FEE_PAYMENT_SPLIT_REQUEST);
     let device_response = create_fee_payment_auth_proof(
         &mut rng,
-        &keys.acct,
+        &(&keys.acct).into(),
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().randomness_gen(),
@@ -296,7 +296,7 @@ pub fn gen_account_reg_split() {
     let req: RegistrationDeviceRequest = load_scale_v1(ACCOUNT_REG_SPLIT_REQUEST);
     let device_response = create_registration_auth_proof(
         &mut rng,
-        &keys,
+        &(&keys).into(),
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().sk_enc_gen(),
@@ -345,7 +345,7 @@ pub fn gen_mint_split() {
     let req: RegistrationDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
     let device_response = create_registration_auth_proof(
         &mut rng,
-        &keys,
+        &(&keys).into(),
         &req,
         gens.account_comm_key().sk_gen(),
         gens.account_comm_key().sk_enc_gen(),

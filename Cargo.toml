@@ -180,18 +180,50 @@ rand = { workspace = true }
 [[bench]]
 name = "proof_benchmark"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "fee_payments"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "leg_decrypt"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "discrete_log"
 harness = false
+required-features = ["host_proofs"]
+
+[[test]]
+name = "curve_tree_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "lean_curve_tree_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "replay"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "sender_affirmation_verify_test"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "simple_mint_and_transfer"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "validation_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "serialized_objects_test"
+required-features = ["host_proofs"]
 
 [features]
 default = [
@@ -199,6 +231,7 @@ default = [
     "asm",
     "parallel",
     "backend_bp",
+    "host_proofs",
     "async_tree",
     "serde",
     "utoipa",
@@ -214,6 +247,8 @@ sqlx = ["dep:sqlx", "sqlx-core"]
 
 async_tree = []
 
+# Compiles the `bp` module: wire types (`encode`, `split_types`) plus, with `host_proofs` also on,
+# the Bulletproofs/curve-tree backed account/leg/fee proofs and key management.
 backend_bp = [
     "polymesh-dart-bp",
     "ark-ff",
@@ -222,11 +257,18 @@ backend_bp = [
     "ark-std",
     "dock_crypto_utils",
     "schnorr_pok",
+    "ark-pallas/curve",
+]
+
+# Bulletproofs/curve-tree backed host protocols: account, leg, fee, key-management and the
+# device auth-proof API (all of which depend on `bp::keys`). Off, `bp` only builds the wire types.
+host_proofs = [
+    "backend_bp",
+    "polymesh-dart-bp/host_proofs",
     "bulletproofs",
     "curve_tree_relations",
     "ark-ec-divisors",
     "ark-dlog-gadget",
-    "ark-pallas/curve",
     "ark-vesta",
 ]
 

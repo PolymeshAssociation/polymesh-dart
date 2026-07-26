@@ -1,16 +1,25 @@
-use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
+use ark_ec::AffineRepr;
+#[cfg(feature = "host_proofs")]
+use ark_ec::{CurveConfig, CurveGroup};
+#[cfg(feature = "host_proofs")]
 use ark_ff::{
     PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
 };
+#[cfg(feature = "host_proofs")]
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+#[cfg(feature = "host_proofs")]
 use ark_std::vec::Vec;
 
+#[cfg(feature = "host_proofs")]
 use blake2::Blake2b512;
 use bounded_collections::Get;
+#[cfg(feature = "host_proofs")]
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use codec::{Decode, DecodeWithMemTracking, Encode};
+#[cfg(feature = "host_proofs")]
 use digest::Digest;
+#[cfg(feature = "host_proofs")]
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
     Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
 };
@@ -21,46 +30,69 @@ use polymesh_dart_common::{
 };
 use scale_info::TypeInfo;
 
-#[cfg(feature = "sqlx")]
+#[cfg(all(feature = "sqlx", feature = "host_proofs"))]
 pub mod sqlx_impl;
 
 pub mod encode;
 pub use encode::{BoundedCanonical, CompressedAffine, WrappedCanonical};
 
+#[cfg(feature = "host_proofs")]
 mod account;
+#[cfg(feature = "host_proofs")]
 pub use account::*;
 
+#[cfg(feature = "host_proofs")]
 mod asset;
+#[cfg(feature = "host_proofs")]
 pub use asset::*;
 
+#[cfg(feature = "host_proofs")]
 mod batched;
+#[cfg(feature = "host_proofs")]
 pub use batched::*;
 
+#[cfg(feature = "host_proofs")]
 mod leg;
+#[cfg(feature = "host_proofs")]
 pub use leg::*;
 
+#[cfg(feature = "host_proofs")]
 mod keys;
+#[cfg(feature = "host_proofs")]
 pub use keys::*;
 
+#[cfg(feature = "host_proofs")]
 mod fee;
+#[cfg(feature = "host_proofs")]
 pub mod key_distribution_proof;
 
+#[cfg(feature = "host_proofs")]
 pub mod account_reg_split;
+#[cfg(feature = "host_proofs")]
 pub mod affirmation_proofs;
+#[cfg(feature = "host_proofs")]
 pub use affirmation_proofs::*;
 pub mod auth_proofs;
+#[cfg(feature = "host_proofs")]
 pub mod fee_split;
+#[cfg(feature = "host_proofs")]
 pub use fee_split::*;
+pub mod key_reg_split;
+#[cfg(feature = "host_proofs")]
 pub mod mint_split;
 pub mod split_types;
 
+#[cfg(feature = "host_proofs")]
 use crate::curve_tree::{
     AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
     CurveTreeParameters, CurveTreePath, FeeAccountTreeConfig, ValidateCurveTreeRoot,
     get_asset_commitment_parameters,
 };
+#[cfg(feature = "host_proofs")]
 use crate::*;
+#[cfg(feature = "host_proofs")]
 pub use fee::*;
+#[cfg(feature = "host_proofs")]
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 
 /// Use `GetExtra` as the trait bounds for pallet `Config` parameters
@@ -171,13 +203,19 @@ pub type NodeIndex = LeafIndex;
 pub type ChildIndex = LeafIndex;
 
 pub type PallasParameters = ark_pallas::PallasConfig;
-pub type VestaParameters = ark_vesta::VestaConfig;
 pub type PallasA = ark_pallas::Affine;
 pub type PallasScalar = <PallasA as AffineRepr>::ScalarField;
+
+#[cfg(feature = "host_proofs")]
+pub type VestaParameters = ark_vesta::VestaConfig;
+#[cfg(feature = "host_proofs")]
 pub type VestaA = ark_vesta::Affine;
+#[cfg(feature = "host_proofs")]
 pub type VestaScalar = <VestaA as AffineRepr>::ScalarField;
 
+#[cfg(feature = "host_proofs")]
 pub const ACCOUNT_IDENTITY_LABEL: &[u8; 16] = b"account-identity";
+#[cfg(feature = "host_proofs")]
 pub(crate) fn hash_identity<F: PrimeField>(did: &[u8]) -> F {
     let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<F>>::new(ACCOUNT_IDENTITY_LABEL);
     let r = hasher.hash_to_field::<1>(&did);
@@ -190,34 +228,34 @@ pub const DART_GEN_ACCOUNT_KEY: &'static [u8] = b"polymesh-dart-account-key";
 pub const DART_GEN_ASSET_KEY: &'static [u8] = b"polymesh-dart-asset-key";
 pub const DART_GEN_ENC_KEY: &'static [u8] = b"polymesh-dart-pk-enc";
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 lazy_static::lazy_static! {
     pub static ref DART_GENS: DartBPGenerators = DartBPGenerators::new(DART_GEN_DOMAIN);
 
     pub static ref POSEIDON_PARAMS: PoseidonParameters = PoseidonParameters::new().expect("Failed to create Poseidon parameters");
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn set_dart_gens(_gens: DartBPGenerators) {}
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn reset_dart_gens() {}
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn loaded_dart_gens() -> bool {
     // We can't check if the lazy_static generators have been loaded yet without causing the to be loaded, so we just return
     true
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn dart_gens() -> &'static DartBPGenerators {
     &DART_GENS
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 static mut DART_GENS: Option<DartBPGenerators> = None;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn set_dart_gens(gens: DartBPGenerators) {
     unsafe {
@@ -225,7 +263,7 @@ pub fn set_dart_gens(gens: DartBPGenerators) {
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn reset_dart_gens() {
     unsafe {
@@ -233,13 +271,13 @@ pub fn reset_dart_gens() {
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn loaded_dart_gens() -> bool {
     unsafe { DART_GENS.is_some() }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn dart_gens() -> &'static DartBPGenerators {
     unsafe {
@@ -250,21 +288,21 @@ pub fn dart_gens() -> &'static DartBPGenerators {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn set_poseidon_params(_params: PoseidonParameters) {}
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn reset_poseidon_params() {}
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub fn poseidon_params() -> &'static PoseidonParameters {
     &POSEIDON_PARAMS
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 static mut POSEIDON_PARAMS: Option<PoseidonParameters> = None;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn set_poseidon_params(params: PoseidonParameters) {
     unsafe {
@@ -272,7 +310,7 @@ pub fn set_poseidon_params(params: PoseidonParameters) {
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn reset_poseidon_params() {
     unsafe {
@@ -280,7 +318,7 @@ pub fn reset_poseidon_params() {
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "host_proofs"))]
 #[allow(static_mut_refs)]
 pub fn poseidon_params() -> &'static PoseidonParameters {
     unsafe {
@@ -293,11 +331,13 @@ pub fn poseidon_params() -> &'static PoseidonParameters {
     }
 }
 
+#[cfg(feature = "host_proofs")]
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PoseidonParameters {
     pub params: Poseidon2Params<PallasScalar>,
 }
 
+#[cfg(feature = "host_proofs")]
 impl PoseidonParameters {
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
@@ -306,6 +346,7 @@ impl PoseidonParameters {
     }
 }
 
+#[cfg(feature = "host_proofs")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentKey {
     pub sk_gen: PallasA,
@@ -320,6 +361,7 @@ pub struct AccountCommitmentKey {
     pub sk_enc_gen: PallasA,
 }
 
+#[cfg(feature = "host_proofs")]
 impl AccountCommitmentKey {
     /// Create a new account commitment key
     pub fn new<D: Digest>(label: &[u8], sk_gen: PallasA, enc_key_gen: PallasA) -> Self {
@@ -349,6 +391,7 @@ impl AccountCommitmentKey {
     }
 }
 
+#[cfg(feature = "host_proofs")]
 impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
     fn sk_gen(&self) -> PallasA {
         self.sk_gen
@@ -392,6 +435,7 @@ impl AccountCommitmentKeyTrait<PallasA> for AccountCommitmentKey {
 }
 
 /// The generators for the Dart BP protocol.
+#[cfg(feature = "host_proofs")]
 #[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
 pub struct DartBPGenerators {
     sig_key_gen: PallasA,
@@ -400,6 +444,7 @@ pub struct DartBPGenerators {
     leg_asset_value_gen: PallasA,
 }
 
+#[cfg(feature = "host_proofs")]
 impl DartBPGenerators {
     /// Creates a new instance of `DartBPGenerators` by generating the necessary generators.
     pub fn new(label: &[u8]) -> Self {
@@ -437,6 +482,7 @@ impl DartBPGenerators {
     }
 }
 
+#[cfg(feature = "host_proofs")]
 pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
     block_number: T,
 ) -> Result<BlockNumber, Error> {
@@ -445,7 +491,7 @@ pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
         .map_err(|_| Error::CurveTreeBlockNumberNotFound)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 mod tests {
     use super::*;
     use crate::account_reg_split::AccountRegHostProtocol;
@@ -519,7 +565,7 @@ mod tests {
 
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            &keys.acct,
+            &(&keys.acct).into(),
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
@@ -569,7 +615,7 @@ mod tests {
 
         let device_response = create_fee_account_auth_proof(
             &mut rng,
-            &keys.acct,
+            &(&keys.acct).into(),
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )
@@ -648,7 +694,7 @@ mod tests {
             .B_blinding;
         let device_response = create_fee_payment_auth_proof(
             &mut rng,
-            &keys.acct,
+            &(&keys.acct).into(),
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().randomness_gen(),
@@ -687,7 +733,7 @@ mod tests {
         let gens = dart_gens();
         let device_response = create_registration_auth_proof(
             &mut rng,
-            &keys,
+            &(&keys).into(),
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -728,7 +774,7 @@ mod tests {
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
             &mut rng,
-            &keys1,
+            &(&keys1).into(),
             &device_request1,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -736,7 +782,7 @@ mod tests {
         .unwrap();
         let device_response2 = create_registration_auth_proof(
             &mut rng,
-            &keys2,
+            &(&keys2).into(),
             &device_request2,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -760,6 +806,94 @@ mod tests {
         };
 
         batched.verify(ctx, tree_params, &mut rng).unwrap();
+    }
+
+    #[test]
+    fn account_registration_device_split() {
+        // The device (holding secret keys) produces the sigma proof via the light
+        // `create_key_registration_proof`; the host (no secret key) assembles the wire proof, which
+        // then passes the exact `verify` that servers rely on. Also checks the assembled proof
+        // carries the same public keys as the all-in-one `new`.
+        let mut rng = rand::thread_rng();
+        let identity = b"test-registration-device-split";
+
+        let keys1 = AccountKeys::rand(&mut rng).unwrap();
+        let keys2 = AccountKeys::rand(&mut rng).unwrap();
+
+        // Light key material the device would derive from its seed.
+        let device_keys = [
+            (
+                (
+                    keys1.acct.secret.0.clone(),
+                    keys1.acct.public.get_bp_key().unwrap(),
+                ),
+                (
+                    keys1.enc.secret.0.clone(),
+                    keys1.enc.public.get_bp_key().unwrap(),
+                ),
+            ),
+            (
+                (
+                    keys2.acct.secret.0.clone(),
+                    keys2.acct.public.get_bp_key().unwrap(),
+                ),
+                (
+                    keys2.enc.secret.0.clone(),
+                    keys2.enc.public.get_bp_key().unwrap(),
+                ),
+            ),
+        ];
+
+        let gens = dart_gens();
+        let response = crate::bp::key_reg_split::create_key_registration_proof(
+            &mut rng,
+            &device_keys,
+            identity,
+            gens.sig_key_gen(),
+            gens.enc_key_gen(),
+        )
+        .unwrap();
+
+        let proof: AccountRegistrationProof = AccountRegistrationProof::assemble(response).unwrap();
+        proof.verify(identity).unwrap();
+
+        let direct =
+            AccountRegistrationProof::<()>::new(&mut rng, &[keys1, keys2], identity).unwrap();
+        assert_eq!(proof.accounts, direct.accounts);
+        assert_eq!(proof.len(), 2);
+    }
+
+    #[test]
+    fn encryption_key_registration_device_split() {
+        // Same as above for the auditor/mediator encryption-key registration proof.
+        let mut rng = rand::thread_rng();
+        let identity = b"test-enc-key-registration-device-split";
+
+        let k1 = EncryptionKeyPair::rand(&mut rng).unwrap();
+        let k2 = EncryptionKeyPair::rand(&mut rng).unwrap();
+
+        let device_keys = [
+            (k1.secret.0.clone(), k1.public.get_bp_key().unwrap()),
+            (k2.secret.0.clone(), k2.public.get_bp_key().unwrap()),
+        ];
+
+        let gens = dart_gens();
+        let response = crate::bp::key_reg_split::create_encryption_key_registration_proof(
+            &mut rng,
+            &device_keys,
+            identity,
+            gens.enc_key_gen(),
+        )
+        .unwrap();
+
+        let proof: EncryptionKeyRegistrationProof =
+            EncryptionKeyRegistrationProof::assemble(response).unwrap();
+        proof.verify(identity).unwrap();
+
+        let direct =
+            EncryptionKeyRegistrationProof::<()>::new(&mut rng, &[k1, k2], identity).unwrap();
+        assert_eq!(proof.keys, direct.keys);
+        assert_eq!(proof.len(), 2);
     }
 
     #[test]
@@ -801,7 +935,7 @@ mod tests {
         let gens = dart_gens();
         let device_response = create_registration_auth_proof(
             &mut rng,
-            &keys,
+            &(&keys).into(),
             &device_request,
             gens.account_comm_key().sk_gen(),
             gens.account_comm_key().sk_enc_gen(),
@@ -827,7 +961,7 @@ mod tests {
         let gens = dart_gens();
         create_affirmation_auth_proof(
             rng,
-            keys,
+            &keys.into(),
             request,
             gens.account_comm_key().sk_gen(),
             gens.enc_key_gen(),

@@ -74,21 +74,28 @@ mod macros;
 #[macro_use]
 mod test_utils;
 
-pub mod keys;
+pub use auth_proofs::keys;
+#[cfg(feature = "host_proofs")]
 pub mod util;
 
+#[cfg(feature = "host_proofs")]
 pub mod account;
+#[cfg(feature = "host_proofs")]
 pub mod account_registration;
 /// PoC: chunked account registration for evaluating the verifier-first chunking optimization.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub mod account_registration_chunked;
 mod error;
+#[cfg(feature = "host_proofs")]
 pub mod poseidon_impls;
 
 pub mod auth_proofs;
 pub mod discrete_log;
+#[cfg(feature = "host_proofs")]
 pub mod fee_account;
+#[cfg(feature = "host_proofs")]
 pub mod key_distribution;
+#[cfg(feature = "host_proofs")]
 pub mod leg;
 
 pub use error::Error;

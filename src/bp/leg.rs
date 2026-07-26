@@ -848,10 +848,10 @@ impl<
             let ctx = (&self.memo, idx as u8).encode();
             let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng)?;
             // If any tuple is empty which can happen when asset id is revealed
-            if !even.proof_independent_scalars.is_empty() {
+            if !even.fixed_point_scalars.is_empty() {
                 even_tuples.push(even);
             }
-            if !odd.proof_independent_scalars.is_empty() {
+            if !odd.fixed_point_scalars.is_empty() {
                 odd_tuples.push(odd);
             }
         }

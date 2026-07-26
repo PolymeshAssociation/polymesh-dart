@@ -348,7 +348,7 @@ impl AccountKeys {
         Ok(Self { enc, acct })
     }
 
-    /// Genreates a new set of account keys using the provided string as a seed.
+    /// Generates a new set of account keys using the provided string as a seed.
     pub fn from_seed(seed: &str) -> Result<Self, Error> {
         let mut rng =
             rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(seed.as_bytes()).into());
@@ -432,6 +432,27 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
         })
     }
 
+    /// Assemble the proof from a device response. The host holds no secret key.
+    /// Produces a value identical to [`Self::new`].
+    pub fn assemble(
+        response: super::key_reg_split::KeyRegistrationDeviceResponse,
+    ) -> Result<Self, Error> {
+        let mut bounded_accounts = BoundedVec::with_bounded_capacity(response.accounts.len());
+        for (acct, enc) in &response.accounts {
+            bounded_accounts
+                .try_push(AccountPublicKeys {
+                    acct: AccountPublicKey(*acct),
+                    enc: EncryptionPublicKey(*enc),
+                })
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let proof = response.inner.decode()?;
+        Ok(Self {
+            accounts: bounded_accounts,
+            inner: BoundedCanonical::wrap(&proof)?,
+        })
+    }
+
     /// Verify the account registration proof.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
         let proof = self.inner.decode()?;
@@ -488,6 +509,24 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
         let proof =
             bp_keys::AudMedRegProof::new(rng, key_pairs, identity, dart_gens().enc_key_gen())?;
 
+        Ok(Self {
+            keys: bounded_keys,
+            inner: BoundedCanonical::wrap(&proof)?,
+        })
+    }
+
+    /// Assemble the proof from a device response. The host holds no secret key.
+    /// Produces a value identical to [`Self::new`]
+    pub fn assemble(
+        response: key_reg_split::EncryptionKeyRegistrationDeviceResponse,
+    ) -> Result<Self, Error> {
+        let mut bounded_keys = BoundedVec::with_bounded_capacity(response.keys.len());
+        for enc in &response.keys {
+            bounded_keys
+                .try_push(EncryptionPublicKey(*enc))
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let proof = response.inner.decode()?;
         Ok(Self {
             keys: bounded_keys,
             inner: BoundedCanonical::wrap(&proof)?,

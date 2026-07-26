@@ -9,8 +9,8 @@ use crate::account::{
     AffirmAsReceiverSplitProof, AffirmAsReceiverSplitProtocol, AffirmAsSenderSplitProof,
     AffirmAsSenderSplitProtocol, ClaimReceivedSplitProof, ClaimReceivedSplitProtocol,
     IrreversibleAffirmAsReceiverSplitProof, IrreversibleAffirmAsReceiverSplitProtocol,
-    IrreversibleAffirmAsSenderSplitProof, IrreversibleAffirmAsSenderSplitProtocol, LegProverConfig,
-    LegVerifierConfig, ReceiverCounterUpdateSplitProof, ReceiverCounterUpdateSplitProtocol,
+    IrreversibleAffirmAsSenderSplitProof, IrreversibleAffirmAsSenderSplitProtocol,
+    ReceiverCounterUpdateSplitProof, ReceiverCounterUpdateSplitProtocol,
     SenderCounterUpdateSplitProof, SenderCounterUpdateSplitProtocol, SenderReverseSplitProof,
     SenderReverseSplitProtocol,
 };
@@ -21,6 +21,7 @@ use crate::account::{
 };
 use crate::account_registration::tests::{new_account, setup_comm_key};
 use crate::auth_proofs::account::AuthProofAffirmation;
+use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
 use crate::keys::{DecKey, SigKey, keygen_sig};
 use crate::leg::leg_proof::LegCreationProof;
 use crate::leg::mediator::MEDIATOR_TXN_LABEL;
