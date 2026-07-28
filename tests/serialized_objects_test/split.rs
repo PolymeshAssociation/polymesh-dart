@@ -7,7 +7,7 @@ use polymesh_dart::affirmation_proofs::{
 };
 use polymesh_dart::auth_proofs::{
     create_affirmation_auth_proof, create_fee_account_auth_proof, create_fee_payment_auth_proof,
-    create_registration_auth_proof,
+    create_mint_auth_proof, create_registration_auth_proof,
 };
 use polymesh_dart::curve_tree::{
     AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, FeeAccountTreeConfig, ProverCurveTree,
@@ -15,9 +15,9 @@ use polymesh_dart::curve_tree::{
 use polymesh_dart::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
 use polymesh_dart::mint_split::MintHostProtocol;
 use polymesh_dart::split_types::{
-    AffirmationDeviceRequest, AffirmationDeviceResponse, FeeAccountDeviceRequest,
-    FeePaymentDeviceRequest, FeePaymentDeviceResponse, RegistrationDeviceRequest,
-    SingleSkDeviceResponse, TwoSksDeviceResponse,
+    AffirmationDeviceRequest, AffirmationDeviceResponse, AssetMintingDeviceResponse,
+    FeeAccountDeviceRequest, FeePaymentDeviceRequest, FeePaymentDeviceResponse, MintDeviceRequest,
+    RegistrationDeviceRequest, SingleSkDeviceResponse, TwoSksDeviceResponse,
 };
 use polymesh_dart::*;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
@@ -342,8 +342,8 @@ pub fn gen_mint_split() {
     .unwrap();
     save_scale_v1(MINT_SPLIT_REQUEST, &device_request);
 
-    let req: RegistrationDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
-    let device_response = create_registration_auth_proof(
+    let req: MintDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
+    let device_response = create_mint_auth_proof(
         &mut rng,
         &(&keys).into(),
         &req,
@@ -353,7 +353,7 @@ pub fn gen_mint_split() {
     .unwrap();
     save_scale_v1(MINT_SPLIT_RESPONSE, &device_response);
 
-    let res: TwoSksDeviceResponse = load_scale_v1(MINT_SPLIT_RESPONSE);
+    let res: AssetMintingDeviceResponse = load_scale_v1(MINT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
         .finish::<_, ()>(&mut rng, &res, root_block, AccountTreeConfig::parameters())

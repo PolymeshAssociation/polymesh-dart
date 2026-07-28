@@ -8,7 +8,7 @@ license = "GPL-3.0"
 repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common"]
+members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-auth-enclave"]
 
 [patch.crates-io]
 # Curve tree dependencies
@@ -125,6 +125,12 @@ thiserror = { workspace = true, default-features = false }
 log = { workspace = true, default-features = false }
 hex = { workspace = true, default-features = false }
 zeroize = { workspace = true, default-features = false }
+
+# Enclave key sealing (M3). ChaCha20-Poly1305; consider AES-GCM later. Cipher isolated in
+# `bp::device`'s sealing module. Std-gated for now; move to a dedicated `enclave` feature if it
+# must stay out of non-enclave std builds.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"], optional = true }
+hex-literal = { version = "0.4", optional = true }
 
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
@@ -293,6 +299,8 @@ std = [
     "ark-pallas?/std",
     "ark-vesta?/std",
     "zeroize/std",
+    "dep:chacha20poly1305",
+    "dep:hex-literal",
 ]
 
 # Turn on this feature for faster proof verification.

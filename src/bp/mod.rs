@@ -77,6 +77,7 @@ pub mod auth_proofs;
 pub mod fee_split;
 #[cfg(feature = "host_proofs")]
 pub use fee_split::*;
+pub mod device;
 pub mod key_reg_split;
 #[cfg(feature = "host_proofs")]
 pub mod mint_split;
@@ -503,7 +504,7 @@ mod tests {
     };
     use crate::auth_proofs::{
         create_affirmation_auth_proof, create_fee_account_auth_proof,
-        create_fee_payment_auth_proof, create_registration_auth_proof,
+        create_fee_payment_auth_proof, create_mint_auth_proof, create_registration_auth_proof,
     };
     use crate::curve_tree::ProverCurveTree;
     use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
@@ -933,7 +934,7 @@ mod tests {
         .unwrap();
 
         let gens = dart_gens();
-        let device_response = create_registration_auth_proof(
+        let device_response = create_mint_auth_proof(
             &mut rng,
             &(&keys).into(),
             &device_request,

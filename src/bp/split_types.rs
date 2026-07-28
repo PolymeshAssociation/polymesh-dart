@@ -79,6 +79,15 @@ pub struct RegistrationDeviceRequest {
     pub pk_enc: CompressedAffine,
 }
 
+/// Mint uses the same 2-secret-key proof as registration; kept as a distinct type.
+#[derive(Clone, Encode, Decode)]
+pub struct MintDeviceRequest {
+    pub challenge_h_bytes: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub pk_aff: CompressedAffine,
+    pub pk_enc: CompressedAffine,
+}
+
 #[derive(Clone, Encode, Decode)]
 pub struct FeeAccountDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,

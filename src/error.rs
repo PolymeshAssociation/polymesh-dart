@@ -142,6 +142,10 @@ pub enum Error {
     /// The proof doesn't match the leg's asset-id kind.
     #[error("The proof doesn't match the leg's asset-id kind")]
     InvalidProofType,
+
+    /// Device protocol error.
+    #[error("Device error: {0}")]
+    Device(String),
 }
 
 impl From<UtilsError> for Error {

@@ -64,17 +64,20 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
 }
 
-/// Create `AuthProofOnlySks` for account registration and mint proofs (2 keys).
-pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
+/// The 2-secret-key proof shared by registration and mint.
+fn two_sks_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
-    request: &RegistrationDeviceRequest,
+    challenge_h_bytes: &[u8],
+    nonce: &[u8],
+    pk_aff: &CompressedAffine,
+    pk_enc: &CompressedAffine,
     sk_gen: PallasA,
     sk_enc_gen: PallasA,
 ) -> Result<TwoSksDeviceResponse, Error> {
-    let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
-    let pk_aff = PallasA::try_from(&request.pk_aff)?;
-    let pk_enc = PallasA::try_from(&request.pk_enc)?;
+    let nonce = ledger_nonce(challenge_h_bytes, nonce);
+    let pk_aff = PallasA::try_from(pk_aff)?;
+    let pk_enc = PallasA::try_from(pk_enc)?;
 
     let proof = BPAuthProofOnlySks::new(
         rng,
@@ -88,6 +91,47 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
     )?;
 
     Ok(TwoSksDeviceResponse(WrappedCanonical::wrap(&proof)?))
+}
+
+/// Create `AuthProofOnlySks` for account registration (2 keys).
+pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    keys: &AuthSigningKeys,
+    request: &RegistrationDeviceRequest,
+    sk_gen: PallasA,
+    sk_enc_gen: PallasA,
+) -> Result<TwoSksDeviceResponse, Error> {
+    two_sks_proof(
+        rng,
+        keys,
+        &request.challenge_h_bytes,
+        &request.nonce,
+        &request.pk_aff,
+        &request.pk_enc,
+        sk_gen,
+        sk_enc_gen,
+    )
+}
+
+/// Create `AuthProofOnlySks` for asset mint (2 keys).
+pub fn create_mint_auth_proof<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    keys: &AuthSigningKeys,
+    request: &MintDeviceRequest,
+    sk_gen: PallasA,
+    sk_enc_gen: PallasA,
+) -> Result<AssetMintingDeviceResponse, Error> {
+    let response = two_sks_proof(
+        rng,
+        keys,
+        &request.challenge_h_bytes,
+        &request.nonce,
+        &request.pk_aff,
+        &request.pk_enc,
+        sk_gen,
+        sk_enc_gen,
+    )?;
+    Ok(AssetMintingDeviceResponse(response))
 }
 
 /// Create `AuthProofFeePayment` for fee payment proofs.

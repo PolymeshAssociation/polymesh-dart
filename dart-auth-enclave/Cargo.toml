@@ -1,0 +1,15 @@
+[package]
+name = "dart-auth-enclave"
+version = "0.1.0"
+edition = "2024"
+description = "AWS Nitro enclave binary that runs DART auth proofs over vsock."
+authors = ["Polymesh Labs"]
+license = "GPL-3.0"
+
+[dependencies]
+polymesh-dart = { path = "..", default-features = false, features = ["backend_bp", "std"] }
+rand = { workspace = true, default-features = false, features = ["std", "std_rng"] }
+
+# vsock is Linux-only
+[target.'cfg(target_os = "linux")'.dependencies]
+vsock = "0.5"

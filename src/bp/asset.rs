@@ -16,7 +16,7 @@ use rand_core::{CryptoRng, RngCore};
 
 use super::*;
 use crate::{
-    BoundedCanonical, auth_proofs::create_registration_auth_proof, mint_split::MintHostProtocol, *,
+    BoundedCanonical, auth_proofs::create_mint_auth_proof, mint_split::MintHostProtocol, *,
 };
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
@@ -268,7 +268,7 @@ impl<
         )?;
 
         let gens = dart_gens();
-        let device_response = create_registration_auth_proof(
+        let device_response = create_mint_auth_proof(
             rng,
             &keys.into(),
             &device_request,

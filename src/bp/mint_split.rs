@@ -60,7 +60,7 @@ impl<
         amount: Balance,
         nonce: &[u8],
         tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
-    ) -> Result<(Self, RegistrationDeviceRequest), Error> {
+    ) -> Result<(Self, MintDeviceRequest), Error> {
         let pk_aff = pk.acct.get_affine()?;
         let pk_enc = pk.enc.get_affine()?;
 
@@ -90,7 +90,7 @@ impl<
             .challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
         let challenge_h_bytes = serialize_challenge(&challenge_h)?;
 
-        let device_request = RegistrationDeviceRequest {
+        let device_request = MintDeviceRequest {
             challenge_h_bytes,
             nonce: nonce.to_vec(),
             pk_aff: CompressedAffine::try_from(pk_aff)?,
@@ -117,11 +117,11 @@ impl<
     pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
-        device_response: &TwoSksDeviceResponse,
+        device_response: &AssetMintingDeviceResponse,
         root_block: BlockNumber,
         tree_params: &CurveTreeParameters<C>,
     ) -> Result<AssetMintingProof<T, C>, Error> {
-        let auth_proof = device_response.0.decode()?;
+        let auth_proof = device_response.0.0.decode()?;
 
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, self.even_prover.transcript())?;
