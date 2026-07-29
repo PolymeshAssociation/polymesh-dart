@@ -1072,6 +1072,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dart-auth-host"
+version = "0.1.0"
+dependencies = [
+ "polymesh-dart",
+ "vsock",
+]
+
+[[package]]
 name = "dart-testing-cli"
 version = "0.1.0"
 dependencies = [

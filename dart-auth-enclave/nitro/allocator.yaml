@@ -1,0 +1,8 @@
+---
+# Resources the nitro-enclaves-allocator reserves for enclaves.
+# Copy to /etc/nitro_enclaves/allocator.yaml on the parent, then:
+#   sudo systemctl enable --now nitro-enclaves-allocator.service
+# Our enclave is light so 1GB is fine.
+# cpu_count must be even (CPUs are allocated in hyperthread sibling pairs).
+memory_mib: 1024
+cpu_count: 2

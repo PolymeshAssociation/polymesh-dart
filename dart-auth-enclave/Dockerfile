@@ -1,10 +1,17 @@
-# Build context is the workspace root: docker build -f dart-auth-enclave/Dockerfile -t dart-auth-enclave .
+# docker build -f dart-auth-enclave/Dockerfile -t dart-auth-enclave .
+# Defaults to arm64. For x86_64:
+# docker build --build-arg RUST_TARGET=x86_64-unknown-linux-musl -f dart-auth-enclave/Dockerfile -t dart-auth-enclave .
+ARG RUST_TARGET=aarch64-unknown-linux-musl
+
 FROM rust:1-bookworm AS build
-RUN rustup target add x86_64-unknown-linux-musl
+ARG RUST_TARGET
+RUN rustup target add ${RUST_TARGET}
 WORKDIR /src
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl -p dart-auth-enclave
+# Light sigma-only build (no bulletproofs); pure-Rust so the self-contained musl needs no C toolchain.
+RUN cargo build --release --target ${RUST_TARGET} -p dart-auth-enclave
 
 FROM scratch
-COPY --from=build /src/target/x86_64-unknown-linux-musl/release/dart-auth-enclave /dart-auth-enclave
+ARG RUST_TARGET
+COPY --from=build /src/target/${RUST_TARGET}/release/dart-auth-enclave /dart-auth-enclave
 ENTRYPOINT ["/dart-auth-enclave"]

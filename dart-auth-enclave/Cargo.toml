@@ -7,7 +7,8 @@ authors = ["Polymesh Labs"]
 license = "GPL-3.0"
 
 [dependencies]
-polymesh-dart = { path = "..", default-features = false, features = ["backend_bp", "std"] }
+# `hardcoded-key` is the PoC sealing key; swap for `kms` once KMS sealing lands.
+polymesh-dart = { path = "..", default-features = false, features = ["backend_bp", "std", "hardcoded-key"] }
 rand = { workspace = true, default-features = false, features = ["std", "std_rng"] }
 
 # vsock is Linux-only

@@ -5,14 +5,23 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+#[cfg(feature = "hardcoded-key")]
 use hex_literal::hex;
 use rand_core::CryptoRngCore;
 
 // One key per enclave. Revisit if the enclave must hold multiple accounts.
 
-// Sealing key put into the enclave image, just for PoC. Replace with a KMS-derived key later.
+// Temporary. Sealing key compiled into the enclave image, enabled by the `hardcoded-key` feature.
+// The production build drops the feature and seals via KMS instead.
+#[cfg(feature = "hardcoded-key")]
 const SEALING_KEY: [u8; 32] =
     hex!("9e1c4a772bd0638f11a55ec3902d7b46e81439ba6df20851cc973a820bd56ef9");
+
+#[cfg(not(feature = "hardcoded-key"))]
+compile_error!(
+    "device sealing currently requires the `hardcoded-key` feature; KMS-based sealing is not implemented yet"
+);
+
 const VERSION: u8 = 1;
 const NONCE_LEN: usize = 12;
 

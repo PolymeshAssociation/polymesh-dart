@@ -1,0 +1,16 @@
+[package]
+name = "dart-auth-host"
+version = "0.1.0"
+edition = "2024"
+description = "Host-side component that drives the DART auth-proof workflow against the enclave over vsock and verifies the proofs."
+authors = ["Polymesh Labs"]
+license = "GPL-3.0"
+
+[dependencies]
+# host_proofs = the full Bulletproofs/curve-tree host protocols; hardcoded-key so the shared
+# sealing module compiles (the host never seals, but it links the library that does).
+polymesh-dart = { path = "..", default-features = false, features = ["backend_bp", "std", "host_proofs", "hardcoded-key"] }
+
+# vsock is Linux-only
+[target.'cfg(target_os = "linux")'.dependencies]
+vsock = "0.5"

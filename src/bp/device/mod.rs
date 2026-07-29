@@ -31,9 +31,13 @@ mod sealing;
 mod tests;
 #[cfg(feature = "std")]
 mod transport;
+#[cfg(feature = "host_proofs")]
+mod workflow;
 
 #[cfg(feature = "std")]
 pub use transport::{StreamDevice, read_frame, serve, write_frame};
+#[cfg(feature = "host_proofs")]
+pub use workflow::run_register_mint_affirm;
 
 /// The fixed generator points the device needs; it can't derive them (hash-to-curve is host-only).
 #[derive(Clone, Debug, Encode, Decode)]

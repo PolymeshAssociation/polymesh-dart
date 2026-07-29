@@ -8,7 +8,7 @@ license = "GPL-3.0"
 repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-auth-enclave"]
+members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-auth-enclave", "dart-auth-host"]
 
 [patch.crates-io]
 # Curve tree dependencies
@@ -130,6 +130,7 @@ zeroize = { workspace = true, default-features = false }
 # `bp::device`'s sealing module. Std-gated for now; move to a dedicated `enclave` feature if it
 # must stay out of non-enclave std builds.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"], optional = true }
+# Only the `hardcoded-key` sealing key needs this.
 hex-literal = { version = "0.4", optional = true }
 
 # Substrate/SCALE deps.
@@ -243,6 +244,7 @@ default = [
     "utoipa",
     "sqlx",
     "large_baby_steps",
+    "hardcoded-key",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -300,8 +302,11 @@ std = [
     "ark-vesta?/std",
     "zeroize/std",
     "dep:chacha20poly1305",
-    "dep:hex-literal",
 ]
+
+# Temporary PoC device sealing: compile the fixed sealing key into the enclave image. Off, the
+# device seals via KMS. Expected to fold into a `dev` feature later.
+hardcoded-key = ["dep:hex-literal"]
 
 # Turn on this feature for faster proof verification.
 verifier_parallel = [
