@@ -8,7 +8,7 @@ license = "GPL-3.0"
 repository = "https://github.com/PolymeshAssociation/polymesh-dart"
 
 [workspace]
-members = ["dart-bp", "dart-testing-cli", "dart-common", "dart-auth-enclave", "dart-auth-host"]
+members = ["dart-bp", "dart-testing-cli", "dart-common"]
 
 [patch.crates-io]
 # Curve tree dependencies
