@@ -43,15 +43,15 @@ macro_rules! verify_or_rmc_3 {
 /// `verify_using_randomized_mult_checker` or `is_valid`.
 ///
 /// Both variants return `Result<()>` (propagated with `?`).
-/// The bases, commitment point, and t-value are switchable between owned and ref.
+/// The bases and commitment point are switchable between owned and ref.
 macro_rules! verify_schnorr_resp_or_rmc {
-    ($rmc:expr, $resp:expr, $bases:expr, $y:expr, $t:expr, $challenge:expr $(,)?) => {{
+    ($rmc:expr, $resp:expr, $bases:expr, $y:expr, $challenge:expr $(,)?) => {{
         match $rmc.as_mut() {
             Some(__rmc) => {
-                $resp.verify_using_randomized_mult_checker($bases, $y, $t, $challenge, __rmc)?;
+                $resp.verify_using_randomized_mult_checker($bases, $y, $challenge, __rmc)?;
             }
             None => {
-                $resp.is_valid(&$bases, &$y, &$t, $challenge)?;
+                $resp.is_valid(&$bases, &$y, $challenge)?;
             }
         }
     }};
@@ -60,20 +60,19 @@ macro_rules! verify_schnorr_resp_or_rmc {
 /// Same as [`verify_schnorr_resp_or_rmc!`] but for [`PartialSchnorrResponse`] which additionally
 /// takes a `missing_resps` [`BTreeMap`] passed by value to both paths.
 macro_rules! verify_partial_schnorr_resp_or_rmc {
-    ($rmc:expr, $resp:expr, $bases:expr, $y:expr, $t:expr, $challenge:expr, $missing_resps:expr $(,)?) => {{
+    ($rmc:expr, $resp:expr, $bases:expr, $y:expr, $challenge:expr, $missing_resps:expr $(,)?) => {{
         match $rmc.as_mut() {
             Some(__rmc) => {
                 $resp.verify_using_randomized_mult_checker(
                     $bases,
                     $y,
-                    $t,
                     $challenge,
                     $missing_resps,
                     __rmc,
                 )?;
             }
             None => {
-                $resp.is_valid(&$bases, &$y, &$t, $challenge, $missing_resps)?;
+                $resp.is_valid(&$bases, &$y, $challenge, $missing_resps)?;
             }
         }
     }};

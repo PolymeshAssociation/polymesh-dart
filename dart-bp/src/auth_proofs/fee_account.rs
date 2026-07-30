@@ -1,7 +1,7 @@
 use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, error::Result,
+    add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
@@ -102,12 +102,14 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
             &sk_gen,
             &comm_re_rand_gen,
             &partial_re_randomized_account_commitment,
+            dst::FEE_AUTH_ACC_COMM_OLD,
             &mut transcript,
         )?;
         proto_new.challenge_contribution(
             &sk_gen,
             &randomness_gen,
             &partial_updated_account_commitment,
+            dst::FEE_AUTH_ACC_COMM_NEW,
             &mut transcript,
         )?;
 
@@ -138,6 +140,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
                 sk_gen,
                 comm_re_rand_gen,
                 &self.partial_re_randomized_account_commitment,
+                dst::FEE_AUTH_ACC_COMM_OLD,
                 &mut writer,
             )?;
 
@@ -146,6 +149,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
                 sk_gen,
                 current_randomness_gen,
                 &self.partial_updated_account_commitment,
+                dst::FEE_AUTH_ACC_COMM_NEW,
                 &mut writer,
             )?;
         Ok(())

@@ -8,7 +8,7 @@ use crate::account::state::{
 };
 use crate::error::*;
 use crate::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
-use crate::{AssetId, BALANCE_BITS, Balance};
+use crate::{AssetId, BALANCE_BITS, Balance, dst};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
@@ -1050,6 +1050,7 @@ pub(crate) fn add_leg_link_challenge_contributions<G0: SWCurveConfig + Copy>(
                 &eph_pk_amount,
                 &enc_gen,
                 &core.ct_amount(),
+                dst::LEG_AMOUNT,
                 &mut *transcript,
             )?;
         }
@@ -1060,13 +1061,19 @@ pub(crate) fn add_leg_link_challenge_contributions<G0: SWCurveConfig + Copy>(
                     &eph_pk_asset_id,
                     &enc_gen,
                     &core.asset_id_ciphertext().unwrap(),
+                    dst::LEG_ASSET_ID,
                     &mut *transcript,
                 )?,
                 AssetIdProtocol::Elsewhere(t) => {
                     let y = (core.asset_id_ciphertext().unwrap().into_group()
                         - h_at.unwrap().into_group())
                     .into_affine();
-                    t.challenge_contribution(&eph_pk_asset_id, &y, &mut *transcript)?;
+                    t.challenge_contribution(
+                        &eph_pk_asset_id,
+                        &y,
+                        dst::LEG_ASSET_ID_ELSEWHERE,
+                        &mut *transcript,
+                    )?;
                 }
             }
         }
@@ -1218,12 +1225,13 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     let mut transcript = prover.transcript();
 
     // Add challenge contributions in solo transcript order
-    t_acc_old.challenge_contribution(&mut transcript)?;
-    t_acc_new.challenge_contribution(&mut transcript)?;
-    t_bp_randomness_relations.challenge_contribution(&mut transcript)?;
+    t_acc_old.challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut transcript)?;
+    t_acc_new.challenge_contribution(dst::ACCOUNT_COMM_NEW, &mut transcript)?;
+    t_bp_randomness_relations
+        .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
 
     let null_gen = account_comm_key.current_rho_gen();
-    t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
+    t_null.challenge_contribution(&null_gen, &nullifier, dst::NULLIFIER, &mut transcript)?;
 
     add_leg_link_challenge_contributions(&legs, &t_leg_link, h_at, enc_gen, &mut transcript)?;
 
@@ -1301,7 +1309,7 @@ pub(crate) fn generate_sigma_t_values_for_balance_change<
     Zeroize::zeroize(&mut old_balance_blinding);
     Zeroize::zeroize(&mut new_balance_blinding);
 
-    t_comm_bp_bal.challenge_contribution(&mut prover_transcript)?;
+    t_comm_bp_bal.challenge_contribution(dst::BP_BALANCE, &mut prover_transcript)?;
 
     Ok(t_comm_bp_bal)
 }
@@ -1545,9 +1553,9 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_without_leg_link<
 >(
     nullifier: &Affine<G0>,
     comm_bp_randomness_relations: Affine<G0>,
-    t_acc_old: &Affine<G0>,
-    t_acc_new: &Affine<G0>,
-    t_randomness_relations: &Affine<G0>,
+    resp_acc_old: &SchnorrResponse<Affine<G0>>,
+    resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
+    resp_bp_randomness_relations: &PartialSchnorrResponse<Affine<G0>>,
     resp_null: &PartialPokDiscreteLog<Affine<G0>>,
     verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1560,13 +1568,15 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_without_leg_link<
 
     let mut transcript = verifier.transcript();
 
-    t_acc_old.serialize_compressed(&mut transcript)?;
-    t_acc_new.serialize_compressed(&mut transcript)?;
-    t_randomness_relations.serialize_compressed(&mut transcript)?;
+    resp_acc_old.challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut transcript)?;
+    resp_acc_new.challenge_contribution(dst::ACCOUNT_COMM_NEW, &mut transcript)?;
+    resp_bp_randomness_relations
+        .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
 
     resp_null.challenge_contribution(
         &account_comm_key.current_rho_gen(),
         nullifier,
+        dst::NULLIFIER,
         &mut transcript,
     )?;
 
@@ -1605,6 +1615,7 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                 &eph_pk_amount,
                 &enc_gen,
                 &core.ct_amount(),
+                dst::LEG_AMOUNT,
                 &mut *transcript,
             )?;
         }
@@ -1621,9 +1632,13 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                 Error::ProofVerificationError(format!("Expected asset_id_ciphertext for leg {i}"))
             })?;
             match resp_asset_id {
-                RespAssetId::Hidden(resp) => {
-                    resp.challenge_contribution(&eph_pk_asset_id, &enc_gen, &ct, &mut *transcript)?
-                }
+                RespAssetId::Hidden(resp) => resp.challenge_contribution(
+                    &eph_pk_asset_id,
+                    &enc_gen,
+                    &ct,
+                    dst::LEG_ASSET_ID,
+                    &mut *transcript,
+                )?,
                 RespAssetId::Elsewhere(resp) => {
                     let h_at = h_at.ok_or_else(|| {
                         Error::ProofVerificationError(
@@ -1631,7 +1646,12 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                         )
                     })?;
                     let y = (ct.into_group() - h_at).into_affine();
-                    resp.challenge_contribution(&eph_pk_asset_id, &y, &mut *transcript)?;
+                    resp.challenge_contribution(
+                        &eph_pk_asset_id,
+                        &y,
+                        dst::LEG_ASSET_ID_ELSEWHERE,
+                        &mut *transcript,
+                    )?;
                 }
             }
         }
@@ -1653,9 +1673,9 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     asset_id: Option<AssetId>,
     nullifier: &Affine<G0>,
     comm_bp_randomness_relations: Affine<G0>,
-    t_r_leaf: &Affine<G0>,
-    t_acc_new: &Affine<G0>,
-    t_randomness_relations: &Affine<G0>,
+    resp_acc_old: &SchnorrResponse<Affine<G0>>,
+    resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
+    resp_bp_randomness_relations: &PartialSchnorrResponse<Affine<G0>>,
     resp_null: &PartialPokDiscreteLog<Affine<G0>>,
     resp_leg_link: &[LegAccountLink<G0>],
     needs_ct_amount: &[bool],
@@ -1681,9 +1701,9 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     enforce_constraints_and_take_challenge_contrib_without_leg_link(
         nullifier,
         comm_bp_randomness_relations,
-        t_r_leaf,
-        t_acc_new,
-        t_randomness_relations,
+        resp_acc_old,
+        resp_acc_new,
+        resp_bp_randomness_relations,
         resp_null,
         verifier,
         account_comm_key,
@@ -1705,10 +1725,10 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
 /// Write the balance BP T-value challenge contribution to the verifier transcript.
 /// Does NOT include leg-amount challenge contributions.
 pub(crate) fn take_challenge_contrib_of_balance_bp<G0: SWCurveConfig + Copy>(
-    t_comm_bp_bal: &Affine<G0>,
+    resp_comm_bp_bal: &PartialSchnorrResponse<Affine<G0>>,
     verifier_transcript: &mut MerlinTranscript,
 ) -> Result<()> {
-    t_comm_bp_bal.serialize_compressed(verifier_transcript)?;
+    resp_comm_bp_bal.challenge_contribution(dst::BP_BALANCE, verifier_transcript)?;
     Ok(())
 }
 
@@ -1832,9 +1852,6 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     re_randomized_leaf: &Affine<G0>,
     updated_account_commitment: &Affine<G0>,
     comm_bp: &Affine<G0>,
-    t_r_acc_old: &Affine<G0>,
-    t_acc_new: &Affine<G0>,
-    t_bp: &Affine<G0>,
     resp_acc_old: &SchnorrResponse<Affine<G0>>,
     resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
     resp_null: &PartialPokDiscreteLog<Affine<G0>>,
@@ -1913,14 +1930,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             - (account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id)))
         .into_affine(),
     };
-    verify_schnorr_resp_or_rmc!(
-        rmc,
-        resp_acc_old,
-        gens_acc_old,
-        y,
-        *t_r_acc_old,
-        verifier_challenge,
-    );
+    verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, gens_acc_old, y, verifier_challenge,);
 
     let mut y = updated_account_commitment.into_group();
     let counter_gen = account_comm_key.counter_gen().into_group();
@@ -1982,7 +1992,6 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         resp_acc_new,
         gens_acc_new,
         y.into_affine(),
-        *t_acc_new,
         verifier_challenge,
         missing_resps,
     );
@@ -2061,7 +2070,6 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
         resp_bp,
         bp_ver_gens,
         *comm_bp,
-        *t_bp,
         verifier_challenge,
         missing_resps,
     );
@@ -2075,7 +2083,6 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
 pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
     resp_leg_amount: &[Partial2PokPedersenCommitment<Affine<G0>>],
     comm_bp_bal: &Affine<G0>,
-    t_comm_bp_bal: &Affine<G0>,
     resp_comm_bp_bal: &PartialSchnorrResponse<Affine<G0>>,
     verifier_challenge: &G0::ScalarField,
     resp_old_bal: G0::ScalarField,
@@ -2107,7 +2114,6 @@ pub(crate) fn verify_sigma_for_balance_change<G0: SWCurveConfig + Copy>(
         resp_comm_bp_bal,
         bp_bal_gens,
         *comm_bp_bal,
-        *t_comm_bp_bal,
         verifier_challenge,
         missing_resps,
     );

@@ -9,7 +9,7 @@ use ark_std::vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use rand_core::CryptoRngCore;
 use schnorr_pok::partial::PartialSchnorrResponse;
-use schnorr_pok::{SchnorrCommitment, SchnorrResponse};
+use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
     rng: &mut R,
@@ -22,6 +22,8 @@ pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
     sk_gen: G,
     enc_key_gen: G,
     comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+    dst_old: &[u8],
+    dst_new: &[u8],
     mut writer: W,
 ) -> Result<(SchnorrCommitment<G>, SchnorrCommitment<G>, G, G)> {
     // For old (re randomized) account commitment `G_aff * sk + G_enc * sk_enc + B_blinding * rand_part_old_comm` where `rand_part_old_comm` is part of the blinding used in curve tree
@@ -41,9 +43,9 @@ pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
         (pk + comm_re_rand_gen * rand_part_old_comm).into_affine();
     let partial_updated_account_commitment = (pk + comm_re_rand_gen * rand_new_comm).into_affine();
 
-    proto_old.t.serialize_compressed(&mut writer)?;
+    proto_old.challenge_contribution(dst_old, &mut writer)?;
     partial_re_randomized_account_commitment.serialize_compressed(&mut writer)?;
-    proto_new.t.serialize_compressed(&mut writer)?;
+    proto_new.challenge_contribution(dst_new, &mut writer)?;
     partial_updated_account_commitment.serialize_compressed(&mut writer)?;
     Ok((
         proto_old,
@@ -77,10 +79,8 @@ pub fn resp_acc_comm<G: AffineRepr>(
 
 pub fn verify_acc_comm<G: AffineRepr>(
     partial_re_randomized_account_commitment: &G,
-    t_re_randomized_account_commitment: &G,
     resp_re_randomized_account_commitment: &SchnorrResponse<G>,
     partial_updated_account_commitment: &G,
-    t_updated_account_commitment: &G,
     resp_updated_account_commitment: &PartialSchnorrResponse<G>,
     challenge: &G::ScalarField,
     sk_gen: G,
@@ -101,7 +101,6 @@ pub fn verify_acc_comm<G: AffineRepr>(
         resp_re_randomized_account_commitment,
         vec![sk_gen, enc_key_gen, comm_re_rand_gen],
         *partial_re_randomized_account_commitment,
-        *t_re_randomized_account_commitment,
         challenge,
     );
 
@@ -114,7 +113,6 @@ pub fn verify_acc_comm<G: AffineRepr>(
         resp_updated_account_commitment,
         vec![sk_gen, enc_key_gen, comm_re_rand_gen],
         *partial_updated_account_commitment,
-        *t_updated_account_commitment,
         challenge,
         missing_resps,
     );

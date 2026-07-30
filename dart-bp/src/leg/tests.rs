@@ -3848,7 +3848,6 @@ mod input_sanitation_disabled {
                 resp_eph_pk_enc: vec![],
                 resp_eph_pk_public_enc: vec![],
                 comm_r_i_amount: p.comm_r_i_amount,
-                t_comm_r_i_amount: p.t_comm_r_i_amount,
                 resp_comm_r_i_amount: p.resp_comm_r_i_amount.clone(),
             };
             wrong_type_leg_proof.leg_proofs[1] = LegProof::RevealedAssetProof(public_proof);

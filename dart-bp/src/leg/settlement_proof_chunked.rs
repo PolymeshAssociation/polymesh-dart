@@ -802,7 +802,6 @@ mod tests {
         // one enc_keys entry per revealed leg, in leg order.
         let num_revealed = is_revealed_per_leg.iter().filter(|&&r| r).count();
         let enc_keys = vec![vec![pk_a_e.0]; num_revealed];
-        let med_keys: Vec<Vec<(u8, ark_pallas::Affine)>> = vec![vec![]; num_revealed];
 
         batch
             .verify_batched_bp::<_, PallasParams, VestaParams>(

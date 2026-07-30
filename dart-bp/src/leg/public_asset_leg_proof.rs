@@ -1,3 +1,4 @@
+use crate::dst;
 use crate::error::Result;
 use crate::leg::leg_proof::{ensure_eph_key_not_identity, ensure_sender_receiver_not_same};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
@@ -60,7 +61,7 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
     /// And this list might additionally have `r_2/r_1, r_1/r_2` as well if senders and receivers are allowed
     /// to see each other
     pub comm_r_i_amount: Affine<G>,
-    pub t_comm_r_i_amount: Affine<G>,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G>>,
 }
 
@@ -348,6 +349,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &enc_key_gen,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &leg_enc.ct_s(),
+                dst::PUBLIC_ASSET_LEG_CREATE_CT_S,
                 &mut transcript_ref,
             )?;
 
@@ -355,6 +357,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &enc_key_gen,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &leg_enc.ct_r(),
+                dst::PUBLIC_ASSET_LEG_CREATE_CT_R,
                 &mut transcript_ref,
             )?;
 
@@ -362,18 +365,21 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &enc_key_gen,
                 &enc_gen,
                 &leg_enc.ct_amount(),
+                dst::PUBLIC_ASSET_LEG_CREATE_CT_AMOUNT,
                 &mut transcript_ref,
             )?;
 
             eph_pk_s_v_proto.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_V,
                 &mut transcript_ref,
             )?;
 
             eph_pk_r_v_proto.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_V,
                 &mut transcript_ref,
             )?;
 
@@ -389,6 +395,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                                 "Missing sender-to-receiver ephemeral key".into(),
                             )
                         })?,
+                    dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_R,
                     &mut transcript_ref,
                 )?;
             }
@@ -405,6 +412,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                                 "Missing receiver-to-sender ephemeral key".into(),
                             )
                         })?,
+                    dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_S,
                     &mut transcript_ref,
                 )?;
             }
@@ -414,9 +422,24 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .zip(leg.enc_keys.iter())
                 .zip(leg_enc.eph_pk_enc_keys.iter())
             {
-                p.0.challenge_contribution(enc_key, &eph_pk_enc_key.r1, &mut transcript_ref)?;
-                p.1.challenge_contribution(enc_key, &eph_pk_enc_key.r2, &mut transcript_ref)?;
-                p.2.challenge_contribution(enc_key, &eph_pk_enc_key.r3, &mut transcript_ref)?;
+                p.0.challenge_contribution(
+                    enc_key,
+                    &eph_pk_enc_key.r1,
+                    dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R1,
+                    &mut transcript_ref,
+                )?;
+                p.1.challenge_contribution(
+                    enc_key,
+                    &eph_pk_enc_key.r2,
+                    dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R2,
+                    &mut transcript_ref,
+                )?;
+                p.2.challenge_contribution(
+                    enc_key,
+                    &eph_pk_enc_key.r3,
+                    dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R3,
+                    &mut transcript_ref,
+                )?;
             }
 
             for ((p, pk), eph_pk_public_enc_key) in eph_pk_public_enc_proto
@@ -424,12 +447,30 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .zip(leg.public_enc_keys.iter())
                 .zip(leg_enc.eph_pk_public_enc_keys.iter())
             {
-                p.0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript_ref)?;
-                p.1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript_ref)?;
-                p.2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript_ref)?;
+                p.0.challenge_contribution(
+                    pk,
+                    &eph_pk_public_enc_key.r1,
+                    dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R1,
+                    &mut transcript_ref,
+                )?;
+                p.1.challenge_contribution(
+                    pk,
+                    &eph_pk_public_enc_key.r2,
+                    dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R2,
+                    &mut transcript_ref,
+                )?;
+                p.2.challenge_contribution(
+                    pk,
+                    &eph_pk_public_enc_key.r3,
+                    dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R3,
+                    &mut transcript_ref,
+                )?;
             }
 
-            t_comm_r_i_amount.challenge_contribution(&mut transcript_ref)?;
+            t_comm_r_i_amount.challenge_contribution(
+                dst::PUBLIC_ASSET_LEG_CREATE_BP_R_I_AMOUNT,
+                &mut transcript_ref,
+            )?;
         }
 
         let challenge = prover
@@ -485,7 +526,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp_eph_pk_enc,
             resp_eph_pk_public_enc,
             comm_r_i_amount,
-            t_comm_r_i_amount: t_comm_r_i_amount.t,
             resp_comm_r_i_amount,
         })
     }
@@ -727,6 +767,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
+            dst::PUBLIC_ASSET_LEG_CREATE_CT_S,
             &mut transcript_ref,
         )?;
 
@@ -734,6 +775,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
+            dst::PUBLIC_ASSET_LEG_CREATE_CT_R,
             &mut transcript_ref,
         )?;
 
@@ -741,18 +783,21 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount(),
+            dst::PUBLIC_ASSET_LEG_CREATE_CT_AMOUNT,
             &mut transcript_ref,
         )?;
 
         self.resp_eph_pk_s_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_V,
             &mut transcript_ref,
         )?;
 
         self.resp_eph_pk_r_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_V,
             &mut transcript_ref,
         )?;
 
@@ -775,6 +820,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &eph_pk_s_r,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_R,
                 &mut transcript_ref,
             )?;
 
@@ -796,6 +842,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             resp.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &eph_pk_r_s,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_S,
                 &mut transcript_ref,
             )?;
         }
@@ -807,9 +854,24 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             .zip(enc_keys.iter())
             .zip(leg_enc.eph_pk_enc_keys.iter())
         {
-            p.0.challenge_contribution(enc_key, &eph_pk_enc_key.r1, &mut transcript_ref)?;
-            p.1.challenge_contribution(enc_key, &eph_pk_enc_key.r2, &mut transcript_ref)?;
-            p.2.challenge_contribution(enc_key, &eph_pk_enc_key.r3, &mut transcript_ref)?;
+            p.0.challenge_contribution(
+                enc_key,
+                &eph_pk_enc_key.r1,
+                dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R1,
+                &mut transcript_ref,
+            )?;
+            p.1.challenge_contribution(
+                enc_key,
+                &eph_pk_enc_key.r2,
+                dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R2,
+                &mut transcript_ref,
+            )?;
+            p.2.challenge_contribution(
+                enc_key,
+                &eph_pk_enc_key.r3,
+                dst::PUBLIC_ASSET_LEG_CREATE_ENC_KEY_R3,
+                &mut transcript_ref,
+            )?;
         }
 
         // A[i][0] = pk_en[i] * r_1, A[i][1] = pk_en[i] * r_2, A[i][2] = pk_en[i] * r_3
@@ -819,13 +881,30 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             .zip(public_enc_keys.iter())
             .zip(leg_enc.eph_pk_public_enc_keys.iter())
         {
-            p.0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript_ref)?;
-            p.1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript_ref)?;
-            p.2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript_ref)?;
+            p.0.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r1,
+                dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R1,
+                &mut transcript_ref,
+            )?;
+            p.1.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r2,
+                dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R2,
+                &mut transcript_ref,
+            )?;
+            p.2.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r3,
+                dst::PUBLIC_ASSET_LEG_CREATE_PUBLIC_ENC_R3,
+                &mut transcript_ref,
+            )?;
         }
 
-        self.t_comm_r_i_amount
-            .serialize_compressed(&mut transcript_ref)?;
+        self.resp_comm_r_i_amount.challenge_contribution(
+            dst::PUBLIC_ASSET_LEG_CREATE_BP_R_I_AMOUNT,
+            &mut transcript_ref,
+        )?;
 
         let challenge = transcript_ref.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -1026,7 +1105,6 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 leaf_level_bp_gens,
             ),
             self.comm_r_i_amount,
-            self.t_comm_r_i_amount,
             &challenge,
         );
 
@@ -1866,7 +1944,6 @@ mod tests {
         );
         // Verifying with a different key set fails.
         let registry_audit = keygen_enc(&mut rng, enc_key_gen);
-        let registry_med = keygen_sig(&mut rng, sig_key_gen);
         let registry_enc_keys: Vec<_> = vec![registry_audit.1.0];
         assert!(
             proof

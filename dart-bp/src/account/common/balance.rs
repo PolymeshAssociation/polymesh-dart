@@ -1,4 +1,5 @@
 use crate::account::AccountState;
+use crate::dst;
 use crate::util::{
     create_balance_bp_t_values, enforce_balance_change_prover,
     generate_schnorr_responses_for_balance_change, generate_sigma_t_values_for_balance_change,
@@ -32,8 +33,8 @@ pub struct BalanceChangeProofPartial<
 > {
     /// Commitment to old and new balances and amounts used in BP
     pub comm_bp_bal: Affine<G0>,
-    /// For the sigma protocol for above commitment
-    pub t_comm_bp_bal: Affine<G0>,
+    /// Response for the sigma protocol for above commitment. Carries the commitment to
+    /// randomness `t` from step 1.
     pub resp_comm_bp_bal: PartialSchnorrResponse<Affine<G0>>,
 }
 
@@ -140,7 +141,6 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
     }
 
     pub fn gen_proof(self, challenge: &F0) -> Result<BalanceChangeProof<F0, G0>> {
-        let t_comm_bp_bal = self.t_comm_bp_bal.t;
         let resp_comm_bp_bal = generate_schnorr_responses_for_balance_change(
             self.comm_bp_bal_blinding,
             self.t_comm_bp_bal.clone(),
@@ -149,7 +149,6 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         Ok(BalanceChangeProof {
             partial: BalanceChangeProofPartial {
                 comm_bp_bal: self.comm_bp_bal,
-                t_comm_bp_bal,
                 resp_comm_bp_bal,
             },
         })
@@ -252,7 +251,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 
         {
             let mut transcript = even_prover.transcript();
-            t_comm_bp_bal.challenge_contribution(&mut transcript)?;
+            t_comm_bp_bal.challenge_contribution(dst::BP_BALANCE, &mut transcript)?;
         }
 
         Ok(Self {
@@ -263,7 +262,6 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
     }
 
     pub fn gen_proof(self, challenge: &F0) -> Result<BalanceChangeProofPartial<F0, G0>> {
-        let t_comm_bp_bal = self.t_comm_bp_bal.t;
         let resp_comm_bp_bal = generate_schnorr_responses_for_balance_change(
             self.comm_bp_bal_blinding,
             self.t_comm_bp_bal.clone(),
@@ -271,7 +269,6 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         )?;
         Ok(BalanceChangeProofPartial {
             comm_bp_bal: self.comm_bp_bal,
-            t_comm_bp_bal,
             resp_comm_bp_bal,
         })
     }

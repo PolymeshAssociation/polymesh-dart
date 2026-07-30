@@ -8,7 +8,7 @@ use crate::util::{
 };
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, add_to_transcript,
-    error::Result,
+    dst, error::Result,
 };
 use ark_dlog_gadget::dlog::{DiscreteLogParameters, DivisorComms};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -73,7 +73,7 @@ pub struct LegCreationProof<
     /// present only when sender and receiver decryption is needed.
     /// The third list is when asset has any encryption keys and fourth list when asset has mediators
     pub comm_r_i_amount: Affine<G0>,
-    pub t_comm_r_i_amount: Affine<G0>,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
     pub ped_comms: Vec<DivisorComms<Affine<G1>>>,
     /// Response for proving `ct_s = enc_key_gen * r_1 + pk_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
@@ -678,12 +678,13 @@ impl<
         Zeroize::zeroize(&mut m_r_1_inv_blindings);
         Zeroize::zeroize(&mut k_blindings);
 
-        t_comm_r_i_amount.challenge_contribution(&mut transcript)?;
+        t_comm_r_i_amount.challenge_contribution(dst::LEG_CREATE_BP_R_I_AMOUNT, &mut transcript)?;
 
         ct_s_proto.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
+            dst::LEG_CREATE_CT_S,
             &mut transcript,
         )?;
 
@@ -691,6 +692,7 @@ impl<
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
+            dst::LEG_CREATE_CT_R,
             &mut transcript,
         )?;
 
@@ -698,6 +700,7 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount(),
+            dst::LEG_CREATE_CT_AMOUNT,
             &mut transcript,
         )?;
 
@@ -705,12 +708,14 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.asset_id_ciphertext().unwrap(),
+            dst::LEG_CREATE_CT_ASSET_ID,
             &mut transcript,
         )?;
 
         eph_pk_s_v_proto.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            dst::LEG_CREATE_EPH_PK_S_V,
             &mut transcript,
         )?;
 
@@ -722,12 +727,14 @@ impl<
                 .r4
                 .as_ref()
                 .unwrap(),
+            dst::LEG_CREATE_EPH_PK_S_AT,
             &mut transcript,
         )?;
 
         eph_pk_r_v_proto.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            dst::LEG_CREATE_EPH_PK_R_V,
             &mut transcript,
         )?;
 
@@ -739,6 +746,7 @@ impl<
                 .r4
                 .as_ref()
                 .unwrap(),
+            dst::LEG_CREATE_EPH_PK_R_AT,
             &mut transcript,
         )?;
 
@@ -751,6 +759,7 @@ impl<
                     .r2
                     .as_ref()
                     .unwrap(),
+                dst::LEG_CREATE_EPH_PK_S_R,
                 &mut transcript,
             )?;
             eph_pk_r_s_proto.as_ref().unwrap().challenge_contribution(
@@ -761,6 +770,7 @@ impl<
                     .r1
                     .as_ref()
                     .unwrap(),
+                dst::LEG_CREATE_EPH_PK_R_S,
                 &mut transcript,
             )?;
         }
@@ -775,18 +785,31 @@ impl<
                 re_rand_point,
                 &neg_blinding_base,
                 &eph_pk_enc_key.r1,
+                dst::LEG_CREATE_ENC_KEY_R1,
                 &mut transcript,
             )?;
             p.1.challenge_contribution(
                 &b_base,
                 &re_randomized_points.blindings_with_different_gen[&(i + 1)],
+                dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
-            p.2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
-            p.3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
+            p.2.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r2,
+                dst::LEG_CREATE_ENC_KEY_R2,
+                &mut transcript,
+            )?;
+            p.3.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r3,
+                dst::LEG_CREATE_ENC_KEY_R3,
+                &mut transcript,
+            )?;
             p.4.challenge_contribution(
                 &eph_pk_enc_key.r1,
                 eph_pk_enc_key.r4.as_ref().unwrap(),
+                dst::LEG_CREATE_ENC_KEY_R4,
                 &mut transcript,
             )?;
         }
@@ -802,16 +825,23 @@ impl<
                 &enc_key_gen,
                 &neg_blinding_base,
                 &y.into_affine(),
+                dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
 
-            p.1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
+            p.1.challenge_contribution(
+                &b_base,
+                re_rand_point,
+                dst::LEG_CREATE_MED_KEY_BLINDING,
+                &mut transcript,
+            )?;
 
             // One commitment per encryption key, all sharing the `m_i_r_1_inv` response.
             for i in 0..num_enc_keys {
                 p.2[i].challenge_contribution(
                     &leg_enc.eph_pk_enc_keys[i].r1,
                     &mediator.eph_pk_med_keys[i],
+                    dst::LEG_CREATE_MED_KEY_ENC,
                     &mut transcript,
                 )?;
             }
@@ -822,12 +852,28 @@ impl<
             .zip(leg.public_enc_keys.iter())
             .zip(leg_enc.eph_pk_public_enc_keys.iter())
         {
-            p.0.challenge_contribution(pk, &eph_pk_public_enc.r1, &mut transcript)?;
-            p.1.challenge_contribution(pk, &eph_pk_public_enc.r2, &mut transcript)?;
-            p.2.challenge_contribution(pk, &eph_pk_public_enc.r3, &mut transcript)?;
+            p.0.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r1,
+                dst::LEG_CREATE_PUBLIC_ENC_R1,
+                &mut transcript,
+            )?;
+            p.1.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r2,
+                dst::LEG_CREATE_PUBLIC_ENC_R2,
+                &mut transcript,
+            )?;
+            p.2.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r3,
+                dst::LEG_CREATE_PUBLIC_ENC_R3,
+                &mut transcript,
+            )?;
             p.3.challenge_contribution(
                 pk,
                 eph_pk_public_enc.r4.as_ref().unwrap(),
+                dst::LEG_CREATE_PUBLIC_ENC_R4,
                 &mut transcript,
             )?;
         }
@@ -841,6 +887,7 @@ impl<
             &asset_comm_params.j_0,
             &b_blinding_base,
             &asset_id_point_y,
+            dst::LEG_CREATE_ASSET_ID_POINT,
             &mut transcript,
         )?;
 
@@ -929,7 +976,6 @@ impl<
             re_randomized_points,
             ped_comms: divisor_comms,
             comm_r_i_amount,
-            t_comm_r_i_amount: t_comm_r_i_amount.t,
             resp_comm_r_i_amount,
             resp_ct_s,
             resp_ct_r,
@@ -1325,13 +1371,14 @@ impl<
         let b_blinding_base = tree_parameters.odd_parameters.pc_gens().B_blinding;
         let neg_blinding_base = -b_blinding_base.into_group().into_affine();
 
-        self.t_comm_r_i_amount
-            .serialize_compressed(&mut transcript)?;
+        self.resp_comm_r_i_amount
+            .challenge_contribution(dst::LEG_CREATE_BP_R_I_AMOUNT, &mut transcript)?;
 
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
+            dst::LEG_CREATE_CT_S,
             &mut transcript,
         )?;
 
@@ -1339,6 +1386,7 @@ impl<
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
+            dst::LEG_CREATE_CT_R,
             &mut transcript,
         )?;
 
@@ -1346,6 +1394,7 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount(),
+            dst::LEG_CREATE_CT_AMOUNT,
             &mut transcript,
         )?;
 
@@ -1353,30 +1402,35 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &asset_id_ciphertext,
+            dst::LEG_CREATE_CT_ASSET_ID,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_s_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            dst::LEG_CREATE_EPH_PK_S_V,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_s_at.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &eph_pk_s_at,
+            dst::LEG_CREATE_EPH_PK_S_AT,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            dst::LEG_CREATE_EPH_PK_R_V,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_at.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &eph_pk_r_at,
+            dst::LEG_CREATE_EPH_PK_R_AT,
             &mut transcript,
         )?;
 
@@ -1419,11 +1473,13 @@ impl<
             resp_eph_pk_s_r.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &eph_pk_s_r,
+                dst::LEG_CREATE_EPH_PK_S_R,
                 &mut transcript,
             )?;
             resp_eph_pk_r_s.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &eph_pk_r_s,
+                dst::LEG_CREATE_EPH_PK_R_S,
                 &mut transcript,
             )?;
         }
@@ -1444,6 +1500,7 @@ impl<
                 re_rand_point,
                 &neg_blinding_base,
                 &eph_pk_enc_key.r1,
+                dst::LEG_CREATE_ENC_KEY_R1,
                 &mut transcript,
             )?;
             p_1.challenge_contribution(
@@ -1454,10 +1511,21 @@ impl<
                         i + 1, i
                     ))
                 })?,
+                dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
-            p_2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
-            p_3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
+            p_2.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r2,
+                dst::LEG_CREATE_ENC_KEY_R2,
+                &mut transcript,
+            )?;
+            p_3.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r3,
+                dst::LEG_CREATE_ENC_KEY_R3,
+                &mut transcript,
+            )?;
             p_4.challenge_contribution(
                 &eph_pk_enc_key.r1,
                 eph_pk_enc_key.r4.as_ref().ok_or_else(|| {
@@ -1465,6 +1533,7 @@ impl<
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
+                dst::LEG_CREATE_ENC_KEY_R4,
                 &mut transcript,
             )?;
         }
@@ -1482,15 +1551,22 @@ impl<
                 &enc_key_gen,
                 &neg_blinding_base,
                 &y.into_affine(),
+                dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
 
-            p_1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
+            p_1.challenge_contribution(
+                &b_base,
+                re_rand_point,
+                dst::LEG_CREATE_MED_KEY_BLINDING,
+                &mut transcript,
+            )?;
 
             for i in 0..num_enc_keys {
                 p_2[i].challenge_contribution(
                     &leg_enc.eph_pk_enc_keys[i].r1,
                     &mediator.eph_pk_med_keys[i],
+                    dst::LEG_CREATE_MED_KEY_ENC,
                     &mut transcript,
                 )?;
             }
@@ -1503,9 +1579,24 @@ impl<
             .zip(leg_enc.eph_pk_public_enc_keys.iter())
             .enumerate()
         {
-            p_0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript)?;
-            p_1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript)?;
-            p_2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript)?;
+            p_0.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r1,
+                dst::LEG_CREATE_PUBLIC_ENC_R1,
+                &mut transcript,
+            )?;
+            p_1.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r2,
+                dst::LEG_CREATE_PUBLIC_ENC_R2,
+                &mut transcript,
+            )?;
+            p_2.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r3,
+                dst::LEG_CREATE_PUBLIC_ENC_R3,
+                &mut transcript,
+            )?;
             p_3.challenge_contribution(
                 pk,
                 eph_pk_public_enc_key.r4.as_ref().ok_or_else(|| {
@@ -1513,6 +1604,7 @@ impl<
                         "leg_enc.eph_pk_public_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
+                dst::LEG_CREATE_PUBLIC_ENC_R4,
                 &mut transcript,
             )?;
         }
@@ -1526,6 +1618,7 @@ impl<
             &asset_comm_params.j_0,
             &b_blinding_base,
             &asset_id_point_y,
+            dst::LEG_CREATE_ASSET_ID_POINT,
             &mut transcript,
         )?;
 
@@ -1867,7 +1960,6 @@ impl<
                 tree_parameters,
             ),
             self.comm_r_i_amount,
-            self.t_comm_r_i_amount,
             &challenge,
         );
 
@@ -3167,6 +3259,136 @@ mod mocking_tests {
                 leg_enc_rand,
                 path,
                 asset_data_2,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &proof,
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
+
+    #[test]
+    fn leg_proof_with_mismatched_asset_data() {
+        // Prover mocks AssetData::points to corrupt the asset-id point, so the leaf binds asset data that disagrees with the committed tree leaf.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mismatched-asset-data";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 0u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors as u32,
+            num_mediators as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    parties_see_each_other: true,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut tampered_points = asset_data.points(&asset_comm_params);
+        tampered_points[0] = PallasA::rand(&mut rng);
+        AssetData::<PallasF, VestaF, PallasParameters, VestaParameters>::points.mock_safe(
+            move |_asset_data: &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+                  _params: &AssetCommitmentParams<PallasParameters, VestaParameters>| {
+                MockResult::Return(tampered_points.clone())
+            },
+        );
+        let _ = &MockGuard::new(clear_asset_data_points_mock);
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
                 &root,
                 nonce,
                 &asset_tree_params,

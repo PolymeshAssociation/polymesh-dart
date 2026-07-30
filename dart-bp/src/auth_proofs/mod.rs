@@ -4,7 +4,7 @@ pub mod helpers;
 pub mod transparent;
 
 use crate::{
-    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
+    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -55,8 +55,8 @@ impl<G: AffineRepr> AuthProofOnlySksProtocol<G> {
     ) -> Result<Self> {
         let proto_aff = PokDiscreteLogProtocol::init(sk_aff, G::ScalarField::rand(rng), sk_aff_gen);
         let proto_enc = PokDiscreteLogProtocol::init(sk_enc, G::ScalarField::rand(rng), sk_enc_gen);
-        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, &mut writer)?;
-        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, &mut writer)?;
+        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
+        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
         Ok(Self {
             proto_aff,
             proto_enc,
@@ -148,10 +148,10 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         mut writer: W,
     ) -> Result<()> {
         self.proof_afk
-            .challenge_contribution(sk_aff_gen, pk_aff, &mut writer)?;
+            .challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
 
         self.proof_enc
-            .challenge_contribution(sk_enc_gen, pk_enc, &mut writer)?;
+            .challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
         Ok(())
     }
 
@@ -195,7 +195,7 @@ impl<G: AffineRepr> AuthProofOnlySkProtocol<G> {
         mut writer: W,
     ) -> Result<Self> {
         let proto = PokDiscreteLogProtocol::init(sk, G::ScalarField::rand(rng), sk_gen);
-        proto.challenge_contribution(sk_gen, pk, &mut writer)?;
+        proto.challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
         Ok(AuthProofOnlySkProtocol(proto))
     }
 
@@ -241,7 +241,8 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         sk_gen: &G,
         mut writer: W,
     ) -> Result<()> {
-        self.0.challenge_contribution(sk_gen, pk, &mut writer)?;
+        self.0
+            .challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
         Ok(())
     }
 

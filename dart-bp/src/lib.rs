@@ -87,6 +87,7 @@ pub mod poseidon_impls;
 
 pub mod auth_proofs;
 pub mod discrete_log;
+pub mod dst;
 pub mod fee_account;
 pub mod key_distribution;
 pub mod leg;
