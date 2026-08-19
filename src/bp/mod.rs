@@ -928,7 +928,7 @@ mod tests {
                     amount: amount_0,
                     config: LegConfig {
                         reveal_asset_id: reveal_0,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     public_enc_keys: vec![],
                 })
@@ -939,7 +939,7 @@ mod tests {
                     amount: amount_1,
                     config: LegConfig {
                         reveal_asset_id: reveal_1,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     public_enc_keys: vec![],
                 })

@@ -1005,7 +1005,7 @@ mod tests {
     use crate::account::tests::{get_tree_with_account_comm, setup_gens_new, setup_leg};
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
-    use crate::leg::{Leg, LegEncConfig};
+    use crate::leg::{Leg, LegEncConfig, PartyVisibility};
     use crate::util::{prove_with_rng, verify_rmc, verify_with_rng};
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_std::UniformRand;
@@ -1051,7 +1051,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -1352,7 +1352,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -1846,7 +1846,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -2431,7 +2431,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
@@ -2454,7 +2454,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2477,7 +2477,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
@@ -2500,7 +2500,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2523,7 +2523,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2700,7 +2700,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
@@ -2723,7 +2723,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2852,7 +2852,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
@@ -2875,7 +2875,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,

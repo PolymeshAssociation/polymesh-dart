@@ -89,7 +89,7 @@ fn make_hidden_asset_leg_enc(
             &mut rng,
             LegConfig {
                 reveal_asset_id: false,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             }
             .into(),
             vec![],

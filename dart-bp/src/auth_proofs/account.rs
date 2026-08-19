@@ -1,6 +1,6 @@
 use crate::account::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
+use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
     add_to_transcript, dst, error,
@@ -84,6 +84,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -103,6 +104,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             updated_account_commitment,
             nullifier,
             nonce,
+            txn_type,
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
@@ -125,6 +127,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -155,6 +158,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 conf.party_eph_pk
             );
         }
+        txn_type.add_to_transcript(&mut transcript)?;
 
         let (
             proto_old,
@@ -442,6 +446,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -455,6 +460,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             updated_account_commitment,
             nullifier,
             nonce,
+            txn_type,
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
@@ -471,6 +477,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -499,6 +506,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 conf.party_eph_pk
             );
         }
+        txn_type.add_to_transcript(&mut transcript)?;
 
         self.resp_re_randomized_account_commitment
             .challenge_contribution(dst::AUTH_ACC_COMM_OLD, &mut transcript)?;
@@ -960,8 +968,9 @@ mod serialization {
 mod tests {
     use super::*;
     use crate::account::PartyEphemeralPublicKey;
+    use crate::auth_proofs::DeviceAffirmationType;
     use crate::keys::keygen_enc;
-    use crate::leg::{Leg, LegEncConfig};
+    use crate::leg::{Leg, LegEncConfig, PartyVisibility};
     use ark_ec::short_weierstrass::Affine;
     use ark_pallas::{Fr, PallasConfig};
     use ark_std::UniformRand;
@@ -990,7 +999,7 @@ mod tests {
         let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
         let leg = Leg::new(ek_a.0, pk_r_e.0, amount, asset_id, vec![], vec![], vec![]).unwrap();
         let cfg = LegEncConfig {
-            parties_see_each_other: false,
+            visibility: PartyVisibility::NoVisibility,
             reveal_asset_id: false,
         };
         let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
@@ -1026,6 +1035,9 @@ mod tests {
             &updated_comm,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
@@ -1046,6 +1058,9 @@ mod tests {
                 &updated_comm,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 sk_gen,
                 enc_key_gen,
                 comm_re_rand_gen,

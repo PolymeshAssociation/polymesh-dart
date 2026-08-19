@@ -98,7 +98,7 @@ fn leg_encryption_configs() {
         .encrypt(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             },
             enc_key_gen,
@@ -146,7 +146,7 @@ fn leg_encryption_configs() {
         .encrypt(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: false,
+                visibility: PartyVisibility::NoVisibility,
                 reveal_asset_id: false,
             },
             enc_key_gen,
@@ -175,6 +175,107 @@ fn leg_encryption_configs() {
 
     let (s_pk_opt, r_pk, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
     assert_eq!(s_pk_opt, None);
+    assert_eq!(r_pk, pk_r_e.0);
+    assert_eq!(a_id, asset_id);
+    assert_eq!(amt, amount);
+
+    for (i, (sk_enc, _)) in keys_enc.iter().enumerate() {
+        let (s_pk, r_pk, a_id, amt) = leg_enc
+            .decrypt_given_key(&sk_enc.0, false, i, enc_gen)
+            .unwrap();
+        assert_eq!(s_pk, pk_s_e.0);
+        assert_eq!(r_pk, pk_r_e.0);
+        assert_eq!(a_id, asset_id);
+        assert_eq!(amt, amount);
+    }
+
+    for (i, (sk_enc, _)) in keys_public_enc.iter().enumerate() {
+        let (s_pk, r_pk, a_id, amt) = leg_enc
+            .decrypt_given_key(&sk_enc.0, true, i, enc_gen)
+            .unwrap();
+        assert_eq!(s_pk, pk_s_e.0);
+        assert_eq!(r_pk, pk_r_e.0);
+        assert_eq!(a_id, asset_id);
+        assert_eq!(amt, amount);
+    }
+
+    let (leg_enc, _) = leg
+        .encrypt(
+            &mut rng,
+            LegEncConfig {
+                visibility: PartyVisibility::OnlySenderSeesReceiver,
+                reveal_asset_id: false,
+            },
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+    assert!(!leg_enc.is_asset_id_revealed());
+    assert!(leg_enc.asset_id_ciphertext().is_some());
+    assert!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2.is_some());
+    assert_eq!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1, None);
+    assert!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r4.is_some());
+    assert!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r4.is_some());
+
+    let (s_pk, r_pk_opt, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
+    assert_eq!(s_pk, pk_s_e.0);
+    assert_eq!(r_pk_opt, Some(pk_r_e.0));
+    assert_eq!(a_id, asset_id);
+    assert_eq!(amt, amount);
+
+    let (s_pk_opt, r_pk, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
+    assert_eq!(s_pk_opt, None);
+    assert_eq!(r_pk, pk_r_e.0);
+    assert_eq!(a_id, asset_id);
+    assert_eq!(amt, amount);
+
+    for (i, (sk_enc, _)) in keys_enc.iter().enumerate() {
+        let (s_pk, r_pk, a_id, amt) = leg_enc
+            .decrypt_given_key(&sk_enc.0, false, i, enc_gen)
+            .unwrap();
+        assert_eq!(s_pk, pk_s_e.0);
+        assert_eq!(r_pk, pk_r_e.0);
+        assert_eq!(a_id, asset_id);
+        assert_eq!(amt, amount);
+    }
+
+    for (i, (sk_enc, _)) in keys_public_enc.iter().enumerate() {
+        let (s_pk, r_pk, a_id, amt) = leg_enc
+            .decrypt_given_key(&sk_enc.0, true, i, enc_gen)
+            .unwrap();
+        assert_eq!(s_pk, pk_s_e.0);
+        assert_eq!(r_pk, pk_r_e.0);
+        assert_eq!(a_id, asset_id);
+        assert_eq!(amt, amount);
+    }
+
+    let (leg_enc, _) = leg
+        .encrypt(
+            &mut rng,
+            LegEncConfig {
+                visibility: PartyVisibility::OnlyReceiverSeesSender,
+                reveal_asset_id: true,
+            },
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+    assert!(leg_enc.is_asset_id_revealed());
+    assert_eq!(leg_enc.asset_id(), Some(asset_id));
+    assert_eq!(leg_enc.asset_id_ciphertext(), None);
+    assert_eq!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2, None);
+    assert!(leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1.is_some());
+
+    let (s_pk, r_pk_opt, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
+    assert_eq!(s_pk, pk_s_e.0);
+    assert_eq!(r_pk_opt, None);
+    assert_eq!(a_id, asset_id);
+    assert_eq!(amt, amount);
+
+    let (s_pk_opt, r_pk, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
+    assert_eq!(s_pk_opt, Some(pk_s_e.0));
     assert_eq!(r_pk, pk_r_e.0);
     assert_eq!(a_id, asset_id);
     assert_eq!(amt, amount);
@@ -227,7 +328,7 @@ fn leg_verification() {
     let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
     let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
 
-    let mut test_with_config = |parties_see_each_other: bool,
+    let mut test_with_config = |visibility: PartyVisibility,
                                 num_enc_keys: u8,
                                 num_mediators: u8,
                                 num_public_enc_keys: u8,
@@ -284,7 +385,7 @@ fn leg_verification() {
         .unwrap();
 
         let config = LegEncConfig {
-            parties_see_each_other,
+            visibility,
             reveal_asset_id: false, // asset-id is always hidden
         };
 
@@ -357,7 +458,7 @@ fn leg_verification() {
 
         let (p1, p2, a, b) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
         assert_eq!(p1, pk_s_e.0);
-        if parties_see_each_other {
+        if visibility.sender_sees_receiver() {
             assert_eq!(p2.unwrap(), pk_r_e.0);
         } else {
             assert!(p2.is_none());
@@ -366,7 +467,7 @@ fn leg_verification() {
         assert_eq!(b, amount);
 
         let (p1, p2, a, b) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
-        if parties_see_each_other {
+        if visibility.receiver_sees_sender() {
             assert_eq!(p1.unwrap(), pk_s_e.0);
         } else {
             assert!(p1.is_none());
@@ -394,8 +495,8 @@ fn leg_verification() {
         }
 
         println!(
-            "parties_see_each_other={}, num_enc_keys={}, num_mediators={}, num_public_enc_keys={}, num_public_mediators={}, L={L}, height={}",
-            parties_see_each_other,
+            "visibility={:?}, num_enc_keys={}, num_mediators={}, num_public_enc_keys={}, num_public_mediators={}, L={L}, height={}",
+            visibility,
             num_enc_keys,
             num_mediators,
             num_public_enc_keys,
@@ -413,15 +514,20 @@ fn leg_verification() {
         );
     };
 
-    test_with_config(true, 2, 2, 1, 1);
+    test_with_config(PartyVisibility::FullVisibility, 2, 2, 1, 1);
+    test_with_config(PartyVisibility::NoVisibility, 2, 2, 1, 1);
+    test_with_config(PartyVisibility::OnlySenderSeesReceiver, 2, 2, 1, 1);
+    test_with_config(PartyVisibility::OnlyReceiverSeesSender, 2, 2, 1, 1);
 
-    test_with_config(false, 2, 2, 1, 1);
+    test_with_config(PartyVisibility::FullVisibility, 0, 0, 0, 0);
+    test_with_config(PartyVisibility::NoVisibility, 0, 0, 0, 0);
+    test_with_config(PartyVisibility::OnlySenderSeesReceiver, 0, 0, 0, 0);
+    test_with_config(PartyVisibility::OnlyReceiverSeesSender, 0, 0, 0, 0);
 
-    test_with_config(true, 0, 0, 0, 0);
-    test_with_config(false, 0, 0, 0, 0);
-
-    test_with_config(true, 0, 0, 1, 1);
-    test_with_config(false, 0, 0, 1, 1);
+    test_with_config(PartyVisibility::FullVisibility, 0, 0, 1, 1);
+    test_with_config(PartyVisibility::NoVisibility, 0, 0, 1, 1);
+    test_with_config(PartyVisibility::OnlySenderSeesReceiver, 0, 0, 1, 1);
+    test_with_config(PartyVisibility::OnlyReceiverSeesSender, 0, 0, 1, 1);
 }
 
 #[test]
@@ -495,7 +601,11 @@ fn batch_leg_verification() {
         let root = asset_tree.root_node();
 
         let config = LegEncConfig {
-            parties_see_each_other,
+            visibility: if parties_see_each_other {
+                PartyVisibility::FullVisibility
+            } else {
+                PartyVisibility::NoVisibility
+            },
             reveal_asset_id: false,
         };
 
@@ -749,7 +859,11 @@ fn combined_leg_verification() {
             let root = asset_tree.root_node();
 
             let config = LegEncConfig {
-                parties_see_each_other,
+                visibility: if parties_see_each_other {
+                    PartyVisibility::FullVisibility
+                } else {
+                    PartyVisibility::NoVisibility
+                },
                 reveal_asset_id: false,
             };
 
@@ -1049,7 +1163,7 @@ fn settlement_verification() {
                 &mut rng,
                 LegEncConfig {
                     reveal_asset_id,
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                 },
                 enc_key_gen,
                 enc_gen,
@@ -1060,7 +1174,7 @@ fn settlement_verification() {
                 &mut rng,
                 LegEncConfig {
                     reveal_asset_id,
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                 },
                 enc_key_gen,
                 enc_gen,
@@ -1182,7 +1296,7 @@ fn settlement_verification() {
                 &mut rng,
                 LegEncConfig {
                     reveal_asset_id,
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                 },
                 enc_key_gen,
                 enc_gen,
@@ -1193,7 +1307,7 @@ fn settlement_verification() {
                 &mut rng,
                 LegEncConfig {
                     reveal_asset_id,
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                 },
                 enc_key_gen,
                 enc_gen,
@@ -1331,7 +1445,7 @@ fn settlement_verification() {
                 &mut rng,
                 LegEncConfig {
                     reveal_asset_id,
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                 },
                 enc_key_gen,
                 enc_gen,
@@ -2200,7 +2314,7 @@ fn six_leg_alternating_settlement() {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id,
                 },
                 enc_key_gen,
@@ -2354,7 +2468,7 @@ fn six_leg_grouped_settlement() {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id,
                 },
                 enc_key_gen,
@@ -2493,7 +2607,7 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
         .encrypt(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             enc_key_gen,
@@ -2616,7 +2730,7 @@ proptest! {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other,
+                    visibility: if parties_see_each_other { PartyVisibility::FullVisibility } else { PartyVisibility::NoVisibility },
                     reveal_asset_id,
                 },
                 enc_key_gen,
@@ -2700,7 +2814,7 @@ proptest! {
         .unwrap();
 
         let config = LegEncConfig {
-            parties_see_each_other,
+            visibility: if parties_see_each_other { PartyVisibility::FullVisibility } else { PartyVisibility::NoVisibility },
             reveal_asset_id,
         };
 
@@ -2720,7 +2834,7 @@ proptest! {
         }
 
         assert_eq!(
-            leg_enc.do_parties_see_each_other(),
+            leg_enc.party_visibility() == PartyVisibility::FullVisibility,
             parties_see_each_other,
         );
 
@@ -2838,7 +2952,7 @@ proptest! {
 
         let (leg_enc, leg_enc_rand) = leg.encrypt(
             &mut rng,
-            LegEncConfig { parties_see_each_other, reveal_asset_id: false },
+            LegEncConfig { visibility: if parties_see_each_other { PartyVisibility::FullVisibility } else { PartyVisibility::NoVisibility }, reveal_asset_id: false },
             enc_key_gen, enc_gen,
         ).unwrap();
 
@@ -3001,7 +3115,7 @@ proptest! {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other,
+                    visibility: if parties_see_each_other { PartyVisibility::FullVisibility } else { PartyVisibility::NoVisibility },
                     reveal_asset_id,
                 },
                 enc_key_gen,
@@ -3527,7 +3641,7 @@ mod input_sanitation_disabled {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3576,7 +3690,7 @@ mod input_sanitation_disabled {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -3602,7 +3716,7 @@ mod input_sanitation_disabled {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: false,
+                        visibility: PartyVisibility::NoVisibility,
                         reveal_asset_id: false,
                     },
                     enc_key_gen,
@@ -3755,7 +3869,7 @@ mod input_sanitation_disabled {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3766,7 +3880,7 @@ mod input_sanitation_disabled {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,

@@ -2,7 +2,7 @@ use crate::account::transparent::{
     EncryptedPublicKey, chal_contrib_pk_enc, init_pk_enc_protocol, reps_pk_enc, verify_pk_enc,
 };
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL, helpers};
+use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL, helpers};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
     add_to_transcript, dst, error::Result,
@@ -59,6 +59,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         nullifier: G,
         auditor_keys: Vec<G>,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -76,6 +77,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         let sk_blinding = G::ScalarField::rand(rng);
         let sk_enc_blinding = G::ScalarField::rand(rng);
@@ -143,6 +145,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         nullifier: G,
         auditor_keys: &[G],
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -161,6 +164,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         self.challenge_contribution(&auditor_keys, sk_gen, enc_key_gen, &mut transcript)?;
 

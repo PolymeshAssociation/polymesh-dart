@@ -21,6 +21,7 @@ use crate::account::{
 };
 use crate::account_registration::tests::{new_account, setup_comm_key};
 use crate::auth_proofs::account::AuthProofAffirmation;
+use crate::auth_proofs::{DeviceAffirmationType, DeviceTxnType};
 use crate::keys::{DecKey, SigKey, keygen_sig};
 use crate::leg::leg_proof::LegCreationProof;
 use crate::leg::mediator::MEDIATOR_TXN_LABEL;
@@ -32,7 +33,7 @@ use crate::leg::tests::setup_keys;
 use crate::leg::{
     AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LegEncryption, LegEncryptionRandomness,
 };
-use crate::leg::{LEG_TXN_ODD_LABEL, LegEncConfig, MediatorTxnProof};
+use crate::leg::{LEG_TXN_ODD_LABEL, LegEncConfig, MediatorTxnProof, PartyVisibility};
 use crate::leg::{
     Leg, LegEncryptionCore, PartyEphemeralPublicKey, ReceiverEphemeralPublicKey,
     SenderEphemeralPublicKey,
@@ -97,7 +98,7 @@ fn send_txn() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -243,7 +244,7 @@ fn affirmation_rejects_substituted_leg_enc() {
     .unwrap();
 
     let conf = LegEncConfig {
-        parties_see_each_other: true,
+        visibility: PartyVisibility::FullVisibility,
         reveal_asset_id: false,
     };
     let (_, leg_enc_a, _) = setup_leg_with_conf(
@@ -369,7 +370,7 @@ fn receive_txn() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -521,7 +522,7 @@ fn claim_received_funds() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -670,7 +671,7 @@ fn counter_update_txn_by_sender() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -818,7 +819,7 @@ fn reverse_send_txn() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -967,7 +968,7 @@ fn reverse_receive_txn() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -9691,7 +9692,7 @@ pub fn setup_public_asset_leg<R: CryptoRngCore>(
     LegEncryptionRandomness<PallasFr>,
 ) {
     let conf = LegEncConfig {
-        parties_see_each_other: true,
+        visibility: PartyVisibility::FullVisibility,
         reveal_asset_id: true,
     };
     let enc_keys = vec![pk_e];
@@ -9871,7 +9872,7 @@ fn setup_single_leg_test<const L: usize, R: CryptoRngCore>(
     Root<L, 1, PallasParameters, VestaParameters>,
 ) {
     let conf = LegEncConfig {
-        parties_see_each_other: true,
+        visibility: PartyVisibility::FullVisibility,
         reveal_asset_id,
     };
     let (_, leg_enc, _) = setup_leg_with_conf(
@@ -10018,6 +10019,9 @@ macro_rules! gen_split_proof {
             &$uac.0,
             nullifier,
             $nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             $ack.sk_gen(),
             $ack.sk_enc_gen(),
             $bb,
@@ -10110,6 +10114,9 @@ macro_rules! gen_split_proof {
             &$uac.0,
             nullifier,
             $nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             $ack.sk_gen(),
             $ack.sk_enc_gen(),
             $bb,
@@ -10212,6 +10219,9 @@ macro_rules! gen_split_proof {
             &$uac.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             $ack.sk_gen(),
             $ack.sk_enc_gen(),
             $bb,
@@ -10325,6 +10335,9 @@ macro_rules! gen_split_proof {
             &$uac.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             $ack.sk_gen(),
             $ack.sk_enc_gen(),
             $bb,
@@ -10408,6 +10421,9 @@ macro_rules! verify_split_proof {
                 &$uac.0,
                 $nullifier,
                 $nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 $ack.sk_gen(),
                 $ack.sk_enc_gen(),
                 $bb,
@@ -10491,6 +10507,9 @@ macro_rules! verify_split_proof {
                 &$uac.0,
                 $nullifier,
                 &ledger_nonce_v,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 $ack.sk_gen(),
                 $ack.sk_enc_gen(),
                 $bb,
@@ -11788,7 +11807,7 @@ fn single_shot_settlement_split_proof() {
 
     let mut test_with_config = |reveal_asset_id: bool| {
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id,
         };
 
@@ -11895,6 +11914,9 @@ fn single_shot_settlement_split_proof() {
             &updated_sender_account_comm.0,
             sender_nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -11974,6 +11996,9 @@ fn single_shot_settlement_split_proof() {
             &updated_receiver_account_comm.0,
             receiver_nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -12226,6 +12251,9 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         &updated_sender_account_comm.0,
         sender_nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12295,6 +12323,9 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         &updated_receiver_account_comm.0,
         receiver_nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12467,6 +12498,9 @@ fn make_sender_split_proof(
         &updated_account_comm.0,
         nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12559,6 +12593,9 @@ fn make_receiver_split_proof(
         &updated_account_comm.0,
         nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12640,6 +12677,9 @@ fn verify_sender_split(
         &updated_account_comm.0,
         nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12721,6 +12761,9 @@ fn verify_receiver_split(
         &updated_account_comm.0,
         nullifier,
         nonce,
+        &DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        },
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
@@ -12779,7 +12822,7 @@ fn sender_affirmation_w2_consistency() {
     let (_, leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -12834,7 +12877,7 @@ fn sender_affirmation_w2_consistency() {
     let (_, different_leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -12939,7 +12982,7 @@ fn receiver_affirmation_w2_consistency() {
     let (_, leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -12994,7 +13037,7 @@ fn receiver_affirmation_w2_consistency() {
     let (_, different_leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -13111,7 +13154,7 @@ fn sender_affirmation_w3_consistency() {
     let (_, leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -13193,6 +13236,9 @@ fn sender_affirmation_w3_consistency() {
             &updated_account_comm.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -13311,7 +13357,7 @@ fn sender_affirmation_w3_consistency() {
         let (_, different_leg_enc, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             },
             pk_a_e.0,
@@ -13380,6 +13426,9 @@ fn sender_affirmation_w3_consistency() {
                     &updated_account_comm.0,
                     nullifier,
                     &ledger_nonce_v,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -13448,6 +13497,9 @@ fn sender_affirmation_w3_consistency() {
             &wrong_uac.0, // device uses wrong uac
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -13523,6 +13575,9 @@ fn sender_affirmation_w3_consistency() {
                     &updated_account_comm.0, // correct uac
                     nullifier,
                     &ledger_nonce_v,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -13589,6 +13644,9 @@ fn sender_affirmation_w3_consistency() {
                     &updated_account_comm.0,
                     nullifier,
                     &ledger_nonce_v,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -13676,7 +13734,7 @@ fn receiver_affirmation_w3_consistency() {
     let (_, leg_enc, _) = setup_leg_with_conf(
         &mut rng,
         LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: true,
         },
         pk_a_e.0,
@@ -13828,6 +13886,9 @@ fn receiver_affirmation_w3_consistency() {
             &updated_account_comm.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -13862,7 +13923,7 @@ fn receiver_affirmation_w3_consistency() {
         let (_, diff_leg_enc, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             },
             pk_a_e.0,
@@ -13923,6 +13984,9 @@ fn receiver_affirmation_w3_consistency() {
                     &updated_account_comm.0,
                     nullifier,
                     &ln_v,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -13985,6 +14049,9 @@ fn receiver_affirmation_w3_consistency() {
                     &updated_account_comm.0,
                     nullifier,
                     &ln_v,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -16199,7 +16266,7 @@ mod input_sanitation_disabled {
 
             // Revealed asset-id leg, no balance change -> LegAccountLink::AmountOnly.
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             };
             let (_, leg_enc, _) = setup_leg_with_conf(

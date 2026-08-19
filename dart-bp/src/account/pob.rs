@@ -742,6 +742,14 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             )));
         }
 
+        if self.resp_participant.len() != legs.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_participant length mismatch: expected {}, got {}",
+                legs.len(),
+                self.resp_participant.len()
+            )));
+        }
+
         if sender_in_leg_indices.len() > 0 {
             if self.resp_sent_amount.is_none() {
                 return Err(Error::ProofVerificationError(
@@ -1100,7 +1108,7 @@ mod tests {
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig};
+    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig, PartyVisibility};
     use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
@@ -1327,7 +1335,7 @@ mod tests {
                 .unwrap();
                 let config = if i % 4 == 0 {
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     }
                 } else {
@@ -1350,7 +1358,7 @@ mod tests {
                 .unwrap();
                 let config = if i % 4 == 1 {
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     }
                 } else {
@@ -1556,9 +1564,9 @@ mod tests {
     }
 
     #[test]
-    fn pob_with_anyone_resp_asset_id_len_mismatch_fails() {
-        // Popping one entry off resp_asset_id makes its length no longer match the number of legs;
-        // verification must reject on the length-mismatch check.
+    fn pob_with_anyone_resp_len_mismatch_fails() {
+        // Popping one entry off resp_asset_id or resp_participant makes its length no longer match
+        // the number of legs; verification must reject on the length-mismatch check.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1641,6 +1649,30 @@ mod tests {
             enc_gen,
         )
         .unwrap();
+
+        let mut proof_participant = proof.clone();
+        proof_participant.resp_participant.pop();
+        assert!(
+            proof_participant
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    &pk_e.0,
+                    account_comm.clone(),
+                    legs.clone(),
+                    sender_in_leg_indices.clone(),
+                    receiver_in_leg_indices.clone(),
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .is_err()
+        );
 
         proof.resp_asset_id.pop();
 

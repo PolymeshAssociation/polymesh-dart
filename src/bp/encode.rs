@@ -341,12 +341,6 @@ impl<P: SWCurveConfig> TryFrom<&CompressedAffine> for Affine<P> {
     }
 }
 
-impl<P: SWCurveConfig> From<CompressedAffine> for Affine<P> {
-    fn from(compressed: CompressedAffine) -> Self {
-        Self::try_from(&compressed).expect("Failed to convert CompressedAffine to Affine")
-    }
-}
-
 impl<'a, P: SWCurveConfig> EncodeAsRef<'a, Affine<P>> for CompressedAffine {
     type RefType = CompressedAffine;
 }

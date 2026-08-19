@@ -3204,6 +3204,7 @@ mod tests {
         get_tree_with_account_comm, get_tree_with_commitment, setup_gens_new,
     };
     use crate::account_registration::tests::new_account;
+    use crate::auth_proofs::DeviceTxnType;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
         add_verification_tuples_batches_to_rmc, batch_verify_bp, handle_verification_tuples,
@@ -4308,6 +4309,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Withdraw {
+            asset_id,
+            amount: withdraw_amount,
+        };
+
         //  Host side: creates partial + host account commitment (without sk)
         let (partial, host_proof, rerandomized_leaf, rand_part_old_comm, rand_new_comm, nullifier) =
             WithdrawSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::new::<
@@ -4345,6 +4351,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4391,6 +4398,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4452,6 +4460,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Withdraw {
+            asset_id,
+            amount: withdraw_amount,
+        };
+
         //  Host creates partial + host account commitment
         let (protocol, mut even_prover, odd_prover, nullifier) =
             WithdrawSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::init::<
@@ -4504,6 +4517,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4580,6 +4594,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 &ledger_nonce_v,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4675,6 +4690,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Deposit {
+            asset_id,
+            amount: deposit_amount,
+        };
+
         //  Host side: creates partial + host account commitment (without sk)
         let (partial, host_proof, rerandomized_leaf, rand_part_old_comm, rand_new_comm, nullifier) =
             DepositSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::new::<
@@ -4711,6 +4731,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4757,6 +4778,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4818,6 +4840,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Deposit {
+            asset_id,
+            amount: deposit_amount,
+        };
+
         //  Host creates partial + host account commitment
         let (protocol, mut even_prover, odd_prover, nullifier) =
             DepositSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::init::<
@@ -4870,6 +4897,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4946,6 +4974,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 &ledger_nonce_v,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,

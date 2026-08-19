@@ -1,7 +1,7 @@
 use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
-use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
+use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::dst;
 use crate::error::*;
@@ -1377,8 +1377,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let sk_gen = account_comm_key.sk_gen();
         let sk_enc_gen = account_comm_key.sk_enc_gen();
-        self.auth_proof
-            .verify(pk_aff, pk_enc, &ledger_nonce_v, &sk_gen, &sk_enc_gen, None)?;
+        self.auth_proof.verify(
+            pk_aff,
+            pk_enc,
+            &ledger_nonce_v,
+            &DeviceTxnType::AccountRegistration { asset_id },
+            &sk_gen,
+            &sk_enc_gen,
+            None,
+        )?;
 
         let mut auth_proof_bytes = Vec::new();
         self.auth_proof
@@ -2913,6 +2920,7 @@ pub mod tests {
                     pk_aff.0,
                     pk_enc.0,
                     &ledger_nonce,
+                    &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
                     &enc_key_gen,
                 )
@@ -3081,6 +3089,7 @@ pub mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 nonce,
+                &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
                 &enc_key_gen,
             )
@@ -3130,7 +3139,15 @@ pub mod tests {
 
             reg_proof
                 .auth_proof
-                .verify(pk_aff.0, pk_enc.0, nonce, &aff_key_gen, &enc_key_gen, None)
+                .verify(
+                    pk_aff.0,
+                    pk_enc.0,
+                    nonce,
+                    &DeviceTxnType::AccountRegistration { asset_id },
+                    &aff_key_gen,
+                    &enc_key_gen,
+                    None,
+                )
                 .unwrap();
 
             let proof = reg_proof.partial.proof.as_ref().unwrap();
@@ -3212,6 +3229,7 @@ pub mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 &ledger_nonce,
+                &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
                 &enc_key_gen,
             )
@@ -3274,6 +3292,7 @@ pub mod tests {
                     pk_aff.0,
                     pk_enc.0,
                     &ledger_nonce_v,
+                    &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
                     &enc_key_gen,
                     None,

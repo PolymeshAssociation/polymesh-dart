@@ -3,7 +3,7 @@ use crate::account::common::balance::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
+use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
 use crate::dst;
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
@@ -1162,6 +1162,10 @@ impl<
             issuer_aff_pk,
             issuer_enc_pk,
             &ledger_nonce_v,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
             None,
@@ -1447,6 +1451,10 @@ mod tests {
             pk_aff.0,
             pk_enc.0,
             nonce,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
         )
@@ -1478,7 +1486,18 @@ mod tests {
         // Verify auth proof using its own AUTH_TXN_LABEL transcript
         proof
             .auth_proof
-            .verify(pk_aff.0, pk_enc.0, nonce, &sk_gen, &sk_enc_gen, None)
+            .verify(
+                pk_aff.0,
+                pk_enc.0,
+                nonce,
+                &DeviceTxnType::Mint {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
+                &sk_gen,
+                &sk_enc_gen,
+                None,
+            )
             .unwrap();
 
         let r1cs_proof = proof.partial.r1cs_proof.as_ref().unwrap();
@@ -1567,6 +1586,10 @@ mod tests {
             pk_aff.0,
             pk_enc.0,
             &ledger_nonce,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
         )
@@ -1642,6 +1665,10 @@ mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 &ledger_nonce_v,
+                &DeviceTxnType::Mint {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
                 &sk_gen,
                 &sk_enc_gen,
                 None,

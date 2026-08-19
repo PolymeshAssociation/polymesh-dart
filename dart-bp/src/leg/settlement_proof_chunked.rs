@@ -204,6 +204,11 @@ impl<
         Vec<VerificationTuple<Affine<G0>>>,
     )> {
         let total_legs: usize = self.chunks.iter().map(|c| c.leg_proofs.len()).sum();
+        if self.num_legs as usize != total_legs {
+            return Err(Error::ProofVerificationError(
+                "num_legs does not match total legs across chunks".to_string(),
+            ));
+        }
         let total_revealed = leg_encs.iter().filter(|e| e.is_asset_id_revealed()).count();
         if leg_encs.len() != total_legs {
             return Err(Error::ProofVerificationError(
@@ -307,7 +312,7 @@ mod tests {
     use super::SettlementCreationProofBatch;
     use crate::keys::keygen_enc;
     use crate::leg::settlement_proof::SettlementCreationProof;
-    use crate::leg::{AssetCommitmentParams, AssetData, Leg, LegEncConfig};
+    use crate::leg::{AssetCommitmentParams, AssetData, Leg, LegEncConfig, PartyVisibility};
     use crate::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
     use ark_ec::CurveGroup;
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
@@ -428,7 +433,7 @@ mod tests {
                     &mut rng,
                     LegEncConfig {
                         reveal_asset_id: false,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     enc_key_gen,
                     enc_gen,
@@ -759,7 +764,7 @@ mod tests {
                     &mut rng,
                     LegEncConfig {
                         reveal_asset_id: revealed,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     enc_key_gen,
                     enc_gen,

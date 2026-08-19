@@ -76,6 +76,7 @@ macro_rules! with_balance {
         verifier_has_balance_decreased: $hbd:expr,
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
+        device_affirmation_type: $DevAffType:expr,
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -171,6 +172,7 @@ macro_rules! with_balance {
                         None => vec![],
                     },
                     leg_prover_configs: vec![LegProverConfig::wrap(&leg_prover_config)?],
+                    txn_type: DeviceTxnType::DeviceAffirmation { typ: $DevAffType },
                 };
 
                 Ok((
@@ -360,6 +362,9 @@ macro_rules! with_balance {
                             &updated_comm.0,
                             nullifier,
                             &ledger_nonce_v,
+                            &polymesh_dart_bp::auth_proofs::DeviceTxnType::DeviceAffirmation {
+                                typ: $DevAffType.into(),
+                            },
                             sk_gen,
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
@@ -432,6 +437,7 @@ macro_rules! no_balance {
         eph_pk_variant: $EphPkVariant:ident,
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
+        device_affirmation_type: $DevAffType:expr,
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -533,6 +539,7 @@ macro_rules! no_balance {
                         None => vec![],
                     },
                     leg_prover_configs: vec![LegProverConfig::wrap(&leg_prover_config)?],
+                    txn_type: DeviceTxnType::DeviceAffirmation { typ: $DevAffType },
                 };
 
                 Ok((
@@ -722,6 +729,9 @@ macro_rules! no_balance {
                             &updated_comm.0,
                             nullifier,
                             &ledger_nonce_v,
+                            &polymesh_dart_bp::auth_proofs::DeviceTxnType::DeviceAffirmation {
+                                typ: $DevAffType.into(),
+                            },
                             sk_gen,
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
@@ -791,6 +801,7 @@ with_balance! {
     verifier_has_balance_decreased: Some(true),
     verifier_has_counter_decreased: Some(false),
     state_method: get_sender_affirm_state,
+    device_affirmation_type: DeviceAffirmationType::SenderAffirmation,
 }
 
 no_balance! {
@@ -802,6 +813,7 @@ no_balance! {
     eph_pk_variant: Receiver,
     verifier_has_counter_decreased: Some(false),
     state_method: get_receiver_affirm_state,
+    device_affirmation_type: DeviceAffirmationType::ReceiverAffirmation,
 }
 
 with_balance! {
@@ -814,6 +826,7 @@ with_balance! {
     verifier_has_balance_decreased: Some(false),
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_claiming_received,
+    device_affirmation_type: DeviceAffirmationType::ReceiverClaim,
 }
 
 with_balance! {
@@ -826,6 +839,7 @@ with_balance! {
     verifier_has_balance_decreased: Some(false),
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_reversing_send,
+    device_affirmation_type: DeviceAffirmationType::SenderReversal,
 }
 
 no_balance! {
@@ -837,6 +851,7 @@ no_balance! {
     eph_pk_variant: Sender,
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
+    device_affirmation_type: DeviceAffirmationType::SenderCounterUpdate,
 }
 
 no_balance! {
@@ -848,6 +863,7 @@ no_balance! {
     eph_pk_variant: Receiver,
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
+    device_affirmation_type: DeviceAffirmationType::ReceiverReversal,
 }
 
 with_balance! {
@@ -860,6 +876,7 @@ with_balance! {
     verifier_has_balance_decreased: Some(true),
     verifier_has_counter_decreased: None,
     state_method: get_instant_sender_affirm_state,
+    device_affirmation_type: DeviceAffirmationType::InstantSenderAffirmation,
 }
 
 with_balance! {
@@ -872,4 +889,5 @@ with_balance! {
     verifier_has_balance_decreased: Some(false),
     verifier_has_counter_decreased: None,
     state_method: get_instant_receiver_affirm_state,
+    device_affirmation_type: DeviceAffirmationType::InstantReceiverAffirmation,
 }

@@ -32,6 +32,9 @@ fn generate_v1_serialized_objects() {
     leg::gen_settlement_proof_1_aud_1_med_1_pub();
     leg::gen_settlement_proof_revealed_asset_id();
     leg::gen_settlement_proof_parties_hidden();
+    leg::gen_settlement_proof_parties_visible();
+    leg::gen_settlement_proof_sender_sees_receiver();
+    leg::gen_settlement_proof_receiver_sees_sender();
     leg::gen_leg_encrypted();
     leg::gen_mediator_encryption();
     leg::gen_mediator_proof();

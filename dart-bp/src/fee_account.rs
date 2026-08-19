@@ -1,6 +1,6 @@
 use crate::account::AccountCommitmentKeyTrait;
 use crate::auth_proofs::fee_account::AuthProofFeePayment;
-use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol};
+use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol, DeviceTxnType};
 use crate::dst;
 use crate::error::*;
 use crate::util::{
@@ -531,8 +531,13 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
 
-        self.auth_proof
-            .verify(*pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+        self.auth_proof.verify(
+            *pk,
+            &ledger_nonce_v,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &account_comm_key.sk_gen(),
+            None,
+        )?;
 
         let challenge_h_final_v =
             append_auth_proof_and_get_challenge(&self.auth_proof, &mut transcript)?;
@@ -1533,8 +1538,16 @@ impl<
 
         let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
 
-        self.auth_proof
-            .verify(pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+        self.auth_proof.verify(
+            pk,
+            &ledger_nonce_v,
+            &DeviceTxnType::FeeAccountTopup {
+                asset_id,
+                amount: increase_bal_by,
+            },
+            &account_comm_key.sk_gen(),
+            None,
+        )?;
 
         let challenge_h_final_v: F0 =
             append_auth_proof_and_get_challenge(&self.auth_proof, even_verifier.transcript())?;
@@ -3844,7 +3857,15 @@ pub mod tests {
         //  Ledger side: own transcript, auth T-values only
         // Uses AuthProofOnlySk::new which internally builds an AUTH_TXN_LABEL transcript
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof = AuthProofOnlySk::new(&mut rng, sk.0, pk.0, nonce, &sk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk.0,
+            pk.0,
+            nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &sk_gen,
+        )
+        .unwrap();
 
         let reg_proof = RegTxnProof {
             partial,
@@ -3880,8 +3901,43 @@ pub mod tests {
         // Verify auth: uses its own AUTH_TXN_LABEL transcript
         reg_proof
             .auth_proof
-            .verify(pk.0, nonce, &sk_gen, None)
+            .verify(
+                pk.0,
+                nonce,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &sk_gen,
+                None,
+            )
             .unwrap();
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountTopup {
+                        asset_id,
+                        amount: 10,
+                    },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountRegistration { asset_id: 2 },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -3925,8 +3981,15 @@ pub mod tests {
             .copied()
             .collect();
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof =
-            AuthProofOnlySk::new(&mut rng, sk.0, pk.0, &ledger_nonce, &sk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk.0,
+            pk.0,
+            &ledger_nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &sk_gen,
+        )
+        .unwrap();
 
         // Host hashes auth_proof into the transcript to derive an updated challenge
         let mut auth_proof_bytes = Vec::new();
@@ -3971,7 +4034,13 @@ pub mod tests {
             .collect();
         reg_proof
             .auth_proof
-            .verify(pk.0, &ledger_nonce_v, &sk_gen, None)
+            .verify(
+                pk.0,
+                &ledger_nonce_v,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &sk_gen,
+                None,
+            )
             .unwrap();
 
         // Verifier hashes auth_proof into the transcript to derive the updated challenge
@@ -4189,7 +4258,15 @@ pub mod tests {
             .unwrap();
 
         //  Ledger side: own AUTH_TXN_LABEL transcript, independently
-        let auth_proof = AuthProofOnlySk::new(&mut rng, sk_i.0, pk_i.0, nonce, &pk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk_i.0,
+            pk_i.0,
+            nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &pk_gen,
+        )
+        .unwrap();
 
         let proof = FeeAccountTopupTxnProof {
             auth_proof,
@@ -4226,7 +4303,13 @@ pub mod tests {
         // Verify auth proof using its own AUTH_TXN_LABEL transcript
         proof
             .auth_proof
-            .verify(pk_i.0, nonce, &pk_gen, None)
+            .verify(
+                pk_i.0,
+                nonce,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &pk_gen,
+                None,
+            )
             .unwrap();
     }
 
@@ -4293,8 +4376,15 @@ pub mod tests {
             .chain(nonce.iter())
             .copied()
             .collect();
-        let auth_proof =
-            AuthProofOnlySk::new(&mut rng, sk_i.0, pk_i.0, &ledger_nonce, &pk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk_i.0,
+            pk_i.0,
+            &ledger_nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &pk_gen,
+        )
+        .unwrap();
 
         // Host hashes auth_proof into the transcript to derive an updated challenge
         let mut auth_proof_bytes = Vec::new();
@@ -4360,7 +4450,13 @@ pub mod tests {
             .collect();
         proof
             .auth_proof
-            .verify(pk_i.0, &ledger_nonce_v, &pk_gen, None)
+            .verify(
+                pk_i.0,
+                &ledger_nonce_v,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &pk_gen,
+                None,
+            )
             .unwrap();
 
         // Verifier hashes auth_proof into the transcript to derive the updated challenge
@@ -4820,6 +4916,10 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
             sk_gen,
             randomness_gen,
             b_blinding,
@@ -4860,6 +4960,10 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::FeePayment {
+                    asset_id,
+                    amount: fee_amount,
+                },
                 sk_gen,
                 randomness_gen,
                 b_blinding,
@@ -4949,6 +5053,10 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
             sk_gen,
             randomness_gen,
             b_blinding,
@@ -5020,6 +5128,10 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 &ledger_nonce_v,
+                &DeviceTxnType::FeePayment {
+                    asset_id,
+                    amount: fee_amount,
+                },
                 sk_gen,
                 randomness_gen,
                 b_blinding,

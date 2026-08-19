@@ -326,14 +326,42 @@ impl Leg {
     }
 }
 
+/// Which of the sender and receiver can decrypt the other's public key.
+#[derive(Clone, Copy, Debug, Encode, Decode, TypeInfo, PartialEq, Eq, DecodeWithMemTracking)]
+pub enum PartyVisibility {
+    /// Neither party can decrypt the other's public key.
+    NoVisibility,
+    /// Both parties can decrypt the other's public key.
+    FullVisibility,
+    /// Only the sender can decrypt the receiver's public key.
+    OnlySenderSeesReceiver,
+    /// Only the receiver can decrypt the sender's public key.
+    OnlyReceiverSeesSender,
+}
+
+impl From<PartyVisibility> for bp_leg::PartyVisibility {
+    fn from(v: PartyVisibility) -> Self {
+        match v {
+            PartyVisibility::NoVisibility => bp_leg::PartyVisibility::NoVisibility,
+            PartyVisibility::FullVisibility => bp_leg::PartyVisibility::FullVisibility,
+            PartyVisibility::OnlySenderSeesReceiver => {
+                bp_leg::PartyVisibility::OnlySenderSeesReceiver
+            }
+            PartyVisibility::OnlyReceiverSeesSender => {
+                bp_leg::PartyVisibility::OnlyReceiverSeesSender
+            }
+        }
+    }
+}
+
 /// Configuration for a leg's encryption and proof generation.
 ///
 /// This mirrors [`polymesh_dart_bp::leg::LegEncConfig`] but derives SCALE codec traits
 /// so it can be serialized as part of `LegBuilder`.
 #[derive(Clone, Copy, Debug, Encode, Decode, TypeInfo, PartialEq, Eq, DecodeWithMemTracking)]
 pub struct LegConfig {
-    /// If `true`, sender can decrypt receiver's pk and vice versa.
-    pub parties_see_each_other: bool,
+    /// Which of the sender and receiver can decrypt the other's public key.
+    pub visibility: PartyVisibility,
     /// If `true`, asset-id is revealed in the leg else a curve-tree membership proof in the asset
     /// tree is created
     pub reveal_asset_id: bool,
@@ -343,7 +371,7 @@ impl Default for LegConfig {
     /// By default, both parties see each other and the asset-id is hidden.
     fn default() -> Self {
         Self {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: false,
         }
     }
@@ -352,7 +380,7 @@ impl Default for LegConfig {
 impl From<LegConfig> for bp_leg::LegEncConfig {
     fn from(c: LegConfig) -> Self {
         Self {
-            parties_see_each_other: c.parties_see_each_other,
+            visibility: c.visibility.into(),
             reveal_asset_id: c.reveal_asset_id,
         }
     }

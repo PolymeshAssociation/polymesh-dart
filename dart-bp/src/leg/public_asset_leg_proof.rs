@@ -159,14 +159,16 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_2 = leg_enc_rand.r2;
         let mut r_3 = leg_enc_rand.r3;
 
-        let parties_see_each_other = leg_enc.do_parties_see_each_other();
+        let visibility = leg_enc.party_visibility();
+        let sender_sees_receiver = visibility.sender_sees_receiver();
+        let receiver_sees_sender = visibility.receiver_sees_sender();
 
         let mut r_1_inv = r_1.inverse().ok_or_else(|| Error::InvertingZero)?;
         let mut r_2_inv = r_2.inverse().ok_or_else(|| Error::InvertingZero)?;
         let mut r_3_r_1_inv = r_3 * r_1_inv;
         let mut r_3_r_2_inv = r_3 * r_2_inv;
-        let r_2_r_1_inv = parties_see_each_other.then(|| r_2 * r_1_inv);
-        let r_1_r_2_inv = parties_see_each_other.then(|| r_1 * r_2_inv);
+        let r_2_r_1_inv = sender_sees_receiver.then(|| r_2 * r_1_inv);
+        let r_1_r_2_inv = receiver_sees_sender.then(|| r_1 * r_2_inv);
 
         let mut amount_blinding = G::ScalarField::rand(rng);
         let mut r_1_blinding = G::ScalarField::rand(rng);
@@ -176,8 +178,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_2_inv_blinding = G::ScalarField::rand(rng);
         let mut r_3_r_1_inv_blinding = G::ScalarField::rand(rng);
         let mut r_3_r_2_inv_blinding = G::ScalarField::rand(rng);
-        let mut r_2_r_1_inv_blinding = parties_see_each_other.then(|| G::ScalarField::rand(rng));
-        let mut r_1_r_2_inv_blinding = parties_see_each_other.then(|| G::ScalarField::rand(rng));
+        let mut r_2_r_1_inv_blinding = sender_sees_receiver.then(|| G::ScalarField::rand(rng));
+        let mut r_1_r_2_inv_blinding = receiver_sees_sender.then(|| G::ScalarField::rand(rng));
 
         let mut amount = G::ScalarField::from(leg.core.amount);
 
@@ -229,24 +231,22 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
-        // If parties_see_each_other is true, then S[1] and R[0] is present in leg encryption
-        // For proving S[1] = S[0] * r_2/r_1 and R[0] = R[1] * r_1/r_2
-        let (eph_pk_s_r_proto, eph_pk_r_s_proto) = if parties_see_each_other {
-            (
-                Some(PokDiscreteLogProtocol::init(
-                    r_2_r_1_inv.unwrap(),
-                    r_2_r_1_inv_blinding.unwrap(),
-                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                )),
-                Some(PokDiscreteLogProtocol::init(
-                    r_1_r_2_inv.unwrap(),
-                    r_1_r_2_inv_blinding.unwrap(),
-                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-                )),
+        // S[1] (eph_pk_s.r2) is present iff the sender can see the receiver. Prove S[1] = S[0] * r_2/r_1.
+        let eph_pk_s_r_proto = sender_sees_receiver.then(|| {
+            PokDiscreteLogProtocol::init(
+                r_2_r_1_inv.unwrap(),
+                r_2_r_1_inv_blinding.unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             )
-        } else {
-            (None, None)
-        };
+        });
+        // R[0] (eph_pk_r.r1) is present iff the receiver can see the sender. Prove R[0] = R[1] * r_1/r_2.
+        let eph_pk_r_s_proto = receiver_sees_sender.then(|| {
+            PokDiscreteLogProtocol::init(
+                r_1_r_2_inv.unwrap(),
+                r_1_r_2_inv_blinding.unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            )
+        });
 
         let mut eph_pk_enc_proto = Vec::with_capacity(leg_enc.eph_pk_enc_keys.len());
         let mut eph_pk_public_enc_proto = Vec::with_capacity(leg_enc.eph_pk_public_enc_keys.len());
@@ -301,7 +301,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_1_r_2_inv_blinding,
             comm_r_i_blinding,
             t_comm_r_i_amount_blinding,
-            parties_see_each_other,
+            sender_sees_receiver,
+            receiver_sees_sender,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
             prover,
@@ -317,8 +318,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_3_r_1_inv,
             r_3_r_2_inv,
         ];
-        if parties_see_each_other {
+        if sender_sees_receiver {
             wits.push(r_2_r_1_inv.unwrap());
+        }
+        if receiver_sees_sender {
             wits.push(r_1_r_2_inv.unwrap());
         }
 
@@ -701,6 +704,19 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             ));
         }
 
+        if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r4.is_some()
+            || leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r4.is_some()
+            || leg_enc.eph_pk_enc_keys.iter().any(|e| e.r4.is_some())
+            || leg_enc
+                .eph_pk_public_enc_keys
+                .iter()
+                .any(|e| e.r4.is_some())
+        {
+            return Err(Error::ProofVerificationError(
+                "asset-id (r4) ephemeral keys must be absent when asset-id is revealed".to_string(),
+            ));
+        }
+
         if leg_enc.eph_pk_enc_keys.len() != enc_keys.len() {
             return Err(Error::ProofVerificationError(format!(
                 "leg_enc.eph_pk_enc_keys.len() != enc_keys.len() ({} != {})",
@@ -716,33 +732,23 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
-        let parties_see_each_other = leg_enc.do_parties_see_each_other();
+        let visibility = leg_enc.party_visibility();
+        let sender_sees_receiver = visibility.sender_sees_receiver();
+        let receiver_sees_sender = visibility.receiver_sees_sender();
 
-        if parties_see_each_other {
-            if self.resp_eph_pk_s_r.is_none() {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
-                ));
-            }
-            if self.resp_eph_pk_r_s.is_none() {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
-                ));
-            }
-        } else {
-            if self.resp_eph_pk_s_r.is_some() {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is false but resp_eph_pk_s_r is present".to_string(),
-                ));
-            }
-            if self.resp_eph_pk_r_s.is_some() {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is false but resp_eph_pk_r_s is present".to_string(),
-                ));
-            }
+        if self.resp_eph_pk_s_r.is_some() != sender_sees_receiver {
+            return Err(Error::ProofVerificationError(
+                "resp_eph_pk_s_r presence must match sender-sees-receiver visibility".to_string(),
+            ));
+        }
+        if self.resp_eph_pk_r_s.is_some() != receiver_sees_sender {
+            return Err(Error::ProofVerificationError(
+                "resp_eph_pk_r_s presence must match receiver-sees-sender visibility".to_string(),
+            ));
         }
 
-        let required_resp_comm_len = if parties_see_each_other { 11 } else { 9 };
+        let num_vis_resps = sender_sees_receiver as usize + receiver_sees_sender as usize;
+        let required_resp_comm_len = 9 + num_vis_resps;
         if self.resp_comm_r_i_amount.0.len() != required_resp_comm_len {
             return Err(Error::ProofVerificationError(format!(
                 "resp_comm_r_i_amount response length is {} but expected {}",
@@ -755,11 +761,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
         ensure_eph_key_not_identity(&leg_enc)?;
 
-        let vars = verifier.commit_vec(
-            8 + if parties_see_each_other { 2 } else { 0 },
-            self.comm_r_i_amount,
-        );
-        Self::enforce_constraints(&mut *verifier, None, vars, parties_see_each_other)?;
+        let vars = verifier.commit_vec(8 + num_vis_resps, self.comm_r_i_amount);
+        Self::enforce_constraints(
+            &mut *verifier,
+            None,
+            vars,
+            sender_sees_receiver,
+            receiver_sees_sender,
+        )?;
 
         let mut transcript_ref = verifier.transcript();
 
@@ -801,10 +810,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &mut transcript_ref,
         )?;
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             let resp = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
+                    "sender sees receiver but resp_eph_pk_s_r is missing".to_string(),
                 )
             })?;
             let eph_pk_s_r = leg_enc
@@ -813,8 +822,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .r2
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing"
-                            .to_string(),
+                        "sender sees receiver but leg_enc.eph_pk_s.1 is missing".to_string(),
                     )
                 })?;
             resp.challenge_contribution(
@@ -823,10 +831,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_R,
                 &mut transcript_ref,
             )?;
+        }
 
+        if receiver_sees_sender {
             let resp = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
+                    "receiver sees sender but resp_eph_pk_r_s is missing".to_string(),
                 )
             })?;
             let eph_pk_r_s = leg_enc
@@ -835,8 +845,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .r1
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing"
-                            .to_string(),
+                        "receiver sees sender but leg_enc.eph_pk_r.0 is missing".to_string(),
                     )
                 })?;
             resp.challenge_contribution(
@@ -969,10 +978,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &self.resp_comm_r_i_amount.0[8],
         );
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             let resp = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_s_r is missing".to_string(),
+                    "sender sees receiver but resp_eph_pk_s_r is missing".to_string(),
                 )
             })?;
             let eph_pk_s_r = leg_enc
@@ -981,8 +990,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .r2
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "parties_see_each_other is true but leg_enc.eph_pk_s.1 is missing"
-                            .to_string(),
+                        "sender sees receiver but leg_enc.eph_pk_s.1 is missing".to_string(),
                     )
                 })?;
             verify_or_rmc_2!(
@@ -994,10 +1002,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &challenge,
                 &self.resp_comm_r_i_amount.0[9],
             );
+        }
 
+        if receiver_sees_sender {
             let resp = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_r_s is missing".to_string(),
+                    "receiver sees sender but resp_eph_pk_r_s is missing".to_string(),
                 )
             })?;
             let eph_pk_r_s = leg_enc
@@ -1006,8 +1016,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 .r1
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "parties_see_each_other is true but leg_enc.eph_pk_r.0 is missing"
-                            .to_string(),
+                        "receiver sees sender but leg_enc.eph_pk_r.0 is missing".to_string(),
                     )
                 })?;
             verify_or_rmc_2!(
@@ -1017,7 +1026,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 eph_pk_r_s,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[10],
+                &self.resp_comm_r_i_amount.0[9 + sender_sees_receiver as usize],
             );
         }
 
@@ -1100,7 +1109,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             rmc,
             self.resp_comm_r_i_amount,
             Self::bp_gens(
-                parties_see_each_other,
+                sender_sees_receiver,
+                receiver_sees_sender,
                 leaf_level_pc_gens,
                 leaf_level_bp_gens,
             ),
@@ -1115,17 +1125,13 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         cs: &mut CS,
         amount: Option<Balance>,
         mut committed_variables: Vec<Variable<G::ScalarField>>,
-        parties_see_each_other: bool,
+        sender_sees_receiver: bool,
+        receiver_sees_sender: bool,
     ) -> Result<()> {
-        // Unwrap is fine because caller creates the committed_variables list
-        let (var_r1_r2_inv, var_r2_r1_inv) = if parties_see_each_other {
-            (
-                Some(committed_variables.pop().unwrap()),
-                Some(committed_variables.pop().unwrap()),
-            )
-        } else {
-            (None, None)
-        };
+        // Unwrap is fine because caller creates the committed_variables list. r_1/r_2 was pushed
+        // after r_2/r_1, so it is popped first.
+        let var_r1_r2_inv = receiver_sees_sender.then(|| committed_variables.pop().unwrap());
+        let var_r2_r1_inv = sender_sees_receiver.then(|| committed_variables.pop().unwrap());
 
         let var_r3_r2_inv = committed_variables.pop().unwrap();
         let var_r3_r1_inv = committed_variables.pop().unwrap();
@@ -1160,11 +1166,12 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let (_, _, r3) = cs.multiply(lc_r2.clone(), var_r3_r2_inv.into());
         cs.constrain(lc_r3.clone() - r3);
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             // r_1 * r_2/r_1 = r_2
             let (_, _, r2) = cs.multiply(lc_r1.clone(), var_r2_r1_inv.unwrap().into());
             cs.constrain(lc_r2.clone() - r2);
-
+        }
+        if receiver_sees_sender {
             // r_2 * r_1/r_2 = r_1
             let (_, _, r1) = cs.multiply(lc_r2, var_r1_r2_inv.unwrap().into());
             cs.constrain(lc_r1 - r1);
@@ -1181,15 +1188,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     }
 
     fn bp_gens(
-        parties_see_each_other: bool,
+        sender_sees_receiver: bool,
+        receiver_sees_sender: bool,
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
     ) -> Vec<Affine<G>> {
+        let num_vis_resps = sender_sees_receiver as u32 + receiver_sees_sender as u32;
         let mut gens = vec![leaf_level_pc_gens.B_blinding];
-        for g in bp_gens_for_vec_commitment(
-            8 + if parties_see_each_other { 2 } else { 0 },
-            leaf_level_bp_gens,
-        ) {
+        for g in bp_gens_for_vec_commitment(8 + num_vis_resps, leaf_level_bp_gens) {
             gens.push(g);
         }
         gens
@@ -1237,7 +1243,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         r_1_r_2_inv_blinding: Option<G::ScalarField>,
         comm_r_i_blinding: G::ScalarField,
         t_comm_r_i_amount_blinding: G::ScalarField,
-        parties_see_each_other: bool,
+        sender_sees_receiver: bool,
+        receiver_sees_sender: bool,
         leaf_level_pc_gens: &PedersenGens<Affine<G>>,
         leaf_level_bp_gens: &BulletproofGens<Affine<G>>,
         prover: &mut Prover<MerlinTranscript, Affine<G>>,
@@ -1252,14 +1259,16 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_3_r_1_inv,
             r_3_r_2_inv,
         ];
-        // If S[1] and R[0] are present, then knowledge of r_2 / r_1 and r_1 / r_2 needs to be proven as well
-        if parties_see_each_other {
+        // Knowledge of r_2 / r_1 is proven when the sender can see the receiver, and r_1 / r_2 when the receiver can see the sender
+        if sender_sees_receiver {
             wits.push(r_2_r_1_inv.unwrap());
+        }
+        if receiver_sees_sender {
             wits.push(r_1_r_2_inv.unwrap());
         }
 
         // Commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2]`. And this list might additionally
-        // have `r_2/r_1, r_1/r_2` as well if senders and receivers are allowed to see each other
+        // have `r_2/r_1` and/or `r_1/r_2` depending on which party is allowed to see the other
         let (comm_r_i_amount, vars) =
             prover.commit_vec(&wits, comm_r_i_blinding, leaf_level_bp_gens);
 
@@ -1267,7 +1276,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &mut *prover,
             Some(amount_as_balance),
             vars,
-            parties_see_each_other,
+            sender_sees_receiver,
+            receiver_sees_sender,
         )?;
 
         // Sigma protocol for proving knowledge of `comm_r_i_amount`
@@ -1282,13 +1292,16 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_3_r_1_inv_blinding,
             r_3_r_2_inv_blinding,
         ];
-        if parties_see_each_other {
+        if sender_sees_receiver {
             blindings.push(r_2_r_1_inv_blinding.unwrap());
+        }
+        if receiver_sees_sender {
             blindings.push(r_1_r_2_inv_blinding.unwrap());
         }
         let t_comm_r_i_amount = SchnorrCommitment::new(
             &Self::bp_gens(
-                parties_see_each_other,
+                sender_sees_receiver,
+                receiver_sees_sender,
                 leaf_level_pc_gens,
                 leaf_level_bp_gens,
             ),
@@ -1348,7 +1361,7 @@ mod tests {
 
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
-    use crate::leg::{Leg, LegEncConfig};
+    use crate::leg::{Leg, LegEncConfig, PartyVisibility};
     use ark_pallas::PallasConfig;
     use ark_serialize::CanonicalSerialize;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
@@ -1407,22 +1420,108 @@ mod tests {
         )
         .unwrap();
 
+        for visibility in [
+            PartyVisibility::FullVisibility,
+            PartyVisibility::NoVisibility,
+            PartyVisibility::OnlySenderSeesReceiver,
+            PartyVisibility::OnlyReceiverSeesSender,
+        ] {
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        visibility,
+                        reveal_asset_id: true,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+
+            assert!(leg_enc.is_asset_id_revealed());
+            assert_eq!(leg_enc.party_visibility(), visibility);
+            assert_eq!(
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2.is_some(),
+                visibility.sender_sees_receiver()
+            );
+            assert_eq!(
+                leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1.is_some(),
+                visibility.receiver_sees_sender()
+            );
+
+            let clock = Instant::now();
+            let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_enc_rand,
+                nonce,
+                &leaf_level_pc_gens,
+                &leaf_level_bp_gens,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+            let prover_time = clock.elapsed();
+
+            let proof_size = proof.compressed_size();
+
+            let clock = Instant::now();
+            proof
+                .verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+            let verifier_time = clock.elapsed();
+
+            let clock = Instant::now();
+            let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
+            proof
+                .verify(
+                    &mut rng,
+                    leg_enc.clone(),
+                    asset_id,
+                    enc_keys.clone(),
+                    public_enc_keys.clone(),
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                    Some(&mut rmc),
+                )
+                .unwrap();
+            rmc.verify().unwrap();
+            let verifier_time_rmc = clock.elapsed();
+
+            println!("For public asset leg proof (visibility = {:?})", visibility);
+            println!("total proof size = {}", proof_size);
+            println!("total prover time = {:?}", prover_time);
+            println!("verifier time (regular) = {:?}", verifier_time);
+            println!("verifier time (RMC) = {:?}", verifier_time_rmc);
+        }
+
         let (leg_enc, leg_enc_rand) = leg
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
                 enc_gen,
             )
             .unwrap();
-
-        assert!(leg_enc.is_asset_id_revealed());
-
-        // Test with parties_see_each_other = true
-        let clock = Instant::now();
         let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
             &mut rng,
             leg.clone(),
@@ -1435,129 +1534,34 @@ mod tests {
             enc_gen,
         )
         .unwrap();
-        let prover_time = clock.elapsed();
 
-        let proof_size = proof.compressed_size();
-
-        let clock = Instant::now();
-        proof
-            .verify(
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                public_enc_keys.clone(),
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verifier_time = clock.elapsed();
-
-        let clock = Instant::now();
-        let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
-        proof
-            .verify(
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                public_enc_keys.clone(),
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
-                Some(&mut rmc),
-            )
-            .unwrap();
-        rmc.verify().unwrap();
-        let verifier_time_rmc = clock.elapsed();
-
-        println!("For public asset leg proof (parties_see_each_other = true)");
-        println!("total proof size = {}", proof_size);
-        println!("total prover time = {:?}", prover_time);
-        println!("verifier time (regular) = {:?}", verifier_time);
-        println!("verifier time (RMC) = {:?}", verifier_time_rmc);
-
-        // sender and receiver can't learn each other's public key
-        let (leg_enc, leg_enc_rand) = leg
-            .encrypt(
-                &mut rng,
-                LegEncConfig {
-                    parties_see_each_other: false,
-                    reveal_asset_id: true,
-                },
-                enc_key_gen,
-                enc_gen,
-            )
-            .unwrap();
-
-        assert!(leg_enc.is_asset_id_revealed());
-
-        let clock = Instant::now();
-        let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
-            &mut rng,
-            leg.clone(),
-            leg_enc.clone(),
-            leg_enc_rand,
-            nonce,
-            &leaf_level_pc_gens,
-            &leaf_level_bp_gens,
-            enc_key_gen,
-            enc_gen,
-        )
-        .unwrap();
-        let prover_time = clock.elapsed();
-
-        let proof_size = proof.compressed_size();
-
-        let clock = Instant::now();
-        proof
-            .verify(
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                public_enc_keys.clone(),
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
-                None,
-            )
-            .unwrap();
-        let verifier_time = clock.elapsed();
-
-        let clock = Instant::now();
-        let mut rmc = RandomizedMultChecker::new(ark_pallas::Fr::rand(&mut rng));
-        proof
-            .verify(
-                &mut rng,
-                leg_enc.clone(),
-                asset_id,
-                enc_keys.clone(),
-                public_enc_keys.clone(),
-                nonce,
-                &leaf_level_pc_gens,
-                &leaf_level_bp_gens,
-                enc_key_gen,
-                enc_gen,
-                Some(&mut rmc),
-            )
-            .unwrap();
-        rmc.verify().unwrap();
-        let verifier_time_rmc = clock.elapsed();
-
-        println!("For public asset leg proof (parties_see_each_other = false)");
-        println!("total proof size = {}", proof_size);
-        println!("total prover time = {:?}", prover_time);
-        println!("verifier time (regular) = {:?}", verifier_time);
-        println!("verifier time (RMC) = {:?}", verifier_time_rmc);
+        // Reject any proof where r4 related terms are set
+        for i in 0..4 {
+            let mut wrong = leg_enc.clone();
+            match i {
+                0 => wrong.leg_enc_core_and_eph_keys.eph_pk_s.r4 = Some(enc_key_gen),
+                1 => wrong.leg_enc_core_and_eph_keys.eph_pk_r.r4 = Some(enc_key_gen),
+                2 => wrong.eph_pk_enc_keys[0].r4 = Some(enc_key_gen),
+                _ => wrong.eph_pk_public_enc_keys[0].r4 = Some(enc_key_gen),
+            }
+            assert!(
+                proof
+                    .verify(
+                        &mut rng,
+                        wrong,
+                        asset_id,
+                        enc_keys.clone(),
+                        public_enc_keys.clone(),
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1624,7 +1628,11 @@ mod tests {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: i % 2 == 0,
+                        visibility: if i % 2 == 0 {
+                            PartyVisibility::FullVisibility
+                        } else {
+                            PartyVisibility::NoVisibility
+                        },
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -1784,7 +1792,11 @@ mod tests {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: i % 2 == 0,
+                        visibility: if i % 2 == 0 {
+                            PartyVisibility::FullVisibility
+                        } else {
+                            PartyVisibility::NoVisibility
+                        },
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -1903,7 +1915,7 @@ mod tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: true,
                 },
                 enc_key_gen,
@@ -2057,7 +2069,7 @@ mod tests {
                 .encrypt(
                     rng,
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -2189,7 +2201,8 @@ mod tests {
                           r_1_r_2_inv_blinding,
                           comm_r_i_blinding,
                           t_comm_r_i_amount_blinding,
-                          parties_see_each_other,
+                          sender_sees_receiver,
+                          receiver_sees_sender,
                           leaf_level_pc_gens,
                           leaf_level_bp_gens,
                           prover| {
@@ -2203,8 +2216,10 @@ mod tests {
                             r_3_r_1_inv,
                             r_3_r_2_inv,
                         ];
-                        if parties_see_each_other {
+                        if sender_sees_receiver {
                             wits.push(r_2_r_1_inv.unwrap());
+                        }
+                        if receiver_sees_sender {
                             wits.push(r_1_r_2_inv.unwrap());
                         }
 
@@ -2216,7 +2231,8 @@ mod tests {
                                 prover,
                                 Some(mocked_amount_u64),
                                 vars,
-                                parties_see_each_other,
+                                sender_sees_receiver,
+                                receiver_sees_sender,
                             )
                         {
                             return MockResult::Return(Err(e));
@@ -2233,14 +2249,17 @@ mod tests {
                             r_3_r_1_inv_blinding,
                             r_3_r_2_inv_blinding,
                         ];
-                        if parties_see_each_other {
+                        if sender_sees_receiver {
                             blindings.push(r_2_r_1_inv_blinding.unwrap());
+                        }
+                        if receiver_sees_sender {
                             blindings.push(r_1_r_2_inv_blinding.unwrap());
                         }
 
                         let t_comm_r_i_amount = SchnorrCommitment::new(
                             &PublicAssetLegCreationProof::<PallasConfig>::bp_gens(
-                                parties_see_each_other,
+                                sender_sees_receiver,
+                                receiver_sees_sender,
                                 leaf_level_pc_gens,
                                 leaf_level_bp_gens,
                             ),
@@ -2383,7 +2402,7 @@ mod tests {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -2424,7 +2443,7 @@ mod tests {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: false,
                     },
                     enc_key_gen,
@@ -2565,7 +2584,7 @@ mod tests {
                     None,
                 ),
                 Error::ProofVerificationError(_),
-                "resp_eph_pk_s_r is missing"
+                "resp_eph_pk_s_r presence must match sender-sees-receiver visibility"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &missing_cross_pk_proof,
@@ -2586,7 +2605,7 @@ mod tests {
                 .encrypt(
                     &mut rng,
                     LegEncConfig {
-                        parties_see_each_other: false,
+                        visibility: PartyVisibility::NoVisibility,
                         reveal_asset_id: true,
                     },
                     enc_key_gen,
@@ -2608,7 +2627,7 @@ mod tests {
                     None,
                 ),
                 Error::ProofVerificationError(_),
-                "resp_eph_pk_s_r is present"
+                "resp_eph_pk_s_r presence must match sender-sees-receiver visibility"
             );
             assert_public_asset_leg_verify_fails_with_rmc(
                 &extra_cross_pk_proof,

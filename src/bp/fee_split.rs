@@ -92,6 +92,9 @@ impl FeeRegHostProtocol {
             challenge_h_bytes,
             nonce: nonce.to_vec(),
             pk: CompressedAffine::try_from(pk_affine)?,
+            txn_type: DeviceTxnType::FeeAccountRegistration {
+                asset_id: account_state.asset_id,
+            },
         };
 
         Ok((
@@ -191,6 +194,10 @@ impl<
             challenge_h_bytes,
             nonce: nonce.to_vec(),
             pk: CompressedAffine::try_from(pk_affine)?,
+            txn_type: DeviceTxnType::FeeAccountTopup {
+                asset_id: account_state.asset_id(),
+                amount,
+            },
         };
 
         Ok((
@@ -313,6 +320,10 @@ impl<
             rerandomized_leaf: CompressedAffine::try_from(rerandomized_leaf)?,
             updated_account_commitment: CompressedAffine::try_from(updated_comm_affine)?,
             nullifier: CompressedAffine::try_from(nullifier)?,
+            txn_type: DeviceTxnType::FeePayment {
+                asset_id: account_state.asset_id(),
+                amount,
+            },
         };
 
         Ok((

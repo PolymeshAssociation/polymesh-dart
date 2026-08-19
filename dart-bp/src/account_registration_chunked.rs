@@ -240,6 +240,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<Vec<VerificationTuple<G>>> {
         let expected: usize = self.chunks.iter().map(|c| c.regs.len()).sum();
+        if self.num_regs as usize != expected {
+            return Err(Error::ProofVerificationError(
+                "num_regs does not match total registrations across chunks".to_string(),
+            ));
+        }
         if ids.len() != expected {
             return Err(Error::ProofVerificationError(
                 "Number of public inputs does not match total registrations across chunks"

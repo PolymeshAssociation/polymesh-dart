@@ -110,4 +110,7 @@ pub const ASSET_MINTING_PROOF: &str = "asset_minting_proof.bin";
 pub const SETTLEMENT_PROOF_PREFIX: &str = "settlement_proof";
 pub const SETTLEMENT_PROOF_REVEALED_ASSET_ID: &str = "settlement_proof_revealed_asset_id.bin";
 pub const SETTLEMENT_PROOF_PARTIES_HIDDEN: &str = "settlement_proof_parties_hidden.bin";
+pub const SETTLEMENT_PROOF_PARTIES_VISIBLE: &str = "settlement_proof_parties_visible.bin";
+pub const SETTLEMENT_PROOF_SENDER_SEES_RECEIVER: &str = "settlement_proof_sender_sees_receiver.bin";
+pub const SETTLEMENT_PROOF_RECEIVER_SEES_SENDER: &str = "settlement_proof_receiver_sees_sender.bin";
 pub const SETTLEMENT_PROOF_2_AUDITORS: &str = "settlement_proof_2_auditors.bin";

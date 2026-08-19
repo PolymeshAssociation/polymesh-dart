@@ -928,6 +928,10 @@ impl<
                     &updated_account_commitment.0,
                     nullifier,
                     &ledger_nonce,
+                    &polymesh_dart_bp::auth_proofs::DeviceTxnType::FeePayment {
+                        asset_id: self.asset_id,
+                        amount: self.amount,
+                    },
                     sk_gen,
                     randomness_gen,
                     b_blinding,

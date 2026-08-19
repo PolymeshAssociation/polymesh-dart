@@ -1,4 +1,4 @@
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL};
+use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
     add_to_transcript, dst, error::Result,
@@ -52,6 +52,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         randomness_gen: G,
         comm_re_rand_gen: G, // generator used to re-randomize the commitment
@@ -69,6 +70,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         let sk_blinding = G::ScalarField::rand(rng);
 
@@ -193,6 +195,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         randomness_gen: G,
         comm_re_rand_gen: G, // generator used to re-randomize the commitment
@@ -211,6 +214,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         self.challenge_contribution(&sk_gen, &randomness_gen, &comm_re_rand_gen, &mut transcript)?;
 
