@@ -2036,7 +2036,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     missing_resps.insert(2, resp_acc_old.0[5 - offset_when_asset_id_revealed]);
     let resp_acc_new_cur_rho = resp_acc_new
         .responses
-        .get(&(5 - offset_when_asset_id_revealed))
+        .get(&((5 - offset_when_asset_id_revealed) as u32))
         .ok_or_else(|| {
             Error::ProofVerificationError(
                 "Common state-change sigma verification: missing response for new account current_rho"
@@ -2048,7 +2048,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     missing_resps.insert(5, resp_acc_old.0[7 - offset_when_asset_id_revealed]);
     let resp_acc_new_cur_rand = resp_acc_new
         .responses
-        .get(&(7 - offset_when_asset_id_revealed))
+        .get(&((7 - offset_when_asset_id_revealed) as u32))
         .ok_or_else(|| {
             Error::ProofVerificationError(
                 "Common state-change sigma verification: missing response for new account current_randomness"

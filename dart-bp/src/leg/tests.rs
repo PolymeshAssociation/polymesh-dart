@@ -2677,7 +2677,7 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
     missing_med_blinding
         .re_randomized_points
         .blindings_with_different_gen
-        .remove(&(enc_keys.len() + 1));
+        .remove(&((enc_keys.len() + 1) as u32));
     assert!(
         missing_med_blinding
             .verify::<_, PallasParams, VestaParams>(

@@ -494,7 +494,7 @@ impl<
                 *common_state_change_proof
                     .resp_acc_new
                     .responses
-                    .get(&BALANCE_GEN_INDEX)
+                    .get(&(BALANCE_GEN_INDEX as u32))
                     .ok_or_else(|| {
                         Error::ProofVerificationError(format!(
                             "Missing resp_acc_new response for BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
@@ -1053,7 +1053,7 @@ impl<
             .host_commitment_proof
             .resp_acc_new
             .responses
-            .get(&(CURRENT_RHO_GEN_INDEX - offset - 1))
+            .get(&((CURRENT_RHO_GEN_INDEX - offset - 1) as u32))
             .copied()
             .ok_or_else(|| {
                 Error::ProofVerificationError(
@@ -1065,7 +1065,7 @@ impl<
             .host_commitment_proof
             .resp_acc_new
             .responses
-            .get(&(CURRENT_RANDOMNESS_GEN_INDEX - offset - 1))
+            .get(&((CURRENT_RANDOMNESS_GEN_INDEX - offset - 1) as u32))
             .copied()
             .ok_or_else(|| {
                 Error::ProofVerificationError(

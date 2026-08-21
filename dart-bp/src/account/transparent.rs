@@ -182,13 +182,25 @@ impl<
 
         // Build missing BP responses and verify partial (nullifier + BP)
         let i = 4 - offset;
-        let resp_acc_new_rho = resp_acc_new.responses.get(&i).copied().ok_or_else(|| {
-            Error::ProofVerificationError(format!("Missing resp_acc_new response for index {i}"))
-        })?;
+        let resp_acc_new_rho = resp_acc_new
+            .responses
+            .get(&(i as u32))
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing resp_acc_new response for index {i}"
+                ))
+            })?;
         let i = 6 - offset;
-        let resp_acc_new_s = resp_acc_new.responses.get(&i).copied().ok_or_else(|| {
-            Error::ProofVerificationError(format!("Missing resp_acc_new response for index {i}"))
-        })?;
+        let resp_acc_new_s = resp_acc_new
+            .responses
+            .get(&(i as u32))
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing resp_acc_new response for index {i}"
+                ))
+            })?;
 
         let mut missing_resps_bp = BTreeMap::new();
         missing_resps_bp.insert(1, resp_acc_old.0[3 - offset]); // rho

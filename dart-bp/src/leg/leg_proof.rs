@@ -378,7 +378,8 @@ impl<
                 );
 
                 assert_eq!(
-                    re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
+                    re_randomized_points.blindings_with_different_gen[&((i + 1) as u32)]
+                        .into_group(),
                     b_base * blindings_for_points[i + 1]
                 );
             }
@@ -785,11 +786,21 @@ impl<
             )?;
         }
 
-        for (i, ((p, re_rand_point), eph_pk_enc_key)) in pk_en_proto
+        for ((p, (re_rand_point, blinding_point)), eph_pk_enc_key) in pk_en_proto
             .iter_mut()
-            .zip(re_randomized_points.re_randomized_points.iter().skip(1))
+            .zip(
+                re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(1)
+                    .zip(
+                        re_randomized_points
+                            .blindings_with_different_gen
+                            .range(..=(l.len() as u32))
+                            .map(|(_, v)| v),
+                    ),
+            )
             .zip(leg_enc.eph_pk_enc_keys.iter())
-            .enumerate()
         {
             p.0.challenge_contribution(
                 re_rand_point,
@@ -800,7 +811,7 @@ impl<
             )?;
             p.1.challenge_contribution(
                 &b_base,
-                &re_randomized_points.blindings_with_different_gen[&(i + 1)],
+                blinding_point,
                 dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
@@ -824,12 +835,20 @@ impl<
             )?;
         }
 
-        for ((p, mediator), re_rand_point) in pk_m_proto.iter_mut().zip(mediators.iter()).zip(
-            re_randomized_points
-                .re_randomized_points
-                .iter()
-                .skip(l.len() + 1),
-        ) {
+        for ((p, mediator), (re_rand_point, blinding_point)) in
+            pk_m_proto.iter_mut().zip(mediators.iter()).zip(
+                re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(l.len() + 1)
+                    .zip(
+                        re_randomized_points
+                            .blindings_with_different_gen
+                            .range(((l.len() as u32) + 1)..)
+                            .map(|(_, v)| v),
+                    ),
+            )
+        {
             let y = mediator.ct_med - re_rand_point;
             p.0.challenge_contribution(
                 &enc_key_gen,
@@ -841,7 +860,7 @@ impl<
 
             p.1.challenge_contribution(
                 &b_base,
-                re_rand_point,
+                blinding_point,
                 dst::LEG_CREATE_MED_KEY_BLINDING,
                 &mut transcript,
             )?;
@@ -1480,17 +1499,23 @@ impl<
             )?;
         }
 
-        for (i, (((p_0, p_1, p_2, p_3, p_4), re_rand_point), eph_pk_enc_key)) in self
-            .resp_eph_pk_enc
-            .iter()
-            .zip(
-                self.re_randomized_points
-                    .re_randomized_points
-                    .iter()
-                    .skip(1),
-            )
-            .zip(leg_enc.eph_pk_enc_keys.iter())
-            .enumerate()
+        for (i, (((p_0, p_1, p_2, p_3, p_4), (re_rand_point, blinding_point)), eph_pk_enc_key)) in
+            self.resp_eph_pk_enc
+                .iter()
+                .zip(
+                    self.re_randomized_points
+                        .re_randomized_points
+                        .iter()
+                        .skip(1)
+                        .zip(
+                            self.re_randomized_points
+                                .blindings_with_different_gen
+                                .range(..=(num_enc_keys as u32))
+                                .map(|(_, v)| v),
+                        ),
+                )
+                .zip(leg_enc.eph_pk_enc_keys.iter())
+                .enumerate()
         {
             p_0.challenge_contribution(
                 re_rand_point,
@@ -1501,12 +1526,7 @@ impl<
             )?;
             p_1.challenge_contribution(
                 &b_base,
-                self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
-                    Error::ProofVerificationError(format!(
-                        "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
-                        i + 1, i
-                    ))
-                })?,
+                blinding_point,
                 dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
@@ -1534,12 +1554,18 @@ impl<
             )?;
         }
 
-        for (((p_0, p_1, p_2), mediator), re_rand_point) in
+        for (((p_0, p_1, p_2), mediator), (re_rand_point, blinding_point)) in
             self.resp_eph_pk_meds.iter().zip(mediators.iter()).zip(
                 self.re_randomized_points
                     .re_randomized_points
                     .iter()
-                    .skip(num_enc_keys + 1),
+                    .skip(num_enc_keys + 1)
+                    .zip(
+                        self.re_randomized_points
+                            .blindings_with_different_gen
+                            .range(((num_enc_keys as u32) + 1)..)
+                            .map(|(_, v)| v),
+                    ),
             )
         {
             let y = mediator.ct_med - re_rand_point;
@@ -1553,7 +1579,7 @@ impl<
 
             p_1.challenge_contribution(
                 &b_base,
-                re_rand_point,
+                blinding_point,
                 dst::LEG_CREATE_MED_KEY_BLINDING,
                 &mut transcript,
             )?;
@@ -1801,7 +1827,7 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_enc[{}].1 verification failed", i),
-                *self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
+                *self.re_randomized_points.blindings_with_different_gen.get(&((i + 1) as u32)).ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
                         i + 1, i
@@ -1873,7 +1899,7 @@ impl<
                 rmc,
                 p_1,
                 format!("resp_eph_pk_meds[{}].1 verification failed", i),
-                *self.re_randomized_points.blindings_with_different_gen.get(&(num_enc_keys + i + 1)).ok_or_else(|| {
+                *self.re_randomized_points.blindings_with_different_gen.get(&((num_enc_keys + i + 1) as u32)).ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "re_randomized_points.blindings_with_different_gen missing key {} for med key {}",
                         num_enc_keys + i + 1, i
@@ -2238,7 +2264,7 @@ impl<
 
             #[cfg(not(feature = "ignore_prover_input_sanitation"))]
             debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
+                re_randomized_points.blindings_with_different_gen[&((i + 1) as u32)].into_group(),
                 b_base * l[i]
             );
 
@@ -2295,7 +2321,7 @@ impl<
                 .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
                 .enumerate()
         {
-            // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
+            // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k_i`
             let t_m = PokPedersenCommitmentProtocol::init(
                 *r_med,
                 *m_blinding,
@@ -2307,7 +2333,7 @@ impl<
 
             #[cfg(not(feature = "ignore_prover_input_sanitation"))]
             debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(1 + num_enc_keys + i)]
+                re_randomized_points.blindings_with_different_gen[&((1 + num_enc_keys + i) as u32)]
                     .into_group(),
                 b_base * *k_i
             );
@@ -4175,8 +4201,8 @@ mod mocking_tests {
         LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::tamper_re_randomized_points_for_test
             .mock_safe(move |mut rrp: ReRandomizedPoints<PallasParameters>| {
                 let patched =
-                    (b_base * delta + rrp.blindings_with_different_gen[&(target + 1)]).into_affine();
-                rrp.blindings_with_different_gen.insert(target + 1, patched);
+                    (b_base * delta + rrp.blindings_with_different_gen[&((target + 1) as u32)]).into_affine();
+                rrp.blindings_with_different_gen.insert((target + 1) as u32, patched);
                 MockResult::Return(rrp)
             });
         assert_err!(build_and_verify(&mut rng), Error::BulletproofR1CSError(_));
