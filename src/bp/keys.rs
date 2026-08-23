@@ -317,7 +317,7 @@ impl MasterSeed {
         let sig_key_gen = dart_gens().sig_key_gen();
         let ((acct_sk, acct_pk), (enc_sk, enc_pk)) =
             self.0
-                .derive_keys::<_, Blake2b512>(path.as_bytes(), 0, enc_key_gen, sig_key_gen);
+                .derive_keys::<_, Blake2b512>(path.as_bytes(), 0, sig_key_gen, enc_key_gen);
         Ok(AccountKeys {
             enc: EncryptionKeyPair {
                 public: EncryptionPublicKey::from_affine(enc_pk.0)?,
