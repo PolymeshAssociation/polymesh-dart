@@ -1,4 +1,5 @@
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::dst;
 use crate::leg::LegEncryption;
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, BALANCE_LABEL, Error, ID_LABEL, NONCE_LABEL,
@@ -29,7 +30,7 @@ pub const PENDING_RECV_AMOUNT_LABEL: &'static [u8; 19] = b"pending_recv_amount";
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAuditorProofPartial<G: AffineRepr> {
-    pub t_acc: G,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PartialPokDiscreteLog<G>,
     pub nullifier: G,
@@ -138,10 +139,15 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let t_pk_enc =
             PokDiscreteLogProtocol::init(sk_enc.clone(), G::ScalarField::rand(rng), &enc_key_gen);
 
-        t_acc.challenge_contribution(&mut transcript)?;
-        t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
-        t_pk.challenge_contribution(&pk_gen, &pk_aff, &mut transcript)?;
-        t_pk_enc.challenge_contribution(&enc_key_gen, &pk_enc, &mut transcript)?;
+        t_acc.challenge_contribution(dst::POB_ACC, &mut transcript)?;
+        t_null.challenge_contribution(
+            &null_gen,
+            &nullifier,
+            dst::POB_NULLIFIER,
+            &mut transcript,
+        )?;
+        t_pk.challenge_contribution(&pk_gen, &pk_aff, dst::POB_PK, &mut transcript)?;
+        t_pk_enc.challenge_contribution(&enc_key_gen, &pk_enc, dst::POB_PK_ENC, &mut transcript)?;
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -160,7 +166,6 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         Ok(Self {
             partial: PobWithAuditorProofPartial {
                 nullifier,
-                t_acc: t_acc.t,
                 resp_acc,
                 resp_null,
             },
@@ -233,16 +238,23 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
         let pk_gen = account_comm_key.sk_gen();
         let pk_enc_gen = account_comm_key.sk_enc_gen();
 
-        self.partial.t_acc.serialize_compressed(&mut transcript)?;
+        self.partial
+            .resp_acc
+            .challenge_contribution(dst::POB_ACC, &mut transcript)?;
         self.partial.resp_null.challenge_contribution(
             &null_gen,
             &self.partial.nullifier,
+            dst::POB_NULLIFIER,
             &mut transcript,
         )?;
         self.resp_pk
-            .challenge_contribution(&pk_gen, &pk_aff, &mut transcript)?;
-        self.resp_pk_enc
-            .challenge_contribution(&pk_enc_gen, &pk_enc, &mut transcript)?;
+            .challenge_contribution(&pk_gen, &pk_aff, dst::POB_PK, &mut transcript)?;
+        self.resp_pk_enc.challenge_contribution(
+            &pk_enc_gen,
+            &pk_enc,
+            dst::POB_PK_ENC,
+            &mut transcript,
+        )?;
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -261,7 +273,6 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
                 account_comm_key.current_randomness_gen(),
             ],
             &y.into_affine(),
-            &self.partial.t_acc,
             &challenge,
         )?;
 
@@ -298,7 +309,7 @@ impl<G: AffineRepr> PobWithAuditorProof<G> {
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub nullifier: G,
-    pub t_acc: G,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_acc: SchnorrResponse<G>,
     pub resp_null: PartialPokDiscreteLog<G>,
     pub resp_pk: PokDiscreteLog<G>,
@@ -532,21 +543,29 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             PokDiscreteLogProtocol::init(sk_enc_inv, sk_enc_inv_blinding, &eph_pk_amount_total_recv)
         });
 
-        t_acc.challenge_contribution(&mut transcript)?;
+        t_acc.challenge_contribution(dst::POB_ACC, &mut transcript)?;
         t_null.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &nullifier,
+            dst::POB_NULLIFIER,
             &mut transcript,
         )?;
-        t_pk.challenge_contribution(&account_comm_key.sk_gen(), &pk_aff, &mut transcript)?;
+        t_pk.challenge_contribution(
+            &account_comm_key.sk_gen(),
+            &pk_aff,
+            dst::POB_PK,
+            &mut transcript,
+        )?;
         t_pk_enc.challenge_contribution(
             &account_comm_key.sk_enc_gen(),
             &pk_enc,
+            dst::POB_PK_ENC,
             &mut transcript,
         )?;
         t_enc_key_gen.challenge_contribution(
             &pk_enc,
             &account_comm_key.sk_enc_gen(),
+            dst::POB_ENC_KEY_GEN_INV,
             &mut transcript,
         )?;
 
@@ -558,12 +577,14 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 t_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r2,
                     &(legs[i].ct_r() - pk_enc_proj).into_affine(),
+                    dst::POB_PARTICIPANT_RECV,
                     &mut transcript,
                 )?;
             } else {
                 t_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     &(legs[i].ct_s() - pk_enc_proj).into_affine(),
+                    dst::POB_PARTICIPANT_SEND,
                     &mut transcript,
                 )?;
             }
@@ -574,6 +595,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 t.challenge_contribution(
                     eph_pk_bases_for_asset_id[i].as_ref().unwrap(),
                     &y,
+                    dst::POB_ASSET_ID,
                     &mut transcript,
                 )?;
             }
@@ -581,11 +603,21 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         if let Some(t) = &t_sent_amount {
             let y = enc_total_send - (enc_gen * G::ScalarField::from(pending_sent_amount));
-            t.challenge_contribution(&eph_pk_amount_total_send, &y.into_affine(), &mut transcript)?;
+            t.challenge_contribution(
+                &eph_pk_amount_total_send,
+                &y.into_affine(),
+                dst::POB_SENT_AMOUNT,
+                &mut transcript,
+            )?;
         }
         if let Some(t) = &t_recv_amount {
             let y = enc_total_recv - (enc_gen * G::ScalarField::from(pending_recv_amount));
-            t.challenge_contribution(&eph_pk_amount_total_recv, &y.into_affine(), &mut transcript)?;
+            t.challenge_contribution(
+                &eph_pk_amount_total_recv,
+                &y.into_affine(),
+                dst::POB_RECV_AMOUNT,
+                &mut transcript,
+            )?;
         }
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
@@ -619,7 +651,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
 
         Ok(Self {
             nullifier,
-            t_acc: t_acc.t,
             resp_acc,
             resp_null,
             resp_pk,
@@ -711,6 +742,14 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             )));
         }
 
+        if self.resp_participant.len() != legs.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_participant length mismatch: expected {}, got {}",
+                legs.len(),
+                self.resp_participant.len()
+            )));
+        }
+
         if sender_in_leg_indices.len() > 0 {
             if self.resp_sent_amount.is_none() {
                 return Err(Error::ProofVerificationError(
@@ -783,22 +822,30 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             transcript.append(LEGS_LABEL, l);
         }
 
-        self.t_acc.serialize_compressed(&mut transcript)?;
+        self.resp_acc
+            .challenge_contribution(dst::POB_ACC, &mut transcript)?;
         self.resp_null.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &self.nullifier,
+            dst::POB_NULLIFIER,
             &mut transcript,
         )?;
-        self.resp_pk
-            .challenge_contribution(&account_comm_key.sk_gen(), pk_aff, &mut transcript)?;
+        self.resp_pk.challenge_contribution(
+            &account_comm_key.sk_gen(),
+            pk_aff,
+            dst::POB_PK,
+            &mut transcript,
+        )?;
         self.resp_pk_enc.challenge_contribution(
             &account_comm_key.sk_enc_gen(),
             pk_enc,
+            dst::POB_PK_ENC,
             &mut transcript,
         )?;
         self.resp_enc_key_gen.challenge_contribution(
             &pk_enc,
             &account_comm_key.sk_enc_gen(),
+            dst::POB_ENC_KEY_GEN_INV,
             &mut transcript,
         )?;
 
@@ -877,12 +924,14 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 self.resp_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r2,
                     &y_participant[i],
+                    dst::POB_PARTICIPANT_RECV,
                     &mut transcript,
                 )?;
             } else {
                 self.resp_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     &y_participant[i],
+                    dst::POB_PARTICIPANT_SEND,
                     &mut transcript,
                 )?;
             }
@@ -891,7 +940,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 let resp = self.resp_asset_id[i].as_ref().unwrap();
                 let base = eph_pk_bases_for_asset_id[i].as_ref().unwrap();
                 let y = y_asset_id[i].as_ref().unwrap();
-                resp.challenge_contribution(base, y, &mut transcript)?;
+                resp.challenge_contribution(base, y, dst::POB_ASSET_ID, &mut transcript)?;
             }
         }
 
@@ -902,6 +951,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             resp.challenge_contribution(
                 &eph_pk_amount_total_send.into_affine(),
                 &y_total_send,
+                dst::POB_SENT_AMOUNT,
                 &mut transcript,
             )?;
             Some(y_total_send)
@@ -916,6 +966,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             resp.challenge_contribution(
                 &eph_pk_amount_total_recv.into_affine(),
                 &y_total_recv,
+                dst::POB_RECV_AMOUNT,
                 &mut transcript,
             )?;
             Some(y_total_recv)
@@ -940,7 +991,6 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 account_comm_key.current_randomness_gen(),
             ],
             &y.into_affine(),
-            &self.t_acc,
             &challenge,
         )?;
 
@@ -1058,7 +1108,7 @@ mod tests {
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig};
+    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig, PartyVisibility};
     use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
@@ -1285,7 +1335,7 @@ mod tests {
                 .unwrap();
                 let config = if i % 4 == 0 {
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     }
                 } else {
@@ -1308,7 +1358,7 @@ mod tests {
                 .unwrap();
                 let config = if i % 4 == 1 {
                     LegEncConfig {
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                         reveal_asset_id: true,
                     }
                 } else {
@@ -1514,9 +1564,9 @@ mod tests {
     }
 
     #[test]
-    fn pob_with_anyone_resp_asset_id_len_mismatch_fails() {
-        // Popping one entry off resp_asset_id makes its length no longer match the number of legs;
-        // verification must reject on the length-mismatch check.
+    fn pob_with_anyone_resp_len_mismatch_fails() {
+        // Popping one entry off resp_asset_id or resp_participant makes its length no longer match
+        // the number of legs; verification must reject on the length-mismatch check.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1599,6 +1649,30 @@ mod tests {
             enc_gen,
         )
         .unwrap();
+
+        let mut proof_participant = proof.clone();
+        proof_participant.resp_participant.pop();
+        assert!(
+            proof_participant
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    &pk_e.0,
+                    account_comm.clone(),
+                    legs.clone(),
+                    sender_in_leg_indices.clone(),
+                    receiver_in_leg_indices.clone(),
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .is_err()
+        );
 
         proof.resp_asset_id.pop();
 

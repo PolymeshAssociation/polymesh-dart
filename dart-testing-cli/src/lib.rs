@@ -1470,6 +1470,22 @@ impl DartTestingDb {
             MediatorAffirmationProof::<()>::new(rng, &leg_ref, &med_enc, &account_keys, 0, accept)?
         };
 
+        if proof.leg_ref != leg_ref {
+            return Err(anyhow!(
+                "supplied proof is for leg {}, but target leg is {}",
+                proof.leg_ref,
+                leg_ref
+            ));
+        }
+
+        if proof.accept != accept {
+            return Err(anyhow!(
+                "supplied proof authenticates accept={}, but requested accept={}",
+                proof.accept,
+                accept
+            ));
+        }
+
         // If proof action is to generate only, save proof and return
         if !proof_action.apply_proof() {
             // Save proof to file if requested

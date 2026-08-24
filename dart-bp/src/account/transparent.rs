@@ -9,7 +9,7 @@ use crate::util::{
 };
 use crate::{
     ASSET_ID_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
+    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, dst,
     error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
@@ -51,7 +51,6 @@ pub struct CommonTransparentWithoutCommitmentsProof<
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     pub comm_bp: Affine<G0>,
-    pub t_bp: Affine<G0>,
     pub resp_bp: PartialSchnorrResponse<Affine<G0>>,
 }
 
@@ -118,8 +117,12 @@ impl<
 
         let nullifier_gen = account_comm_key.current_rho_gen();
 
-        self.resp_null
-            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        self.resp_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::TRANSPARENT_NULLIFIER,
+            &mut transcript,
+        )?;
 
         let _ = transcript;
 
@@ -135,7 +138,8 @@ impl<
         enforce_constraints_for_randomness_relations(even_verifier, &mut vars);
 
         let mut transcript = even_verifier.transcript();
-        self.t_bp.serialize_compressed(&mut transcript)?;
+        self.resp_bp
+            .challenge_contribution(dst::TRANSPARENT_BP, &mut transcript)?;
 
         Ok(())
     }
@@ -178,13 +182,25 @@ impl<
 
         // Build missing BP responses and verify partial (nullifier + BP)
         let i = 4 - offset;
-        let resp_acc_new_rho = resp_acc_new.responses.get(&i).copied().ok_or_else(|| {
-            Error::ProofVerificationError(format!("Missing resp_acc_new response for index {i}"))
-        })?;
+        let resp_acc_new_rho = resp_acc_new
+            .responses
+            .get(&(i as u32))
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing resp_acc_new response for index {i}"
+                ))
+            })?;
         let i = 6 - offset;
-        let resp_acc_new_s = resp_acc_new.responses.get(&i).copied().ok_or_else(|| {
-            Error::ProofVerificationError(format!("Missing resp_acc_new response for index {i}"))
-        })?;
+        let resp_acc_new_s = resp_acc_new
+            .responses
+            .get(&(i as u32))
+            .copied()
+            .ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "Missing resp_acc_new response for index {i}"
+                ))
+            })?;
 
         let mut missing_resps_bp = BTreeMap::new();
         missing_resps_bp.insert(1, resp_acc_old.0[3 - offset]); // rho
@@ -226,7 +242,6 @@ impl<
             self.resp_bp,
             bp_gens_vec,
             self.comm_bp,
-            self.t_bp,
             challenge,
             missing_resps_bp,
         );
@@ -244,8 +259,6 @@ struct CommonTransparentProof<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub without_comms: CommonTransparentWithoutCommitmentsProof<L, F0, F1, G0, G1>,
-    t_acc_old: Affine<G0>,
-    t_acc_new: Affine<G0>,
     resp_acc_old: SchnorrResponse<Affine<G0>>,
     resp_acc_new: PartialSchnorrResponse<Affine<G0>>,
     resp_eph_pk: Vec<PartialPokDiscreteLog<Affine<G0>>>,
@@ -414,7 +427,7 @@ impl<
             transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL)
         };
 
-        let (resp_acc_old, resp_acc_new, t_acc_old_t, t_acc_new_t) = acc_proto.gen_proof(
+        let (resp_acc_old, resp_acc_new) = acc_proto.gen_proof(
             &challenge,
             sk_aff,
             updated_account.balance().into(),
@@ -437,8 +450,6 @@ impl<
         Ok((
             Self {
                 without_comms: partial,
-                t_acc_old: t_acc_old_t,
-                t_acc_new: t_acc_new_t,
                 resp_acc_old,
                 resp_acc_new,
                 resp_enc,
@@ -585,8 +596,14 @@ impl<
         {
             let mut transcript = even_verifier.transcript();
 
-            self.t_acc_old.serialize_compressed(&mut transcript)?;
-            self.t_acc_new.serialize_compressed(&mut transcript)?;
+            self.resp_acc_old.challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITH_SK,
+                &mut transcript,
+            )?;
+            self.resp_acc_new.challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITH_SK,
+                &mut transcript,
+            )?;
 
             chal_contrib_pk_enc(
                 &self.resp_eph_pk,
@@ -655,8 +672,6 @@ impl<
         verify_transparent_acc_comm(
             &self.resp_acc_old,
             &self.resp_acc_new,
-            self.t_acc_old,
-            self.t_acc_new,
             y.into_affine(),
             y_new.into_affine(),
             account_comm_key.clone(),
@@ -720,9 +735,7 @@ impl<
 /// Host portion of the split account commitment proof without secret key
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentsWithoutSkProof<G: SWCurveConfig + Clone + Copy> {
-    pub t_acc_old: Affine<G>,
-    pub t_acc_new: Affine<G>,
-    /// Full response for old leaf: 8 generators
+    /// Full response for old leaf: 8 generators. Carries its commitment `t`.
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
     /// Partial response for new account: 3 unique indices (current_rho, current_randomness, B_blinding)
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
@@ -742,8 +755,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProof<G> {
         verify_transparent_acc_comm(
             &self.resp_acc_old,
             &self.resp_acc_new,
-            self.t_acc_old,
-            self.t_acc_new,
             y_old,
             y_new,
             account_comm_key,
@@ -831,8 +842,10 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
     }
 
     pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.t_acc_old.challenge_contribution(&mut *writer)?;
-        self.t_acc_new.challenge_contribution(writer)?;
+        self.t_acc_old
+            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+        self.t_acc_new
+            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
         Ok(())
     }
 
@@ -855,8 +868,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
     ) -> Result<(
         SchnorrResponse<Affine<G>>,
         PartialSchnorrResponse<Affine<G>>,
-        Affine<G>,
-        Affine<G>,
     )> {
         let (resp_acc_old, resp_acc_new) = resp_transparent_acc_comm(
             &self.t_acc_old,
@@ -876,12 +887,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
             new_acc_randomness,
             None, // solo mode: no B_blinding in new commitment
         )?;
-        Ok((
-            resp_acc_old,
-            resp_acc_new,
-            self.t_acc_old.t,
-            self.t_acc_new.t,
-        ))
+        Ok((resp_acc_old, resp_acc_new))
     }
 }
 
@@ -988,8 +994,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
             Some(-self.rand_new_comm), // host mode: B_blinding witness for new commitment
         )?;
         Ok(AccountCommitmentsWithoutSkProof {
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
         })
@@ -1214,7 +1218,12 @@ impl<
 
         let t_null = Self::nullifier_proto(account.current_rho(), old_rho_blinding, &nullifier_gen);
 
-        t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        t_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::TRANSPARENT_NULLIFIER,
+            &mut transcript,
+        )?;
 
         let _ = transcript;
 
@@ -1241,7 +1250,7 @@ impl<
             )?;
 
         let mut transcript = even_prover.transcript();
-        t_bp.challenge_contribution(&mut transcript)?;
+        t_bp.challenge_contribution(dst::TRANSPARENT_BP, &mut transcript)?;
 
         Ok((
             Self {
@@ -1274,7 +1283,6 @@ impl<
             re_randomized_path: self.re_randomized_path,
             resp_null,
             comm_bp: self.comm_bp,
-            t_bp: self.t_bp.t,
             resp_bp,
         }
     }
@@ -1397,12 +1405,14 @@ impl<
 
         {
             let mut transcript = even_prover.transcript();
-            acc_host_proto
-                .t_acc_old
-                .challenge_contribution(&mut transcript)?;
-            acc_host_proto
-                .t_acc_new
-                .challenge_contribution(&mut transcript)?;
+            acc_host_proto.t_acc_old.challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITHOUT_SK,
+                &mut transcript,
+            )?;
+            acc_host_proto.t_acc_new.challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITHOUT_SK,
+                &mut transcript,
+            )?;
 
             let acc_old = <Projective<G0> as VariableBaseMSM>::msm_unchecked(
                 &acc_old_gens_host(&account_comm_key, b_blinding),
@@ -1596,12 +1606,18 @@ impl<
         // Host account commitment T-values and Y-values together
         self.commitment_proof
             .host_proof
-            .t_acc_old
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_old
+            .challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITHOUT_SK,
+                &mut transcript,
+            )?;
         self.commitment_proof
             .host_proof
-            .t_acc_new
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_new
+            .challenge_contribution(
+                dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITHOUT_SK,
+                &mut transcript,
+            )?;
 
         let (y_old, y_new) = self.old_and_new_host_commitments(
             asset_id,
@@ -2875,8 +2891,6 @@ fn resp_transparent_acc_comm<G: SWCurveConfig + Clone + Copy>(
 fn verify_transparent_acc_comm<G: SWCurveConfig + Clone + Copy>(
     resp_acc_old: &SchnorrResponse<Affine<G>>,
     resp_acc_new: &PartialSchnorrResponse<Affine<G>>,
-    t_acc_old: Affine<G>,
-    t_acc_new: Affine<G>,
     y_old: Affine<G>,
     y_new: Affine<G>,
     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
@@ -2919,7 +2933,7 @@ fn verify_transparent_acc_comm<G: SWCurveConfig + Clone + Copy>(
         )
     };
 
-    verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, old_gens, y_old, t_acc_old, challenge);
+    verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, old_gens, y_old, challenge);
 
     let offset = if include_sk { 1 } else { 0 };
 
@@ -2944,7 +2958,6 @@ fn verify_transparent_acc_comm<G: SWCurveConfig + Clone + Copy>(
         resp_acc_new,
         new_gens,
         y_new,
-        t_acc_new,
         challenge,
         missing_resps,
     );
@@ -3006,10 +3019,16 @@ pub(crate) fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
         &enc_key_gen,
         &sk_gen,
         &encrypted_pubkey.encrypted,
+        dst::TRANSPARENT_ENC_PUBKEY_ENC,
         &mut writer,
     )?;
     for (i, t) in t_eph_pk.iter().enumerate() {
-        t.challenge_contribution(&auditor_keys[i], &encrypted_pubkey.eph_pk[i], &mut writer)?;
+        t.challenge_contribution(
+            &auditor_keys[i],
+            &encrypted_pubkey.eph_pk[i],
+            dst::TRANSPARENT_ENC_PUBKEY_EPH,
+            &mut writer,
+        )?;
     }
 
     r.zeroize();
@@ -3060,10 +3079,16 @@ pub(crate) fn chal_contrib_pk_enc<G: AffineRepr, W: Write>(
         &enc_key_gen,
         &sk_gen,
         &encrypted_pubkey.encrypted,
+        dst::TRANSPARENT_ENC_PUBKEY_ENC,
         &mut writer,
     )?;
     for (i, r) in resp_eph_pk.iter().enumerate() {
-        r.challenge_contribution(&auditor_keys[i], &encrypted_pubkey.eph_pk[i], &mut writer)?;
+        r.challenge_contribution(
+            &auditor_keys[i],
+            &encrypted_pubkey.eph_pk[i],
+            dst::TRANSPARENT_ENC_PUBKEY_EPH,
+            &mut writer,
+        )?;
     }
 
     Ok(())
@@ -3191,6 +3216,7 @@ mod tests {
         get_tree_with_account_comm, get_tree_with_commitment, setup_gens_new,
     };
     use crate::account_registration::tests::new_account;
+    use crate::auth_proofs::DeviceTxnType;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::util::{
         add_verification_tuples_batches_to_rmc, batch_verify_bp, handle_verification_tuples,
@@ -4295,6 +4321,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Withdraw {
+            asset_id,
+            amount: withdraw_amount,
+        };
+
         //  Host side: creates partial + host account commitment (without sk)
         let (partial, host_proof, rerandomized_leaf, rand_part_old_comm, rand_new_comm, nullifier) =
             WithdrawSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::new::<
@@ -4332,6 +4363,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4378,6 +4410,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4439,6 +4472,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Withdraw {
+            asset_id,
+            amount: withdraw_amount,
+        };
+
         //  Host creates partial + host account commitment
         let (protocol, mut even_prover, odd_prover, nullifier) =
             WithdrawSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::init::<
@@ -4491,6 +4529,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4567,6 +4606,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 &ledger_nonce_v,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4662,6 +4702,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Deposit {
+            asset_id,
+            amount: deposit_amount,
+        };
+
         //  Host side: creates partial + host account commitment (without sk)
         let (partial, host_proof, rerandomized_leaf, rand_part_old_comm, rand_new_comm, nullifier) =
             DepositSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::new::<
@@ -4698,6 +4743,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4744,6 +4790,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
@@ -4805,6 +4852,11 @@ mod tests {
         let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let root = account_tree.root_node();
 
+        let txn_type = DeviceTxnType::Deposit {
+            asset_id,
+            amount: deposit_amount,
+        };
+
         //  Host creates partial + host account commitment
         let (protocol, mut even_prover, odd_prover, nullifier) =
             DepositSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::init::<
@@ -4857,6 +4909,7 @@ mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
+            &txn_type,
             sk_gen,
             enc_key_gen,
             b_blinding,
@@ -4933,6 +4986,7 @@ mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 &ledger_nonce_v,
+                &txn_type,
                 sk_gen,
                 enc_key_gen,
                 b_blinding,

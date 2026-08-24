@@ -319,7 +319,7 @@ pub fn gen_settlement_proof_revealed_asset_id() {
             amount: SETTLEMENT_AMOUNT,
             config: LegConfig {
                 reveal_asset_id: true,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             },
             public_enc_keys: vec![],
         })
@@ -342,13 +342,82 @@ pub fn gen_settlement_proof_parties_hidden() {
             amount: SETTLEMENT_AMOUNT,
             config: LegConfig {
                 reveal_asset_id: false,
-                parties_see_each_other: false,
+                visibility: PartyVisibility::NoVisibility,
             },
             public_enc_keys: vec![],
         })
         .encrypt_and_prove(&mut rng, &asset_tree)
         .unwrap();
     save_scale_v1(SETTLEMENT_PROOF_PARTIES_HIDDEN, &proof);
+}
+
+pub fn gen_settlement_proof_parties_visible() {
+    let mut rng = default_rng();
+    let sender_keys = alice_keys();
+    let receiver_keys = bob_keys();
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    let (asset_tree, _) = build_asset_tree(&[asset_state.clone()]);
+    let proof = SettlementBuilder::<()>::new(IDENTITY)
+        .leg(LegBuilder {
+            sender: sender_keys.public_keys(),
+            receiver: receiver_keys.public_keys(),
+            asset: asset_state,
+            amount: SETTLEMENT_AMOUNT,
+            config: LegConfig {
+                reveal_asset_id: false,
+                visibility: PartyVisibility::FullVisibility,
+            },
+            public_enc_keys: vec![],
+        })
+        .encrypt_and_prove(&mut rng, &asset_tree)
+        .unwrap();
+    save_scale_v1(SETTLEMENT_PROOF_PARTIES_VISIBLE, &proof);
+}
+
+pub fn gen_settlement_proof_sender_sees_receiver() {
+    let mut rng = default_rng();
+    let sender_keys = alice_keys();
+    let receiver_keys = bob_keys();
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    let (asset_tree, _) = build_asset_tree(&[asset_state.clone()]);
+    let proof = SettlementBuilder::<()>::new(IDENTITY)
+        .leg(LegBuilder {
+            sender: sender_keys.public_keys(),
+            receiver: receiver_keys.public_keys(),
+            asset: asset_state,
+            amount: SETTLEMENT_AMOUNT,
+            config: LegConfig {
+                reveal_asset_id: false,
+                visibility: PartyVisibility::OnlySenderSeesReceiver,
+            },
+            public_enc_keys: vec![],
+        })
+        .encrypt_and_prove(&mut rng, &asset_tree)
+        .unwrap();
+    save_scale_v1(SETTLEMENT_PROOF_SENDER_SEES_RECEIVER, &proof);
+}
+
+pub fn gen_settlement_proof_receiver_sees_sender() {
+    let mut rng = default_rng();
+    let sender_keys = alice_keys();
+    let receiver_keys = bob_keys();
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    let (asset_tree, _) = build_asset_tree(&[asset_state.clone()]);
+    let proof = SettlementBuilder::<()>::new(IDENTITY)
+        .leg(LegBuilder {
+            sender: sender_keys.public_keys(),
+            receiver: receiver_keys.public_keys(),
+            asset: asset_state,
+            amount: SETTLEMENT_AMOUNT,
+            config: LegConfig {
+                reveal_asset_id: false,
+                visibility: PartyVisibility::OnlyReceiverSeesSender,
+            },
+            public_enc_keys: vec![],
+        })
+        .encrypt_and_prove(&mut rng, &asset_tree)
+        .unwrap();
+    save_scale_v1(SETTLEMENT_PROOF_RECEIVER_SEES_SENDER, &proof);
 }
 
 #[test]
@@ -396,6 +465,24 @@ fn verify_v1_settlement_proof_revealed_asset_id() {
 fn verify_v1_settlement_proof_parties_hidden() {
     let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
     verify_settlement(SETTLEMENT_PROOF_PARTIES_HIDDEN, &[asset_state]);
+}
+
+#[test]
+fn verify_v1_settlement_proof_parties_visible() {
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    verify_settlement(SETTLEMENT_PROOF_PARTIES_VISIBLE, &[asset_state]);
+}
+
+#[test]
+fn verify_v1_settlement_proof_sender_sees_receiver() {
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    verify_settlement(SETTLEMENT_PROOF_SENDER_SEES_RECEIVER, &[asset_state]);
+}
+
+#[test]
+fn verify_v1_settlement_proof_receiver_sees_sender() {
+    let asset_state = AssetState::new::<()>(ASSET_ID_0, &[], &[]).unwrap();
+    verify_settlement(SETTLEMENT_PROOF_RECEIVER_SEES_SENDER, &[asset_state]);
 }
 
 pub fn gen_settlement_proof_2_auditors() {

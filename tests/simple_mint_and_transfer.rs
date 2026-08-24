@@ -62,7 +62,7 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
         let config = if reveal_asset_id {
             LegConfig {
                 reveal_asset_id: true,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             }
         } else {
             LegConfig::default()
@@ -211,7 +211,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
         let config = if reveal_asset_id {
             LegConfig {
                 reveal_asset_id: true,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             }
         } else {
             LegConfig::default()
@@ -355,7 +355,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
         let config = if reveal_asset_id {
             LegConfig {
                 reveal_asset_id: true,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             }
         } else {
             LegConfig::default()
@@ -567,7 +567,7 @@ fn test_atomic_swap() -> Result<()> {
         let config = if reveal_asset_id {
             LegConfig {
                 reveal_asset_id: true,
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
             }
         } else {
             LegConfig::default()

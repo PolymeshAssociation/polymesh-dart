@@ -5,6 +5,7 @@ pub mod verifier;
 use crate::account::state::NUM_GENERATORS;
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::account::AuthProofAffirmation;
+use crate::dst;
 use crate::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
 use crate::util::{
     BPProof, generate_sigma_responses_for_common_state_change,
@@ -82,9 +83,8 @@ pub struct CommonStateChangeProofPartial<
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     /// Commitment to initial rho, old and current rho, old and current randomness
     pub comm_bp_randomness_relations: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of rho and commitment randomness (step 1 of Schnorr)
-    pub t_bp_randomness_relations: Affine<G0>,
-    /// Response for proving knowledge of rho and commitment randomness (step 3 of Schnorr)
+    /// Response for proving knowledge of rho and commitment randomness (step 3 of Schnorr).
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_bp_randomness_relations: PartialSchnorrResponse<Affine<G0>>,
 }
 
@@ -98,13 +98,11 @@ pub struct CommonStateChangeProof<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub partial: CommonStateChangeProofPartial<F0, F1, G0, G1, { L }>,
-    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_old: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_new: Affine<G0>,
-    /// Response for proving knowledge of re-randomized account commitment (leaf) using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of re-randomized account commitment (leaf) using Schnorr
+    /// protocol (step 3 of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_old: SchnorrResponse<Affine<G0>>,
-    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3
+    /// of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_new: PartialSchnorrResponse<Affine<G0>>,
     pub resp_leg_link: Vec<LegAccountLink<G0>>,
 }
@@ -532,11 +530,8 @@ impl<
                 re_randomized_path: self.re_randomized_path.clone(),
                 resp_null,
                 comm_bp_randomness_relations: self.comm_bp_randomness_relations,
-                t_bp_randomness_relations: self.t_bp_randomness_relations.t,
                 resp_bp_randomness_relations,
             },
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
             resp_leg_link,
@@ -548,18 +543,18 @@ impl<
 /// Does NOT include sk or sk_enc.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentsHostProof<G: SWCurveConfig + Clone + Copy> {
-    pub t_acc_old: Affine<G>,
-    pub t_acc_new: Affine<G>,
-    /// Full response for old re-randomized account
+    /// Full response for old re-randomized account (carries its commitment `t`)
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
-    /// Partial response for new account
+    /// Partial response for new account (carries its commitment `t`)
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProof<G> {
     pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.t_acc_old.serialize_compressed(&mut *writer)?;
-        self.t_acc_new.serialize_compressed(writer)?;
+        self.resp_acc_old
+            .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut *writer)?;
+        self.resp_acc_new
+            .challenge_contribution(dst::ACCOUNT_COMM_NEW, writer)?;
         Ok(())
     }
 }
@@ -658,8 +653,10 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
     }
 
     pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.t_acc_old.challenge_contribution(&mut *writer)?;
-        self.t_acc_new.challenge_contribution(writer)?;
+        self.t_acc_old
+            .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut *writer)?;
+        self.t_acc_new
+            .challenge_contribution(dst::ACCOUNT_COMM_NEW, writer)?;
         Ok(())
     }
 
@@ -688,8 +685,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
         )?;
 
         Ok(AccountCommitmentsHostProof {
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
         })
@@ -897,7 +892,6 @@ impl<
             re_randomized_path: self.re_randomized_path.take(),
             resp_null,
             comm_bp_randomness_relations: self.comm_bp,
-            t_bp_randomness_relations: self.t_bp.t,
             resp_bp_randomness_relations: resp_bp,
         }
     }
@@ -1217,13 +1211,18 @@ impl<
             let mut transcript = even_prover.transcript();
             acc_host_proto
                 .t_acc_old
-                .challenge_contribution(&mut transcript)?;
+                .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut transcript)?;
             acc_host_proto
                 .t_acc_new
-                .challenge_contribution(&mut transcript)?;
-            t_bp.challenge_contribution(&mut transcript)?;
+                .challenge_contribution(dst::ACCOUNT_COMM_NEW, &mut transcript)?;
+            t_bp.challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
             let null_gen = account_comm_key.current_rho_gen();
-            t_null.challenge_contribution(&null_gen, &nullifier, &mut transcript)?;
+            t_null.challenge_contribution(
+                &null_gen,
+                &nullifier,
+                dst::NULLIFIER,
+                &mut transcript,
+            )?;
         }
 
         let mut ct_asset_id_2_protos = Vec::new();
@@ -1244,6 +1243,7 @@ impl<
                         &enc_gen,
                         &b_blinding,
                         ct_asset_id_2,
+                        dst::HOST_CT_ASSET_ID_2,
                         &mut transcript,
                     )?;
                 }
@@ -1269,6 +1269,7 @@ impl<
                     &enc_gen,
                     &b_blinding,
                     ct_amount_2,
+                    dst::HOST_CT_AMOUNT_2,
                     &mut transcript,
                 )?;
             }
@@ -1489,7 +1490,6 @@ impl<
             re_randomized_path,
             resp_null,
             comm_bp_randomness_relations: comm_bp,
-            t_bp_randomness_relations: t_bp.t,
             resp_bp_randomness_relations: resp_bp,
         };
 

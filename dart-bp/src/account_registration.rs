@@ -1,8 +1,9 @@
 use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
-use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
+use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
 use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::dst;
 use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
@@ -81,7 +82,7 @@ pub struct EncryptionForRegistration<
 > {
     /// Combined Bulletproof vector commitment to `[s_chunks..., rho_chunks...]`
     pub comm_s_rho_chunks_bp: G,
-    pub t_comm_s_rho_chunks_bp: G,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_s_rho_chunks_bp: SchnorrResponse<G>,
     /// Called `uppercase Omega` in the report
     pub encrypted_randomness: EncryptedScalar<G, CHUNK_BITS, NUM_CHUNKS>,
@@ -95,7 +96,7 @@ pub struct RegTxnWithoutSkProof<
     const CHUNK_BITS: usize = 48,
     const NUM_CHUNKS: usize = 6,
 > {
-    pub t_comm: G,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm: SchnorrResponse<G>,
     /// `N = current_rho_gen * rho`, called the "initial nullifier".
     pub initial_nullifier: G,
@@ -103,7 +104,7 @@ pub struct RegTxnWithoutSkProof<
     pub resp_initial_nullifier: PartialPokDiscreteLog<G>,
     /// Bulletproof vector commitment to `rho_randomness, rho, current_rho`
     pub comm_rho_bp: G,
-    pub t_comm_rho_bp: G,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_rho_bp: PartialSchnorrResponse<G>,
     pub proof: Option<R1CSProof<G>>,
     /// Present only when `T` (trusted party for force transfer) is provided for the registration
@@ -245,7 +246,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ],
             vec![rho_blinding, rho_sq_blinding, s_blinding, s_sq_blinding],
         );
-        comm_protocol.challenge_contribution(&mut transcript_ref)?;
+        comm_protocol.challenge_contribution(dst::REG_COMM, &mut transcript_ref)?;
         reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
 
         // N = current_rho_gen * rho (initial nullifier)
@@ -255,6 +256,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         init_null_protocol.challenge_contribution(
             &nullifier_gen,
             &initial_nullifier,
+            dst::REG_INITIAL_NULLIFIER,
             &mut transcript_ref,
         )?;
 
@@ -346,7 +348,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             };
 
         let mut transcript_ref = prover.transcript();
-        t_comm_rho_bp.challenge_contribution(&mut transcript_ref)?;
+        t_comm_rho_bp.challenge_contribution(dst::REG_BP_RHO, &mut transcript_ref)?;
 
         // Chunks commitment t-values and combined protos
         let combined_enc_data = if let Some((s_prep, rho_prep)) = &mut enc_prep {
@@ -360,7 +362,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 ),
                 blindings,
             );
-            t_comm_s_rho_chunks_bp.challenge_contribution(&mut transcript_ref)?;
+            t_comm_s_rho_chunks_bp
+                .challenge_contribution(dst::REG_BP_S_RHO_CHUNKS, &mut transcript_ref)?;
 
             let pk_t = T.as_ref().unwrap().0;
             let h = T.as_ref().unwrap().2;
@@ -499,7 +502,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
             Some(EncryptionForRegistration {
                 comm_s_rho_chunks_bp: enc.comm_s_rho_chunks_bp,
-                t_comm_s_rho_chunks_bp: t_comm.t,
                 resp_comm_s_rho_chunks_bp: resp_s_rho_chunks,
                 encrypted_randomness: enc_rand,
                 encrypted_rho: enc_rho,
@@ -509,12 +511,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         };
 
         Ok(RegTxnWithoutSkProof {
-            t_comm: self.comm_protocol.t,
             resp_comm,
             initial_nullifier: self.initial_nullifier,
             resp_initial_nullifier,
             comm_rho_bp: self.comm_rho_bp,
-            t_comm_rho_bp: self.t_comm_rho_bp.t,
             resp_comm_rho_bp,
             encryption_for_T,
             proof: None,
@@ -636,6 +636,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             eph_proto[i].challenge_contribution(
                 enc_key_gen,
                 &ciphertexts[i].eph_pk,
+                dst::REG_ENC_CHUNK_EPH,
                 &mut *transcript_ref,
             )?;
             enc_proto.push(PokPedersenCommitmentProtocol::init(
@@ -650,6 +651,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 pk_T,
                 enc_gen,
                 &ciphertexts[i].encrypted,
+                dst::REG_ENC_CHUNK_ENC,
                 &mut *transcript_ref,
             )?;
         }
@@ -698,6 +700,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             pk_T,
             enc_gen,
             &combined_commitment,
+            dst::REG_ENC_COMBINED,
             transcript_ref,
         )?;
         Ok(combined_proto)
@@ -776,13 +779,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             + (account_comm_key.id_gen() * id);
         let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
 
-        self.t_comm.serialize_compressed(&mut transcript_ref)?;
+        self.resp_comm
+            .challenge_contribution(dst::REG_COMM, &mut transcript_ref)?;
         reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
 
         // N = current_rho_gen * rho
         self.resp_initial_nullifier.challenge_contribution(
             &account_comm_key.current_rho_gen(),
             &self.initial_nullifier,
+            dst::REG_INITIAL_NULLIFIER,
             &mut transcript_ref,
         )?;
 
@@ -801,12 +806,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 resp_eph_pk.challenge_contribution(
                     enc_key_gen_T,
                     &ciphertext.eph_pk,
+                    dst::REG_ENC_CHUNK_EPH,
                     &mut transcript_ref,
                 )?;
                 resp_encrypted.challenge_contribution(
                     pk_T,
                     enc_gen,
                     &ciphertext.encrypted,
+                    dst::REG_ENC_CHUNK_ENC,
                     &mut transcript_ref,
                 )?;
             }
@@ -820,12 +827,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 resp_eph_pk.challenge_contribution(
                     enc_key_gen_T,
                     &ciphertext.eph_pk,
+                    dst::REG_ENC_CHUNK_EPH,
                     &mut transcript_ref,
                 )?;
                 resp_encrypted.challenge_contribution(
                     pk_T,
                     enc_gen,
                     &ciphertext.encrypted,
+                    dst::REG_ENC_CHUNK_ENC,
                     &mut transcript_ref,
                 )?;
             }
@@ -851,15 +860,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
 
         let mut transcript_ref = verifier.transcript();
-        self.t_comm_rho_bp
-            .serialize_compressed(&mut transcript_ref)?;
+        self.resp_comm_rho_bp
+            .challenge_contribution(dst::REG_BP_RHO, &mut transcript_ref)?;
 
         // Chunks combined protos
         if let Some(ref enc_for_T) = self.encryption_for_T {
             let enc_rand = &enc_for_T.encrypted_randomness;
             enc_for_T
-                .t_comm_s_rho_chunks_bp
-                .serialize_compressed(&mut transcript_ref)?;
+                .resp_comm_s_rho_chunks_bp
+                .challenge_contribution(dst::REG_BP_S_RHO_CHUNKS, &mut transcript_ref)?;
 
             let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
             let encs = enc_rand
@@ -877,6 +886,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 &pk_T,
                 &h,
                 &combined_s_commitment,
+                dst::REG_ENC_COMBINED,
                 &mut transcript_ref,
             )?;
 
@@ -894,6 +904,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 &pk_T,
                 &h,
                 &combined_rho_commitment,
+                dst::REG_ENC_COMBINED,
                 &mut transcript_ref,
             )?;
         }
@@ -969,14 +980,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             account_comm_key.randomness_gen(),
             account_comm_key.current_randomness_gen(),
         ];
-        verify_schnorr_resp_or_rmc!(
-            rmc,
-            self.resp_comm,
-            bases,
-            reduced_acc_comm,
-            self.t_comm,
-            challenge,
-        );
+        verify_schnorr_resp_or_rmc!(rmc, self.resp_comm, bases, reduced_acc_comm, challenge,);
 
         // Verify BP commitment Schnorr
         let mut missing_resps = BTreeMap::new();
@@ -993,7 +997,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             )
             .to_vec(),
             self.comm_rho_bp,
-            self.t_comm_rho_bp,
             challenge,
             missing_resps,
         );
@@ -1105,7 +1108,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                     leaf_level_bp_gens,
                 ),
                 enc_for_T.comm_s_rho_chunks_bp,
-                enc_for_T.t_comm_s_rho_chunks_bp,
                 challenge,
             );
 
@@ -1375,8 +1377,15 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let sk_gen = account_comm_key.sk_gen();
         let sk_enc_gen = account_comm_key.sk_enc_gen();
-        self.auth_proof
-            .verify(pk_aff, pk_enc, &ledger_nonce_v, &sk_gen, &sk_enc_gen, None)?;
+        self.auth_proof.verify(
+            pk_aff,
+            pk_enc,
+            &ledger_nonce_v,
+            &DeviceTxnType::AccountRegistration { asset_id },
+            &sk_gen,
+            &sk_enc_gen,
+            None,
+        )?;
 
         let mut auth_proof_bytes = Vec::new();
         self.auth_proof
@@ -2911,6 +2920,7 @@ pub mod tests {
                     pk_aff.0,
                     pk_enc.0,
                     &ledger_nonce,
+                    &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
                     &enc_key_gen,
                 )
@@ -3079,6 +3089,7 @@ pub mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 nonce,
+                &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
                 &enc_key_gen,
             )
@@ -3128,7 +3139,15 @@ pub mod tests {
 
             reg_proof
                 .auth_proof
-                .verify(pk_aff.0, pk_enc.0, nonce, &aff_key_gen, &enc_key_gen, None)
+                .verify(
+                    pk_aff.0,
+                    pk_enc.0,
+                    nonce,
+                    &DeviceTxnType::AccountRegistration { asset_id },
+                    &aff_key_gen,
+                    &enc_key_gen,
+                    None,
+                )
                 .unwrap();
 
             let proof = reg_proof.partial.proof.as_ref().unwrap();
@@ -3210,6 +3229,7 @@ pub mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 &ledger_nonce,
+                &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
                 &enc_key_gen,
             )
@@ -3272,6 +3292,7 @@ pub mod tests {
                     pk_aff.0,
                     pk_enc.0,
                     &ledger_nonce_v,
+                    &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
                     &enc_key_gen,
                     None,

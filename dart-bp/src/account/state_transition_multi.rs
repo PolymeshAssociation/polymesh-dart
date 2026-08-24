@@ -385,8 +385,8 @@ mod tests {
     };
     use crate::account::{AccountCommitmentKeyTrait, AccountTxnWitness};
     use crate::account_registration::tests::new_account;
-    use crate::leg::LegEncConfig;
     use crate::leg::tests::setup_keys;
+    use crate::leg::{LegEncConfig, PartyVisibility};
     use crate::util::verify_rmc;
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_pallas::{Fr as PallasFr, PallasConfig as PallasParameters};
@@ -423,7 +423,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -914,7 +914,7 @@ mod tests {
         // Create all 6 legs
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -1943,7 +1943,7 @@ mod tests {
         // Create all 6 legs
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -2575,7 +2575,7 @@ mod tests {
         let (_, leg_enc_1, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             },
             pk_auditor_e.0,
@@ -2592,7 +2592,7 @@ mod tests {
         let (_, leg_enc_2, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             pk_auditor_e.0,
@@ -2609,7 +2609,7 @@ mod tests {
         let (_, leg_enc_3, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
             },
             pk_auditor_e.0,
@@ -2626,7 +2626,7 @@ mod tests {
         let (_, leg_enc_4, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             pk_auditor_e.0,
@@ -2643,7 +2643,7 @@ mod tests {
         let (_, leg_enc_5, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             pk_auditor_e.0,
@@ -2660,7 +2660,7 @@ mod tests {
         let (_, leg_enc_6, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             pk_auditor_e.0,

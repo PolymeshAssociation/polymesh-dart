@@ -8,7 +8,7 @@ use crate::util::{
 };
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, add_to_transcript,
-    error::Result,
+    dst, error::Result,
 };
 use ark_dlog_gadget::dlog::{DiscreteLogParameters, DivisorComms};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -73,7 +73,7 @@ pub struct LegCreationProof<
     /// present only when sender and receiver decryption is needed.
     /// The third list is when asset has any encryption keys and fourth list when asset has mediators
     pub comm_r_i_amount: Affine<G0>,
-    pub t_comm_r_i_amount: Affine<G0>,
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_r_i_amount: SchnorrResponse<Affine<G0>>,
     pub ped_comms: Vec<DivisorComms<Affine<G1>>>,
     /// Response for proving `ct_s = enc_key_gen * r_1 + pk_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
@@ -102,9 +102,9 @@ pub struct LegCreationProof<
         PartialPokDiscreteLog<Affine<G0>>,
         Vec<PartialPokDiscreteLog<Affine<G0>>>,
     )>,
-    /// Response for proving `S[1] = S[0] * r_2/r_1` (only when sender_receiver_decryption_needed)
+    /// Response for proving `S[1] = S[0] * r_2/r_1` (only when the sender sees the receiver)
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G0>>>,
-    /// Response for proving `R[0] = R[1] * r_1/r_2` (only when sender_receiver_decryption_needed)
+    /// Response for proving `R[0] = R[1] * r_1/r_2` (only when the receiver sees the sender)
     pub resp_eph_pk_r_s: Option<PartialPokDiscreteLog<Affine<G0>>>,
     /// Responses for proving public encryption key relations
     pub resp_eph_pk_public_enc: Vec<(
@@ -378,7 +378,8 @@ impl<
                 );
 
                 assert_eq!(
-                    re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
+                    re_randomized_points.blindings_with_different_gen[&((i + 1) as u32)]
+                        .into_group(),
                     b_base * blindings_for_points[i + 1]
                 );
             }
@@ -402,7 +403,9 @@ impl<
             Error::ProofGenerationError("mediators are missing in leg encryption".to_string())
         })?;
 
-        let parties_see_each_other = leg_enc.do_parties_see_each_other();
+        let visibility = leg_enc.party_visibility();
+        let sender_sees_receiver = visibility.sender_sees_receiver();
+        let receiver_sees_sender = visibility.receiver_sees_sender();
 
         let (asset_id_point_blinding, l, k) =
             Self::split_point_blindings(blindings_for_points, num_enc_keys);
@@ -411,8 +414,10 @@ impl<
         debug_assert_eq!(k.len(), num_med_keys);
         debug_assert_eq!(l.len() + k.len() + 1, num_asset_data_points);
 
-        // If ct_s and ct_r need to be decrypted.
-        let sender_receiver_decryption_needed = parties_see_each_other || !l.is_empty();
+        // `r_2/r_1` is committed when the sender can see the receiver or auditor ciphertexts must be
+        // created. `r_1/r_2` only when the receiver can see the sender.
+        let commit_r_2_r_1_inv = sender_sees_receiver || !l.is_empty();
+        let commit_r_1_r_2_inv = receiver_sees_sender;
 
         let mut r_1_inv = r_1.inverse().ok_or_else(|| Error::InvertingZero)?;
         let mut r_2_inv = r_2.inverse().ok_or_else(|| Error::InvertingZero)?;
@@ -425,9 +430,9 @@ impl<
         // r_4/r_2
         let mut r_4_r_2_inv = r_4 * r_2_inv;
         // r_2/r_1
-        let mut r_2_r_1_inv = sender_receiver_decryption_needed.then(|| r_2 * r_1_inv);
+        let mut r_2_r_1_inv = commit_r_2_r_1_inv.then(|| r_2 * r_1_inv);
         // r_1/r_2
-        let mut r_1_r_2_inv = sender_receiver_decryption_needed.then(|| r_1 * r_2_inv);
+        let mut r_1_r_2_inv = commit_r_1_r_2_inv.then(|| r_1 * r_2_inv);
 
         // `l_i * r_1`
         let l_r_1 = l.iter().map(|l_i| *l_i * r_1).collect::<Vec<_>>();
@@ -446,8 +451,8 @@ impl<
         let mut r_3_r_2_inv_blinding = F0::rand(rng);
         let mut r_4_r_1_inv_blinding = F0::rand(rng);
         let mut r_4_r_2_inv_blinding = F0::rand(rng);
-        let mut r_2_r_1_inv_blinding = sender_receiver_decryption_needed.then(|| F0::rand(rng));
-        let mut r_1_r_2_inv_blinding = sender_receiver_decryption_needed.then(|| F0::rand(rng));
+        let mut r_2_r_1_inv_blinding = commit_r_2_r_1_inv.then(|| F0::rand(rng));
+        let mut r_1_r_2_inv_blinding = commit_r_1_r_2_inv.then(|| F0::rand(rng));
         let mut l_blindings = (0..l.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
         let mut l_r_1_blindings = (0..l.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
         let mut m_blindings = (0..r_meds.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
@@ -471,8 +476,10 @@ impl<
             r_4_r_2_inv,
         ];
 
-        if sender_receiver_decryption_needed {
+        if commit_r_2_r_1_inv {
             wits.push(r_2_r_1_inv.unwrap());
+        }
+        if commit_r_1_r_2_inv {
             wits.push(r_1_r_2_inv.unwrap());
         }
 
@@ -493,7 +500,8 @@ impl<
         LegCreationProof::<L, F0, F1, G0, G1>::enforce_constraints(
             odd_prover,
             Some(leg.core.amount),
-            sender_receiver_decryption_needed,
+            commit_r_2_r_1_inv,
+            commit_r_1_r_2_inv,
             l.len(),
             r_meds.len(),
             vars,
@@ -514,8 +522,10 @@ impl<
             r_4_r_1_inv_blinding,
             r_4_r_2_inv_blinding,
         ];
-        if sender_receiver_decryption_needed {
+        if commit_r_2_r_1_inv {
             blindings.push(r_2_r_1_inv_blinding.unwrap());
+        }
+        if commit_r_1_r_2_inv {
             blindings.push(r_1_r_2_inv_blinding.unwrap());
         }
         for (l_i, l_i_r_1) in l_blindings.iter().zip(l_r_1_blindings.iter()) {
@@ -529,7 +539,8 @@ impl<
 
         let t_comm_r_i_amount = SchnorrCommitment::new(
             &Self::bp_gens_vec::<Parameters0, Parameters1>(
-                sender_receiver_decryption_needed,
+                commit_r_2_r_1_inv,
+                commit_r_1_r_2_inv,
                 l.len(),
                 r_meds.len(),
                 tree_parameters,
@@ -590,24 +601,22 @@ impl<
             &leg_enc,
         );
 
-        // If parties_see_each_other is true, then S[1] and R[0] is present in leg encryption
-        // For proving S[1] = S[0] * r_2/r_1 and R[0] = R[1] * r_1/r_2
-        let (eph_pk_s_r_proto, eph_pk_r_s_proto) = if parties_see_each_other {
-            (
-                Some(PokDiscreteLogProtocol::init(
-                    r_2_r_1_inv.unwrap(),
-                    r_2_r_1_inv_blinding.unwrap(),
-                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                )),
-                Some(PokDiscreteLogProtocol::init(
-                    r_1_r_2_inv.unwrap(),
-                    r_1_r_2_inv_blinding.unwrap(),
-                    &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-                )),
+        // S[1] (eph_pk_s.r2) is present if the sender can see the receiver. Prove S[1] = S[0] * r_2/r_1.
+        let eph_pk_s_r_proto = sender_sees_receiver.then(|| {
+            PokDiscreteLogProtocol::init(
+                r_2_r_1_inv.unwrap(),
+                r_2_r_1_inv_blinding.unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             )
-        } else {
-            (None, None)
-        };
+        });
+        // R[0] (eph_pk_r.r1) is present if the receiver can see the sender. Prove R[0] = R[1] * r_1/r_2.
+        let eph_pk_r_s_proto = receiver_sees_sender.then(|| {
+            PokDiscreteLogProtocol::init(
+                r_1_r_2_inv.unwrap(),
+                r_1_r_2_inv_blinding.unwrap(),
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            )
+        });
 
         let mut pk_en_proto = Self::enc_key_protos(
             &l,
@@ -678,12 +687,13 @@ impl<
         Zeroize::zeroize(&mut m_r_1_inv_blindings);
         Zeroize::zeroize(&mut k_blindings);
 
-        t_comm_r_i_amount.challenge_contribution(&mut transcript)?;
+        t_comm_r_i_amount.challenge_contribution(dst::LEG_CREATE_BP_R_I_AMOUNT, &mut transcript)?;
 
         ct_s_proto.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
+            dst::LEG_CREATE_CT_S,
             &mut transcript,
         )?;
 
@@ -691,6 +701,7 @@ impl<
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
+            dst::LEG_CREATE_CT_R,
             &mut transcript,
         )?;
 
@@ -698,6 +709,7 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount(),
+            dst::LEG_CREATE_CT_AMOUNT,
             &mut transcript,
         )?;
 
@@ -705,12 +717,14 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.asset_id_ciphertext().unwrap(),
+            dst::LEG_CREATE_CT_ASSET_ID,
             &mut transcript,
         )?;
 
         eph_pk_s_v_proto.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            dst::LEG_CREATE_EPH_PK_S_V,
             &mut transcript,
         )?;
 
@@ -722,12 +736,14 @@ impl<
                 .r4
                 .as_ref()
                 .unwrap(),
+            dst::LEG_CREATE_EPH_PK_S_AT,
             &mut transcript,
         )?;
 
         eph_pk_r_v_proto.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            dst::LEG_CREATE_EPH_PK_R_V,
             &mut transcript,
         )?;
 
@@ -739,10 +755,11 @@ impl<
                 .r4
                 .as_ref()
                 .unwrap(),
+            dst::LEG_CREATE_EPH_PK_R_AT,
             &mut transcript,
         )?;
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             eph_pk_s_r_proto.as_ref().unwrap().challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 leg_enc
@@ -751,8 +768,11 @@ impl<
                     .r2
                     .as_ref()
                     .unwrap(),
+                dst::LEG_CREATE_EPH_PK_S_R,
                 &mut transcript,
             )?;
+        }
+        if receiver_sees_sender {
             eph_pk_r_s_proto.as_ref().unwrap().challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 leg_enc
@@ -761,57 +781,96 @@ impl<
                     .r1
                     .as_ref()
                     .unwrap(),
+                dst::LEG_CREATE_EPH_PK_R_S,
                 &mut transcript,
             )?;
         }
 
-        for (i, ((p, re_rand_point), eph_pk_enc_key)) in pk_en_proto
+        for ((p, (re_rand_point, blinding_point)), eph_pk_enc_key) in pk_en_proto
             .iter_mut()
-            .zip(re_randomized_points.re_randomized_points.iter().skip(1))
+            .zip(
+                re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(1)
+                    .zip(
+                        re_randomized_points
+                            .blindings_with_different_gen
+                            .range(..=(l.len() as u32))
+                            .map(|(_, v)| v),
+                    ),
+            )
             .zip(leg_enc.eph_pk_enc_keys.iter())
-            .enumerate()
         {
             p.0.challenge_contribution(
                 re_rand_point,
                 &neg_blinding_base,
                 &eph_pk_enc_key.r1,
+                dst::LEG_CREATE_ENC_KEY_R1,
                 &mut transcript,
             )?;
             p.1.challenge_contribution(
                 &b_base,
-                &re_randomized_points.blindings_with_different_gen[&(i + 1)],
+                blinding_point,
+                dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
-            p.2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
-            p.3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
+            p.2.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r2,
+                dst::LEG_CREATE_ENC_KEY_R2,
+                &mut transcript,
+            )?;
+            p.3.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r3,
+                dst::LEG_CREATE_ENC_KEY_R3,
+                &mut transcript,
+            )?;
             p.4.challenge_contribution(
                 &eph_pk_enc_key.r1,
                 eph_pk_enc_key.r4.as_ref().unwrap(),
+                dst::LEG_CREATE_ENC_KEY_R4,
                 &mut transcript,
             )?;
         }
 
-        for ((p, mediator), re_rand_point) in pk_m_proto.iter_mut().zip(mediators.iter()).zip(
-            re_randomized_points
-                .re_randomized_points
-                .iter()
-                .skip(l.len() + 1),
-        ) {
+        for ((p, mediator), (re_rand_point, blinding_point)) in
+            pk_m_proto.iter_mut().zip(mediators.iter()).zip(
+                re_randomized_points
+                    .re_randomized_points
+                    .iter()
+                    .skip(l.len() + 1)
+                    .zip(
+                        re_randomized_points
+                            .blindings_with_different_gen
+                            .range(((l.len() as u32) + 1)..)
+                            .map(|(_, v)| v),
+                    ),
+            )
+        {
             let y = mediator.ct_med - re_rand_point;
             p.0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
                 &y.into_affine(),
+                dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
 
-            p.1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
+            p.1.challenge_contribution(
+                &b_base,
+                blinding_point,
+                dst::LEG_CREATE_MED_KEY_BLINDING,
+                &mut transcript,
+            )?;
 
             // One commitment per encryption key, all sharing the `m_i_r_1_inv` response.
             for i in 0..num_enc_keys {
                 p.2[i].challenge_contribution(
                     &leg_enc.eph_pk_enc_keys[i].r1,
                     &mediator.eph_pk_med_keys[i],
+                    dst::LEG_CREATE_MED_KEY_ENC,
                     &mut transcript,
                 )?;
             }
@@ -822,12 +881,28 @@ impl<
             .zip(leg.public_enc_keys.iter())
             .zip(leg_enc.eph_pk_public_enc_keys.iter())
         {
-            p.0.challenge_contribution(pk, &eph_pk_public_enc.r1, &mut transcript)?;
-            p.1.challenge_contribution(pk, &eph_pk_public_enc.r2, &mut transcript)?;
-            p.2.challenge_contribution(pk, &eph_pk_public_enc.r3, &mut transcript)?;
+            p.0.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r1,
+                dst::LEG_CREATE_PUBLIC_ENC_R1,
+                &mut transcript,
+            )?;
+            p.1.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r2,
+                dst::LEG_CREATE_PUBLIC_ENC_R2,
+                &mut transcript,
+            )?;
+            p.2.challenge_contribution(
+                pk,
+                &eph_pk_public_enc.r3,
+                dst::LEG_CREATE_PUBLIC_ENC_R3,
+                &mut transcript,
+            )?;
             p.3.challenge_contribution(
                 pk,
                 eph_pk_public_enc.r4.as_ref().unwrap(),
+                dst::LEG_CREATE_PUBLIC_ENC_R4,
                 &mut transcript,
             )?;
         }
@@ -841,6 +916,7 @@ impl<
             &asset_comm_params.j_0,
             &b_blinding_base,
             &asset_id_point_y,
+            dst::LEG_CREATE_ASSET_ID_POINT,
             &mut transcript,
         )?;
 
@@ -929,7 +1005,6 @@ impl<
             re_randomized_points,
             ped_comms: divisor_comms,
             comm_r_i_amount,
-            t_comm_r_i_amount: t_comm_r_i_amount.t,
             resp_comm_r_i_amount,
             resp_ct_s,
             resp_ct_r,
@@ -1176,26 +1251,18 @@ impl<
             ));
         }
 
-        let parties_see_each_other = leg_enc.do_parties_see_each_other();
-        if parties_see_each_other {
-            if self.resp_eph_pk_s_r.is_none() || self.resp_eph_pk_r_s.is_none() {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is true but resp_eph_pk_s_r/resp_eph_pk_r_s is missing"
-                        .to_string(),
-                ));
-            }
-            if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2.is_none()
-                || leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1.is_none()
-            {
-                return Err(Error::ProofVerificationError(
-                    "parties_see_each_other is true but leg_enc.eph_pk_s.1/leg_enc.eph_pk_r.0 is missing"
-                        .to_string(),
-                ));
-            }
-        } else if self.resp_eph_pk_s_r.is_some() || self.resp_eph_pk_r_s.is_some() {
+        let visibility = leg_enc.party_visibility();
+        let sender_sees_receiver = visibility.sender_sees_receiver();
+        let receiver_sees_sender = visibility.receiver_sees_sender();
+
+        if self.resp_eph_pk_s_r.is_some() != sender_sees_receiver {
             return Err(Error::ProofVerificationError(
-                "parties_see_each_other is false but resp_eph_pk_s_r/resp_eph_pk_r_s is present"
-                    .to_string(),
+                "resp_eph_pk_s_r presence must match sender-sees-receiver visibility".to_string(),
+            ));
+        }
+        if self.resp_eph_pk_r_s.is_some() != receiver_sees_sender {
+            return Err(Error::ProofVerificationError(
+                "resp_eph_pk_r_s presence must match receiver-sees-sender visibility".to_string(),
             ));
         }
 
@@ -1268,18 +1335,16 @@ impl<
 
         ensure_eph_key_not_identity(&leg_enc)?;
 
-        // If ct_s and ct_r need to be decrypted.
-        let sender_receiver_decryption_needed = parties_see_each_other || num_enc_keys > 0;
+        // r_2/r_1 is committed when the sender can see the receiver or auditor ciphertexts must be
+        // decrypted; r_1/r_2 only when the receiver can see the sender.
+        let commit_r_2_r_1_inv = sender_sees_receiver || num_enc_keys > 0;
+        let commit_r_1_r_2_inv = receiver_sees_sender;
+        let num_vis_resps = commit_r_2_r_1_inv as usize + commit_r_1_r_2_inv as usize;
+        // Response index where the l/m (auditor/mediator) begin
+        let l_m_offset = 12 + num_vis_resps;
 
         // +1 for blinding
-        let num_resps = 1
-            + 11
-            + 2 * (num_enc_keys + num_med_keys)
-            + if sender_receiver_decryption_needed {
-                2
-            } else {
-                0
-            };
+        let num_resps = 1 + 11 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
         if self.resp_comm_r_i_amount.len() != num_resps {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 num_resps,
@@ -1305,15 +1370,14 @@ impl<
             None,
         )?;
 
-        let mut vars_count = 11 + (self.resp_eph_pk_enc.len() + self.resp_eph_pk_meds.len()) * 2;
-        if sender_receiver_decryption_needed {
-            vars_count += 2;
-        }
+        let vars_count =
+            11 + (self.resp_eph_pk_enc.len() + self.resp_eph_pk_meds.len()) * 2 + num_vis_resps;
         let vars = odd_verifier.commit_vec(vars_count, self.comm_r_i_amount);
         LegCreationProof::<L, F0, F1, G0, G1>::enforce_constraints(
             odd_verifier,
             None,
-            sender_receiver_decryption_needed,
+            commit_r_2_r_1_inv,
+            commit_r_1_r_2_inv,
             num_enc_keys,
             num_med_keys,
             vars,
@@ -1325,13 +1389,14 @@ impl<
         let b_blinding_base = tree_parameters.odd_parameters.pc_gens().B_blinding;
         let neg_blinding_base = -b_blinding_base.into_group().into_affine();
 
-        self.t_comm_r_i_amount
-            .serialize_compressed(&mut transcript)?;
+        self.resp_comm_r_i_amount
+            .challenge_contribution(dst::LEG_CREATE_BP_R_I_AMOUNT, &mut transcript)?;
 
         self.resp_ct_s.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.ct_s(),
+            dst::LEG_CREATE_CT_S,
             &mut transcript,
         )?;
 
@@ -1339,6 +1404,7 @@ impl<
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
+            dst::LEG_CREATE_CT_R,
             &mut transcript,
         )?;
 
@@ -1346,6 +1412,7 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &leg_enc.ct_amount(),
+            dst::LEG_CREATE_CT_AMOUNT,
             &mut transcript,
         )?;
 
@@ -1353,44 +1420,42 @@ impl<
             &enc_key_gen,
             &enc_gen,
             &asset_id_ciphertext,
+            dst::LEG_CREATE_CT_ASSET_ID,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_s_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3,
+            dst::LEG_CREATE_EPH_PK_S_V,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_s_at.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &eph_pk_s_at,
+            dst::LEG_CREATE_EPH_PK_S_AT,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
+            dst::LEG_CREATE_EPH_PK_R_V,
             &mut transcript,
         )?;
 
         self.resp_eph_pk_r_at.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &eph_pk_r_at,
+            dst::LEG_CREATE_EPH_PK_R_AT,
             &mut transcript,
         )?;
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             let resp_eph_pk_s_r = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "resp_eph_pk_s_r must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
-            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "resp_eph_pk_r_s must be present when parties_see_each_other is true"
-                        .to_string(),
+                    "resp_eph_pk_s_r must be present when sender sees receiver".to_string(),
                 )
             })?;
             let eph_pk_s_r = leg_enc
@@ -1400,10 +1465,22 @@ impl<
                 .clone()
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
-                            .to_string(),
+                        "leg_enc.eph_pk_s.1 must be present when sender sees receiver".to_string(),
                     )
                 })?;
+            resp_eph_pk_s_r.challenge_contribution(
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                &eph_pk_s_r,
+                dst::LEG_CREATE_EPH_PK_S_R,
+                &mut transcript,
+            )?;
+        }
+        if receiver_sees_sender {
+            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_r_s must be present when receiver sees sender".to_string(),
+                )
+            })?;
             let eph_pk_r_s = leg_enc
                 .leg_enc_core_and_eph_keys
                 .eph_pk_r
@@ -1411,53 +1488,60 @@ impl<
                 .clone()
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
-                            .to_string(),
+                        "leg_enc.eph_pk_r.0 must be present when receiver sees sender".to_string(),
                     )
                 })?;
-
-            resp_eph_pk_s_r.challenge_contribution(
-                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                &eph_pk_s_r,
-                &mut transcript,
-            )?;
             resp_eph_pk_r_s.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &eph_pk_r_s,
+                dst::LEG_CREATE_EPH_PK_R_S,
                 &mut transcript,
             )?;
         }
 
-        for (i, (((p_0, p_1, p_2, p_3, p_4), re_rand_point), eph_pk_enc_key)) in self
-            .resp_eph_pk_enc
-            .iter()
-            .zip(
-                self.re_randomized_points
-                    .re_randomized_points
-                    .iter()
-                    .skip(1),
-            )
-            .zip(leg_enc.eph_pk_enc_keys.iter())
-            .enumerate()
+        for (i, (((p_0, p_1, p_2, p_3, p_4), (re_rand_point, blinding_point)), eph_pk_enc_key)) in
+            self.resp_eph_pk_enc
+                .iter()
+                .zip(
+                    self.re_randomized_points
+                        .re_randomized_points
+                        .iter()
+                        .skip(1)
+                        .zip(
+                            self.re_randomized_points
+                                .blindings_with_different_gen
+                                .range(..=(num_enc_keys as u32))
+                                .map(|(_, v)| v),
+                        ),
+                )
+                .zip(leg_enc.eph_pk_enc_keys.iter())
+                .enumerate()
         {
             p_0.challenge_contribution(
                 re_rand_point,
                 &neg_blinding_base,
                 &eph_pk_enc_key.r1,
+                dst::LEG_CREATE_ENC_KEY_R1,
                 &mut transcript,
             )?;
             p_1.challenge_contribution(
                 &b_base,
-                self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
-                    Error::ProofVerificationError(format!(
-                        "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
-                        i + 1, i
-                    ))
-                })?,
+                blinding_point,
+                dst::LEG_CREATE_ENC_KEY_BLINDING,
                 &mut transcript,
             )?;
-            p_2.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r2, &mut transcript)?;
-            p_3.challenge_contribution(&eph_pk_enc_key.r1, &eph_pk_enc_key.r3, &mut transcript)?;
+            p_2.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r2,
+                dst::LEG_CREATE_ENC_KEY_R2,
+                &mut transcript,
+            )?;
+            p_3.challenge_contribution(
+                &eph_pk_enc_key.r1,
+                &eph_pk_enc_key.r3,
+                dst::LEG_CREATE_ENC_KEY_R3,
+                &mut transcript,
+            )?;
             p_4.challenge_contribution(
                 &eph_pk_enc_key.r1,
                 eph_pk_enc_key.r4.as_ref().ok_or_else(|| {
@@ -1465,16 +1549,23 @@ impl<
                         "leg_enc.eph_pk_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
+                dst::LEG_CREATE_ENC_KEY_R4,
                 &mut transcript,
             )?;
         }
 
-        for (((p_0, p_1, p_2), mediator), re_rand_point) in
+        for (((p_0, p_1, p_2), mediator), (re_rand_point, blinding_point)) in
             self.resp_eph_pk_meds.iter().zip(mediators.iter()).zip(
                 self.re_randomized_points
                     .re_randomized_points
                     .iter()
-                    .skip(num_enc_keys + 1),
+                    .skip(num_enc_keys + 1)
+                    .zip(
+                        self.re_randomized_points
+                            .blindings_with_different_gen
+                            .range(((num_enc_keys as u32) + 1)..)
+                            .map(|(_, v)| v),
+                    ),
             )
         {
             let y = mediator.ct_med - re_rand_point;
@@ -1482,15 +1573,22 @@ impl<
                 &enc_key_gen,
                 &neg_blinding_base,
                 &y.into_affine(),
+                dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
 
-            p_1.challenge_contribution(&b_base, re_rand_point, &mut transcript)?;
+            p_1.challenge_contribution(
+                &b_base,
+                blinding_point,
+                dst::LEG_CREATE_MED_KEY_BLINDING,
+                &mut transcript,
+            )?;
 
             for i in 0..num_enc_keys {
                 p_2[i].challenge_contribution(
                     &leg_enc.eph_pk_enc_keys[i].r1,
                     &mediator.eph_pk_med_keys[i],
+                    dst::LEG_CREATE_MED_KEY_ENC,
                     &mut transcript,
                 )?;
             }
@@ -1503,9 +1601,24 @@ impl<
             .zip(leg_enc.eph_pk_public_enc_keys.iter())
             .enumerate()
         {
-            p_0.challenge_contribution(pk, &eph_pk_public_enc_key.r1, &mut transcript)?;
-            p_1.challenge_contribution(pk, &eph_pk_public_enc_key.r2, &mut transcript)?;
-            p_2.challenge_contribution(pk, &eph_pk_public_enc_key.r3, &mut transcript)?;
+            p_0.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r1,
+                dst::LEG_CREATE_PUBLIC_ENC_R1,
+                &mut transcript,
+            )?;
+            p_1.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r2,
+                dst::LEG_CREATE_PUBLIC_ENC_R2,
+                &mut transcript,
+            )?;
+            p_2.challenge_contribution(
+                pk,
+                &eph_pk_public_enc_key.r3,
+                dst::LEG_CREATE_PUBLIC_ENC_R3,
+                &mut transcript,
+            )?;
             p_3.challenge_contribution(
                 pk,
                 eph_pk_public_enc_key.r4.as_ref().ok_or_else(|| {
@@ -1513,6 +1626,7 @@ impl<
                         "leg_enc.eph_pk_public_enc_keys[{i}].3 must be present when asset-id is encrypted"
                     ))
                 })?,
+                dst::LEG_CREATE_PUBLIC_ENC_R4,
                 &mut transcript,
             )?;
         }
@@ -1526,6 +1640,7 @@ impl<
             &asset_comm_params.j_0,
             &b_blinding_base,
             &asset_id_point_y,
+            dst::LEG_CREATE_ASSET_ID_POINT,
             &mut transcript,
         )?;
 
@@ -1629,17 +1744,10 @@ impl<
             &self.resp_comm_r_i_amount.0[11],
         );
 
-        if parties_see_each_other {
+        if sender_sees_receiver {
             let resp_eph_pk_s_r = self.resp_eph_pk_s_r.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(
-                    "resp_eph_pk_s_r must be present when parties_see_each_other is true"
-                        .to_string(),
-                )
-            })?;
-            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
-                Error::ProofVerificationError(
-                    "resp_eph_pk_r_s must be present when parties_see_each_other is true"
-                        .to_string(),
+                    "resp_eph_pk_s_r must be present when sender sees receiver".to_string(),
                 )
             })?;
             let eph_pk_s_r = leg_enc
@@ -1649,22 +1757,9 @@ impl<
                 .clone()
                 .ok_or_else(|| {
                     Error::ProofVerificationError(
-                        "leg_enc.eph_pk_s.1 must be present when parties_see_each_other is true"
-                            .to_string(),
+                        "leg_enc.eph_pk_s.1 must be present when sender sees receiver".to_string(),
                     )
                 })?;
-            let eph_pk_r_s = leg_enc
-                .leg_enc_core_and_eph_keys
-                .eph_pk_r
-                .r1
-                .clone()
-                .ok_or_else(|| {
-                    Error::ProofVerificationError(
-                        "leg_enc.eph_pk_r.0 must be present when parties_see_each_other is true"
-                            .to_string(),
-                    )
-                })?;
-
             verify_or_rmc_2!(
                 rmc,
                 resp_eph_pk_s_r,
@@ -1674,6 +1769,23 @@ impl<
                 &challenge,
                 &self.resp_comm_r_i_amount.0[12],
             );
+        }
+        if receiver_sees_sender {
+            let resp_eph_pk_r_s = self.resp_eph_pk_r_s.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError(
+                    "resp_eph_pk_r_s must be present when receiver sees sender".to_string(),
+                )
+            })?;
+            let eph_pk_r_s = leg_enc
+                .leg_enc_core_and_eph_keys
+                .eph_pk_r
+                .r1
+                .clone()
+                .ok_or_else(|| {
+                    Error::ProofVerificationError(
+                        "leg_enc.eph_pk_r.0 must be present when receiver sees sender".to_string(),
+                    )
+                })?;
             verify_or_rmc_2!(
                 rmc,
                 resp_eph_pk_r_s,
@@ -1681,11 +1793,12 @@ impl<
                 eph_pk_r_s,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[13],
+                &self.resp_comm_r_i_amount.0[12 + commit_r_2_r_1_inv as usize],
             );
         }
 
-        // Dont need to offset any responses as following will only execute if sender_receiver_decryption_needed = true
+        // The auditor/mediator responses start at lm_base, which already accounts for the committed
+        // r_2/r_1 and r_1/r_2 inverses.
 
         for (i, (((p_0, p_1, p_2, p_3, p_4), re_rand_point), eph_pk_enc_key)) in self
             .resp_eph_pk_enc
@@ -1708,13 +1821,13 @@ impl<
                 neg_blinding_base,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[2],
-                &self.resp_comm_r_i_amount.0[14 + (2 * i) + 1],
+                &self.resp_comm_r_i_amount.0[l_m_offset + (2 * i) + 1],
             );
             verify_or_rmc_2!(
                 rmc,
                 p_1,
                 format!("resp_eph_pk_enc[{}].1 verification failed", i),
-                *self.re_randomized_points.blindings_with_different_gen.get(&(i + 1)).ok_or_else(|| {
+                *self.re_randomized_points.blindings_with_different_gen.get(&((i + 1) as u32)).ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "re_randomized_points.blindings_with_different_gen missing key {} for enc key {}",
                         i + 1, i
@@ -1722,7 +1835,7 @@ impl<
                 })?,
                 b_base,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[14 + (2 * i)],
+                &self.resp_comm_r_i_amount.0[l_m_offset +(2 * i)],
             );
             verify_or_rmc_2!(
                 rmc,
@@ -1779,14 +1892,14 @@ impl<
                 enc_key_gen,
                 neg_blinding_base,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i)],
+                &self.resp_comm_r_i_amount.0[l_m_offset + 2 * num_enc_keys + (2 * i)],
             );
 
             verify_or_rmc_2!(
                 rmc,
                 p_1,
                 format!("resp_eph_pk_meds[{}].1 verification failed", i),
-                *self.re_randomized_points.blindings_with_different_gen.get(&(num_enc_keys + i + 1)).ok_or_else(|| {
+                *self.re_randomized_points.blindings_with_different_gen.get(&((num_enc_keys + i + 1) as u32)).ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "re_randomized_points.blindings_with_different_gen missing key {} for med key {}",
                         num_enc_keys + i + 1, i
@@ -1806,7 +1919,7 @@ impl<
                     mediator.eph_pk_med_keys[l],
                     leg_enc.eph_pk_enc_keys[l].r1,
                     &challenge,
-                    &self.resp_comm_r_i_amount.0[14 + 2 * num_enc_keys + (2 * i) + 1],
+                    &self.resp_comm_r_i_amount.0[l_m_offset + 2 * num_enc_keys + (2 * i) + 1],
                 );
             }
         }
@@ -1861,13 +1974,13 @@ impl<
             rmc,
             self.resp_comm_r_i_amount,
             Self::bp_gens_vec(
-                sender_receiver_decryption_needed,
+                commit_r_2_r_1_inv,
+                commit_r_1_r_2_inv,
                 num_enc_keys,
                 num_med_keys,
                 tree_parameters,
             ),
             self.comm_r_i_amount,
-            self.t_comm_r_i_amount,
             &challenge,
         );
 
@@ -1899,7 +2012,8 @@ impl<
     fn enforce_constraints<CS: ConstraintSystem<F0>>(
         cs: &mut CS,
         amount: Option<Balance>,
-        sender_receiver_decryption_needed: bool,
+        commit_r_2_r_1_inv: bool,
+        commit_r_1_r_2_inv: bool,
         num_enc_keys: usize,
         num_med_keys: usize,
         mut committed_variables: Vec<Variable<F0>>,
@@ -1918,14 +2032,9 @@ impl<
             let l_i = committed_variables.pop().unwrap();
             vars_enc_keys.push((l_i, l_i_r_1));
         }
-        let (var_r1_r2_inv, var_r2_r1_inv) = if sender_receiver_decryption_needed {
-            (
-                Some(committed_variables.pop().unwrap()),
-                Some(committed_variables.pop().unwrap()),
-            )
-        } else {
-            (None, None)
-        };
+        // r_1/r_2 was pushed after r_2/r_1, so it is popped first.
+        let var_r1_r2_inv = commit_r_1_r_2_inv.then(|| committed_variables.pop().unwrap());
+        let var_r2_r1_inv = commit_r_2_r_1_inv.then(|| committed_variables.pop().unwrap());
 
         let var_r4_r2_inv = committed_variables.pop().unwrap();
         let var_r4_r1_inv = committed_variables.pop().unwrap();
@@ -1973,11 +2082,12 @@ impl<
         let (_, _, r4) = cs.multiply(lc_r2.clone(), var_r4_r2_inv.into());
         cs.constrain(lc_r4.clone() - r4);
 
-        if sender_receiver_decryption_needed {
+        if commit_r_2_r_1_inv {
             // r_1 * r_2/r_1 = r_2
             let (_, _, r2) = cs.multiply(lc_r1.clone(), var_r2_r1_inv.unwrap().into());
             cs.constrain(lc_r2.clone() - r2);
-
+        }
+        if commit_r_1_r_2_inv {
             // r_2 * r_1/r_2 = r_1
             let (_, _, r1) = cs.multiply(lc_r2.clone(), var_r1_r2_inv.unwrap().into());
             cs.constrain(lc_r1.clone() - r1);
@@ -2006,18 +2116,14 @@ impl<
     }
 
     fn bp_gens_vec<Parameters0: DiscreteLogParameters, Parameters1: DiscreteLogParameters>(
-        sender_receiver_decryption_needed: bool,
+        commit_r_2_r_1_inv: bool,
+        commit_r_1_r_2_inv: bool,
         num_enc_keys: usize,
         num_med_keys: usize,
         tree_params: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
     ) -> Vec<Affine<G0>> {
-        let count = 11
-            + 2 * (num_enc_keys + num_med_keys)
-            + if sender_receiver_decryption_needed {
-                2
-            } else {
-                0
-            };
+        let num_vis_resps = commit_r_2_r_1_inv as usize + commit_r_1_r_2_inv as usize;
+        let count = 11 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
         let mut gens = vec![tree_params.odd_parameters.pc_gens().B_blinding];
         for g in bp_gens_for_vec_commitment(count as u32, tree_params.odd_parameters.bp_gens()) {
             gens.push(g);
@@ -2158,7 +2264,7 @@ impl<
 
             #[cfg(not(feature = "ignore_prover_input_sanitation"))]
             debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(i + 1)].into_group(),
+                re_randomized_points.blindings_with_different_gen[&((i + 1) as u32)].into_group(),
                 b_base * l[i]
             );
 
@@ -2215,7 +2321,7 @@ impl<
                 .zip(m_r_1_inv.iter().zip(m_r_1_inv_blindings.iter()))
                 .enumerate()
         {
-            // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k[i]`
+            // For proving relation `ct_m[i] - pk_{{m,i}_r} = enc_key_gen * r_meds[i] + blinding_base * k_i`
             let t_m = PokPedersenCommitmentProtocol::init(
                 *r_med,
                 *m_blinding,
@@ -2227,7 +2333,7 @@ impl<
 
             #[cfg(not(feature = "ignore_prover_input_sanitation"))]
             debug_assert_eq!(
-                re_randomized_points.blindings_with_different_gen[&(1 + num_enc_keys + i)]
+                re_randomized_points.blindings_with_different_gen[&((1 + num_enc_keys + i) as u32)]
                     .into_group(),
                 b_base * *k_i
             );
@@ -2418,7 +2524,7 @@ pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
 mod input_sanitation_tests {
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
-    use crate::leg::LegEncConfig;
+    use crate::leg::{LegEncConfig, PartyVisibility};
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_pallas::{Fq as PallasBase, Fr as PallasScalar, PallasConfig};
     use ark_vesta::VestaConfig;
@@ -2507,7 +2613,7 @@ mod input_sanitation_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2612,7 +2718,7 @@ mod input_sanitation_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2715,7 +2821,7 @@ mod input_sanitation_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2822,7 +2928,7 @@ mod input_sanitation_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -2905,7 +3011,7 @@ mod input_sanitation_tests {
 mod mocking_tests {
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
-    use crate::leg::LegEncConfig;
+    use crate::leg::{LegEncConfig, PartyVisibility};
     use crate::util::verify_rmc;
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_ff::Field;
@@ -3111,7 +3217,7 @@ mod mocking_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3167,6 +3273,136 @@ mod mocking_tests {
                 leg_enc_rand,
                 path,
                 asset_data_2,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        assert_leg_verify_fails_with_rmc(
+            &proof,
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+        );
+    }
+
+    #[test]
+    fn leg_proof_with_mismatched_asset_data() {
+        // Prover mocks AssetData::points to corrupt the asset-id point, so the leaf binds asset data that disagrees with the committed tree leaf.
+
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let label = b"mismatched-asset-data";
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let num_auditors = 1u8;
+        let num_mediators = 0u8;
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            num_auditors as u32,
+            num_mediators as u32,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let keys_auditor = (0..num_auditors)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen))
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen))
+            .collect::<Vec<_>>();
+
+        let enc_keys = keys_auditor.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+        let med_keys = keys_mediator.iter().map(|(_, k)| k.0).collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            &asset_comm_params,
+        )
+        .unwrap();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![asset_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            enc_keys,
+            med_keys,
+            vec![],
+        )
+        .unwrap();
+
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        let mut tampered_points = asset_data.points(&asset_comm_params);
+        tampered_points[0] = PallasA::rand(&mut rng);
+        AssetData::<PallasF, VestaF, PallasParameters, VestaParameters>::points.mock_safe(
+            move |_asset_data: &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+                  _params: &AssetCommitmentParams<PallasParameters, VestaParameters>| {
+                MockResult::Return(tampered_points.clone())
+            },
+        );
+        let _ = &MockGuard::new(clear_asset_data_points_mock);
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let proof =
+            LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_enc_rand,
+                path,
+                asset_data,
                 &root,
                 nonce,
                 &asset_tree_params,
@@ -3266,7 +3502,7 @@ mod mocking_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3358,7 +3594,7 @@ mod mocking_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3522,7 +3758,7 @@ mod mocking_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3712,7 +3948,7 @@ mod mocking_tests {
             .encrypt(
                 &mut rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: false,
                 },
                 enc_key_gen,
@@ -3965,8 +4201,8 @@ mod mocking_tests {
         LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::tamper_re_randomized_points_for_test
             .mock_safe(move |mut rrp: ReRandomizedPoints<PallasParameters>| {
                 let patched =
-                    (b_base * delta + rrp.blindings_with_different_gen[&(target + 1)]).into_affine();
-                rrp.blindings_with_different_gen.insert(target + 1, patched);
+                    (b_base * delta + rrp.blindings_with_different_gen[&((target + 1) as u32)]).into_affine();
+                rrp.blindings_with_different_gen.insert((target + 1) as u32, patched);
                 MockResult::Return(rrp)
             });
         assert_err!(build_and_verify(&mut rng), Error::BulletproofR1CSError(_));

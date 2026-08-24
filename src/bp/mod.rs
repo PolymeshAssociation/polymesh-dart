@@ -928,7 +928,7 @@ mod tests {
                     amount: amount_0,
                     config: LegConfig {
                         reveal_asset_id: reveal_0,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     public_enc_keys: vec![],
                 })
@@ -939,7 +939,7 @@ mod tests {
                     amount: amount_1,
                     config: LegConfig {
                         reveal_asset_id: reveal_1,
-                        parties_see_each_other: true,
+                        visibility: PartyVisibility::FullVisibility,
                     },
                     public_enc_keys: vec![],
                 })
@@ -1475,5 +1475,33 @@ mod tests {
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
+    }
+
+    #[test]
+    fn derived_account_keys_register() {
+        let mut rng = rand::thread_rng();
+        let identity = b"test-identity";
+
+        let keys = [
+            AccountKeys::rand(&mut rng).unwrap(),
+            AccountKeys::from_seed("seed").unwrap(),
+            MasterSeed::from_seed("master-seed")
+                .derive_account_keys("seed/0")
+                .unwrap(),
+        ];
+
+        for k in keys {
+            let proof = AccountRegistrationProof::<()>::new(&mut rng, &[k], identity).unwrap();
+            proof.verify(identity).unwrap();
+            assert!(proof.verify(b"other-identity").is_err());
+        }
+
+        let a = MasterSeed::from_seed("master-seed")
+            .derive_account_keys("seed/0")
+            .unwrap();
+        let b = MasterSeed::from_seed("master-seed")
+            .derive_account_keys("seed/0")
+            .unwrap();
+        assert_eq!(a.public_keys(), b.public_keys());
     }
 }

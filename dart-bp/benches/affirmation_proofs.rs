@@ -14,7 +14,7 @@ use polymesh_dart_bp::account::{
     AccountTxnWitness, AffirmAsReceiverTxnProof, AffirmAsSenderTxnProof,
 };
 use polymesh_dart_bp::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc, keygen_sig};
-use polymesh_dart_bp::leg::{Leg, LegEncConfig, LegEncryption};
+use polymesh_dart_bp::leg::{Leg, LegEncConfig, LegEncryption, PartyVisibility};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::verify_rmc;
 
@@ -103,7 +103,7 @@ fn create_leg_and_encryption<R: rand_core::CryptoRngCore>(
     let amount = 100;
 
     let conf = LegEncConfig {
-        parties_see_each_other: true,
+        visibility: PartyVisibility::FullVisibility,
         reveal_asset_id,
     };
 

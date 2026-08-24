@@ -234,10 +234,44 @@ pub struct Leg<G: AffineRepr> {
     pub public_enc_keys: Vec<G>,
 }
 
+/// Which of the sender and receiver can decrypt the other's public key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PartyVisibility {
+    /// Neither party can decrypt the other's public key.
+    NoVisibility,
+    /// Both parties can decrypt the other's public key.
+    FullVisibility,
+    /// Only the sender can decrypt the receiver's public key.
+    OnlySenderSeesReceiver,
+    /// Only the receiver can decrypt the sender's public key.
+    OnlyReceiverSeesSender,
+}
+
+impl PartyVisibility {
+    pub fn new(sender_sees_receiver: bool, receiver_sees_sender: bool) -> Self {
+        match (sender_sees_receiver, receiver_sees_sender) {
+            (false, false) => Self::NoVisibility,
+            (true, true) => Self::FullVisibility,
+            (true, false) => Self::OnlySenderSeesReceiver,
+            (false, true) => Self::OnlyReceiverSeesSender,
+        }
+    }
+
+    /// Sender can decrypt receiver's pk.
+    pub fn sender_sees_receiver(&self) -> bool {
+        matches!(self, Self::FullVisibility | Self::OnlySenderSeesReceiver)
+    }
+
+    /// Receiver can decrypt sender's pk.
+    pub fn receiver_sees_sender(&self) -> bool {
+        matches!(self, Self::FullVisibility | Self::OnlyReceiverSeesSender)
+    }
+}
+
 #[derive(Clone)]
 pub struct LegEncConfig {
-    /// If `parties_see_each_other` is true, sender can decrypt receiver's pk and vice versa.
-    pub parties_see_each_other: bool,
+    /// Which of the sender and receiver can decrypt the other's public key.
+    pub visibility: PartyVisibility,
     /// If `true`, asset-id is revealed in the leg else a curve-tree membership proof in the asset
     /// tree is created
     pub reveal_asset_id: bool,
@@ -247,7 +281,7 @@ impl Default for LegEncConfig {
     /// By default, both parties see each other and the asset-id is hidden.
     fn default() -> Self {
         Self {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: false,
         }
     }
@@ -480,10 +514,9 @@ pub struct LegEncCoreAndEphKeys<G: AffineRepr> {
 }
 
 impl<G: AffineRepr> LegEncCoreAndEphKeys<G> {
-    /// Returns true if senders and receivers are allowed to see each other. Here the leg encryption
-    /// contains required elements
-    pub fn do_parties_see_each_other(&self) -> bool {
-        self.eph_pk_s.r2.is_some() & self.eph_pk_r.r1.is_some()
+    /// Which of the sender and receiver can decrypt the other's public key.
+    pub fn party_visibility(&self) -> PartyVisibility {
+        PartyVisibility::new(self.eph_pk_s.r2.is_some(), self.eph_pk_r.r1.is_some())
     }
 }
 
@@ -577,7 +610,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         if let Some(r) = r4 {
             proj.push(pk_s_enc * r); // eph_pk_s.r4
         }
-        if config.parties_see_each_other {
+        if config.visibility.sender_sees_receiver() {
             proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
         }
         proj.push(pk_r_enc * r2); // eph_pk_r.r2
@@ -585,7 +618,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         if let Some(r) = r4 {
             proj.push(pk_r_enc * r); // eph_pk_r.r4
         }
-        if config.parties_see_each_other {
+        if config.visibility.receiver_sees_sender() {
             proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
         }
         for pk in self.enc_keys.iter() {
@@ -642,7 +675,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             r3: next!(),
             r4: (!config.reveal_asset_id).then(|| next!()),
         };
-        eph_pk_s.r2 = config.parties_see_each_other.then(|| next!());
+        eph_pk_s.r2 = config.visibility.sender_sees_receiver().then(|| next!());
 
         let mut eph_pk_r = ReceiverEphemeralPublicKey::<G> {
             r1: None,
@@ -650,7 +683,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             r3: next!(),
             r4: (!config.reveal_asset_id).then(|| next!()),
         };
-        eph_pk_r.r1 = config.parties_see_each_other.then(|| next!());
+        eph_pk_r.r1 = config.visibility.receiver_sees_sender().then(|| next!());
 
         let enc_keys: Vec<EphemeralPublicKey<G>> = self
             .enc_keys
@@ -723,10 +756,9 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         self.leg_enc_core_and_eph_keys.core.is_asset_id_revealed()
     }
 
-    /// Returns true if senders and receivers are allowed to see each other. Here the leg encryption
-    /// contains required elements
-    pub fn do_parties_see_each_other(&self) -> bool {
-        self.leg_enc_core_and_eph_keys.do_parties_see_each_other()
+    /// Which of the sender and receiver can decrypt the other's public key.
+    pub fn party_visibility(&self) -> PartyVisibility {
+        self.leg_enc_core_and_eph_keys.party_visibility()
     }
 
     /// `None` when asset-id is encrypted (not revealed to the verifier).

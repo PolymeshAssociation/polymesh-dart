@@ -1,6 +1,7 @@
 use crate::account_registration::{ENC_PK_LABEL, digits, powers_of_base};
 use crate::add_to_transcript;
 use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::dst;
 use crate::error::*;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL};
@@ -54,8 +55,8 @@ pub struct KeyDistributionProof<
     pub resp_recipient_cts: Vec<[PartialPokDiscreteLog<G>; NUM_CHUNKS]>,
     /// Bulletproof vector commitment to all the chunks of the secret key
     pub comm_sk_chunks_bp: G,
-    pub t_comm_sk_chunks_bp: G,
     /// For Pedersen commitment to the chunks. Ties with range proofs in Bulletproofs.
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_comm_sk_chunks_bp: SchnorrResponse<G>,
     /// Proves the chunks reconstruct to the full secret key committed in the combined ciphertext
     pub resp_combined_sk: PokPedersenCommitment<G>,
@@ -133,7 +134,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 sk_i_blinding,
                 &enc_gen,
             );
-            shared_proto.challenge_contribution(&enc_key_gen, &enc_gen, &ct, &mut transcript)?;
+            shared_proto.challenge_contribution(
+                &enc_key_gen,
+                &enc_gen,
+                &ct,
+                dst::KEY_DIST_SHARED_CT,
+                &mut transcript,
+            )?;
             shared_cts_proto.push(shared_proto);
 
             // Per-recipient ciphertext for chunk i: E_ji = recipient_pk_j * r_i (one per recipient)
@@ -144,7 +151,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
                 let recipient_proto =
                     PokDiscreteLogProtocol::init(r_i, r_i_blinding, &recipient_pk);
-                recipient_proto.challenge_contribution(&recipient_pk, &E_ji, &mut transcript)?;
+                recipient_proto.challenge_contribution(
+                    &recipient_pk,
+                    &E_ji,
+                    dst::KEY_DIST_RECIPIENT_CT,
+                    &mut transcript,
+                )?;
                 recipient_cts_proto[j].push(recipient_proto);
             }
         }
@@ -167,11 +179,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &enc_key_gen,
             &enc_gen,
             &combined_s_commitment,
+            dst::KEY_DIST_COMBINED,
             &mut transcript,
         )?;
 
         let pk_proto = PokDiscreteLogProtocol::init(sk, sk_blinding, &enc_key_gen);
-        pk_proto.challenge_contribution(&enc_key_gen, &pk, &mut transcript)?;
+        pk_proto.challenge_contribution(&enc_key_gen, &pk, dst::KEY_DIST_PK, &mut transcript)?;
 
         let mut prover = Prover::new(&leaf_level_pc_gens, transcript);
         let comm_bp_blinding = G::ScalarField::rand(rng);
@@ -195,7 +208,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let mut blindings = vec![G::ScalarField::rand(rng)];
         blindings.extend_from_slice(&sk_chunks_blindings);
         let t_comm_sk_chunks_bp = SchnorrCommitment::new(&bp_gens, blindings);
-        t_comm_sk_chunks_bp.challenge_contribution(&mut prover.transcript())?;
+        t_comm_sk_chunks_bp
+            .challenge_contribution(dst::KEY_DIST_COMM_SK_CHUNKS_BP, &mut prover.transcript())?;
 
         let challenge = prover
             .transcript()
@@ -232,7 +246,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 .map(|v| v.try_into().unwrap())
                 .collect(),
             comm_sk_chunks_bp,
-            t_comm_sk_chunks_bp: t_comm_sk_chunks_bp.t,
             resp_comm_sk_chunks_bp,
             resp_combined_sk,
             resp_pk,
@@ -302,6 +315,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 &enc_key_gen,
                 &enc_gen,
                 shared_ct,
+                dst::KEY_DIST_SHARED_CT,
                 &mut transcript,
             )?;
 
@@ -314,6 +328,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 resp_recipient_cts_for_j[i].challenge_contribution(
                     &recipient_pk,
                     &recipient_cts_for_j[i],
+                    dst::KEY_DIST_RECIPIENT_CT,
                     &mut transcript,
                 )?;
             }
@@ -328,11 +343,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &enc_key_gen,
             &enc_gen,
             &combined_cts,
+            dst::KEY_DIST_COMBINED,
             &mut transcript,
         )?;
 
-        self.resp_pk
-            .challenge_contribution(&enc_key_gen, &pk, &mut transcript)?;
+        self.resp_pk.challenge_contribution(
+            &enc_key_gen,
+            &pk,
+            dst::KEY_DIST_PK,
+            &mut transcript,
+        )?;
 
         let mut verifier = Verifier::new(transcript);
         let vars = verifier.commit_vec(NUM_CHUNKS, self.comm_sk_chunks_bp);
@@ -341,8 +361,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             range_proof(&mut verifier, var.into(), None, CHUNK_BITS)?;
         }
 
-        self.t_comm_sk_chunks_bp
-            .serialize_compressed(&mut verifier.transcript())?;
+        self.resp_comm_sk_chunks_bp
+            .challenge_contribution(dst::KEY_DIST_COMM_SK_CHUNKS_BP, &mut verifier.transcript())?;
 
         let challenge = verifier
             .transcript()
@@ -397,7 +417,6 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             self.resp_comm_sk_chunks_bp,
             bp_gens,
             self.comm_sk_chunks_bp,
-            self.t_comm_sk_chunks_bp,
             &challenge,
         );
         verify_or_rmc_3!(

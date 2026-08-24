@@ -1,5 +1,5 @@
 use crate::leg::{MediatorEncryption, MediatorEncryptionOld};
-use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, error::Result};
+use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, dst, error::Result};
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ec::scalar_mul::BatchMulPreprocessing;
@@ -325,7 +325,13 @@ impl<G: AffineRepr> MediatorTxnOldProof<G> {
         Zeroize::zeroize(&mut enc_sk);
         Zeroize::zeroize(&mut mediator_sk);
 
-        enc_pk.challenge_contribution(eph_pk, sig_key_gen, &y, &mut transcript)?;
+        enc_pk.challenge_contribution(
+            eph_pk,
+            sig_key_gen,
+            &y,
+            dst::MEDIATOR_OLD_ENC_PK,
+            &mut transcript,
+        )?;
 
         add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
 
@@ -367,8 +373,13 @@ impl<G: AffineRepr> MediatorTxnOldProof<G> {
         let y = leg_enc.ct_med;
         let eph_pk = leg_enc.eph_pk_med_key;
 
-        self.resp_enc_pk
-            .challenge_contribution(&eph_pk, &sig_key_gen, &y, &mut transcript)?;
+        self.resp_enc_pk.challenge_contribution(
+            &eph_pk,
+            &sig_key_gen,
+            &y,
+            dst::MEDIATOR_OLD_ENC_PK,
+            &mut transcript,
+        )?;
 
         add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
 
@@ -428,7 +439,12 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
         let proto =
             PokDiscreteLogProtocol::init(mediator_sk, G::ScalarField::rand(rng), sig_key_gen);
         Zeroize::zeroize(&mut mediator_sk);
-        proto.challenge_contribution(sig_key_gen, mediator_pk, &mut *transcript)?;
+        proto.challenge_contribution(
+            sig_key_gen,
+            mediator_pk,
+            dst::MEDIATOR_PUBLIC_ASSET,
+            &mut *transcript,
+        )?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_RESPONSE_LABEL);
         Ok(Self(proto.gen_proof(&challenge)))
     }
@@ -462,8 +478,12 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         add_to_transcript(transcript, accept, nonce);
-        self.0
-            .challenge_contribution(sig_key_gen, mediator_pk, &mut *transcript)?;
+        self.0.challenge_contribution(
+            sig_key_gen,
+            mediator_pk,
+            dst::MEDIATOR_PUBLIC_ASSET,
+            &mut *transcript,
+        )?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_RESPONSE_LABEL);
         match rmc {
             Some(rmc) => {

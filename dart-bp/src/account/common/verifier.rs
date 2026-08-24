@@ -15,7 +15,7 @@ use crate::util::{
 };
 use crate::{
     Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
-    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
+    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, dst, error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -347,9 +347,9 @@ impl<
             asset_id,
             &nullifier,
             proof.partial.comm_bp_randomness_relations,
-            &proof.t_acc_old,
-            &proof.t_acc_new,
-            &proof.partial.t_bp_randomness_relations,
+            &proof.resp_acc_old,
+            &proof.resp_acc_new,
+            &proof.partial.resp_bp_randomness_relations,
             &proof.partial.resp_null,
             &proof.resp_leg_link,
             &needs_ct_amount,
@@ -392,7 +392,7 @@ impl<
         // ct_amount challenge contributions are written in the leg-link (common) phase now;
         // the balance phase only contributes the balance BP t-value.
         take_challenge_contrib_of_balance_bp(
-            &proof.partial.t_comm_bp_bal,
+            &proof.partial.resp_comm_bp_bal,
             &mut verifier_transcript,
         )?;
         Ok(())
@@ -441,9 +441,6 @@ impl<
             &common_state_change_proof
                 .partial
                 .comm_bp_randomness_relations,
-            &common_state_change_proof.t_acc_old,
-            &common_state_change_proof.t_acc_new,
-            &common_state_change_proof.partial.t_bp_randomness_relations,
             &common_state_change_proof.resp_acc_old,
             &common_state_change_proof.resp_acc_new,
             &common_state_change_proof.partial.resp_null,
@@ -483,7 +480,6 @@ impl<
             verify_sigma_for_balance_change(
                 &balance_resp_amounts,
                 &balance_change_proof.partial.comm_bp_bal,
-                &balance_change_proof.partial.t_comm_bp_bal,
                 &balance_change_proof.partial.resp_comm_bp_bal,
                 challenge,
                 *common_state_change_proof
@@ -498,7 +494,7 @@ impl<
                 *common_state_change_proof
                     .resp_acc_new
                     .responses
-                    .get(&BALANCE_GEN_INDEX)
+                    .get(&(BALANCE_GEN_INDEX as u32))
                     .ok_or_else(|| {
                         Error::ProofVerificationError(format!(
                             "Missing resp_acc_new response for BALANCE_GEN_INDEX={BALANCE_GEN_INDEX}"
@@ -729,12 +725,13 @@ impl<
                 .challenge_contribution(&mut transcript)?;
             proof
                 .partial
-                .t_bp_randomness_relations
-                .serialize_compressed(&mut transcript)?;
+                .resp_bp_randomness_relations
+                .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
             let null_gen = account_comm_key.current_rho_gen();
             proof.partial.resp_null.challenge_contribution(
                 &null_gen,
                 &nullifier,
+                dst::NULLIFIER,
                 &mut transcript,
             )?;
         }
@@ -758,6 +755,7 @@ impl<
                         &enc_gen,
                         &B_blinding,
                         &ct_asset_id_2,
+                        dst::HOST_CT_ASSET_ID_2,
                         &mut transcript,
                     )?;
                     asset_id_idx += 1;
@@ -779,6 +777,7 @@ impl<
                         &enc_gen,
                         &B_blinding,
                         &ct_amount_2,
+                        dst::HOST_CT_AMOUNT_2,
                         &mut transcript,
                     )?;
                     amount_idx += 1;
@@ -881,8 +880,8 @@ impl<
             let mut transcript = even_verifier.transcript();
             balance_proof
                 .partial
-                .t_comm_bp_bal
-                .serialize_compressed(&mut transcript)?;
+                .resp_comm_bp_bal
+                .challenge_contribution(dst::BP_BALANCE, &mut transcript)?;
         }
 
         Ok(())
@@ -1001,7 +1000,6 @@ impl<
             common_proof.host_commitment_proof.resp_acc_old,
             gens_acc_old,
             y_old,
-            common_proof.host_commitment_proof.t_acc_old,
             challenge,
         );
 
@@ -1046,7 +1044,6 @@ impl<
             common_proof.host_commitment_proof.resp_acc_new,
             gens_acc_new,
             y_new,
-            common_proof.host_commitment_proof.t_acc_new,
             challenge,
             missing_resps_acc_new,
         );
@@ -1056,7 +1053,7 @@ impl<
             .host_commitment_proof
             .resp_acc_new
             .responses
-            .get(&(CURRENT_RHO_GEN_INDEX - offset - 1))
+            .get(&((CURRENT_RHO_GEN_INDEX - offset - 1) as u32))
             .copied()
             .ok_or_else(|| {
                 Error::ProofVerificationError(
@@ -1068,7 +1065,7 @@ impl<
             .host_commitment_proof
             .resp_acc_new
             .responses
-            .get(&(CURRENT_RANDOMNESS_GEN_INDEX - offset - 1))
+            .get(&((CURRENT_RANDOMNESS_GEN_INDEX - offset - 1) as u32))
             .copied()
             .ok_or_else(|| {
                 Error::ProofVerificationError(
@@ -1120,7 +1117,6 @@ impl<
             common_proof.partial.resp_bp_randomness_relations,
             bp_gens_vec,
             common_proof.partial.comm_bp_randomness_relations,
-            common_proof.partial.t_bp_randomness_relations,
             challenge,
             missing_resps_bp,
         );
@@ -1196,7 +1192,6 @@ impl<
                 balance_proof.partial.resp_comm_bp_bal,
                 bp_bal_gens,
                 balance_proof.partial.comm_bp_bal,
-                balance_proof.partial.t_comm_bp_bal,
                 challenge,
                 missing_resps_bal,
             );

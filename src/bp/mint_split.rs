@@ -95,6 +95,10 @@ impl<
             nonce: nonce.to_vec(),
             pk_aff: CompressedAffine::try_from(pk_aff)?,
             pk_enc: CompressedAffine::try_from(pk_enc)?,
+            txn_type: DeviceTxnType::Mint {
+                asset_id: account_state.asset_id(),
+                amount,
+            },
         };
 
         Ok((

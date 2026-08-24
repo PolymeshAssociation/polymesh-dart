@@ -1,6 +1,7 @@
 use crate::account::AccountCommitmentKeyTrait;
 use crate::auth_proofs::fee_account::AuthProofFeePayment;
-use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol};
+use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol, DeviceTxnType};
+use crate::dst;
 use crate::error::*;
 use crate::util::{
     BPProof, append_auth_proof_and_get_challenge, get_verification_tuples_with_rng,
@@ -287,6 +288,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
             &account_comm_key.rho_gen(),
             &account_comm_key.randomness_gen(),
             &reduced_acc_comm,
+            dst::FEE_REG_COMM,
             &mut transcript,
         )?;
 
@@ -361,6 +363,7 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
             &account_comm_key.rho_gen(),
             &account_comm_key.randomness_gen(),
             &reduced_acc_comm,
+            dst::FEE_REG_COMM,
             &mut transcript,
         )?;
         Ok(reduced_acc_comm)
@@ -528,8 +531,13 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
 
-        self.auth_proof
-            .verify(*pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+        self.auth_proof.verify(
+            *pk,
+            &ledger_nonce_v,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &account_comm_key.sk_gen(),
+            None,
+        )?;
 
         let challenge_h_final_v =
             append_auth_proof_and_get_challenge(&self.auth_proof, &mut transcript)?;
@@ -763,8 +771,12 @@ impl<
         let nullifier = account.nullifier(&account_comm_key);
         let new_balance = F0::from(updated_account.balance());
 
-        acc_comm.t_acc_old.challenge_contribution(&mut transcript)?;
-        acc_comm.t_acc_new.challenge_contribution(&mut transcript)?;
+        acc_comm
+            .t_acc_old
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITHOUT_SK, &mut transcript)?;
+        acc_comm
+            .t_acc_new
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITHOUT_SK, &mut transcript)?;
 
         let acc_old = <Projective<G0> as VariableBaseMSM>::msm_unchecked(
             &acc_old_gens_without_sk(&account_comm_key, b_blinding),
@@ -791,7 +803,12 @@ impl<
 
         let t_null =
             Self::nullifier_proto(account.rho(), acc_comm.old_rho_blinding, &nullifier_gen);
-        t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        t_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::FEE_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
@@ -819,6 +836,7 @@ impl<
                 .pc_gens()
                 .B_blinding,
             &comm_new_bal,
+            dst::FEE_BP_BALANCE,
             &mut transcript,
         )?;
 
@@ -1003,11 +1021,11 @@ impl<
         let nullifier_gen = account_comm_key.rho_gen();
 
         self.account_comm_proof
-            .t_acc_old
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_old
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITHOUT_SK, &mut transcript)?;
         self.account_comm_proof
-            .t_acc_new
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_new
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITHOUT_SK, &mut transcript)?;
 
         let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
         let reduce = (pk.into_group() + asset_id_comm).into_affine();
@@ -1023,8 +1041,12 @@ impl<
         acc_old.serialize_compressed(&mut transcript)?;
         acc_new.serialize_compressed(&mut transcript)?;
 
-        self.resp_null
-            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        self.resp_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::FEE_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_verifier below
         let _ = transcript;
@@ -1048,6 +1070,7 @@ impl<
                 .pc_gens()
                 .B_blinding,
             &self.comm_new_bal,
+            dst::FEE_BP_BALANCE,
             &mut transcript,
         )?;
 
@@ -1116,7 +1139,6 @@ impl<
             )
             .to_vec(),
             acc_old,
-            self.account_comm_proof.t_acc_old,
             challenge,
         );
         verify_partial_schnorr_resp_or_rmc!(
@@ -1124,7 +1146,6 @@ impl<
             self.account_comm_proof.resp_acc_new,
             acc_new_gens_without_sk(&account_comm_key).to_vec(),
             acc_new,
-            self.account_comm_proof.t_acc_new,
             challenge,
             missing_resps,
         );
@@ -1517,8 +1538,16 @@ impl<
 
         let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
 
-        self.auth_proof
-            .verify(pk, &ledger_nonce_v, &account_comm_key.sk_gen(), None)?;
+        self.auth_proof.verify(
+            pk,
+            &ledger_nonce_v,
+            &DeviceTxnType::FeeAccountTopup {
+                asset_id,
+                amount: increase_bal_by,
+            },
+            &account_comm_key.sk_gen(),
+            None,
+        )?;
 
         let challenge_h_final_v: F0 =
             append_auth_proof_and_get_challenge(&self.auth_proof, even_verifier.transcript())?;
@@ -1712,26 +1741,22 @@ impl<
 /// Proves correctness of both full account commitments, i.e. including secret key
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentsProof<G: SWCurveConfig + Clone + Copy> {
-    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_old: Affine<G>,
-    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_new: Affine<G>,
-    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of
+    /// Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
-    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3
+    /// of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
 }
 
 /// Proves correctness of both account commitments but without secret key
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountCommitmentsWithoutSkProof<G: SWCurveConfig + Clone + Copy> {
-    /// Commitment to randomness for proving knowledge of re-randomized leaf using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_old: Affine<G>,
-    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_new: Affine<G>,
-    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of
+    /// Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
-    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3
+    /// of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
 }
 
@@ -1749,8 +1774,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProof<G> {
         verify_acc_comm(
             &self.resp_acc_old,
             &self.resp_acc_new,
-            self.t_acc_old,
-            self.t_acc_new,
             y_old,
             y_new,
             account_comm_key,
@@ -1837,8 +1860,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
             host_new_randomness,
         )?;
         Ok(AccountCommitmentsWithoutSkProof {
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
         })
@@ -1895,8 +1916,10 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
     }
 
     pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.t_acc_old.challenge_contribution(&mut *writer)?;
-        self.t_acc_new.challenge_contribution(writer)?;
+        self.t_acc_old
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+        self.t_acc_new
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
         Ok(())
     }
 
@@ -1924,8 +1947,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
             new_randomness,
         )?;
         Ok(AccountCommitmentsProof {
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
         })
@@ -1934,8 +1955,10 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProof<G> {
     pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.t_acc_old.serialize_compressed(&mut *writer)?;
-        self.t_acc_new.serialize_compressed(writer)?;
+        self.resp_acc_old
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+        self.resp_acc_new
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
         Ok(())
     }
 
@@ -1952,8 +1975,6 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProof<G> {
         verify_acc_comm(
             &self.resp_acc_old,
             &self.resp_acc_new,
-            self.t_acc_old,
-            self.t_acc_new,
             y_old,
             y_new,
             account_comm_key,
@@ -2175,7 +2196,12 @@ impl<
         // Uses old_rho_blinding shared with the account commitment proof so the rho response matches.
         let t_null = Self::nullifier_proto(account.rho(), old_rho_blinding, &nullifier_gen);
 
-        t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        t_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::FEE_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
@@ -2200,7 +2226,13 @@ impl<
 
         let mut transcript = even_prover.transcript();
 
-        t_bp.challenge_contribution(b, b_blinding, &comm_new_bal, &mut transcript)?;
+        t_bp.challenge_contribution(
+            b,
+            b_blinding,
+            &comm_new_bal,
+            dst::FEE_BP_BALANCE,
+            &mut transcript,
+        )?;
 
         Ok((
             Self {
@@ -2328,8 +2360,12 @@ impl<
 
         let nullifier_gen = account_comm_key.rho_gen();
 
-        self.resp_null
-            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        self.resp_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::FEE_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_verifier below
         let _ = transcript;
@@ -2353,6 +2389,7 @@ impl<
                 .pc_gens()
                 .B_blinding,
             &self.comm_new_bal,
+            dst::FEE_BP_BALANCE,
             &mut transcript,
         )?;
 
@@ -2850,10 +2887,10 @@ impl<
 
         acc_host_proto
             .t_acc_old
-            .challenge_contribution(&mut transcript)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITHOUT_SK, &mut transcript)?;
         acc_host_proto
             .t_acc_new
-            .challenge_contribution(&mut transcript)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITHOUT_SK, &mut transcript)?;
 
         // Compute Y-values directly from witnesses: no pk needed
         let acc_old = <Projective<G0> as VariableBaseMSM>::msm_unchecked(
@@ -3074,12 +3111,12 @@ impl<
         // Write host account commitment T-values and Y-values (host's part of old re-randomized and new account commitments) to transcript
         self.commitment_proof
             .host_proof
-            .t_acc_old
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_old
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITHOUT_SK, &mut transcript)?;
         self.commitment_proof
             .host_proof
-            .t_acc_new
-            .serialize_compressed(&mut transcript)?;
+            .resp_acc_new
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITHOUT_SK, &mut transcript)?;
         let (comm_old, comm_new) = self.old_and_new_host_commitments(
             asset_id,
             fee_amount,
@@ -3521,8 +3558,6 @@ fn resp_acc_comm<G: SWCurveConfig + Clone + Copy>(
 fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
     resp_acc_old: &SchnorrResponse<Affine<G>>,
     resp_acc_new: &PartialSchnorrResponse<Affine<G>>,
-    t_acc_old: Affine<G>,
-    t_acc_new: Affine<G>,
     y_old: Affine<G>,
     y_new: Affine<G>,
     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
@@ -3565,13 +3600,12 @@ fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
         )
     };
 
-    verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, old_gens, y_old, t_acc_old, challenge);
+    verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, old_gens, y_old, challenge);
     verify_partial_schnorr_resp_or_rmc!(
         rmc,
         resp_acc_new,
         new_gens,
         y_new,
-        t_acc_new,
         challenge,
         missing_resps,
     );
@@ -3823,7 +3857,15 @@ pub mod tests {
         //  Ledger side: own transcript, auth T-values only
         // Uses AuthProofOnlySk::new which internally builds an AUTH_TXN_LABEL transcript
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof = AuthProofOnlySk::new(&mut rng, sk.0, pk.0, nonce, &sk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk.0,
+            pk.0,
+            nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &sk_gen,
+        )
+        .unwrap();
 
         let reg_proof = RegTxnProof {
             partial,
@@ -3859,8 +3901,43 @@ pub mod tests {
         // Verify auth: uses its own AUTH_TXN_LABEL transcript
         reg_proof
             .auth_proof
-            .verify(pk.0, nonce, &sk_gen, None)
+            .verify(
+                pk.0,
+                nonce,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &sk_gen,
+                None,
+            )
             .unwrap();
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountTopup {
+                        asset_id,
+                        amount: 10,
+                    },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountRegistration { asset_id: 2 },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -3904,8 +3981,15 @@ pub mod tests {
             .copied()
             .collect();
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof =
-            AuthProofOnlySk::new(&mut rng, sk.0, pk.0, &ledger_nonce, &sk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk.0,
+            pk.0,
+            &ledger_nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &sk_gen,
+        )
+        .unwrap();
 
         // Host hashes auth_proof into the transcript to derive an updated challenge
         let mut auth_proof_bytes = Vec::new();
@@ -3950,7 +4034,13 @@ pub mod tests {
             .collect();
         reg_proof
             .auth_proof
-            .verify(pk.0, &ledger_nonce_v, &sk_gen, None)
+            .verify(
+                pk.0,
+                &ledger_nonce_v,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &sk_gen,
+                None,
+            )
             .unwrap();
 
         // Verifier hashes auth_proof into the transcript to derive the updated challenge
@@ -4168,7 +4258,15 @@ pub mod tests {
             .unwrap();
 
         //  Ledger side: own AUTH_TXN_LABEL transcript, independently
-        let auth_proof = AuthProofOnlySk::new(&mut rng, sk_i.0, pk_i.0, nonce, &pk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk_i.0,
+            pk_i.0,
+            nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &pk_gen,
+        )
+        .unwrap();
 
         let proof = FeeAccountTopupTxnProof {
             auth_proof,
@@ -4205,7 +4303,13 @@ pub mod tests {
         // Verify auth proof using its own AUTH_TXN_LABEL transcript
         proof
             .auth_proof
-            .verify(pk_i.0, nonce, &pk_gen, None)
+            .verify(
+                pk_i.0,
+                nonce,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &pk_gen,
+                None,
+            )
             .unwrap();
     }
 
@@ -4272,8 +4376,15 @@ pub mod tests {
             .chain(nonce.iter())
             .copied()
             .collect();
-        let auth_proof =
-            AuthProofOnlySk::new(&mut rng, sk_i.0, pk_i.0, &ledger_nonce, &pk_gen).unwrap();
+        let auth_proof = AuthProofOnlySk::new(
+            &mut rng,
+            sk_i.0,
+            pk_i.0,
+            &ledger_nonce,
+            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &pk_gen,
+        )
+        .unwrap();
 
         // Host hashes auth_proof into the transcript to derive an updated challenge
         let mut auth_proof_bytes = Vec::new();
@@ -4339,7 +4450,13 @@ pub mod tests {
             .collect();
         proof
             .auth_proof
-            .verify(pk_i.0, &ledger_nonce_v, &pk_gen, None)
+            .verify(
+                pk_i.0,
+                &ledger_nonce_v,
+                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &pk_gen,
+                None,
+            )
             .unwrap();
 
         // Verifier hashes auth_proof into the transcript to derive the updated challenge
@@ -4799,6 +4916,10 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
             sk_gen,
             randomness_gen,
             b_blinding,
@@ -4839,6 +4960,10 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::FeePayment {
+                    asset_id,
+                    amount: fee_amount,
+                },
                 sk_gen,
                 randomness_gen,
                 b_blinding,
@@ -4928,6 +5053,10 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             &ledger_nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
             sk_gen,
             randomness_gen,
             b_blinding,
@@ -4999,6 +5128,10 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 &ledger_nonce_v,
+                &DeviceTxnType::FeePayment {
+                    asset_id,
+                    amount: fee_amount,
+                },
                 sk_gen,
                 randomness_gen,
                 b_blinding,

@@ -31,7 +31,14 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk = PallasA::try_from(&request.pk)?;
 
-    let proof = BPAuthProofOnlySk::new(rng, key.secret.0.0, pk, &nonce, &sk_gen)?;
+    let proof = BPAuthProofOnlySk::new(
+        rng,
+        key.secret.0.0,
+        pk,
+        &nonce,
+        &request.txn_type.into(),
+        &sk_gen,
+    )?;
 
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
 }
@@ -55,6 +62,7 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
         pk_aff,
         pk_enc,
         &nonce,
+        &request.txn_type.into(),
         &sk_gen,
         &sk_enc_gen,
     )?;
@@ -87,6 +95,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
         &updated_commitment,
         nullifier,
         &nonce,
+        &request.txn_type.into(),
         sk_gen,
         randomness_gen,
         comm_re_rand_gen,
@@ -142,6 +151,7 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
         &updated_commitment,
         nullifier,
         &nonce,
+        &request.txn_type.into(),
         sk_gen,
         enc_key_gen,
         comm_re_rand_gen,

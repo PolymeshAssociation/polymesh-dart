@@ -2,10 +2,10 @@ use crate::account::transparent::{
     EncryptedPublicKey, chal_contrib_pk_enc, init_pk_enc_protocol, reps_pk_enc, verify_pk_enc,
 };
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, verify_acc_comm};
-use crate::auth_proofs::{AUTH_TXN_LABEL, NULLIFIER_LABEL, helpers};
+use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL, helpers};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, error::Result,
+    add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -30,12 +30,13 @@ use schnorr_pok::partial::{
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AuthProofTransparent<G: AffineRepr> {
     /// The state (commitment) being invalidated through nullifier
-    /// For Pedersen commitment to affirmation secret key, encryption secret key and part of randomness used to re-randomize the commitment
-    pub t_re_randomized_account_commitment: G,
+    /// For Pedersen commitment to affirmation secret key, encryption secret key and part of
+    /// randomness used to re-randomize the commitment. Carries the commitment to randomness `t`
+    /// from step 1.
     pub resp_re_randomized_account_commitment: SchnorrResponse<G>,
     /// The new state (commitment) being created
-    /// For Pedersen commitment to affirmation secret key, encryption secret key and part of commitment randomness
-    pub t_updated_account_commitment: G,
+    /// For Pedersen commitment to affirmation secret key, encryption secret key and part of
+    /// commitment randomness. Carries the commitment to randomness `t` from step 1.
     pub resp_updated_account_commitment: PartialSchnorrResponse<G>,
     /// `sk_gen * sk + enc_key_gen * sk_enc + comm_re_rand_gen * rand_part_old_comm`
     pub partial_re_randomized_account_commitment: G,
@@ -58,6 +59,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         nullifier: G,
         auditor_keys: Vec<G>,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -75,6 +77,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         let sk_blinding = G::ScalarField::rand(rng);
         let sk_enc_blinding = G::ScalarField::rand(rng);
@@ -95,6 +98,8 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
+            dst::TRANSPARENT_AUTH_ACC_COMM_OLD,
+            dst::TRANSPARENT_AUTH_ACC_COMM_NEW,
             &mut transcript,
         )?;
 
@@ -123,9 +128,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             )?;
 
         Ok(Self {
-            t_re_randomized_account_commitment: proto_old.t,
             resp_re_randomized_account_commitment,
-            t_updated_account_commitment: proto_new.t,
             resp_updated_account_commitment,
             partial_re_randomized_account_commitment,
             partial_updated_account_commitment,
@@ -142,6 +145,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         nullifier: G,
         auditor_keys: &[G],
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
@@ -160,6 +164,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             ACCOUNT_COMMITMENT_LABEL,
             updated_account_commitment
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         self.challenge_contribution(&auditor_keys, sk_gen, enc_key_gen, &mut transcript)?;
 
@@ -182,12 +187,12 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         enc_key_gen: G,
         mut writer: W,
     ) -> Result<()> {
-        self.t_re_randomized_account_commitment
-            .serialize_compressed(&mut writer)?;
+        self.resp_re_randomized_account_commitment
+            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_OLD, &mut writer)?;
         self.partial_re_randomized_account_commitment
             .serialize_compressed(&mut writer)?;
-        self.t_updated_account_commitment
-            .serialize_compressed(&mut writer)?;
+        self.resp_updated_account_commitment
+            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_NEW, &mut writer)?;
         self.partial_updated_account_commitment
             .serialize_compressed(&mut writer)?;
 
@@ -215,10 +220,8 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
     ) -> Result<()> {
         verify_acc_comm(
             &self.partial_re_randomized_account_commitment,
-            &self.t_re_randomized_account_commitment,
             &self.resp_re_randomized_account_commitment,
             &self.partial_updated_account_commitment,
-            &self.t_updated_account_commitment,
             &self.resp_updated_account_commitment,
             challenge,
             sk_gen,

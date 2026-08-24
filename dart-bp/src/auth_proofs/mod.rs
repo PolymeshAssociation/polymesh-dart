@@ -4,7 +4,7 @@ pub mod helpers;
 pub mod transparent;
 
 use crate::{
-    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, error::Result,
+    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -13,12 +13,118 @@ use ark_std::io::Write;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog};
 
 pub const AUTH_TXN_LABEL: &'static [u8; 8] = b"auth-txn";
 pub const NULLIFIER_LABEL: &[u8; 9] = b"nullifier";
+
+pub const DEVICE_TXN_TYPE_LABEL: &[u8] = b"device-txn-type";
+pub const DEVICE_ASSET_ID_LABEL: &[u8] = b"device-asset-id";
+pub const DEVICE_AMOUNT_LABEL: &[u8] = b"device-amount";
+pub const DEVICE_AFFIRM_TYPE_LABEL: &[u8] = b"device-affirm-type";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceAffirmationType {
+    SenderAffirmation,
+    ReceiverAffirmation,
+    ReceiverClaim,
+    SenderReversal,
+    ReceiverReversal,
+    SenderCounterUpdate,
+    ReceiverCounterUpdate,
+    InstantSenderAffirmation,
+    InstantReceiverAffirmation,
+}
+
+impl DeviceAffirmationType {
+    pub fn typ(&self) -> u8 {
+        match self {
+            DeviceAffirmationType::SenderAffirmation => 0,
+            DeviceAffirmationType::ReceiverAffirmation => 1,
+            DeviceAffirmationType::ReceiverClaim => 2,
+            DeviceAffirmationType::SenderReversal => 3,
+            DeviceAffirmationType::ReceiverReversal => 4,
+            DeviceAffirmationType::SenderCounterUpdate => 5,
+            DeviceAffirmationType::ReceiverCounterUpdate => 6,
+            DeviceAffirmationType::InstantSenderAffirmation => 7,
+            DeviceAffirmationType::InstantReceiverAffirmation => 8,
+        }
+    }
+}
+
+/// The txn type a device is authorizing in a split proof. Added to the device transcript binding
+/// the txn shown to the device to the proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceTxnType {
+    AccountRegistration { asset_id: AssetId },
+    Mint { asset_id: AssetId, amount: Balance },
+    FeeAccountRegistration { asset_id: AssetId },
+    FeeAccountTopup { asset_id: AssetId, amount: Balance },
+    FeePayment { asset_id: AssetId, amount: Balance },
+    DeviceAffirmation { typ: DeviceAffirmationType },
+    Deposit { asset_id: AssetId, amount: Balance },
+    Withdraw { asset_id: AssetId, amount: Balance },
+}
+
+impl DeviceTxnType {
+    pub fn txn_type(&self) -> u8 {
+        match self {
+            DeviceTxnType::AccountRegistration { .. } => 0,
+            DeviceTxnType::Mint { .. } => 1,
+            DeviceTxnType::FeeAccountRegistration { .. } => 2,
+            DeviceTxnType::FeeAccountTopup { .. } => 3,
+            DeviceTxnType::FeePayment { .. } => 4,
+            DeviceTxnType::DeviceAffirmation { .. } => 5,
+            DeviceTxnType::Deposit { .. } => 6,
+            DeviceTxnType::Withdraw { .. } => 7,
+        }
+    }
+
+    /// Absorb the transaction type and its consent-relevant parameters into `transcript`.
+    pub fn add_to_transcript(&self, transcript: &mut MerlinTranscript) -> Result<()> {
+        let txn_type = self.txn_type();
+        match self {
+            DeviceTxnType::AccountRegistration { asset_id }
+            | DeviceTxnType::FeeAccountRegistration { asset_id } => {
+                add_to_transcript!(
+                    transcript,
+                    DEVICE_TXN_TYPE_LABEL,
+                    txn_type,
+                    DEVICE_ASSET_ID_LABEL,
+                    *asset_id
+                );
+            }
+            DeviceTxnType::Mint { asset_id, amount }
+            | DeviceTxnType::FeeAccountTopup { asset_id, amount }
+            | DeviceTxnType::FeePayment { asset_id, amount }
+            | DeviceTxnType::Deposit { asset_id, amount }
+            | DeviceTxnType::Withdraw { asset_id, amount } => {
+                add_to_transcript!(
+                    transcript,
+                    DEVICE_TXN_TYPE_LABEL,
+                    txn_type,
+                    DEVICE_ASSET_ID_LABEL,
+                    *asset_id,
+                    DEVICE_AMOUNT_LABEL,
+                    *amount
+                );
+            }
+            DeviceTxnType::DeviceAffirmation { typ } => {
+                add_to_transcript!(
+                    transcript,
+                    DEVICE_TXN_TYPE_LABEL,
+                    txn_type,
+                    DEVICE_AFFIRM_TYPE_LABEL,
+                    typ.typ()
+                );
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AuthProofOnlySksProtocol<G: AffineRepr> {
@@ -55,8 +161,8 @@ impl<G: AffineRepr> AuthProofOnlySksProtocol<G> {
     ) -> Result<Self> {
         let proto_aff = PokDiscreteLogProtocol::init(sk_aff, G::ScalarField::rand(rng), sk_aff_gen);
         let proto_enc = PokDiscreteLogProtocol::init(sk_enc, G::ScalarField::rand(rng), sk_enc_gen);
-        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, &mut writer)?;
-        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, &mut writer)?;
+        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
+        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
         Ok(Self {
             proto_aff,
             proto_enc,
@@ -81,6 +187,7 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         pk_aff: G,
         pk_enc: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_aff_gen: &G,
         sk_enc_gen: &G,
     ) -> Result<Self> {
@@ -95,6 +202,7 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
             PK_ENC_LABEL,
             pk_enc,
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         let proto = AuthProofOnlySksProtocol::init(
             rng,
@@ -116,6 +224,7 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         pk_aff: G,
         pk_enc: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
+        txn_type: &DeviceTxnType,
         sk_aff_gen: &G,
         sk_enc_gen: &G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
@@ -131,6 +240,7 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
             PK_ENC_LABEL,
             pk_enc,
         );
+        txn_type.add_to_transcript(&mut transcript)?;
 
         self.challenge_contribution(&pk_aff, &pk_enc, sk_aff_gen, sk_enc_gen, &mut transcript)?;
 
@@ -148,10 +258,10 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         mut writer: W,
     ) -> Result<()> {
         self.proof_afk
-            .challenge_contribution(sk_aff_gen, pk_aff, &mut writer)?;
+            .challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
 
         self.proof_enc
-            .challenge_contribution(sk_enc_gen, pk_enc, &mut writer)?;
+            .challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
         Ok(())
     }
 
@@ -195,7 +305,7 @@ impl<G: AffineRepr> AuthProofOnlySkProtocol<G> {
         mut writer: W,
     ) -> Result<Self> {
         let proto = PokDiscreteLogProtocol::init(sk, G::ScalarField::rand(rng), sk_gen);
-        proto.challenge_contribution(sk_gen, pk, &mut writer)?;
+        proto.challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
         Ok(AuthProofOnlySkProtocol(proto))
     }
 
@@ -212,10 +322,12 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         sk: G::ScalarField,
         pk: G,
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: &G,
     ) -> Result<Self> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        txn_type.add_to_transcript(&mut transcript)?;
         let proto = AuthProofOnlySkProtocol::init(rng, sk, &pk, sk_gen, &mut transcript)?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         Ok(proto.gen_proof(&challenge))
@@ -225,11 +337,13 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         &self,
         pk: G,
         nonce: &[u8],
+        txn_type: &DeviceTxnType,
         sk_gen: &G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        txn_type.add_to_transcript(&mut transcript)?;
         self.challenge_contribution(&pk, sk_gen, &mut transcript)?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         self.verify_given_challenge(&pk, sk_gen, &challenge, rmc)
@@ -241,7 +355,8 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         sk_gen: &G,
         mut writer: W,
     ) -> Result<()> {
-        self.0.challenge_contribution(sk_gen, pk, &mut writer)?;
+        self.0
+            .challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
         Ok(())
     }
 
@@ -277,7 +392,9 @@ pub mod tests {
     use crate::fee_account::tests::new_fee_account;
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{LegEncConfig, PartyEphemeralPublicKey, SenderEphemeralPublicKey};
+    use crate::leg::{
+        LegEncConfig, PartyEphemeralPublicKey, PartyVisibility, SenderEphemeralPublicKey,
+    };
     use ark_ec::CurveGroup;
 
     type Fr = ark_pallas::Fr;
@@ -306,6 +423,7 @@ pub mod tests {
             pk_aff.0,
             pk_enc.0,
             nonce,
+            &DeviceTxnType::AccountRegistration { asset_id: 1 },
             &account_comm_key.sk_gen(),
             &account_comm_key.sk_enc_gen(),
         )
@@ -316,11 +434,43 @@ pub mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 nonce,
+                &DeviceTxnType::AccountRegistration { asset_id: 1 },
                 &account_comm_key.sk_gen(),
                 &account_comm_key.sk_enc_gen(),
                 None,
             )
             .unwrap();
+
+        assert!(
+            proof
+                .verify(
+                    pk_aff.0,
+                    pk_enc.0,
+                    nonce,
+                    &DeviceTxnType::Mint {
+                        asset_id: 1,
+                        amount: 10,
+                    },
+                    &account_comm_key.sk_gen(),
+                    &account_comm_key.sk_enc_gen(),
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    pk_aff.0,
+                    pk_enc.0,
+                    nonce,
+                    &DeviceTxnType::AccountRegistration { asset_id: 2 },
+                    &account_comm_key.sk_gen(),
+                    &account_comm_key.sk_enc_gen(),
+                    None,
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -333,6 +483,7 @@ pub mod tests {
         let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
         let asset_id = 1;
+        let fee_amount = 10;
 
         // All parties generate their keys
         let (((sk_s, pk_s), _), (_, _), _) = setup_keys(
@@ -350,7 +501,7 @@ pub mod tests {
             + (account_tree_params.even_parameters.pc_gens().B_blinding * leaf_blinding))
             .into_affine();
 
-        let updated_account = account.get_state_for_payment(10).unwrap();
+        let updated_account = account.get_state_for_payment(fee_amount).unwrap();
         let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
 
         // Only hardware (Ledger) knows these
@@ -386,6 +537,10 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.current_randomness_gen(),
             account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -398,6 +553,10 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::FeePayment {
+                    asset_id,
+                    amount: fee_amount,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.current_randomness_gen(),
                 account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -423,6 +582,10 @@ pub mod tests {
                     &updated_account_comm.0,
                     wrong_nullifier,
                     nonce,
+                    &DeviceTxnType::FeePayment {
+                        asset_id,
+                        amount: fee_amount,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -438,6 +601,10 @@ pub mod tests {
                     &updated_account_comm.0,
                     nullifier,
                     b"wrong-nonce",
+                    &DeviceTxnType::FeePayment {
+                        asset_id,
+                        amount: fee_amount,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -454,6 +621,10 @@ pub mod tests {
                     &updated_account_comm.0,
                     nullifier,
                     nonce,
+                    &DeviceTxnType::FeePayment {
+                        asset_id,
+                        amount: fee_amount,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -470,6 +641,67 @@ pub mod tests {
                     &wrong_updated_comm,
                     nullifier,
                     nonce,
+                    &DeviceTxnType::FeePayment {
+                        asset_id,
+                        amount: fee_amount,
+                    },
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    &DeviceTxnType::FeePayment {
+                        asset_id,
+                        amount: 11,
+                    },
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    &DeviceTxnType::FeePayment {
+                        asset_id: 2,
+                        amount: fee_amount,
+                    },
+                    account_comm_key.sk_gen(),
+                    account_comm_key.current_randomness_gen(),
+                    account_tree_params.even_parameters.pc_gens().B_blinding,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            proof
+                .verify(
+                    &re_randomized_account_commitment,
+                    &updated_account_comm.0,
+                    nullifier,
+                    nonce,
+                    &DeviceTxnType::FeeAccountTopup {
+                        asset_id,
+                        amount: fee_amount,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
@@ -520,6 +752,11 @@ pub mod tests {
             .collect::<Vec<_>>();
         let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
 
+        let txn_type = DeviceTxnType::Withdraw {
+            asset_id,
+            amount: 30,
+        };
+
         let proof = AuthProofTransparent::new(
             &mut rng,
             sk_aff.0,
@@ -531,6 +768,7 @@ pub mod tests {
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
+            &txn_type,
             account_comm_key.sk_gen(),
             enc_key_gen,
             b_blinding,
@@ -544,6 +782,7 @@ pub mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -578,6 +817,7 @@ pub mod tests {
                 wrong_nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -593,6 +833,7 @@ pub mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 b"wrong-nonce",
+                &txn_type,
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -609,6 +850,7 @@ pub mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -625,6 +867,45 @@ pub mod tests {
                 nullifier,
                 &auditor_pubkeys,
                 nonce,
+                &txn_type,
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
+        );
+
+        assert_err!(
+            proof.verify(
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                &auditor_pubkeys,
+                nonce,
+                &DeviceTxnType::Withdraw {
+                    asset_id,
+                    amount: 31,
+                },
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                None,
+            ),
+            Error::SchnorrError(_)
+        );
+
+        assert_err!(
+            proof.verify(
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                &auditor_pubkeys,
+                nonce,
+                &DeviceTxnType::Deposit {
+                    asset_id,
+                    amount: 30,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -678,7 +959,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: false,
         };
 
@@ -720,6 +1001,9 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             enc_key_gen,
             b_blinding,
@@ -741,6 +1025,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -774,6 +1061,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 wrong_nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -790,6 +1080,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 b"wrong-nonce",
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -807,6 +1100,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -824,6 +1120,9 @@ pub mod tests {
                 &wrong_updated_comm,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -846,6 +1145,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -862,7 +1164,7 @@ pub mod tests {
         let (_, different_leg_enc, _) = setup_leg_with_conf(
             &mut rng,
             LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: false,
             },
             pk_enc.0,
@@ -889,6 +1191,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -907,6 +1212,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -926,6 +1234,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -952,6 +1263,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -960,6 +1274,42 @@ pub mod tests {
             ),
             Error::ProofVerificationError(_),
             "missing the asset-id ephemeral key"
+        );
+
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::ReceiverAffirmation,
+                },
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
+        );
+
+        assert_err!(
+            proof.verify(
+                legs_verifier.clone(),
+                &re_randomized_account_commitment,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                &DeviceTxnType::Mint { asset_id, amount },
+                account_comm_key.sk_gen(),
+                enc_key_gen,
+                b_blinding,
+                enc_gen,
+                None,
+            ),
+            Error::SchnorrError(_)
         );
     }
 
@@ -996,7 +1346,7 @@ pub mod tests {
         let nonce = b"test-nonce";
 
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: false,
         };
         let (_, leg_enc, _) = setup_leg_with_conf(
@@ -1035,6 +1385,9 @@ pub mod tests {
             &updated_account_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             enc_key_gen,
             b_blinding,
@@ -1066,6 +1419,9 @@ pub mod tests {
                     &updated_account_comm.0,
                     nullifier,
                     nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     enc_key_gen,
                     b_blinding,
@@ -1109,7 +1465,7 @@ pub mod tests {
             let (_, leg_enc, _) = setup_leg_with_conf(
                 rng,
                 LegEncConfig {
-                    parties_see_each_other: true,
+                    visibility: PartyVisibility::FullVisibility,
                     reveal_asset_id: reveal,
                 },
                 pk_enc.0,
@@ -1149,6 +1505,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
@@ -1172,6 +1531,9 @@ pub mod tests {
                 &updated_account_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,

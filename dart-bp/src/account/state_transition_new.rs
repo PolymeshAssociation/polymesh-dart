@@ -1367,8 +1367,9 @@ mod tests {
     use crate::account_registration::tests::new_account;
     use crate::auth_proofs::AUTH_TXN_LABEL;
     use crate::auth_proofs::account::AuthProofAffirmation;
+    use crate::auth_proofs::{DeviceAffirmationType, DeviceTxnType};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{Leg, LegEncConfig};
+    use crate::leg::{Leg, LegEncConfig, PartyVisibility};
     use crate::util::verify_given_verification_tuples;
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
     use ark_std::UniformRand;
@@ -1410,7 +1411,7 @@ mod tests {
         let bob_send_amount = 200u64;
 
         let conf = LegEncConfig {
-            parties_see_each_other: true,
+            visibility: PartyVisibility::FullVisibility,
             reveal_asset_id: false,
         };
 
@@ -1550,6 +1551,9 @@ mod tests {
             &carol_receives_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -1608,6 +1612,9 @@ mod tests {
                 &carol_receives_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -1790,6 +1797,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -1848,6 +1858,9 @@ mod tests {
                 &alice_updated_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -2035,6 +2048,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2081,6 +2097,9 @@ mod tests {
                 &alice_updated_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -2260,6 +2279,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2298,6 +2320,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2469,6 +2494,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2528,6 +2556,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2692,6 +2723,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2752,6 +2786,9 @@ mod tests {
             &alice_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -2793,7 +2830,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -2989,6 +3026,9 @@ mod tests {
                 &alice_account_1_updated_comm.0,
                 nullifier_1,
                 alice_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3021,6 +3061,9 @@ mod tests {
                 &alice_account_2_updated_comm.0,
                 nullifier_2,
                 alice_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::ReceiverAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3111,6 +3154,9 @@ mod tests {
                     &alice_account_1_updated_comm.0,
                     nullifier_1,
                     alice_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -3136,6 +3182,9 @@ mod tests {
                     &alice_account_2_updated_comm.0,
                     nullifier_2,
                     alice_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::ReceiverAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -3224,7 +3273,7 @@ mod tests {
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
-                parties_see_each_other: true,
+                visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id,
             };
 
@@ -3466,6 +3515,9 @@ mod tests {
                 &alice_account_1_updated_comm.0,
                 alice_nullifier_1,
                 alice_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3498,6 +3550,9 @@ mod tests {
                 &alice_account_2_updated_comm.0,
                 alice_nullifier_2,
                 alice_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::ReceiverAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3637,6 +3692,9 @@ mod tests {
                 &bob_account_1_updated_comm.0,
                 bob_nullifier_1,
                 bob_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::ReceiverAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3665,6 +3723,9 @@ mod tests {
                 &bob_account_2_updated_comm.0,
                 bob_nullifier_2,
                 bob_nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
@@ -3757,6 +3818,9 @@ mod tests {
                     &alice_account_1_updated_comm.0,
                     alice_nullifier_1,
                     alice_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -3782,6 +3846,9 @@ mod tests {
                     &alice_account_2_updated_comm.0,
                     alice_nullifier_2,
                     alice_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::ReceiverAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -3888,6 +3955,9 @@ mod tests {
                     &bob_account_1_updated_comm.0,
                     bob_nullifier_1,
                     bob_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::ReceiverAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -3913,6 +3983,9 @@ mod tests {
                     &bob_account_2_updated_comm.0,
                     bob_nullifier_2,
                     bob_nonce,
+                    &DeviceTxnType::DeviceAffirmation {
+                        typ: DeviceAffirmationType::SenderAffirmation,
+                    },
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
@@ -4087,6 +4160,9 @@ mod tests {
             &e_updated_comm.0,
             nullifier,
             nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
@@ -4130,6 +4206,9 @@ mod tests {
                 &e_updated_comm.0,
                 nullifier,
                 nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,

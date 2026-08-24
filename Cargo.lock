@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ee4e7ea4b6979981c077a3a8117813fef871f96f"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -237,7 +237,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ee4e7ea4b6979981c077a3a8117813fef871f96f"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -387,8 +387,7 @@ dependencies = [
 [[package]]
 name = "ark-secp256k1"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8bd211c48debd3037b48873a7aa22c3aba034e83388aa4124795c9f220b88c7"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#be949ad980da003b1a43abe81c6d54dbaef8b26a"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -398,8 +397,7 @@ dependencies = [
 [[package]]
 name = "ark-secq256k1"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcc501d24c6d6a73128769231312f00cd73fd99bf550e10edecb875963f4f198"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#be949ad980da003b1a43abe81c6d54dbaef8b26a"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -648,7 +646,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ee4e7ea4b6979981c077a3a8117813fef871f96f"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
 dependencies = [
  "ahash",
  "ark-ec",
@@ -656,6 +654,8 @@ dependencies = [
  "ark-helios",
  "ark-host-msm",
  "ark-pallas",
+ "ark-secp256k1",
+ "ark-secq256k1",
  "ark-selene",
  "ark-serialize",
  "ark-std",
@@ -1171,7 +1171,7 @@ dependencies = [
 [[package]]
 name = "dock_crypto_utils"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#e7845619a6b1ce85ca9be8722e9d2b8c9ba9edc9"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
 dependencies = [
  "aead",
  "ark-ec",
@@ -1197,7 +1197,7 @@ dependencies = [
 [[package]]
 name = "dock_merlin"
 version = "3.0.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#e7845619a6b1ce85ca9be8722e9d2b8c9ba9edc9"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -2971,7 +2971,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#ee4e7ea4b6979981c077a3a8117813fef871f96f"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
@@ -3125,7 +3125,7 @@ dependencies = [
 [[package]]
 name = "schnorr_pok"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#e7845619a6b1ce85ca9be8722e9d2b8c9ba9edc9"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -4423,7 +4423,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

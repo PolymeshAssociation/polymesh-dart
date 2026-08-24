@@ -1,11 +1,14 @@
 use ark_std::vec::Vec;
 use codec::{Decode, Encode};
 
+use polymesh_dart_bp::auth_proofs::{
+    DeviceAffirmationType as BPDeviceAffirmationType, DeviceTxnType as BPDeviceTxnType,
+};
 use polymesh_dart_bp::{
     account::common::leg_link::LegProverConfig as BPLegProverConfig,
     leg::{LegEncryptionCore, PartyEphemeralPublicKey},
 };
-use polymesh_dart_common::Balance;
+use polymesh_dart_common::{AssetId, Balance};
 
 use super::*;
 use crate::Error;
@@ -16,6 +19,78 @@ pub type BPAuthProofAffirmation =
     polymesh_dart_bp::auth_proofs::account::AuthProofAffirmation<PallasA>;
 pub type BPAuthProofFeePayment =
     polymesh_dart_bp::auth_proofs::fee_account::AuthProofFeePayment<PallasA>;
+
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
+pub enum DeviceAffirmationType {
+    SenderAffirmation,
+    ReceiverAffirmation,
+    ReceiverClaim,
+    SenderReversal,
+    ReceiverReversal,
+    SenderCounterUpdate,
+    ReceiverCounterUpdate,
+    InstantSenderAffirmation,
+    InstantReceiverAffirmation,
+}
+
+impl From<DeviceAffirmationType> for BPDeviceAffirmationType {
+    fn from(t: DeviceAffirmationType) -> Self {
+        match t {
+            DeviceAffirmationType::SenderAffirmation => BPDeviceAffirmationType::SenderAffirmation,
+            DeviceAffirmationType::ReceiverAffirmation => {
+                BPDeviceAffirmationType::ReceiverAffirmation
+            }
+            DeviceAffirmationType::ReceiverClaim => BPDeviceAffirmationType::ReceiverClaim,
+            DeviceAffirmationType::SenderReversal => BPDeviceAffirmationType::SenderReversal,
+            DeviceAffirmationType::ReceiverReversal => BPDeviceAffirmationType::ReceiverReversal,
+            DeviceAffirmationType::SenderCounterUpdate => {
+                BPDeviceAffirmationType::SenderCounterUpdate
+            }
+            DeviceAffirmationType::ReceiverCounterUpdate => {
+                BPDeviceAffirmationType::ReceiverCounterUpdate
+            }
+            DeviceAffirmationType::InstantSenderAffirmation => {
+                BPDeviceAffirmationType::InstantSenderAffirmation
+            }
+            DeviceAffirmationType::InstantReceiverAffirmation => {
+                BPDeviceAffirmationType::InstantReceiverAffirmation
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
+pub enum DeviceTxnType {
+    AccountRegistration { asset_id: AssetId },
+    Mint { asset_id: AssetId, amount: Balance },
+    FeeAccountRegistration { asset_id: AssetId },
+    FeeAccountTopup { asset_id: AssetId, amount: Balance },
+    FeePayment { asset_id: AssetId, amount: Balance },
+    DeviceAffirmation { typ: DeviceAffirmationType },
+}
+
+impl From<DeviceTxnType> for BPDeviceTxnType {
+    fn from(typ: DeviceTxnType) -> Self {
+        match typ {
+            DeviceTxnType::AccountRegistration { asset_id } => {
+                BPDeviceTxnType::AccountRegistration { asset_id }
+            }
+            DeviceTxnType::Mint { asset_id, amount } => BPDeviceTxnType::Mint { asset_id, amount },
+            DeviceTxnType::FeeAccountRegistration { asset_id } => {
+                BPDeviceTxnType::FeeAccountRegistration { asset_id }
+            }
+            DeviceTxnType::FeeAccountTopup { asset_id, amount } => {
+                BPDeviceTxnType::FeeAccountTopup { asset_id, amount }
+            }
+            DeviceTxnType::FeePayment { asset_id, amount } => {
+                BPDeviceTxnType::FeePayment { asset_id, amount }
+            }
+            DeviceTxnType::DeviceAffirmation { typ } => {
+                BPDeviceTxnType::DeviceAffirmation { typ: typ.into() }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Encode, Decode)]
 pub struct LegProverConfig {
@@ -59,6 +134,7 @@ pub struct AffirmationDeviceRequest {
     pub k_amounts: Vec<WrappedCanonical<PallasScalar>>,
     pub k_asset_ids: Vec<WrappedCanonical<PallasScalar>>,
     pub leg_prover_configs: Vec<LegProverConfig>,
+    pub txn_type: DeviceTxnType,
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -70,6 +146,7 @@ pub struct FeePaymentDeviceRequest {
     pub rerandomized_leaf: CompressedAffine,
     pub updated_account_commitment: CompressedAffine,
     pub nullifier: CompressedAffine,
+    pub txn_type: DeviceTxnType,
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -78,6 +155,7 @@ pub struct RegistrationDeviceRequest {
     pub nonce: Vec<u8>,
     pub pk_aff: CompressedAffine,
     pub pk_enc: CompressedAffine,
+    pub txn_type: DeviceTxnType,
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -85,6 +163,7 @@ pub struct FeeAccountDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,
     pub nonce: Vec<u8>,
     pub pk: CompressedAffine,
+    pub txn_type: DeviceTxnType,
 }
 
 #[derive(Clone, Encode, Decode)]

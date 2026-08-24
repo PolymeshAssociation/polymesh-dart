@@ -3,7 +3,8 @@ use crate::account::common::balance::ensure_correct_balance_change;
 use crate::account::common::ensure_same_accounts;
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
-use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol};
+use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
+use crate::dst;
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
     get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng, verify_with_rng,
@@ -52,21 +53,18 @@ pub struct MintTxnProofPartial<
     pub r1cs_proof: Option<BPProof<G0, G1>>,
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
-    /// Commitment to randomness for proving knowledge of re-randomized old state commitment (leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_old: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of new account commitment (which becomes new leaf) using Schnorr protocol (step 1 of Schnorr)
-    pub t_acc_new: Affine<G0>,
-    /// Response for proving knowledge of re-randomized old state commitment (leaf) using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of re-randomized old state commitment (leaf) using Schnorr
+    /// protocol (step 3 of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_old: SchnorrResponse<Affine<G0>>,
-    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3 of Schnorr)
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3
+    /// of Schnorr). Carries the commitment to randomness `t` from step 1.
     pub resp_acc_new: PartialSchnorrResponse<Affine<G0>>,
-    /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
+    /// Response for proving correctness of nullifier using Schnorr protocol (step 3 of Schnorr)
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     /// Commitment to the values committed in Bulletproofs
     pub comm_bp: Affine<G0>,
-    /// Commitment to randomness for proving knowledge of values committed in Bulletproofs commitment (step 1 of Schnorr)
-    pub t_bp: Affine<G0>,
-    /// Response for proving knowledge of values committed in Bulletproofs (step 3 of Schnorr)
+    /// Response for proving knowledge of values committed in Bulletproofs (step 3 of Schnorr).
+    /// Carries the commitment to randomness `t` from step 1.
     pub resp_bp: PartialSchnorrResponse<Affine<G0>>,
 }
 
@@ -227,9 +225,14 @@ impl<
         // Schnorr commitment for proving correctness of nullifier
         let t_null = Self::nullifier_proto(account.current_rho(), old_rho_blinding, &nullifier_gen);
 
-        t_acc_old.challenge_contribution(&mut transcript)?;
-        t_acc_new.challenge_contribution(&mut transcript)?;
-        t_null.challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        t_acc_old.challenge_contribution(dst::MINT_ACCOUNT_COMM_OLD, &mut transcript)?;
+        t_acc_new.challenge_contribution(dst::MINT_ACCOUNT_COMM_NEW, &mut transcript)?;
+        t_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::MINT_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
@@ -254,7 +257,7 @@ impl<
             );
 
         let mut transcript = even_prover.transcript();
-        t_bp.challenge_contribution(&mut transcript)?;
+        t_bp.challenge_contribution(dst::MINT_BP, &mut transcript)?;
 
         counter_blinding.zeroize();
         new_balance_blinding.zeroize();
@@ -325,13 +328,10 @@ impl<
         Ok(MintTxnProofPartial {
             r1cs_proof: None,
             re_randomized_path: self.re_randomized_path,
-            t_acc_old: self.t_acc_old.t,
-            t_acc_new: self.t_acc_new.t,
             resp_acc_old,
             resp_acc_new,
             resp_null,
             comm_bp: self.comm_bp,
-            t_bp: self.t_bp.t,
             resp_bp,
         })
     }
@@ -567,10 +567,16 @@ impl<
 
         let nullifier_gen = account_comm_key.current_rho_gen();
 
-        self.t_acc_old.serialize_compressed(&mut transcript)?;
-        self.t_acc_new.serialize_compressed(&mut transcript)?;
-        self.resp_null
-            .challenge_contribution(&nullifier_gen, &nullifier, &mut transcript)?;
+        self.resp_acc_old
+            .challenge_contribution(dst::MINT_ACCOUNT_COMM_OLD, &mut transcript)?;
+        self.resp_acc_new
+            .challenge_contribution(dst::MINT_ACCOUNT_COMM_NEW, &mut transcript)?;
+        self.resp_null.challenge_contribution(
+            &nullifier_gen,
+            &nullifier,
+            dst::MINT_NULLIFIER,
+            &mut transcript,
+        )?;
 
         // Drop reference to borrow even_verifier below
         let _ = transcript;
@@ -580,7 +586,8 @@ impl<
 
         let mut transcript = even_verifier.transcript();
 
-        self.t_bp.serialize_compressed(&mut transcript)?;
+        self.resp_bp
+            .challenge_contribution(dst::MINT_BP, &mut transcript)?;
 
         Ok(())
     }
@@ -663,7 +670,6 @@ impl<
                     .B_blinding,
             ),
             &y.into_affine(),
-            &self.t_acc_old,
             challenge,
         )?;
 
@@ -681,7 +687,6 @@ impl<
         self.resp_acc_new.is_valid(
             &MintTxnProof::<L, F0, F1, G0, G1>::acc_new_gens(&account_comm_key),
             &y.into_affine(),
-            &self.t_acc_new,
             challenge,
             missing_resps,
         )?;
@@ -710,7 +715,6 @@ impl<
                 account_tree_params.even_parameters.bp_gens(),
             ),
             &self.comm_bp,
-            &self.t_bp,
             challenge,
             missing_resps,
         )?;
@@ -1158,6 +1162,10 @@ impl<
             issuer_aff_pk,
             issuer_enc_pk,
             &ledger_nonce_v,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
             None,
@@ -1443,6 +1451,10 @@ mod tests {
             pk_aff.0,
             pk_enc.0,
             nonce,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
         )
@@ -1474,7 +1486,18 @@ mod tests {
         // Verify auth proof using its own AUTH_TXN_LABEL transcript
         proof
             .auth_proof
-            .verify(pk_aff.0, pk_enc.0, nonce, &sk_gen, &sk_enc_gen, None)
+            .verify(
+                pk_aff.0,
+                pk_enc.0,
+                nonce,
+                &DeviceTxnType::Mint {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
+                &sk_gen,
+                &sk_enc_gen,
+                None,
+            )
             .unwrap();
 
         let r1cs_proof = proof.partial.r1cs_proof.as_ref().unwrap();
@@ -1563,6 +1586,10 @@ mod tests {
             pk_aff.0,
             pk_enc.0,
             &ledger_nonce,
+            &DeviceTxnType::Mint {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &sk_gen,
             &sk_enc_gen,
         )
@@ -1638,6 +1665,10 @@ mod tests {
                 pk_aff.0,
                 pk_enc.0,
                 &ledger_nonce_v,
+                &DeviceTxnType::Mint {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
                 &sk_gen,
                 &sk_enc_gen,
                 None,
