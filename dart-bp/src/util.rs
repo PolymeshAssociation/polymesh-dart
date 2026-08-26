@@ -911,12 +911,17 @@ pub(crate) fn create_bp_and_null_t_values<
     ];
 
     let r = if include_sk {
-        let sk_enc = sk_enc.unwrap();
+        let sk_enc =
+            sk_enc.ok_or_else(|| Error::ProofGenerationError("sk_enc is missing".to_string()))?;
         let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
         wits.push(sk_enc);
         wits.push(sk_enc_inv);
-        blindings.push(sk_enc_blinding.unwrap());
-        blindings.push(sk_enc_inv_blinding.unwrap());
+        blindings.push(sk_enc_blinding.ok_or_else(|| {
+            Error::ProofGenerationError("sk_enc_blinding is missing".to_string())
+        })?);
+        blindings.push(sk_enc_inv_blinding.ok_or_else(|| {
+            Error::ProofGenerationError("sk_enc_inv_blinding is missing".to_string())
+        })?);
 
         let (comm_bp, mut vars) = prover.commit_vec(&wits, comm_bp_blinding, bp_gens);
         enforce_constraints_for_sk_enc_relation(prover, &mut vars);
@@ -2535,6 +2540,82 @@ mod tests {
             vec![false, true]
         ));
     }
+
+    /// Prover commits balances consistent with `prover_sign`; verifier enforces `verifier_sign`.
+    fn balance_change_with_split_signs(
+        pc_gens: &PedersenGens<PallasA>,
+        bp_gens: &BulletproofGens<PallasA>,
+        old_balance: u64,
+        new_balance: u64,
+        amount: u64,
+        prover_sign: bool,
+        verifier_sign: bool,
+    ) -> bool {
+        let values = vec![
+            Fr::from(amount),
+            Fr::from(old_balance),
+            Fr::from(new_balance),
+        ];
+
+        let mut prover = Prover::new(pc_gens, MerlinTranscript::new(b"test"));
+        let (comm, vars) = prover.commit_vec(&values, Fr::from(200u64), bp_gens);
+        if enforce_constraints_for_balance_change(
+            &mut prover,
+            vars,
+            vec![prover_sign],
+            Some(new_balance),
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let proof = match prover.prove(&bp_gens) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        let mut verifier = Verifier::new(MerlinTranscript::new(b"test"));
+        let vars = verifier.commit_vec(3, comm);
+        if enforce_constraints_for_balance_change(&mut verifier, vars, vec![verifier_sign], None)
+            .is_err()
+        {
+            return false;
+        }
+        verifier.verify(&proof, &pc_gens, &bp_gens).is_ok()
+    }
+
+    /// Audit regression for obligation M-balance-counter-sign-binding (malleability lens).
+    /// `has_balance_decreased` is the accounting sign (debit vs credit). It must be bound between
+    /// prover and verifier: a prover cannot commit balances shaped for one sign and have the proof
+    /// accepted under the opposite sign. If it could, a sender (whose leg-link amount proof binds a
+    /// real debit) could present a credit-shaped balance proof and be credited instead of debited
+    /// (mint). The verifier's `has_balance_decreased` is applied as the R1CS constraint
+    /// `var_bal_old + delta - var_bal_new = 0` (enforce_constraints_for_balance_change), so a
+    /// sign mismatch against the prover's committed old/new balances must be rejected.
+    #[test]
+    fn test_balance_change_sign_is_bound_not_free_selector() {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(128, 1);
+
+        // Baseline: matching signs accept.
+        assert!(balance_change_with_split_signs(
+            &pc_gens, &bp_gens, 100, 60, 40, true, true
+        )); // debit: 100 - 40 = 60
+        assert!(balance_change_with_split_signs(
+            &pc_gens, &bp_gens, 50, 100, 50, false, false
+        )); // credit: 50 + 50 = 100
+
+        // Malleability: a credit-shaped proof (new = old + amount) MUST be rejected when the
+        // verifier enforces debit — otherwise a sender flips the sign and is credited (mint).
+        assert!(!balance_change_with_split_signs(
+            &pc_gens, &bp_gens, 50, 100, 50, false, true
+        ));
+        // And a debit-shaped proof MUST be rejected when the verifier enforces credit.
+        assert!(!balance_change_with_split_signs(
+            &pc_gens, &bp_gens, 100, 60, 40, true, false
+        ));
+    }
+
     fn prove_verify_randomness_relations(
         pc_gens: &PedersenGens<PallasA>,
         bp_gens: &BulletproofGens<PallasA>,

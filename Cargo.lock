@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#4db58cf137c1ea19daabd05e72dd6d6e12cda7a2"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -237,7 +237,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#4db58cf137c1ea19daabd05e72dd6d6e12cda7a2"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -646,7 +646,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#4db58cf137c1ea19daabd05e72dd6d6e12cda7a2"
 dependencies = [
  "ahash",
  "ark-ec",
@@ -1171,7 +1171,7 @@ dependencies = [
 [[package]]
 name = "dock_crypto_utils"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch32#9c903b57a3501a2ba460b0ccfe1554ab75074342"
 dependencies = [
  "aead",
  "ark-ec",
@@ -1191,13 +1191,14 @@ dependencies = [
  "rayon",
  "serde",
  "sha2",
+ "smallvec",
  "zeroize",
 ]
 
 [[package]]
 name = "dock_merlin"
 version = "3.0.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch32#9c903b57a3501a2ba460b0ccfe1554ab75074342"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -2971,7 +2972,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch5#07b2c029bb546e08369c69ff4ba360324b0ec556"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#4db58cf137c1ea19daabd05e72dd6d6e12cda7a2"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
@@ -3125,7 +3126,7 @@ dependencies = [
 [[package]]
 name = "schnorr_pok"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch30#187c89da7ff19002ea2dec4321a6a5ed1c8531d7"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch32#9c903b57a3501a2ba460b0ccfe1554ab75074342"
 dependencies = [
  "ark-ec",
  "ark-ff",

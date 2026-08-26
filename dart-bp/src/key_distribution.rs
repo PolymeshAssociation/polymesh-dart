@@ -99,7 +99,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         add_to_transcript!(transcript, NONCE_LABEL, nonce, ENC_PK_LABEL, pk);
         for (i, &recipient_pk) in recipient_pks.iter().enumerate() {
             transcript.append_message(RECIPIENT_PK_LABEL, &(i as u64).to_le_bytes());
-            recipient_pk.serialize_compressed(&mut transcript)?;
+            transcript.append(RECIPIENT_PK_LABEL, &recipient_pk);
         }
 
         let mut shared_cts = [G::zero(); NUM_CHUNKS];
@@ -302,7 +302,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         add_to_transcript!(transcript, NONCE_LABEL, nonce, ENC_PK_LABEL, pk);
         for (i, &recipient_pk) in recipient_pks.iter().enumerate() {
             transcript.append_message(RECIPIENT_PK_LABEL, &(i as u64).to_le_bytes());
-            recipient_pk.serialize_compressed(&mut transcript)?;
+            transcript.append(RECIPIENT_PK_LABEL, &recipient_pk);
         }
 
         for (i, (resp_shared_ct, shared_ct)) in self
@@ -452,7 +452,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             return Err(Error::InvalidRecipientIndex);
         }
 
-        let mut sk_enc_inv = sk_enc.inverse().unwrap();
+        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
 
         let max = 1_u64 << CHUNK_BITS;
         let chunks = self

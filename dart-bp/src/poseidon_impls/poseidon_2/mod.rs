@@ -23,11 +23,11 @@ impl<F: PrimeField> Poseidon2<F> {
     }
 
     pub fn get_t(&self) -> usize {
-        self.params.state_size
+        self.params.state_size as usize
     }
 
     pub fn permutation(&self, input: &[F]) -> Result<Vec<F>> {
-        let t = self.params.state_size;
+        let t = self.params.state_size as usize;
         if input.len() != t {
             return Err(Error::UnequalInputSizeAndStateSize(input.len(), t));
         }
@@ -37,21 +37,21 @@ impl<F: PrimeField> Poseidon2<F> {
         // Linear layer at beginning
         self.matmul_external(&mut current_state);
 
-        for r in 0..self.params.rounds_f_beginning {
+        for r in 0..self.params.rounds_f_beginning as usize {
             current_state = self.add_rc(&current_state, &self.params.round_constants[r]);
             current_state = self.sbox(&current_state);
             self.matmul_external(&mut current_state);
         }
 
-        let p_end = self.params.rounds_f_beginning + self.params.rounds_p;
-        for r in self.params.rounds_f_beginning..p_end {
+        let p_end = self.params.rounds_f_beginning as usize + self.params.rounds_p as usize;
+        for r in self.params.rounds_f_beginning as usize..p_end {
             current_state[0].add_assign(&self.params.round_constants[r][0]);
             current_state[0] = self.sbox_p(&current_state[0]);
             // self.matmul_internal(&mut current_state, &self.params.mat_internal_diag_m_1);
             self.matmul_internal(&mut current_state);
         }
 
-        for r in p_end..self.params.rounds {
+        for r in p_end..self.params.rounds as usize {
             current_state = self.add_rc(&current_state, &self.params.round_constants[r]);
             current_state = self.sbox(&current_state);
             self.matmul_external(&mut current_state);
@@ -93,7 +93,7 @@ impl<F: PrimeField> Poseidon2<F> {
 
     #[allow(dead_code)]
     fn matmul_m4(&self, input: &mut [F]) {
-        let t = self.params.state_size;
+        let t = self.params.state_size as usize;
         let t4 = t / 4;
         for i in 0..t4 {
             let start_index = i * 4;
@@ -127,7 +127,7 @@ impl<F: PrimeField> Poseidon2<F> {
     }
 
     fn matmul_external(&self, input: &mut [F]) {
-        let t = self.params.state_size;
+        let t = self.params.state_size as usize;
         match t {
             2 => {
                 // Matrix circ(2, 1)
@@ -175,7 +175,7 @@ impl<F: PrimeField> Poseidon2<F> {
 
     // fn matmul_internal(&self, input: &mut[F], mat_internal_diag_m_1: &[F]) {
     fn matmul_internal(&self, input: &mut [F]) {
-        let t = self.params.state_size;
+        let t = self.params.state_size as usize;
 
         match t {
             2 => {
@@ -231,7 +231,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     input: Vec<LinearCombination<F>>,
     params: &Poseidon2Params<F>,
 ) -> Result<Vec<LinearCombination<F>>> {
-    let t = params.state_size;
+    let t = params.state_size as usize;
     if input.len() != t {
         return Err(Error::UnequalInputSizeAndStateSize(input.len(), t));
     }
@@ -242,7 +242,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     matmul_external_constraints(&mut output_vars, params);
 
     // Full rounds before partial
-    for r in 0..params.rounds_f_beginning {
+    for r in 0..params.rounds_f_beginning as usize {
         apply_round_constants(&mut output_vars, &params.round_constants[r]);
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
@@ -251,9 +251,9 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
         }
     }
 
-    let p_end = params.rounds_f_beginning + params.rounds_p;
+    let p_end = params.rounds_f_beginning as usize + params.rounds_p as usize;
     // Partial rounds
-    for r in params.rounds_f_beginning..p_end {
+    for r in params.rounds_f_beginning as usize..p_end {
         output_vars[0] += params.round_constants[r][0];
         output_vars[0] = sbox_p_constraints(cs, &output_vars[0], params)?;
         matmul_internal_constraints(&mut output_vars, params);
@@ -263,7 +263,7 @@ pub fn Poseidon_permutation_constraints<F: PrimeField, CS: ConstraintSystem<F>>(
     }
 
     // Full rounds after partial
-    for r in p_end..params.rounds {
+    for r in p_end..params.rounds as usize {
         apply_round_constants(&mut output_vars, &params.round_constants[r]);
         output_vars = apply_sbox_full(cs, &output_vars, params)?;
         matmul_external_constraints(&mut output_vars, params);
@@ -280,7 +280,7 @@ pub fn Poseidon_permutation_gadget<F: PrimeField, CS: ConstraintSystem<F>>(
     params: &Poseidon2Params<F>,
     output: &[F],
 ) -> Result<()> {
-    let width = params.state_size;
+    let width = params.state_size as usize;
     if input.len() != width {
         return Err(Error::UnequalInputSizeAndStateSize(input.len(), width));
     }
@@ -346,7 +346,7 @@ fn matmul_external_constraints<F: PrimeField>(
     input: &mut [LinearCombination<F>],
     params: &Poseidon2Params<F>,
 ) {
-    let t = params.state_size;
+    let t = params.state_size as usize;
     debug_assert!(t == 2 || t == 3);
     match t {
         2 => {
@@ -371,7 +371,7 @@ fn matmul_internal_constraints<F: PrimeField>(
     input: &mut [LinearCombination<F>],
     params: &Poseidon2Params<F>,
 ) {
-    let t = params.state_size;
+    let t = params.state_size as usize;
     debug_assert!(t == 2 || t == 3);
     match t {
         2 => {

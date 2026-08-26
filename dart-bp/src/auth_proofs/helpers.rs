@@ -4,14 +4,14 @@ use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_std::UniformRand;
 use ark_std::collections::BTreeMap;
-use ark_std::io::Write;
 use ark_std::vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
 use schnorr_pok::partial::PartialSchnorrResponse;
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
-pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
+pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr>(
     rng: &mut R,
     sk: G::ScalarField,
     sk_enc: G::ScalarField,
@@ -24,7 +24,7 @@ pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
     comm_re_rand_gen: G, // generator used blind the old and new commitment parts
     dst_old: &[u8],
     dst_new: &[u8],
-    mut writer: W,
+    transcript: &mut MerlinTranscript,
 ) -> Result<(SchnorrCommitment<G>, SchnorrCommitment<G>, G, G)> {
     // For old (re randomized) account commitment `G_aff * sk + G_enc * sk_enc + B_blinding * rand_part_old_comm` where `rand_part_old_comm` is part of the blinding used in curve tree
     let proto_old = SchnorrCommitment::new(
@@ -43,10 +43,13 @@ pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
         (pk + comm_re_rand_gen * rand_part_old_comm).into_affine();
     let partial_updated_account_commitment = (pk + comm_re_rand_gen * rand_new_comm).into_affine();
 
-    proto_old.challenge_contribution(dst_old, &mut writer)?;
-    partial_re_randomized_account_commitment.serialize_compressed(&mut writer)?;
-    proto_new.challenge_contribution(dst_new, &mut writer)?;
-    partial_updated_account_commitment.serialize_compressed(&mut writer)?;
+    proto_old.challenge_contribution(dst_old, transcript)?;
+    transcript.append(
+        b"partial_acc_comm_old",
+        &partial_re_randomized_account_commitment,
+    );
+    proto_new.challenge_contribution(dst_new, transcript)?;
+    transcript.append(b"partial_acc_comm_new", &partial_updated_account_commitment);
     Ok((
         proto_old,
         proto_new,

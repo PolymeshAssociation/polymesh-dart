@@ -550,11 +550,11 @@ pub struct AccountCommitmentsHostProof<G: SWCurveConfig + Clone + Copy> {
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProof<G> {
-    pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         self.resp_acc_old
-            .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut *writer)?;
+            .challenge_contribution(dst::ACCOUNT_COMM_OLD, transcript)?;
         self.resp_acc_new
-            .challenge_contribution(dst::ACCOUNT_COMM_NEW, writer)?;
+            .challenge_contribution(dst::ACCOUNT_COMM_NEW, transcript)?;
         Ok(())
     }
 }
@@ -652,11 +652,11 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
         )
     }
 
-    pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         self.t_acc_old
-            .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut *writer)?;
+            .challenge_contribution(dst::ACCOUNT_COMM_OLD, transcript)?;
         self.t_acc_new
-            .challenge_contribution(dst::ACCOUNT_COMM_NEW, writer)?;
+            .challenge_contribution(dst::ACCOUNT_COMM_NEW, transcript)?;
         Ok(())
     }
 
@@ -1358,9 +1358,9 @@ impl<
                 );
             }
 
-            let mut transcript = even_prover.transcript();
-            reduced_acc_old.serialize_compressed(&mut transcript)?;
-            reduced_acc_new.serialize_compressed(&mut transcript)?;
+            let transcript = even_prover.transcript();
+            transcript.append(b"acc_comm_old", &reduced_acc_old);
+            transcript.append(b"acc_comm_new", &reduced_acc_new);
         }
 
         Ok(Self {

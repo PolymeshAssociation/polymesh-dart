@@ -325,6 +325,15 @@ impl<
         self.comm_bp_blinding.zeroize();
         self.rerandomization.zeroize();
 
+        self.balance.zeroize();
+        self.counter.zeroize();
+        self.rho.zeroize();
+        self.current_rho.zeroize();
+        self.randomness.zeroize();
+        self.current_randomness.zeroize();
+        self.updated_current_rho.zeroize();
+        self.updated_current_randomness.zeroize();
+
         Ok(MintTxnProofPartial {
             r1cs_proof: None,
             re_randomized_path: self.re_randomized_path,

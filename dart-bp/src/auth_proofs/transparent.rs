@@ -9,7 +9,6 @@ use crate::{
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::io::Write;
 use ark_std::{UniformRand, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -180,21 +179,25 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         )
     }
 
-    pub fn challenge_contribution<W: Write>(
+    pub fn challenge_contribution(
         &self,
         auditor_keys: &[G],
         sk_gen: G,
         enc_key_gen: G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         self.resp_re_randomized_account_commitment
-            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_OLD, &mut writer)?;
-        self.partial_re_randomized_account_commitment
-            .serialize_compressed(&mut writer)?;
+            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_OLD, transcript)?;
+        transcript.append(
+            b"partial_acc_comm_old",
+            &self.partial_re_randomized_account_commitment,
+        );
         self.resp_updated_account_commitment
-            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_NEW, &mut writer)?;
-        self.partial_updated_account_commitment
-            .serialize_compressed(&mut writer)?;
+            .challenge_contribution(dst::TRANSPARENT_AUTH_ACC_COMM_NEW, transcript)?;
+        transcript.append(
+            b"partial_acc_comm_new",
+            &self.partial_updated_account_commitment,
+        );
 
         chal_contrib_pk_enc(
             &self.resp_eph_pk,
@@ -203,7 +206,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             auditor_keys,
             sk_gen,
             enc_key_gen,
-            &mut writer,
+            transcript,
         )?;
 
         Ok(())
