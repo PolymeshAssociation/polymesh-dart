@@ -156,7 +156,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
             key_index as usize,
             i,
             accept,
-            ctx.as_bytes(),
+            &ctx,
             &med,
             dart_gens().sig_key_gen(),
         )?;
@@ -184,7 +184,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
             rng,
             mediator_keys.acct.secret.0.0,
             accept,
-            ctx.as_bytes(),
+            &ctx,
             &mediator_keys.acct.public.get_affine()?,
             &dart_gens().sig_key_gen(),
         )?;
@@ -208,7 +208,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
-        let ctx = leg_ref.context();
+        let ctx = leg_ref.context_old();
         let proof = mediator::MediatorTxnOldProof::new(
             rng,
             leg_enc.decode()?,
@@ -236,7 +236,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
                 inner.decode()?.verify(
                     self.key_index as usize,
                     self.accept,
-                    ctx.as_bytes(),
+                    &ctx,
                     &leg_enc.decode()?,
                     dart_gens().sig_key_gen(),
                 )?;
@@ -248,7 +248,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
 
     /// Verify a leg created in the older scheme.
     pub fn verify_old(&self, leg_enc: &MediatorEncryptionOld) -> Result<(), Error> {
-        let ctx = self.leg_ref.context();
+        let ctx = self.leg_ref.context_old();
         match &self.inner {
             MediatorAffirmationInner::HiddenOld(inner) => {
                 inner.decode()?.verify(
@@ -271,7 +271,7 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
             MediatorAffirmationInner::Revealed(inner) => {
                 inner.decode()?.verify(
                     self.accept,
-                    ctx.as_bytes(),
+                    &ctx,
                     &mediator_pk.get_affine()?,
                     &dart_gens().sig_key_gen(),
                     None,

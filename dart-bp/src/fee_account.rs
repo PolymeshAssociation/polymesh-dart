@@ -516,6 +516,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_commitment: &FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         let reduced_acc_comm = self.partial.challenge_contribution(
@@ -536,7 +537,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             &ledger_nonce_v,
             &DeviceTxnType::FeeAccountRegistration { asset_id },
             &account_comm_key.sk_gen(),
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let challenge_h_final_v =
@@ -546,7 +547,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             reduced_acc_comm,
             account_comm_key,
             &challenge_h_final_v,
-            None,
+            rmc,
         )?;
         Ok(())
     }
@@ -1516,7 +1517,7 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let (mut even_verifier, odd_verifier) = self
             .partial
@@ -1546,7 +1547,7 @@ impl<
                 amount: increase_bal_by,
             },
             &account_comm_key.sk_gen(),
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let challenge_h_final_v: F0 =

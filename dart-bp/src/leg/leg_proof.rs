@@ -284,7 +284,7 @@ impl<
             }
         }
 
-        ensure_leg_encryption_consistent(&leg, &leg_enc)?;
+        ensure_leg_encryption_consistent(&leg, &leg_enc, &asset_data)?;
 
         let mut at = F0::from(leg.core.asset_id);
         let mut amount = F0::from(leg.core.amount);
@@ -2409,18 +2409,40 @@ impl<
     }
 }
 
-pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
+pub(crate) fn ensure_leg_encryption_consistent<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
     leg: &Leg<Affine<G0>>,
     leg_enc: &LegEncryption<Affine<G0>>,
+    asset_data: &AssetData<F0, F1, G0, G1>,
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
-        let _ = (leg, leg_enc);
+        let _ = (leg, leg_enc, asset_data);
         return Ok(());
     }
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
+        if leg.enc_keys.len() != asset_data.enc_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in enc_keys length: leg has {} but asset_data has {}",
+                leg.enc_keys.len(),
+                asset_data.enc_keys.len()
+            )));
+        }
+
+        if leg.med_keys.len() != asset_data.med_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in med_keys length: leg has {} but asset_data has {}",
+                leg.med_keys.len(),
+                asset_data.med_keys.len()
+            )));
+        }
+
         if leg_enc.eph_pk_enc_keys.len() != leg.enc_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in eph_pk_enc_keys length: leg_enc has {} but leg has {} enc_keys",

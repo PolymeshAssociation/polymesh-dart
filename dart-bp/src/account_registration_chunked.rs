@@ -98,7 +98,19 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
     ) -> Result<VerificationTuple<G>> {
         let transcript = MerlinTranscript::new(REG_TXN_LABEL);
         let mut verifier = Verifier::new(transcript);
-        for i in 0..self.regs.len() {
+        let num_regs = self.regs.len();
+        if ids.len() != num_regs
+            || pk_affs.len() != num_regs
+            || pk_encs.len() != num_regs
+            || asset_ids.len() != num_regs
+            || account_commitments.len() != num_regs
+            || nonces.len() != num_regs
+        {
+            return Err(Error::ProofVerificationError(
+                "Number of public inputs does not match registrations in chunk".to_string(),
+            ));
+        }
+        for i in 0..num_regs {
             self.regs[i].verify_sigma_protocols_and_enforce_constraints(
                 ids[i],
                 pk_affs[i],
@@ -245,7 +257,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 "num_regs does not match total registrations across chunks".to_string(),
             ));
         }
-        if ids.len() != expected {
+        if ids.len() != expected
+            || pk_affs.len() != expected
+            || pk_encs.len() != expected
+            || asset_ids.len() != expected
+            || account_commitments.len() != expected
+            || nonces.len() != expected
+        {
             return Err(Error::ProofVerificationError(
                 "Number of public inputs does not match total registrations across chunks"
                     .to_string(),

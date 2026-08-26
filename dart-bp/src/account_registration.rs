@@ -1360,7 +1360,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
-        rmc: Option<&mut RandomizedMultChecker<G>>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
         let mut verifier = self.partial.challenge_contribution(
             id,
@@ -1396,7 +1396,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &DeviceTxnType::AccountRegistration { asset_id },
             &sk_gen,
             &sk_enc_gen,
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let mut auth_proof_bytes = Vec::new();

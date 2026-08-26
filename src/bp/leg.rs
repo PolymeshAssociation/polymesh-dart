@@ -27,7 +27,7 @@ use super::WrappedCanonical;
 use crate::curve_tree::*;
 use crate::*;
 use dock_crypto_utils::randomized_mult_checker::{
-    PairRandomizedMultCheckerGuard, RandomizedMultCheckerGuard,
+    PairRandomizedMultCheckerGuard, RandomizedMultChecker, RandomizedMultCheckerGuard,
 };
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
@@ -138,9 +138,20 @@ impl LegRef {
     }
 
     /// The settlement/leg context to tie proofs to a leg.
-    pub fn context(&self) -> String {
+    pub fn context(&self) -> [u8; 33] {
+        let mut out = [0u8; 33];
+        (&self.settlement, self.leg_id).encode_to(&mut out.as_mut_slice());
+        out
+    }
+
+    pub fn context_old(&self) -> String {
         format!("{:?}-{}", self.settlement, self.leg_id)
     }
+}
+
+fn leg_proof_initial_ctx(memo: &[u8], idx: usize) -> Vec<u8> {
+    // Reconsider u8. We might want to do proofs over > 255 legs
+    (memo, idx as u8).encode()
 }
 
 #[derive(
@@ -287,6 +298,35 @@ impl Leg {
         asset_med_keys: Vec<PallasA>,
         public_enc_keys: Vec<PallasA>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
+        let (leg, leg_enc, leg_enc_rand) = self.encrypt_without_encoding(
+            rng,
+            config,
+            asset_enc_keys,
+            asset_med_keys,
+            public_enc_keys,
+        )?;
+        Ok((
+            leg,
+            LegEncrypted::new(leg_enc)?,
+            LegEncryptionRandomness::new(leg_enc_rand)?,
+        ))
+    }
+
+    pub fn encrypt_without_encoding<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        config: bp_leg::LegEncConfig,
+        asset_enc_keys: Vec<PallasA>,
+        asset_med_keys: Vec<PallasA>,
+        public_enc_keys: Vec<PallasA>,
+    ) -> Result<
+        (
+            bp_leg::Leg<PallasA>,
+            bp_leg::LegEncryption<PallasA>,
+            bp_leg::LegEncryptionRandomness<PallasScalar>,
+        ),
+        Error,
+    > {
         let leg = bp_leg::Leg::new(
             self.sender.get_affine()?,
             self.receiver.get_affine()?,
@@ -302,11 +342,7 @@ impl Leg {
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
         )?;
-        Ok((
-            leg,
-            LegEncrypted::new(leg_enc)?,
-            LegEncryptionRandomness::new(leg_enc_rand)?,
-        ))
+        Ok((leg, leg_enc, leg_enc_rand))
     }
 
     pub fn sender(&self) -> Result<EncryptionPublicKey, Error> {
@@ -453,8 +489,13 @@ impl LegBuilder {
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let (leg, leg_enc, leg_enc_rand) =
-            leg.encrypt(rng, self.config.into(), enc_keys, med_keys, public_enc_keys)?;
+        let (leg, leg_enc, leg_enc_rand) = leg.encrypt_without_encoding(
+            rng,
+            self.config.into(),
+            enc_keys,
+            med_keys,
+            public_enc_keys,
+        )?;
 
         if self.config.reveal_asset_id {
             let leg_proof = SettlementLegProofRevealedAssetId::new(
@@ -462,7 +503,7 @@ impl LegBuilder {
                 leg,
                 asset_id,
                 leg_enc,
-                &leg_enc_rand,
+                leg_enc_rand,
                 self.public_enc_keys.clone(),
                 ctx,
             )?;
@@ -473,7 +514,7 @@ impl LegBuilder {
                 rng,
                 leg,
                 leg_enc,
-                &leg_enc_rand,
+                leg_enc_rand,
                 asset_data,
                 self.public_enc_keys.clone(),
                 ctx,
@@ -557,6 +598,7 @@ impl<
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<
         (
             VerificationTuple<Affine<C::P0>>,
@@ -565,9 +607,9 @@ impl<
         Error,
     > {
         match self {
-            Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng),
+            Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng, rmc),
             Self::RevealedAssetId(p) => {
-                let odd_tuple = p.batched_verify(ctx, asset_lookup, rng)?;
+                let odd_tuple = p.batched_verify(ctx, asset_lookup, rng, rmc)?;
                 // Create an empty verification tuple for Vesta (even) since revealed asset ID
                 // proofs only operate on Pallas curve.
                 let even_tuple = VerificationTuple {
@@ -678,7 +720,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
         let mut legs = Vec::with_capacity(self.legs.len());
 
         for (idx, leg_builder) in self.legs.iter().enumerate() {
-            let ctx = (&memo, idx as u8).encode();
+            let ctx = leg_proof_initial_ctx(&memo, idx);
             let leg_proof = leg_builder.encrypt_and_prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
@@ -768,7 +810,7 @@ impl<
         self.legs.par_iter().enumerate().try_for_each_init(
             || rng.clone(),
             |rng, (idx, leg)| {
-                let ctx = (memo, idx as u8).encode();
+                let ctx = leg_proof_initial_ctx(memo, idx);
                 leg.verify(&ctx, &root, asset_lookup, rng)
             },
         )?;
@@ -791,7 +833,7 @@ impl<
             })?;
         let root = root.root_node()?;
         for (idx, leg) in self.legs.iter().enumerate() {
-            let ctx = (&self.memo, idx as u8).encode();
+            let ctx = leg_proof_initial_ctx(&self.memo, idx);
             leg.verify(&ctx, &root, asset_lookup, rng)?;
         }
         Ok(())
@@ -826,8 +868,11 @@ impl<
             .map_init(
                 || rng.clone(),
                 |rng, (idx, leg)| {
-                    let ctx = (memo, idx as u8).encode();
-                    leg.batched_verify(&ctx, &root, asset_lookup, rng)
+                    let ctx = leg_proof_initial_ctx(memo, idx);
+                    let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
+                    guard.with_err(Error::RMCVerifyError, |rmc| {
+                        leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))
+                    })
                 },
             )
             .collect::<Result<Vec<_>, Error>>()?;
@@ -872,17 +917,21 @@ impl<
 
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
-        for (idx, leg) in self.legs.iter().enumerate() {
-            let ctx = (&self.memo, idx as u8).encode();
-            let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng)?;
-            // If any tuple is empty which can happen when asset id is revealed
-            if !even.proof_independent_scalars.is_empty() {
-                even_tuples.push(even);
+        let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
+        guard.with_err(Error::RMCVerifyError, |rmc| {
+            for (idx, leg) in self.legs.iter().enumerate() {
+                let ctx = leg_proof_initial_ctx(&self.memo, idx);
+                let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))?;
+                // If any tuple is empty which can happen when asset id is revealed
+                if !even.fixed_point_scalars.is_empty() {
+                    even_tuples.push(even);
+                }
+                if !odd.fixed_point_scalars.is_empty() {
+                    odd_tuples.push(odd);
+                }
             }
-            if !odd.proof_independent_scalars.is_empty() {
-                odd_tuples.push(odd);
-            }
-        }
+            Ok(())
+        })?;
 
         Self::batch_verify_tuples(even_tuples, odd_tuples, rng)?;
 
@@ -960,8 +1009,8 @@ impl<
     pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg: bp_leg::Leg<PallasA>,
-        leg_enc: LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
+        leg_enc: bp_leg::LegEncryption<PallasA>,
+        leg_enc_rand: bp_leg::LegEncryptionRandomness<PallasScalar>,
         asset_data: AssetCommitmentData,
         public_enc_keys: Vec<EncryptionPublicKey>,
         ctx: &[u8],
@@ -974,8 +1023,8 @@ impl<
         let proof = bp_leg::leg_proof::LegCreationProof::new::<_, _, _>(
             rng,
             leg,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
+            leg_enc.clone(),
+            leg_enc_rand,
             asset_path,
             asset_data,
             &root,
@@ -987,7 +1036,7 @@ impl<
         )?;
 
         Ok(Self {
-            leg_enc,
+            leg_enc: LegEncrypted::new(leg_enc)?,
             public_enc_keys,
 
             inner: BoundedCanonical::wrap(&proof)?,
@@ -1045,6 +1094,7 @@ impl<
         ctx: &[u8],
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<
         (
             VerificationTuple<Affine<C::P0>>,
@@ -1073,7 +1123,7 @@ impl<
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rng,
-            None,
+            rmc,
         )?;
         Ok(tuples)
     }
@@ -1114,8 +1164,8 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         rng: &mut R,
         leg: bp_leg::Leg<PallasA>,
         asset_id: AssetId,
-        leg_enc: LegEncrypted,
-        leg_enc_rand: &LegEncryptionRandomness,
+        leg_enc: bp_leg::LegEncryption<PallasA>,
+        leg_enc_rand: bp_leg::LegEncryptionRandomness<PallasScalar>,
         public_enc_keys: Vec<EncryptionPublicKey>,
         ctx: &[u8],
     ) -> Result<Self, Error> {
@@ -1125,8 +1175,8 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         let proof = bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof::new(
             rng,
             leg,
-            leg_enc.decode()?,
-            leg_enc_rand.decode()?,
+            leg_enc.clone(),
+            leg_enc_rand,
             ctx,
             leaf_level_pc_gens,
             leaf_level_bp_gens,
@@ -1136,7 +1186,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
 
         Ok(Self {
             asset_id,
-            leg_enc,
+            leg_enc: LegEncrypted::new(leg_enc)?,
             public_enc_keys,
             inner: BoundedCanonical::wrap(&proof)?,
         })
@@ -1206,6 +1256,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         ctx: &[u8],
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
+        rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<VerificationTuple<PallasA>, Error> {
         let (enc_keys, _) = asset_lookup.get_keys(self.asset_id)?;
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
@@ -1230,7 +1281,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
             dart_gens().enc_key_gen(),
             dart_gens().leg_asset_value_gen(),
             rng,
-            None,
+            rmc,
         )?;
 
         Ok(tuple)
@@ -1401,10 +1452,10 @@ impl LegEncrypted {
     ///
     /// Auditors and mediators should use `try_decrypt_with_key` instead.
     pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
-        // TODO: optimize to avoid decoding leg encryption twice.
-        if let Ok(leg) = self.decrypt(LegRole::sender(), keys) {
+        let leg_enc = &self.decode().ok()?;
+        if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::sender(), keys) {
             Some((leg, LegRole::sender()))
-        } else if let Ok(leg) = self.decrypt(LegRole::receiver(), keys) {
+        } else if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::receiver(), keys) {
             Some((leg, LegRole::receiver()))
         } else {
             None
@@ -1416,13 +1467,20 @@ impl LegEncrypted {
     /// Senders/receivers should use `try_decrypt` instead.
     /// Auditors/mediators should use `try_decrypt_with_key` instead.
     pub fn decrypt(&self, role: LegRole, keys: &AccountKeys) -> Result<Leg, Error> {
+        Self::decrypt_decoded(&self.decode()?, role, keys)
+    }
+
+    pub fn decrypt_decoded(
+        leg_enc: &bp_leg::LegEncryption<PallasA>,
+        role: LegRole,
+        keys: &AccountKeys,
+    ) -> Result<Leg, Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let (sender, receiver, asset_id, amount) = match role {
             LegRole {
                 kind: LegRoleKind::Sender,
                 ..
             } => {
-                let leg_enc = self.decode()?;
                 let (sender, receiver_opt, asset_id, amount) =
                     leg_enc.decrypt_as_sender(&keys.enc.secret.0.0, enc_gen)?;
                 let receiver = receiver_opt.ok_or_else(|| {
@@ -1434,7 +1492,6 @@ impl LegEncrypted {
                 kind: LegRoleKind::Receiver,
                 ..
             } => {
-                let leg_enc = self.decode()?;
                 let (sender_opt, receiver, asset_id, amount) =
                     leg_enc.decrypt_as_receiver(&keys.enc.secret.0.0, enc_gen)?;
                 let sender = sender_opt.ok_or_else(|| {
@@ -1445,15 +1502,11 @@ impl LegEncrypted {
             LegRole {
                 kind: LegRoleKind::Auditor,
                 index: Some(idx),
-            } => {
-                let leg_enc = self.decode()?;
-                leg_enc.decrypt_given_key(&keys.enc.secret.0.0, false, idx as usize, enc_gen)?
-            }
+            } => leg_enc.decrypt_given_key(&keys.enc.secret.0.0, false, idx as usize, enc_gen)?,
             LegRole {
                 kind: LegRoleKind::Mediator,
                 index: Some(idx),
             } => {
-                let leg_enc = self.decode()?;
                 match leg_enc.mediators.as_ref() {
                     Some(_) => {
                         let med_enc = leg_enc.mediator_encryption(idx as usize)?;

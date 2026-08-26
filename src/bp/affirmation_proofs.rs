@@ -135,7 +135,7 @@ macro_rules! with_balance {
                         state_change.new_commitment,
                         leaf_path,
                         &root,
-                        nonce.as_bytes(),
+                        &nonce,
                         C::parameters(),
                         dart_gens().account_comm_key(),
                         dart_gens().leg_asset_value_gen(),
@@ -160,7 +160,7 @@ macro_rules! with_balance {
 
                 let device_request = AffirmationDeviceRequest {
                     challenge_h_bytes,
-                    nonce: nonce.as_bytes().to_vec(),
+                    nonce: nonce.to_vec(),
                     auth_rerandomization: WrappedCanonical::wrap(&protocol.auth_rerandomization())?,
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
@@ -316,7 +316,7 @@ macro_rules! with_balance {
                                 updated_comm,
                                 nullifier,
                                 &root,
-                                ctx.as_bytes(),
+                                &ctx,
                                 C::parameters(),
                                 &comm_key,
                                 enc_gen,
@@ -333,7 +333,7 @@ macro_rules! with_balance {
                             .transcript()
                             .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
 
-                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
+                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, &ctx)?;
 
                         let re_randomized_leaf_v = proof
                             .common
@@ -497,7 +497,7 @@ macro_rules! no_balance {
                         state_change.new_commitment,
                         leaf_path,
                         &root,
-                        nonce.as_bytes(),
+                        &nonce,
                         C::parameters(),
                         dart_gens().account_comm_key(),
                         dart_gens().leg_asset_value_gen(),
@@ -522,7 +522,7 @@ macro_rules! no_balance {
 
                 let device_request = AffirmationDeviceRequest {
                     challenge_h_bytes,
-                    nonce: nonce.as_bytes().to_vec(),
+                    nonce: nonce.to_vec(),
                     auth_rerandomization: WrappedCanonical::wrap(&protocol.auth_rerandomization())?,
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
@@ -683,7 +683,7 @@ macro_rules! no_balance {
                                 updated_comm,
                                 nullifier,
                                 &root,
-                                ctx.as_bytes(),
+                                &ctx,
                                 C::parameters(),
                                 &comm_key,
                                 enc_gen,
@@ -700,7 +700,7 @@ macro_rules! no_balance {
                             .transcript()
                             .challenge_scalar::<C::F0>(TXN_CHALLENGE_LABEL);
 
-                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, ctx.as_bytes())?;
+                        let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, &ctx)?;
 
                         let re_randomized_leaf_v = proof
                             .common
@@ -736,7 +736,7 @@ macro_rules! no_balance {
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
                             enc_gen,
-                            None,
+                            Some(even_rmc),
                         )?;
 
                         let challenge_h_final_v: C::F0 = append_auth_proof_and_get_challenge(

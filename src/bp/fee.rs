@@ -20,7 +20,9 @@ use super::*;
 use crate::auth_proofs::{create_fee_account_auth_proof, create_fee_payment_auth_proof};
 use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
-use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
+use dock_crypto_utils::randomized_mult_checker::{
+    PairRandomizedMultCheckerGuard, RandomizedMultChecker, RandomizedMultCheckerGuard,
+};
 use polymesh_dart_bp::util::{batch_verify_bp_with_rng, serialize_challenge};
 use polymesh_dart_bp::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL, fee_account as bp_fee_account};
 
@@ -340,6 +342,7 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
             &self.account_state_commitment.as_commitment()?,
             identity,
             dart_gens().account_comm_key(),
+            None,
         )?;
         Ok(())
     }
@@ -548,6 +551,7 @@ impl<
         rng: &mut R,
         ctx: &[u8],
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
+        rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<
         (
             VerificationTuple<Affine<C::P0>>,
@@ -567,7 +571,7 @@ impl<
             C::parameters(),
             dart_gens().account_comm_key(),
             rng,
-            None,
+            rmc,
         )?;
         Ok(tuples)
     }
@@ -736,7 +740,12 @@ impl<
             .par_iter()
             .map_init(
                 || rng.clone(),
-                |rng, proof| proof.batched_verify(rng, ctx, &root),
+                |rng, proof| {
+                    let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
+                    guard.with_err(Error::RMCVerifyError, |rmc| {
+                        proof.batched_verify(rng, ctx, &root, Some(rmc))
+                    })
+                },
             )
             .collect::<Result<Vec<_>, Error>>()?;
 
@@ -785,11 +794,16 @@ impl<
 
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
-        for proof in &self.proofs {
-            let (even, odd) = proof.batched_verify(rng, ctx, &root)?;
-            even_tuples.push(even);
-            odd_tuples.push(odd);
-        }
+
+        let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
+        guard.with_err(Error::RMCVerifyError, |rmc| {
+            for proof in &self.proofs {
+                let (even, odd) = proof.batched_verify(rng, ctx, &root, Some(rmc))?;
+                even_tuples.push(even);
+                odd_tuples.push(odd);
+            }
+            Ok(())
+        })?;
 
         let params = C::parameters();
         batch_verify_bp_with_rng(
