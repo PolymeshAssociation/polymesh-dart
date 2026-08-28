@@ -150,8 +150,8 @@ impl LegRef {
 }
 
 fn leg_proof_initial_ctx(memo: &[u8], idx: usize) -> Vec<u8> {
-    // Reconsider u8. We might want to do proofs over > 255 legs
-    (memo, idx as u8).encode()
+    debug_assert!(idx <= LegId::MAX as usize, "leg index must fit in LegId");
+    (memo, idx as LegId).encode()
 }
 
 #[derive(
