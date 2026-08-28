@@ -1,5 +1,5 @@
-use crate::leg::{MediatorEncryption, MediatorEncryptionOld};
-use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, dst, error::Result};
+use crate::leg::MediatorEncryption;
+use crate::{Error, NONCE_LABEL, dst, error::Result};
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ec::scalar_mul::BatchMulPreprocessing;
@@ -11,16 +11,11 @@ use ark_std::{vec, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
-use schnorr_pok::discrete_log::{
-    PokDiscreteLog, PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
-};
+use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
 use zeroize::Zeroize;
 
 /// Transcript domain of the ring affirmation used when asset-id is hidden.
 pub const MEDIATOR_TXN_LABEL: &[u8; 17] = b"mediator-txn-ring";
-/// Transcript domain of the affirmation that predates the broadcast scheme. Its value must stay as
-/// it was or legs created under that scheme stop verifying.
-pub const MEDIATOR_TXN_OLD_LABEL: &[u8; 12] = b"mediator-txn";
 pub const MEDIATOR_TXN_OLD_CHALLENGE_LABEL: &[u8; 22] = b"mediator-txn-challenge";
 /// Transcript domain of the affirmation used when asset-id is revealed.
 pub const PUBLIC_MEDIATOR_TXN_LABEL: &[u8; 25] = b"mediator-txn-public-asset";
@@ -262,144 +257,6 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
     }
 }
 
-/// This is the proof for mediator affirm/reject over a [`MediatorEncryptionOld`] entry, i.e. a leg
-/// created before the broadcast scheme, where the affirmation key was encrypted to the single
-/// encryption key at `enc_key_index`. Kept so those legs can still be affirmed; new legs use
-/// [`MediatorTxnProof`]. Report section 5.1.12
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct MediatorTxnOldProof<G: AffineRepr> {
-    pub resp_enc_pk: PokPedersenCommitment<G>,
-}
-
-impl<G: AffineRepr> MediatorTxnOldProof<G> {
-    pub fn new<R: CryptoRngCore>(
-        rng: &mut R,
-        leg_enc: MediatorEncryptionOld<G>,
-        enc_sk: G::ScalarField,
-        mediator_sk: G::ScalarField,
-        accept: bool,
-        nonce: &[u8],
-        sig_key_gen: &G,
-    ) -> Result<Self> {
-        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_OLD_LABEL);
-        Self::new_with_given_transcript(
-            rng,
-            leg_enc,
-            enc_sk,
-            mediator_sk,
-            accept,
-            nonce,
-            sig_key_gen,
-            &mut transcript,
-        )
-    }
-
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
-        rng: &mut R,
-        leg_enc: MediatorEncryptionOld<G>,
-        mut enc_sk: G::ScalarField,
-        mut mediator_sk: G::ScalarField,
-        accept: bool,
-        nonce: &[u8],
-        sig_key_gen: &G,
-        mut transcript: &mut MerlinTranscript,
-    ) -> Result<Self> {
-        // Hash the mediator's response
-        if accept {
-            transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
-        } else {
-            transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
-        }
-
-        let y = leg_enc.ct_med;
-        let eph_pk = &leg_enc.eph_pk_med_key;
-        let enc_pk = PokPedersenCommitmentProtocol::init(
-            enc_sk.inverse().ok_or(Error::InvertingZero)?,
-            G::ScalarField::rand(rng),
-            eph_pk,
-            mediator_sk,
-            G::ScalarField::rand(rng),
-            sig_key_gen,
-        );
-
-        Zeroize::zeroize(&mut enc_sk);
-        Zeroize::zeroize(&mut mediator_sk);
-
-        enc_pk.challenge_contribution(
-            eph_pk,
-            sig_key_gen,
-            &y,
-            dst::MEDIATOR_OLD_ENC_PK,
-            &mut transcript,
-        )?;
-
-        add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
-
-        let challenge =
-            transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_OLD_CHALLENGE_LABEL);
-
-        let resp_enc_pk = enc_pk.gen_proof(&challenge);
-        Ok(Self { resp_enc_pk })
-    }
-
-    pub fn verify(
-        &self,
-        leg_enc: MediatorEncryptionOld<G>,
-        accept: bool,
-        nonce: &[u8],
-        sig_key_gen: G,
-        rmc: Option<&mut RandomizedMultChecker<G>>,
-    ) -> Result<()> {
-        let mut transcript = MerlinTranscript::new(MEDIATOR_TXN_OLD_LABEL);
-        self.verify_with_given_transcript(leg_enc, accept, nonce, sig_key_gen, &mut transcript, rmc)
-    }
-
-    pub fn verify_with_given_transcript(
-        &self,
-        leg_enc: MediatorEncryptionOld<G>,
-        accept: bool,
-        nonce: &[u8],
-        sig_key_gen: G,
-        mut transcript: &mut MerlinTranscript,
-        mut rmc: Option<&mut RandomizedMultChecker<G>>,
-    ) -> Result<()> {
-        // Hash the mediator's response
-        if accept {
-            transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
-        } else {
-            transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
-        }
-
-        let y = leg_enc.ct_med;
-        let eph_pk = leg_enc.eph_pk_med_key;
-
-        self.resp_enc_pk.challenge_contribution(
-            &eph_pk,
-            &sig_key_gen,
-            &y,
-            dst::MEDIATOR_OLD_ENC_PK,
-            &mut transcript,
-        )?;
-
-        add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc, NONCE_LABEL, nonce);
-
-        let challenge =
-            transcript.challenge_scalar::<G::ScalarField>(MEDIATOR_TXN_OLD_CHALLENGE_LABEL);
-
-        verify_or_rmc_3!(
-            rmc,
-            self.resp_enc_pk,
-            "resp_enc_pk verification failed",
-            y,
-            eph_pk,
-            sig_key_gen,
-            &challenge,
-        );
-
-        Ok(())
-    }
-}
-
 /// This is the proof for mediator affirm/reject when asset-id is revealed. Since the mediator's
 /// affirmation key is known to the verifier, this is a proof of knowledge of its secret key.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -597,74 +454,6 @@ mod tests {
         let mut identity_med = med.clone();
         identity_med.eph_pk_med_keys[0] = PallasA::zero();
         assert!(pr.verify(slot, true, nonce, &identity_med, h).is_err());
-    }
-
-    /// Builds the pre-broadcast mediator entry directly: the current `Leg::encrypt` only produces
-    /// the broadcast form, so a leg of the old shape has to be faked here.
-    fn encrypt_mediator_old<G: AffineRepr>(
-        g: G,
-        enc_key: G,
-        enc_key_index: u8,
-        r: G::ScalarField,
-        pk_aff: G,
-    ) -> MediatorEncryptionOld<G> {
-        let aff = G::Group::normalize_batch(&[g * r + pk_aff, enc_key * r]);
-        MediatorEncryptionOld {
-            enc_key_index,
-            ct_med: aff[0],
-            eph_pk_med_key: aff[1],
-        }
-    }
-
-    #[test]
-    fn mediator_old_action() {
-        let mut rng = rand::thread_rng();
-        let g = hash_to_pallas(b"test", b"enc-key-gen").into_affine();
-        let h = hash_to_pallas(b"test", b"sig-key-gen").into_affine();
-        let nonce = b"test-nonce";
-
-        let (enc_sk, enc_pk) = keygen(&mut rng, g);
-        let (sigma, pk_aff) = keygen(&mut rng, h);
-        let r = Fr::rand(&mut rng);
-        let med = encrypt_mediator_old(g, enc_pk, 0, r, pk_aff);
-
-        // The mediator recovers its affirmation key from the single encryption key it has.
-        assert_eq!(med.affirmation_key(&enc_sk).unwrap(), pk_aff);
-
-        for accept in [true, false] {
-            let pr =
-                MediatorTxnOldProof::new(&mut rng, med.clone(), enc_sk, sigma, accept, nonce, &h)
-                    .unwrap();
-            assert!(pr.verify(med.clone(), accept, nonce, h, None).is_ok());
-
-            let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
-            assert!(
-                pr.verify(med.clone(), accept, nonce, h, Some(&mut rmc))
-                    .is_ok()
-            );
-            assert!(rmc.verify().is_ok());
-
-            // Must not verify as the opposite decision nor under a different nonce.
-            assert!(pr.verify(med.clone(), !accept, nonce, h, None).is_err());
-            assert!(
-                pr.verify(med.clone(), accept, b"other-nonce", h, None)
-                    .is_err()
-            );
-        }
-
-        // Wrong affirmation secret must fail.
-        let wrong_med_sk = Fr::rand(&mut rng);
-        let bad =
-            MediatorTxnOldProof::new(&mut rng, med.clone(), enc_sk, wrong_med_sk, true, nonce, &h)
-                .unwrap();
-        assert!(bad.verify(med.clone(), true, nonce, h, None).is_err());
-
-        // Affirming with an encryption key the mediator does not hold must fail.
-        let wrong_enc_sk = Fr::rand(&mut rng);
-        let bad2 =
-            MediatorTxnOldProof::new(&mut rng, med.clone(), wrong_enc_sk, sigma, true, nonce, &h)
-                .unwrap();
-        assert!(bad2.verify(med, true, nonce, h, None).is_err());
     }
 
     #[test]

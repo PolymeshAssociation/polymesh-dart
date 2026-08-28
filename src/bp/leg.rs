@@ -143,10 +143,6 @@ impl LegRef {
         (&self.settlement, self.leg_id).encode_to(&mut out.as_mut_slice());
         out
     }
-
-    pub fn context_old(&self) -> String {
-        format!("{:?}-{}", self.settlement, self.leg_id)
-    }
 }
 
 fn leg_proof_initial_ctx(memo: &[u8], idx: usize) -> Vec<u8> {
@@ -1312,8 +1308,6 @@ pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>
 
 pub type WrappedMediatorEncryption = WrappedCanonical<bp_leg::MediatorEncryption<PallasA>>;
 
-pub type WrappedMediatorEncryptionOld = WrappedCanonical<bp_leg::MediatorEncryptionOld<PallasA>>;
-
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1329,15 +1323,6 @@ pub struct LegEncrypted(WrappedLegEncryption);
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
 pub struct MediatorEncryption(WrappedMediatorEncryption);
-
-/// Represents an encrypted mediator entry of a leg created before the broadcast scheme. Stored
-/// onchain by those legs; affirmed with [`MediatorAffirmationProof::new_old`].
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "utoipa", schema(value_type = String, examples("0x0000000000000000000000000000000000000000000000000000000000000000"), format = Binary))]
-pub struct MediatorEncryptionOld(WrappedMediatorEncryptionOld);
 
 impl LegEncrypted {
     pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {
@@ -1559,16 +1544,6 @@ impl MediatorEncryption {
     }
 
     pub fn decode(&self) -> Result<bp_leg::MediatorEncryption<PallasA>, Error> {
-        self.0.decode()
-    }
-}
-
-impl MediatorEncryptionOld {
-    pub fn new(mediators_enc: bp_leg::MediatorEncryptionOld<PallasA>) -> Result<Self, Error> {
-        Ok(Self(WrappedCanonical::wrap(&mediators_enc)?))
-    }
-
-    pub fn decode(&self) -> Result<bp_leg::MediatorEncryptionOld<PallasA>, Error> {
         self.0.decode()
     }
 }
