@@ -61,7 +61,7 @@ impl DeviceAffirmationType {
 pub enum DeviceTxnType {
     AccountRegistration { asset_id: AssetId },
     Mint { asset_id: AssetId, amount: Balance },
-    FeeAccountRegistration { asset_id: AssetId },
+    FeeAccountRegistration { asset_id: AssetId, balance: Balance },
     FeeAccountTopup { asset_id: AssetId, amount: Balance },
     FeePayment { asset_id: AssetId, amount: Balance },
     DeviceAffirmation { typ: DeviceAffirmationType },
@@ -87,14 +87,24 @@ impl DeviceTxnType {
     pub fn add_to_transcript(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         let txn_type = self.txn_type();
         match self {
-            DeviceTxnType::AccountRegistration { asset_id }
-            | DeviceTxnType::FeeAccountRegistration { asset_id } => {
+            DeviceTxnType::AccountRegistration { asset_id } => {
                 add_to_transcript!(
                     transcript,
                     DEVICE_TXN_TYPE_LABEL,
                     txn_type,
                     DEVICE_ASSET_ID_LABEL,
                     *asset_id
+                );
+            }
+            DeviceTxnType::FeeAccountRegistration { asset_id, balance } => {
+                add_to_transcript!(
+                    transcript,
+                    DEVICE_TXN_TYPE_LABEL,
+                    txn_type,
+                    DEVICE_ASSET_ID_LABEL,
+                    *asset_id,
+                    DEVICE_AMOUNT_LABEL,
+                    *balance
                 );
             }
             DeviceTxnType::Mint { asset_id, amount }

@@ -535,7 +535,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         self.auth_proof.verify(
             *pk,
             &ledger_nonce_v,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &account_comm_key.sk_gen(),
             rmc.as_deref_mut(),
         )?;
@@ -3863,7 +3863,7 @@ pub mod tests {
             sk.0,
             pk.0,
             nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
         )
         .unwrap();
@@ -3905,7 +3905,7 @@ pub mod tests {
             .verify(
                 pk.0,
                 nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &sk_gen,
                 None,
             )
@@ -3933,7 +3933,26 @@ pub mod tests {
                 .verify(
                     pk.0,
                     nonce,
-                    &DeviceTxnType::FeeAccountRegistration { asset_id: 2 },
+                    &DeviceTxnType::FeeAccountRegistration {
+                        asset_id: 2,
+                        balance
+                    },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountRegistration {
+                        asset_id,
+                        balance: balance + 1,
+                    },
                     &sk_gen,
                     None,
                 )
@@ -3987,7 +4006,7 @@ pub mod tests {
             sk.0,
             pk.0,
             &ledger_nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
         )
         .unwrap();
@@ -4038,7 +4057,7 @@ pub mod tests {
             .verify(
                 pk.0,
                 &ledger_nonce_v,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &sk_gen,
                 None,
             )
@@ -4264,7 +4283,7 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &pk_gen,
         )
         .unwrap();
@@ -4307,7 +4326,7 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &pk_gen,
                 None,
             )
@@ -4382,7 +4401,7 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             &ledger_nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &pk_gen,
         )
         .unwrap();
@@ -4454,7 +4473,7 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 &ledger_nonce_v,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &pk_gen,
                 None,
             )
