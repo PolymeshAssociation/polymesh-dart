@@ -92,7 +92,7 @@ ark-std = { version = "0.5", default-features = false }
 #] }
 digest = { version = "0.10.7", default-features = false }
 blake2 = { version = "0.10", default-features = false }
-rayon = { version = "1.5.3", default-features = false }
+rayon = { version = "1.12.0", default-features = false }
 
 dock_crypto_utils = { version = "0.22.0", default-features = false }
 schnorr_pok = { version = "0.22.0", default-features = false }
