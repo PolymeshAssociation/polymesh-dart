@@ -20,7 +20,7 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
-use ark_std::{UniformRand, format, io::Write, vec::Vec};
+use ark_std::{UniformRand, format, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
@@ -516,6 +516,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         account_commitment: &FeeAccountStateCommitment<G>,
         nonce: &[u8],
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(FEE_REG_TXN_LABEL);
         let reduced_acc_comm = self.partial.challenge_contribution(
@@ -534,9 +535,9 @@ impl<G: AffineRepr> RegTxnProof<G> {
         self.auth_proof.verify(
             *pk,
             &ledger_nonce_v,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &account_comm_key.sk_gen(),
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let challenge_h_final_v =
@@ -546,7 +547,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
             reduced_acc_comm,
             account_comm_key,
             &challenge_h_final_v,
-            None,
+            rmc,
         )?;
         Ok(())
     }
@@ -798,8 +799,8 @@ impl<
         )
         .into_affine();
 
-        acc_old.serialize_compressed(&mut transcript)?;
-        acc_new.serialize_compressed(&mut transcript)?;
+        transcript.append(b"acc_comm_old", &acc_old);
+        transcript.append(b"acc_comm_new", &acc_new);
 
         let t_null =
             Self::nullifier_proto(account.rho(), acc_comm.old_rho_blinding, &nullifier_gen);
@@ -1038,8 +1039,8 @@ impl<
             + (account_comm_key.balance_gen() * F0::from(increase_bal_by)))
         .into_affine();
         let acc_new = (updated_account_commitment.0.into_group() - reduce).into_affine();
-        acc_old.serialize_compressed(&mut transcript)?;
-        acc_new.serialize_compressed(&mut transcript)?;
+        transcript.append(b"acc_comm_old", &acc_old);
+        transcript.append(b"acc_comm_new", &acc_new);
 
         self.resp_null.challenge_contribution(
             &nullifier_gen,
@@ -1516,7 +1517,7 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let (mut even_verifier, odd_verifier) = self
             .partial
@@ -1546,7 +1547,7 @@ impl<
                 amount: increase_bal_by,
             },
             &account_comm_key.sk_gen(),
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let challenge_h_final_v: F0 =
@@ -1915,11 +1916,11 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
         }
     }
 
-    pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         self.t_acc_old
-            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, transcript)?;
         self.t_acc_new
-            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, transcript)?;
         Ok(())
     }
 
@@ -1954,11 +1955,11 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProof<G> {
-    pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         self.resp_acc_old
-            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_OLD_WITH_SK, transcript)?;
         self.resp_acc_new
-            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
+            .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITH_SK, transcript)?;
         Ok(())
     }
 
@@ -2913,8 +2914,8 @@ impl<
         )
         .into_affine();
 
-        acc_old.serialize_compressed(&mut transcript)?;
-        acc_new.serialize_compressed(&mut transcript)?;
+        transcript.append(b"acc_comm_old", &acc_old);
+        transcript.append(b"acc_comm_new", &acc_new);
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         Ok((
@@ -3124,8 +3125,8 @@ impl<
             asset_id_gen,
             balance_gen,
         )?;
-        comm_old.serialize_compressed(&mut transcript)?;
-        comm_new.serialize_compressed(&mut transcript)?;
+        transcript.append(b"acc_comm_old", &comm_old);
+        transcript.append(b"acc_comm_new", &comm_new);
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         Ok((even_verifier, odd_verifier, challenge_h))
@@ -3862,7 +3863,7 @@ pub mod tests {
             sk.0,
             pk.0,
             nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
         )
         .unwrap();
@@ -3904,7 +3905,7 @@ pub mod tests {
             .verify(
                 pk.0,
                 nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &sk_gen,
                 None,
             )
@@ -3932,7 +3933,26 @@ pub mod tests {
                 .verify(
                     pk.0,
                     nonce,
-                    &DeviceTxnType::FeeAccountRegistration { asset_id: 2 },
+                    &DeviceTxnType::FeeAccountRegistration {
+                        asset_id: 2,
+                        balance
+                    },
+                    &sk_gen,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert!(
+            reg_proof
+                .auth_proof
+                .verify(
+                    pk.0,
+                    nonce,
+                    &DeviceTxnType::FeeAccountRegistration {
+                        asset_id,
+                        balance: balance + 1,
+                    },
                     &sk_gen,
                     None,
                 )
@@ -3986,7 +4006,7 @@ pub mod tests {
             sk.0,
             pk.0,
             &ledger_nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
         )
         .unwrap();
@@ -4037,7 +4057,7 @@ pub mod tests {
             .verify(
                 pk.0,
                 &ledger_nonce_v,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &sk_gen,
                 None,
             )
@@ -4263,7 +4283,7 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &pk_gen,
         )
         .unwrap();
@@ -4306,7 +4326,7 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &pk_gen,
                 None,
             )
@@ -4381,7 +4401,7 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             &ledger_nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id },
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &pk_gen,
         )
         .unwrap();
@@ -4453,7 +4473,7 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 &ledger_nonce_v,
-                &DeviceTxnType::FeeAccountRegistration { asset_id },
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &pk_gen,
                 None,
             )

@@ -94,6 +94,7 @@ impl FeeRegHostProtocol {
             pk: CompressedAffine::try_from(pk_affine)?,
             txn_type: DeviceTxnType::FeeAccountRegistration {
                 asset_id: account_state.asset_id,
+                balance: account_state.balance,
             },
         };
 

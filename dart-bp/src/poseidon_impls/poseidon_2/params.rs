@@ -6,14 +6,14 @@ use ark_std::{vec, vec::Vec};
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Poseidon2Params<F: PrimeField> {
-    pub state_size: usize,
+    pub state_size: u8,
     /// sbox degree
-    pub degree: usize,
-    pub rounds_f_beginning: usize,
-    pub rounds_p: usize,
+    pub degree: u8,
+    pub rounds_f_beginning: u16,
+    pub rounds_p: u16,
     #[allow(dead_code)]
-    pub rounds_f_end: usize,
-    pub rounds: usize,
+    pub rounds_f_end: u16,
+    pub rounds: u16,
     pub mat_internal_diag_m_1: Vec<F>,
     pub _mat_internal: Vec<Vec<F>>,
     pub round_constants: Vec<Vec<F>>,
@@ -43,12 +43,12 @@ impl<F: PrimeField> Poseidon2Params<F> {
         let rounds = rounds_f + rounds_p;
 
         Ok(Poseidon2Params {
-            state_size,
-            degree,
-            rounds_f_beginning: r,
-            rounds_p,
-            rounds_f_end: r,
-            rounds,
+            state_size: state_size as u8,
+            degree: degree as u8,
+            rounds_f_beginning: r as u16,
+            rounds_p: rounds_p as u16,
+            rounds_f_end: r as u16,
+            rounds: rounds as u16,
             mat_internal_diag_m_1,
             _mat_internal: mat_internal,
             round_constants,

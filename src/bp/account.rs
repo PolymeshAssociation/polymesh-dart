@@ -12,7 +12,9 @@ use ark_std::vec::Vec;
 
 use bounded_collections::BoundedVec;
 use bulletproofs::r1cs::VerificationTuple;
-use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
+use dock_crypto_utils::randomized_mult_checker::{
+    RandomizedMultChecker, RandomizedMultCheckerGuard,
+};
 use rand_chacha::ChaChaRng;
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 
@@ -470,7 +472,12 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
             .par_iter()
             .map_init(
                 || rng.clone(),
-                |rng, proof| proof.batched_verify(identity, tree_params, rng),
+                |rng, proof| {
+                    let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
+                    guard.with_err(Error::RMCVerifyError, |rmc| {
+                        proof.batched_verify(identity, tree_params, rng, rmc)
+                    })
+                },
             )
             .collect::<Result<Vec<_>, Error>>()?;
 
@@ -497,10 +504,14 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         }
         let mut tuples = Vec::with_capacity(self.proofs.len());
 
-        for proof in &self.proofs {
-            let tuple = proof.batched_verify(identity, tree_params, rng)?;
-            tuples.push(tuple);
-        }
+        let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
+        guard.with_err(Error::RMCVerifyError, |rmc| {
+            for proof in &self.proofs {
+                let tuple = proof.batched_verify(identity, tree_params, rng, rmc)?;
+                tuples.push(tuple);
+            }
+            Ok(())
+        })?;
 
         bulletproofs::r1cs::batch_verify_with_rng(
             tuples,
@@ -602,31 +613,27 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        rmc: &mut RandomizedMultChecker<PallasA>,
     ) -> Result<VerificationTuple<PallasA>, Error> {
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
 
-        let tuples = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng)).with_err(
-            Error::RMCVerifyError,
-            |rmc| {
-                Ok(proof.verify_split_and_return_tuples(
-                    rng,
-                    id,
-                    self.account.acct.get_affine()?,
-                    self.account.enc.get_affine()?,
-                    self.asset_id,
-                    &self.account_state_commitment.as_commitment()?,
-                    self.counter,
-                    identity,
-                    dart_gens().account_comm_key(),
-                    tree_params.even_parameters.pc_gens(),
-                    tree_params.even_parameters.bp_gens(),
-                    &params.params,
-                    None,
-                    Some(rmc),
-                )?)
-            },
+        let tuples = proof.verify_split_and_return_tuples(
+            rng,
+            id,
+            self.account.acct.get_affine()?,
+            self.account.enc.get_affine()?,
+            self.asset_id,
+            &self.account_state_commitment.as_commitment()?,
+            self.counter,
+            identity,
+            dart_gens().account_comm_key(),
+            tree_params.even_parameters.pc_gens(),
+            tree_params.even_parameters.bp_gens(),
+            &params.params,
+            None,
+            Some(rmc),
         )?;
 
         Ok(tuples)

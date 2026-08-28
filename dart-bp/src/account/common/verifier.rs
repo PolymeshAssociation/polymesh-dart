@@ -794,9 +794,9 @@ impl<
                 account_comm_key,
             )?;
 
-            let mut transcript = even_verifier.transcript();
-            y_old.serialize_compressed(&mut transcript)?;
-            y_new.serialize_compressed(&mut transcript)?;
+            let transcript = even_verifier.transcript();
+            transcript.append(b"acc_comm_old", &y_old);
+            transcript.append(b"acc_comm_new", &y_new);
         }
 
         Ok(Self {

@@ -510,12 +510,16 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         self.resp_re_randomized_account_commitment
             .challenge_contribution(dst::AUTH_ACC_COMM_OLD, &mut transcript)?;
-        self.partial_re_randomized_account_commitment
-            .serialize_compressed(&mut transcript)?;
+        transcript.append(
+            b"partial_acc_comm_old",
+            &self.partial_re_randomized_account_commitment,
+        );
         self.resp_updated_account_commitment
             .challenge_contribution(dst::AUTH_ACC_COMM_NEW, &mut transcript)?;
-        self.partial_updated_account_commitment
-            .serialize_compressed(&mut transcript)?;
+        transcript.append(
+            b"partial_acc_comm_new",
+            &self.partial_updated_account_commitment,
+        );
 
         if legs_conf.len() != self.leg_links.len() {
             return Err(Error::ProofVerificationError(format!(

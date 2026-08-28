@@ -63,7 +63,7 @@ impl From<DeviceAffirmationType> for BPDeviceAffirmationType {
 pub enum DeviceTxnType {
     AccountRegistration { asset_id: AssetId },
     Mint { asset_id: AssetId, amount: Balance },
-    FeeAccountRegistration { asset_id: AssetId },
+    FeeAccountRegistration { asset_id: AssetId, balance: Balance },
     FeeAccountTopup { asset_id: AssetId, amount: Balance },
     FeePayment { asset_id: AssetId, amount: Balance },
     DeviceAffirmation { typ: DeviceAffirmationType },
@@ -76,8 +76,8 @@ impl From<DeviceTxnType> for BPDeviceTxnType {
                 BPDeviceTxnType::AccountRegistration { asset_id }
             }
             DeviceTxnType::Mint { asset_id, amount } => BPDeviceTxnType::Mint { asset_id, amount },
-            DeviceTxnType::FeeAccountRegistration { asset_id } => {
-                BPDeviceTxnType::FeeAccountRegistration { asset_id }
+            DeviceTxnType::FeeAccountRegistration { asset_id, balance } => {
+                BPDeviceTxnType::FeeAccountRegistration { asset_id, balance }
             }
             DeviceTxnType::FeeAccountTopup { asset_id, amount } => {
                 BPDeviceTxnType::FeeAccountTopup { asset_id, amount }

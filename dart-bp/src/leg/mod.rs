@@ -10,7 +10,7 @@ pub mod settlement_proof_chunked;
 pub mod tests;
 
 pub use self::leg_proof::LegCreationProof;
-pub use self::mediator::{MediatorTxnOldProof, MediatorTxnProof};
+pub use self::mediator::MediatorTxnProof;
 use crate::discrete_log::solve_discrete_log_bsgs;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
@@ -478,31 +478,6 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryption<G> {
         idx.ok_or_else(|| {
             Error::ProofGenerationError("No mediator encryption key matches".to_string())
         })
-    }
-}
-
-/// Mediator entry of the scheme that predates the broadcast one, where the affirmation key is
-/// encrypted to a single encryption key identified by its index in [`AssetData`]. Kept so legs
-/// created under that scheme can still be affirmed, using [`crate::leg::mediator::MediatorTxnOldProof`].
-#[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct MediatorEncryptionOld<G: AffineRepr> {
-    /// The index corresponds to the encryption key from [`AssetData`].
-    pub enc_key_index: u8,
-    /// Ephemeral encryption public key of the mediator.
-    pub eph_pk_med_key: G,
-    /// Encryption of the mediator affirmation key. Only the mediator holding the encryption key at
-    /// `enc_key_index` needs to decrypt it.
-    pub ct_med: G,
-}
-
-impl<F: PrimeField, G: AffineRepr<ScalarField = F>> MediatorEncryptionOld<G> {
-    /// Recover the mediator's affirmation key from `ct_med` using the mediator's encryption key
-    /// `sk_enc` (the secret of the encryption key at `enc_key_index` in [`AssetData`]).
-    pub fn affirmation_key(&self, sk_enc: &F) -> Result<G> {
-        let mut sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
-        let r_enc_gen = self.eph_pk_med_key * sk_enc_inv;
-        sk_enc_inv.zeroize();
-        Ok((self.ct_med.into_group() - r_enc_gen).into_affine())
     }
 }
 

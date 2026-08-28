@@ -140,6 +140,10 @@ pub enum Error {
     /// The proof doesn't match the leg's asset-id kind.
     #[error("The proof doesn't match the leg's asset-id kind")]
     InvalidProofType,
+
+    /// Unsupported number of legs
+    #[error("Unsupported number of legs: {0}")]
+    UnsupportedNumberOfLegs(usize),
 }
 
 impl From<UtilsError> for Error {

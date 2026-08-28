@@ -19,7 +19,6 @@ use ark_ec_divisors::DivisorCurve;
 use ark_ff::{Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
-use ark_std::io::Write;
 use ark_std::string::ToString;
 use ark_std::{UniformRand, format, vec, vec::Vec};
 use bulletproofs::BulletproofGens;
@@ -841,11 +840,11 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
         }
     }
 
-    pub fn challenge_contribution<W: Write>(&self, writer: &mut W) -> Result<()> {
+    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         self.t_acc_old
-            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITH_SK, &mut *writer)?;
+            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_OLD_WITH_SK, transcript)?;
         self.t_acc_new
-            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITH_SK, writer)?;
+            .challenge_contribution(dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITH_SK, transcript)?;
         Ok(())
     }
 
@@ -1465,8 +1464,8 @@ impl<
                 );
             }
 
-            acc_old.serialize_compressed(&mut transcript)?;
-            acc_new.serialize_compressed(&mut transcript)?;
+            transcript.append(b"acc_comm_old", &acc_old);
+            transcript.append(b"acc_comm_new", &acc_new);
         }
 
         Ok((
@@ -1627,8 +1626,8 @@ impl<
             account_comm_key.asset_id_gen(),
             account_comm_key.balance_gen(),
         );
-        y_old.serialize_compressed(&mut transcript)?;
-        y_new.serialize_compressed(&mut transcript)?;
+        transcript.append(b"acc_comm_old", &y_old);
+        transcript.append(b"acc_comm_new", &y_new);
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
@@ -2987,14 +2986,14 @@ impl<G: AffineRepr> EncryptedPublicKey<G> {
     }
 }
 
-pub(crate) fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
+pub(crate) fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr>(
     rng: &mut R,
     sk: G::ScalarField,
     sk_blinding: G::ScalarField,
     auditor_keys: Vec<G>,
     sk_gen: G,
     enc_key_gen: G,
-    mut writer: W,
+    transcript: &mut MerlinTranscript,
 ) -> Result<(
     Vec<PokDiscreteLogProtocol<G>>,
     PokPedersenCommitmentProtocol<G>,
@@ -3014,20 +3013,20 @@ pub(crate) fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr, W: Write>(
         .collect::<Vec<_>>();
 
     let encrypted_pubkey = EncryptedPublicKey { eph_pk, encrypted };
-    encrypted_pubkey.serialize_compressed(&mut writer)?;
+    transcript.append(b"encrypted_pubkey", &encrypted_pubkey);
     t_enc.challenge_contribution(
         &enc_key_gen,
         &sk_gen,
         &encrypted_pubkey.encrypted,
         dst::TRANSPARENT_ENC_PUBKEY_ENC,
-        &mut writer,
+        transcript,
     )?;
     for (i, t) in t_eph_pk.iter().enumerate() {
         t.challenge_contribution(
             &auditor_keys[i],
             &encrypted_pubkey.eph_pk[i],
             dst::TRANSPARENT_ENC_PUBKEY_EPH,
-            &mut writer,
+            transcript,
         )?;
     }
 
@@ -3052,14 +3051,14 @@ pub(crate) fn reps_pk_enc<G: AffineRepr>(
     (resp_eph_pk, resp_enc)
 }
 
-pub(crate) fn chal_contrib_pk_enc<G: AffineRepr, W: Write>(
+pub(crate) fn chal_contrib_pk_enc<G: AffineRepr>(
     resp_eph_pk: &[PartialPokDiscreteLog<G>],
     resp_enc: &Partial1PokPedersenCommitment<G>,
     encrypted_pubkey: &EncryptedPublicKey<G>,
     auditor_keys: &[G],
     sk_gen: G,
     enc_key_gen: G,
-    mut writer: W,
+    transcript: &mut MerlinTranscript,
 ) -> Result<()> {
     if encrypted_pubkey.eph_pk.len() != auditor_keys.len() {
         return Err(Error::EncryptionOrProofsNotPresentForAllKeys(
@@ -3074,20 +3073,20 @@ pub(crate) fn chal_contrib_pk_enc<G: AffineRepr, W: Write>(
         ));
     }
 
-    encrypted_pubkey.serialize_compressed(&mut writer)?;
+    transcript.append(b"encrypted_pubkey", &encrypted_pubkey);
     resp_enc.challenge_contribution(
         &enc_key_gen,
         &sk_gen,
         &encrypted_pubkey.encrypted,
         dst::TRANSPARENT_ENC_PUBKEY_ENC,
-        &mut writer,
+        transcript,
     )?;
     for (i, r) in resp_eph_pk.iter().enumerate() {
         r.challenge_contribution(
             &auditor_keys[i],
             &encrypted_pubkey.eph_pk[i],
             dst::TRANSPARENT_ENC_PUBKEY_EPH,
-            &mut writer,
+            transcript,
         )?;
     }
 

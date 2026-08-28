@@ -7,7 +7,6 @@ use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
-use ark_std::io::Write;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
@@ -130,12 +129,12 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
         })
     }
 
-    pub fn challenge_contribution<W: Write>(
+    pub fn challenge_contribution(
         &self,
         sk_gen: &G,
         current_randomness_gen: &G,
         comm_re_rand_gen: &G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         self.proof_re_randomized_account_commitment
             .challenge_contribution(
@@ -143,7 +142,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
                 comm_re_rand_gen,
                 &self.partial_re_randomized_account_commitment,
                 dst::FEE_AUTH_ACC_COMM_OLD,
-                &mut writer,
+                transcript,
             )?;
 
         self.proof_updated_account_commitment
@@ -152,7 +151,7 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
                 current_randomness_gen,
                 &self.partial_updated_account_commitment,
                 dst::FEE_AUTH_ACC_COMM_NEW,
-                &mut writer,
+                transcript,
             )?;
         Ok(())
     }

@@ -61,7 +61,7 @@ impl DeviceAffirmationType {
 pub enum DeviceTxnType {
     AccountRegistration { asset_id: AssetId },
     Mint { asset_id: AssetId, amount: Balance },
-    FeeAccountRegistration { asset_id: AssetId },
+    FeeAccountRegistration { asset_id: AssetId, balance: Balance },
     FeeAccountTopup { asset_id: AssetId, amount: Balance },
     FeePayment { asset_id: AssetId, amount: Balance },
     DeviceAffirmation { typ: DeviceAffirmationType },
@@ -87,14 +87,24 @@ impl DeviceTxnType {
     pub fn add_to_transcript(&self, transcript: &mut MerlinTranscript) -> Result<()> {
         let txn_type = self.txn_type();
         match self {
-            DeviceTxnType::AccountRegistration { asset_id }
-            | DeviceTxnType::FeeAccountRegistration { asset_id } => {
+            DeviceTxnType::AccountRegistration { asset_id } => {
                 add_to_transcript!(
                     transcript,
                     DEVICE_TXN_TYPE_LABEL,
                     txn_type,
                     DEVICE_ASSET_ID_LABEL,
                     *asset_id
+                );
+            }
+            DeviceTxnType::FeeAccountRegistration { asset_id, balance } => {
+                add_to_transcript!(
+                    transcript,
+                    DEVICE_TXN_TYPE_LABEL,
+                    txn_type,
+                    DEVICE_ASSET_ID_LABEL,
+                    *asset_id,
+                    DEVICE_AMOUNT_LABEL,
+                    *balance
                 );
             }
             DeviceTxnType::Mint { asset_id, amount }
@@ -149,7 +159,7 @@ pub struct AuthProofOnlySkProtocol<G: AffineRepr>(pub PokDiscreteLogProtocol<G>)
 pub struct AuthProofOnlySk<G: AffineRepr>(pub PokDiscreteLog<G>);
 
 impl<G: AffineRepr> AuthProofOnlySksProtocol<G> {
-    pub fn init<R: CryptoRngCore, W: Write>(
+    pub fn init<R: CryptoRngCore>(
         rng: &mut R,
         sk_aff: G::ScalarField,
         sk_enc: G::ScalarField,
@@ -157,12 +167,12 @@ impl<G: AffineRepr> AuthProofOnlySksProtocol<G> {
         pk_enc: &G,
         sk_aff_gen: &G,
         sk_enc_gen: &G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         let proto_aff = PokDiscreteLogProtocol::init(sk_aff, G::ScalarField::rand(rng), sk_aff_gen);
         let proto_enc = PokDiscreteLogProtocol::init(sk_enc, G::ScalarField::rand(rng), sk_enc_gen);
-        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
-        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
+        proto_aff.challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, transcript)?;
+        proto_enc.challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, transcript)?;
         Ok(Self {
             proto_aff,
             proto_enc,
@@ -249,19 +259,19 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         self.verify_given_challenge(&pk_aff, &pk_enc, sk_aff_gen, sk_enc_gen, &challenge, rmc)
     }
 
-    pub fn challenge_contribution<W: Write>(
+    pub fn challenge_contribution(
         &self,
         pk_aff: &G,
         pk_enc: &G,
         sk_aff_gen: &G,
         sk_enc_gen: &G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         self.proof_afk
-            .challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, &mut writer)?;
+            .challenge_contribution(sk_aff_gen, pk_aff, dst::AUTH_SK_AFF, transcript)?;
 
         self.proof_enc
-            .challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, &mut writer)?;
+            .challenge_contribution(sk_enc_gen, pk_enc, dst::AUTH_SK_ENC, transcript)?;
         Ok(())
     }
 
@@ -297,15 +307,15 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
 }
 
 impl<G: AffineRepr> AuthProofOnlySkProtocol<G> {
-    pub fn init<R: CryptoRngCore, W: Write>(
+    pub fn init<R: CryptoRngCore>(
         rng: &mut R,
         sk: G::ScalarField,
         pk: &G,
         sk_gen: &G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
         let proto = PokDiscreteLogProtocol::init(sk, G::ScalarField::rand(rng), sk_gen);
-        proto.challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
+        proto.challenge_contribution(sk_gen, pk, dst::AUTH_SK, transcript)?;
         Ok(AuthProofOnlySkProtocol(proto))
     }
 
@@ -349,14 +359,14 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         self.verify_given_challenge(&pk, sk_gen, &challenge, rmc)
     }
 
-    pub fn challenge_contribution<W: Write>(
+    pub fn challenge_contribution(
         &self,
         pk: &G,
         sk_gen: &G,
-        mut writer: W,
+        transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         self.0
-            .challenge_contribution(sk_gen, pk, dst::AUTH_SK, &mut writer)?;
+            .challenge_contribution(sk_gen, pk, dst::AUTH_SK, transcript)?;
         Ok(())
     }
 

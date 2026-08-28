@@ -247,7 +247,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             vec![rho_blinding, rho_sq_blinding, s_blinding, s_sq_blinding],
         );
         comm_protocol.challenge_contribution(dst::REG_COMM, &mut transcript_ref)?;
-        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+        transcript_ref.append(b"reduced_acc_comm", &reduced_acc_comm);
 
         // N = current_rho_gen * rho (initial nullifier)
         let initial_nullifier = account.initial_nullifier(account_comm_key);
@@ -438,7 +438,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
     /// Generate the partial proof given a challenge. Consumes the protocol state.
     pub fn gen_proof(
-        self,
+        mut self,
         challenge: &G::ScalarField,
     ) -> Result<RegTxnWithoutSkProof<G, CHUNK_BITS, NUM_CHUNKS>> {
         let resp_comm = self.comm_protocol.response(
@@ -458,7 +458,14 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         wits.insert(1, self.rho_randomness);
         let resp_comm_rho_bp = self.t_comm_rho_bp.partial_response(wits, challenge)?;
 
-        let encryption_for_T = if let Some(enc) = self.enc_state {
+        self.rho.zeroize();
+        self.current_rho.zeroize();
+        self.randomness.zeroize();
+        self.current_randomness.zeroize();
+        self.com_rho_bp_blinding.zeroize();
+        self.rho_randomness.zeroize();
+
+        let encryption_for_T = if let Some(mut enc) = self.enc_state {
             let mut resp_eph_pk = Vec::with_capacity(NUM_CHUNKS);
             let mut resp_encrypted = Vec::with_capacity(NUM_CHUNKS);
             for (eph, enc_p) in enc.s_eph_proto.into_iter().zip(enc.s_enc_proto.into_iter()) {
@@ -499,6 +506,11 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             all_wits.extend_from_slice(&enc.rho_chunks);
             let resp_s_rho_chunks = t_comm.response(&all_wits, challenge)?;
             Zeroize::zeroize(&mut all_wits);
+
+            // Wipe the remaining witness scalars before `enc` drops.
+            enc.s_chunks.zeroize();
+            enc.rho_chunks.zeroize();
+            enc.com_s_rho_bp_blinding.zeroize();
 
             Some(EncryptionForRegistration {
                 comm_s_rho_chunks_bp: enc.comm_s_rho_chunks_bp,
@@ -781,7 +793,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         self.resp_comm
             .challenge_contribution(dst::REG_COMM, &mut transcript_ref)?;
-        reduced_acc_comm.serialize_compressed(&mut transcript_ref)?;
+        transcript_ref.append(b"reduced_acc_comm", &reduced_acc_comm);
 
         // N = current_rho_gen * rho
         self.resp_initial_nullifier.challenge_contribution(
@@ -1348,7 +1360,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
-        rmc: Option<&mut RandomizedMultChecker<G>>,
+        mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
         let mut verifier = self.partial.challenge_contribution(
             id,
@@ -1384,7 +1396,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             &DeviceTxnType::AccountRegistration { asset_id },
             &sk_gen,
             &sk_enc_gen,
-            None,
+            rmc.as_deref_mut(),
         )?;
 
         let mut auth_proof_bytes = Vec::new();

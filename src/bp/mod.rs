@@ -585,6 +585,49 @@ mod tests {
     }
 
     #[test]
+    fn test_fee_topup_batched_verify() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let ctx = b"test-fee-topup-batched";
+        let asset_id: AssetId = 0;
+        let initial_balance: Balance = 1000;
+        let topup_amount: Balance = 500;
+
+        let mut fee_tree =
+            ProverCurveTree::<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FeeAccountTreeConfig>::new(
+                FEE_ACCOUNT_TREE_HEIGHT,
+            )
+            .unwrap();
+
+        // Build several fee accounts, inserting each pre-topup state into the tree.
+        let keys: Vec<_> = (0..3)
+            .map(|_| AccountKeys::rand(&mut rng).unwrap())
+            .collect();
+        let mut states = Vec::new();
+        for k in &keys {
+            let state =
+                FeeAccountAssetState::new(&mut rng, &k.acct.public, asset_id, initial_balance)
+                    .unwrap();
+            let leaf = state.current_commitment().unwrap().as_leaf_value().unwrap();
+            fee_tree.insert(leaf).unwrap();
+            states.push(state);
+        }
+        fee_tree.store_root().unwrap();
+
+        let mut topups: Vec<(&AccountKeyPair, Balance, FeeAccountAssetState)> = keys
+            .iter()
+            .zip(states)
+            .map(|(k, state)| (&k.acct, topup_amount, state))
+            .collect();
+
+        let batched =
+            BatchedFeeAccountTopupProof::<()>::new(&mut rng, &mut topups, ctx, &fee_tree).unwrap();
+        assert_eq!(batched.len(), keys.len());
+
+        let root = fee_tree.root().unwrap();
+        batched.batched_verify(&mut rng, ctx, &root).unwrap();
+    }
+
+    #[test]
     fn test_fee_payment_split() {
         let mut rng = rand::thread_rng();
         let ctx = b"test-fee-payment-split";

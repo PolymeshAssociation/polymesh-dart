@@ -284,7 +284,7 @@ impl<
             }
         }
 
-        ensure_leg_encryption_consistent(&leg, &leg_enc)?;
+        ensure_leg_encryption_consistent(&leg, &leg_enc, &asset_data)?;
 
         let mut at = F0::from(leg.core.asset_id);
         let mut amount = F0::from(leg.core.amount);
@@ -388,7 +388,9 @@ impl<
         let mut r_1 = leg_enc_rand.r1;
         let mut r_2 = leg_enc_rand.r2;
         let mut r_3 = leg_enc_rand.r3;
-        let mut r_4 = leg_enc_rand.r4.unwrap();
+        let mut r_4 = leg_enc_rand.r4.ok_or_else(|| {
+            Error::ProofGenerationError("r4 is missing in leg encryption randomness".to_string())
+        })?;
 
         // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m`.
         // `M_i = pk_{e, j} * m_i` is the ephemeral public key so that mediator can get `enc_key_gen * m_i` to
@@ -716,7 +718,11 @@ impl<
         ct_asset_id_proto.challenge_contribution(
             &enc_key_gen,
             &enc_gen,
-            &leg_enc.asset_id_ciphertext().unwrap(),
+            &leg_enc.asset_id_ciphertext().ok_or_else(|| {
+                Error::ProofGenerationError(
+                    "asset-id ciphertext is missing in leg encryption".to_string(),
+                )
+            })?,
             dst::LEG_CREATE_CT_ASSET_ID,
             &mut transcript,
         )?;
@@ -829,7 +835,11 @@ impl<
             )?;
             p.4.challenge_contribution(
                 &eph_pk_enc_key.r1,
-                eph_pk_enc_key.r4.as_ref().unwrap(),
+                eph_pk_enc_key.r4.as_ref().ok_or_else(|| {
+                    Error::ProofGenerationError(
+                        "r4 is missing in mediator encryption-key ephemeral public key".to_string(),
+                    )
+                })?,
                 dst::LEG_CREATE_ENC_KEY_R4,
                 &mut transcript,
             )?;
@@ -901,7 +911,11 @@ impl<
             )?;
             p.3.challenge_contribution(
                 pk,
-                eph_pk_public_enc.r4.as_ref().unwrap(),
+                eph_pk_public_enc.r4.as_ref().ok_or_else(|| {
+                    Error::ProofGenerationError(
+                        "r4 is missing in public encryption-key ephemeral public key".to_string(),
+                    )
+                })?,
                 dst::LEG_CREATE_PUBLIC_ENC_R4,
                 &mut transcript,
             )?;
@@ -2395,18 +2409,40 @@ impl<
     }
 }
 
-pub(crate) fn ensure_leg_encryption_consistent<G0: SWCurveConfig>(
+pub(crate) fn ensure_leg_encryption_consistent<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
     leg: &Leg<Affine<G0>>,
     leg_enc: &LegEncryption<Affine<G0>>,
+    asset_data: &AssetData<F0, F1, G0, G1>,
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]
     {
-        let _ = (leg, leg_enc);
+        let _ = (leg, leg_enc, asset_data);
         return Ok(());
     }
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
+        if leg.enc_keys.len() != asset_data.enc_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in enc_keys length: leg has {} but asset_data has {}",
+                leg.enc_keys.len(),
+                asset_data.enc_keys.len()
+            )));
+        }
+
+        if leg.med_keys.len() != asset_data.med_keys.len() {
+            return Err(Error::ProofGenerationError(format!(
+                "Mismatch in med_keys length: leg has {} but asset_data has {}",
+                leg.med_keys.len(),
+                asset_data.med_keys.len()
+            )));
+        }
+
         if leg_enc.eph_pk_enc_keys.len() != leg.enc_keys.len() {
             return Err(Error::ProofGenerationError(format!(
                 "Mismatch in eph_pk_enc_keys length: leg_enc has {} but leg has {} enc_keys",
