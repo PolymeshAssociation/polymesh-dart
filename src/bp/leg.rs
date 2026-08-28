@@ -145,9 +145,8 @@ impl LegRef {
     }
 }
 
-fn leg_proof_initial_ctx(memo: &[u8], idx: usize) -> Vec<u8> {
-    debug_assert!(idx <= LegId::MAX as usize, "leg index must fit in LegId");
-    (memo, idx as LegId).encode()
+fn leg_proof_initial_ctx(memo: &[u8], idx: LegId) -> Vec<u8> {
+    (memo, idx).encode()
 }
 
 #[derive(
@@ -713,10 +712,14 @@ impl<T: DartLimits> SettlementBuilder<T> {
         // To avoid getting paths based on different roots if a new block is produced during proof generation.
         let root_block = asset_tree.get_block_number()?;
 
+        if self.legs.len() > LegId::MAX as usize {
+            return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
+        }
+
         let mut legs = Vec::with_capacity(self.legs.len());
 
         for (idx, leg_builder) in self.legs.iter().enumerate() {
-            let ctx = leg_proof_initial_ctx(&memo, idx);
+            let ctx = leg_proof_initial_ctx(&memo, idx as LegId);
             let leg_proof = leg_builder.encrypt_and_prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
@@ -802,11 +805,14 @@ impl<
             })?;
         let root = root.root_node()?;
         let memo = &*self.memo;
+        if self.legs.len() > LegId::MAX as usize {
+            return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
+        }
         // NOTE: If we don't care which leg failed, then leg.verify could accept an RMC
         self.legs.par_iter().enumerate().try_for_each_init(
             || rng.clone(),
             |rng, (idx, leg)| {
-                let ctx = leg_proof_initial_ctx(memo, idx);
+                let ctx = leg_proof_initial_ctx(memo, idx as LegId);
                 leg.verify(&ctx, &root, asset_lookup, rng)
             },
         )?;
@@ -828,8 +834,11 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
+        if self.legs.len() > LegId::MAX as usize {
+            return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
+        }
         for (idx, leg) in self.legs.iter().enumerate() {
-            let ctx = leg_proof_initial_ctx(&self.memo, idx);
+            let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
             leg.verify(&ctx, &root, asset_lookup, rng)?;
         }
         Ok(())
@@ -857,6 +866,10 @@ impl<
         let root = root.root_node()?;
         let memo = &*self.memo;
 
+        if self.legs.len() > LegId::MAX as usize {
+            return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
+        }
+
         let tuples = self
             .legs
             .par_iter()
@@ -864,7 +877,7 @@ impl<
             .map_init(
                 || rng.clone(),
                 |rng, (idx, leg)| {
-                    let ctx = leg_proof_initial_ctx(memo, idx);
+                    let ctx = leg_proof_initial_ctx(memo, idx as LegId);
                     let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
                     guard.with_err(Error::RMCVerifyError, |rmc| {
                         leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))
@@ -910,13 +923,16 @@ impl<
                 Error::CurveTreeRootNotFound
             })?;
         let root = root.root_node()?;
+        if self.legs.len() > LegId::MAX as usize {
+            return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
+        }
 
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
         let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
         guard.with_err(Error::RMCVerifyError, |rmc| {
             for (idx, leg) in self.legs.iter().enumerate() {
-                let ctx = leg_proof_initial_ctx(&self.memo, idx);
+                let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
                 let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))?;
                 // If any tuple is empty which can happen when asset id is revealed
                 if !even.fixed_point_scalars.is_empty() {
