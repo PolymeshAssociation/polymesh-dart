@@ -1,6 +1,6 @@
 [package]
 name = "polymesh-dart"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "Polymesh DART assets."
 authors = ["Polymesh Labs"]
@@ -58,9 +58,9 @@ ark-secp256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra
 ark-secq256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 
 [workspace.dependencies]
-polymesh-dart = { path = "./", version = "0.1.0", default-features = false }
-polymesh-dart-bp = { path = "./dart-bp", version = "0.1.0", default-features = false }
-polymesh-dart-common = { path = "./dart-common", version = "0.1.0", default-features = false }
+polymesh-dart = { path = "./", version = "1.0.0", default-features = false }
+polymesh-dart-bp = { path = "./dart-bp", version = "1.0.0", default-features = false }
+polymesh-dart-common = { path = "./dart-common", version = "1.0.0", default-features = false }
 
 # Common
 rand = { version = "0.8", default-features = false }
