@@ -1,6 +1,6 @@
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::vec::Vec;
+use ark_std::{vec, vec::Vec};
 
 use super::*;
 
