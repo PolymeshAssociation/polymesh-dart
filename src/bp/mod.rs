@@ -483,14 +483,14 @@ mod tests {
     #[test]
     fn key_distribution() {
         let mut rng = rand::thread_rng();
-        let distributor = AccountKeys::rand(&mut rng).unwrap();
+        let distributor = EncryptionKeyPair::rand(&mut rng).unwrap();
         let recipient = AccountKeys::rand(&mut rng).unwrap();
         let params = curve_tree::get_account_curve_tree_parameters();
         let nonce = b"test-nonce";
 
         let proof = KeyDistributionProof::<()>::new(
             &mut rng,
-            &distributor.enc,
+            &distributor,
             vec![recipient.enc.public.clone()],
             nonce,
             params,
@@ -499,7 +499,7 @@ mod tests {
         proof.verify(nonce, params, &mut rng).unwrap();
 
         let recovered = proof.decrypt(0, &recipient.enc.secret).unwrap();
-        assert_eq!(recovered, distributor.enc.secret.inner().0);
+        assert_eq!(recovered, distributor.secret.inner().0);
     }
 
     #[test]
