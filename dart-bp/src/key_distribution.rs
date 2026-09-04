@@ -42,7 +42,7 @@ const RECIPIENT_PK_LABEL: &'static [u8; 12] = b"recipient_pk";
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct KeyDistributionProof<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Shared ciphertexts: `C_i = enc_key_gen * r_i + enc_gen * sk_i` for each chunk
@@ -493,7 +493,7 @@ mod tests {
         // Split sk among 2 then 3 recipients, verify the proof (regular + RandomizedMultChecker) and confirm each recipient decrypts back to sk.
         let mut rng = rand::thread_rng();
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         // Make sk small to run test faster
@@ -566,12 +566,14 @@ mod tests {
         rmc.verify().unwrap();
         let verifier_time_2_rmc = clock.elapsed();
 
+        let now = Instant::now();
         for (i, recipient_sk) in recipient_sks_2.iter().enumerate() {
             let decrypted = proof_2
                 .decrypt(i, &recipient_sk, enc_gen.into_group())
                 .unwrap();
             assert_eq!(sk, decrypted);
         }
+        let decrypt_time = now.elapsed();
 
         println!("total proof size = {}", proof_2.compressed_size());
         println!("total prover time = {:?}", prover_time_2);
@@ -579,6 +581,7 @@ mod tests {
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             verifier_time_2_regular, verifier_time_2_rmc
         );
+        println!("total decrypt time for 2 recipients = {:?}", decrypt_time);
 
         println!("For 3 recipients");
         let mut recipient_sks_3 = Vec::new();
@@ -639,12 +642,14 @@ mod tests {
         rmc.verify().unwrap();
         let verifier_time_3_rmc = clock.elapsed();
 
+        let now = Instant::now();
         for (i, recipient_sk) in recipient_sks_3.iter().enumerate() {
             let decrypted = proof_3
                 .decrypt(i, &recipient_sk, enc_gen.into_group())
                 .unwrap();
             assert_eq!(sk, decrypted);
         }
+        let decrypt_time = now.elapsed();
 
         println!("total proof size = {}", proof_3.compressed_size());
         println!("total prover time = {:?}", prover_time_3);
@@ -652,6 +657,7 @@ mod tests {
             "verifier time (regular) = {:?}, verifier time (RandomizedMultChecker) = {:?}",
             verifier_time_3_regular, verifier_time_3_rmc
         );
+        println!("total decrypt time for 3 recipients = {:?}", decrypt_time);
 
         // empty recipient check
         let result = proof_2.verify(
@@ -714,7 +720,7 @@ mod tests {
         // Changing a shared ciphertext without changing the proof responses should fail.
         let mut rng = rand::thread_rng();
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let sk = PallasFr::from(u32::rand(&mut rng) as u64 + u16::rand(&mut rng) as u64);
@@ -810,7 +816,7 @@ mod tests {
         // Checks the key-distribution proof is bound to the nonce and recipient ordering: a wrong nonce, swapped recipient pubkeys, or a dropped recipient must all fail.
         let mut rng = rand::thread_rng();
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let sk = PallasFr::from(u32::rand(&mut rng) as u64 + u16::rand(&mut rng) as u64);
