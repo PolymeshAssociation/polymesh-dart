@@ -195,6 +195,10 @@ harness = false
 name = "discrete_log"
 harness = false
 
+[[bench]]
+name = "key_distribution"
+harness = false
+
 [features]
 default = [
     "std",
