@@ -23,6 +23,13 @@ fn batched_account_asset_registration_proof_file() -> String {
     )
 }
 
+fn batched_account_asset_registration_proof_with_pk_t_file() -> String {
+    format!(
+        "{}_{}.bin",
+        BATCHED_ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T, ASSET_BATCH_SIZE
+    )
+}
+
 fn asset_commitment_data_file(n_enc: usize, n_med: usize) -> String {
     format!(
         "{}_enc_{}_med_{}.bin",
@@ -171,9 +178,29 @@ pub fn gen_account_asset_registration_proof() {
         0u16,
         IDENTITY,
         tree_params,
+        None,
     )
     .unwrap();
     save_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF, &proof);
+}
+
+pub fn gen_account_asset_registration_proof_with_pk_t() {
+    let mut rng = default_rng();
+    let tree_params = AccountTreeConfig::parameters();
+    let asset_reg_keys = alice_keys();
+    let force_transfer_keys = EncryptionKeyPair::rand(&mut rng).unwrap();
+    let (proof, _) = AccountAssetRegistrationProof::<()>::new(
+        &mut rng,
+        &asset_reg_keys,
+        ASSET_ID_1,
+        0u16,
+        IDENTITY,
+        tree_params,
+        Some(force_transfer_keys.public),
+    )
+    .unwrap();
+    save_scale_v1(FORCE_TRANSFER_KEY_PAIR, &force_transfer_keys);
+    save_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T, &proof);
 }
 
 pub fn gen_batched_fee_account_registration_proof() {
@@ -212,10 +239,10 @@ pub fn gen_batched_account_asset_registration_proof() {
         .iter()
         .map(|s| AccountKeys::from_seed(s).unwrap())
         .collect();
-    let account_assets: Vec<(AccountKeys, AssetId, u16)> = keys
+    let account_assets: Vec<(AccountKeys, AssetId, u16, Option<EncryptionPublicKey>)> = keys
         .into_iter()
         .enumerate()
-        .map(|(i, k)| (k, ASSET_ID_1 + i as AssetId, 0u16))
+        .map(|(i, k)| (k, ASSET_ID_1 + i as AssetId, 0u16, None))
         .collect();
     let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
         &mut rng,
@@ -225,6 +252,37 @@ pub fn gen_batched_account_asset_registration_proof() {
     )
     .unwrap();
     let filename = batched_account_asset_registration_proof_file();
+    save_scale_v1(&filename, &proof);
+}
+
+pub fn gen_batched_account_asset_registration_proof_with_pk_t() {
+    let mut rng = default_rng();
+    let tree_params = AccountTreeConfig::parameters();
+    let seeds = BATCH_PROOF_SEEDS
+        .get(..ASSET_BATCH_SIZE)
+        .expect("ASSET_BATCH_SIZE exceeds number of configured test seeds");
+    let keys: Vec<AccountKeys> = seeds
+        .iter()
+        .map(|s| AccountKeys::from_seed(s).unwrap())
+        .collect();
+    let force_transfer_keys: Vec<EncryptionKeyPair> = (0..ASSET_BATCH_SIZE)
+        .map(|_| EncryptionKeyPair::rand(&mut rng).unwrap())
+        .collect();
+    let account_assets: Vec<(AccountKeys, AssetId, u16, Option<EncryptionPublicKey>)> = keys
+        .into_iter()
+        .zip(force_transfer_keys.iter())
+        .enumerate()
+        .map(|(i, (k, ft_keys))| (k, ASSET_ID_1 + i as AssetId, 0u16, Some(ft_keys.public)))
+        .collect();
+    let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
+        &mut rng,
+        &account_assets,
+        IDENTITY,
+        tree_params,
+    )
+    .unwrap();
+    save_scale_v1(FORCE_TRANSFER_KEY_PAIRS_BATCH, &force_transfer_keys);
+    let filename = batched_account_asset_registration_proof_with_pk_t_file();
     save_scale_v1(&filename, &proof);
 }
 
@@ -332,7 +390,34 @@ fn verify_v1_account_asset_registration_proof() {
     let mut rng = default_rng();
     let tree_params = AccountTreeConfig::parameters();
     let proof: AccountAssetRegistrationProof = load_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF);
-    proof.verify(IDENTITY, tree_params, &mut rng).unwrap();
+    proof.verify(IDENTITY, tree_params, &mut rng, None).unwrap();
+}
+
+#[test]
+fn verify_v1_account_asset_registration_proof_with_pk_t() {
+    let mut rng = default_rng();
+    let tree_params = AccountTreeConfig::parameters();
+    let force_transfer_keys: EncryptionKeyPair = load_scale_v1(FORCE_TRANSFER_KEY_PAIR);
+    let proof: AccountAssetRegistrationProof =
+        load_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T);
+    proof
+        .verify(
+            IDENTITY,
+            tree_params,
+            &mut rng,
+            Some(force_transfer_keys.public),
+        )
+        .unwrap();
+
+    let encrypted_state = proof
+        .get_encrypted_state()
+        .unwrap()
+        .expect("proof registered with pk_T must have encrypted state")
+        .decode()
+        .unwrap();
+    encrypted_state
+        .decrypt(&force_transfer_keys.secret)
+        .unwrap();
 }
 
 #[test]
@@ -342,7 +427,35 @@ fn verify_v1_batched_account_asset_registration_proof() {
     let filename = batched_account_asset_registration_proof_file();
     let proof: BatchedAccountAssetRegistrationProof = load_scale_v1(&filename);
     assert_eq!(proof.proofs.len(), ASSET_BATCH_SIZE);
-    proof.verify(IDENTITY, tree_params, &mut rng).unwrap();
+    let pk_ts = vec![None; ASSET_BATCH_SIZE];
+    proof
+        .verify(IDENTITY, tree_params, &mut rng, &pk_ts)
+        .unwrap();
+}
+
+#[test]
+fn verify_v1_batched_account_asset_registration_proof_with_pk_t() {
+    let mut rng = default_rng();
+    let tree_params = AccountTreeConfig::parameters();
+    let force_transfer_keys: Vec<EncryptionKeyPair> = load_scale_v1(FORCE_TRANSFER_KEY_PAIRS_BATCH);
+    let filename = batched_account_asset_registration_proof_with_pk_t_file();
+    let proof: BatchedAccountAssetRegistrationProof = load_scale_v1(&filename);
+    assert_eq!(proof.proofs.len(), ASSET_BATCH_SIZE);
+    let pk_ts: Vec<Option<EncryptionPublicKey>> =
+        force_transfer_keys.iter().map(|k| Some(k.public)).collect();
+    proof
+        .verify(IDENTITY, tree_params, &mut rng, &pk_ts)
+        .unwrap();
+
+    for (reg_proof, ft_keys) in proof.proofs.iter().zip(force_transfer_keys.iter()) {
+        let encrypted_state = reg_proof
+            .get_encrypted_state()
+            .unwrap()
+            .expect("proof registered with pk_T must have encrypted state")
+            .decode()
+            .unwrap();
+        encrypted_state.decrypt(&ft_keys.secret).unwrap();
+    }
 }
 
 #[test]

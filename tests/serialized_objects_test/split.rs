@@ -288,9 +288,15 @@ pub fn gen_account_reg_split() {
         .unwrap();
     let gens = dart_gens();
 
-    let (protocol, device_request) =
-        AccountRegHostProtocol::init(&mut rng, &account_state, rho_randomness, counter, IDENTITY)
-            .unwrap();
+    let (protocol, device_request) = AccountRegHostProtocol::init(
+        &mut rng,
+        &account_state,
+        rho_randomness,
+        counter,
+        IDENTITY,
+        None,
+    )
+    .unwrap();
     save_scale_v1(ACCOUNT_REG_SPLIT_REQUEST, &device_request);
 
     let req: RegistrationDeviceRequest = load_scale_v1(ACCOUNT_REG_SPLIT_REQUEST);
@@ -316,7 +322,7 @@ fn verify_v1_account_reg_split() {
     let mut rng = default_rng();
     let proof: AccountAssetRegistrationProof = load_scale_v1(ACCOUNT_REG_SPLIT_PROOF);
     proof
-        .verify(IDENTITY, AccountTreeConfig::parameters(), &mut rng)
+        .verify(IDENTITY, AccountTreeConfig::parameters(), &mut rng, None)
         .unwrap();
 }
 

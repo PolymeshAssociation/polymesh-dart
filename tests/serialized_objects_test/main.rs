@@ -18,7 +18,9 @@ fn generate_v1_serialized_objects() {
     account::gen_fee_account_registration_proof();
     account::gen_batched_fee_account_registration_proof();
     account::gen_account_asset_registration_proof();
+    account::gen_account_asset_registration_proof_with_pk_t();
     account::gen_batched_account_asset_registration_proof();
+    account::gen_batched_account_asset_registration_proof_with_pk_t();
     account::gen_key_distribution_proof_2_recipients();
     account::gen_key_distribution_proof_3_recipients();
     account::gen_asset_minting_proof();
