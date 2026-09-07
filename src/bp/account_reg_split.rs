@@ -7,13 +7,14 @@ use polymesh_dart_bp::account_registration;
 use polymesh_dart_bp::util::{append_auth_proof_and_get_challenge, serialize_challenge};
 use polymesh_dart_common::NullifierSkGenCounter;
 
+use super::account::{ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS, BPRegTxnProof};
 use super::encode::*;
 use super::split_types::*;
 use super::*;
 use crate::*;
 
-type BPRegTxnProof = account_registration::RegTxnProof<PallasA>;
-type BPRegTxnWithoutSkProtocol = account_registration::RegTxnWithoutSkProtocol<PallasA>;
+type BPRegTxnWithoutSkProtocol =
+    account_registration::RegTxnWithoutSkProtocol<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;
 
 // Account Registration — W3 split
 
