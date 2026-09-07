@@ -372,6 +372,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         let proofs_and_states = account_assets
             .par_iter()
             .zip(rngs.into_par_iter())
+            .with_min_len(4)
             .map(|((account, asset_id, counter, pk_t), mut rng)| {
                 AccountAssetRegistrationProof::new(
                     &mut rng,
@@ -560,8 +561,8 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     }
 }
 
-pub const ACCOUNT_CHUNK_BITS: usize = 32;
-pub const ACCOUNT_NUM_CHUNKS: usize = 8;
+pub const ACCOUNT_CHUNK_BITS: usize = 37;
+pub const ACCOUNT_NUM_CHUNKS: usize = 7;
 
 pub(crate) type BPRegTxnProof =
     account_registration::RegTxnProof<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;

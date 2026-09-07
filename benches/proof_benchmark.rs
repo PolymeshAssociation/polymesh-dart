@@ -167,6 +167,21 @@ fn proof_benchmark(c: &mut Criterion) {
         for idx in 0..num_proofs {
             account_assets.push((issuer_keys.clone(), idx as AssetId, 0, None));
         }
+        let name = format!("BatchedAccountAssetRegistrationProof generate {num_proofs}");
+        c.bench_function(&name, |b| {
+            b.iter(|| {
+                let (_proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
+                    &mut rng,
+                    &account_assets,
+                    ctx,
+                    &account_params,
+                )
+                .expect("Failed to generate batched proof");
+            })
+        });
+
+        // Generate a batched proof to benchmark verification.
+        println!("BatchedAccountAssetRegistrationProof generate {num_proofs}");
         let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
             &mut rng,
             &account_assets,
