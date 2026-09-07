@@ -720,6 +720,7 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
 /// Only the holder of the matching force-transfer secret key can decode and decrypt these values.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptedAccountState {
+    // TODO: Only store the inner `ciphertexts` chunks, not the full `BPEncryptedScalar` struct, to save space.  The `BPEncryptedScalar` struct is only needed for proof generation and verification, not for storage.
     pub rho: BPEncryptedScalar,
     pub randomness: BPEncryptedScalar,
 }
