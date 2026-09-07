@@ -560,6 +560,14 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     }
 }
 
+pub const ACCOUNT_CHUNK_BITS: usize = 32;
+pub const ACCOUNT_NUM_CHUNKS: usize = 8;
+
+pub(crate) type BPRegTxnProof =
+    account_registration::RegTxnProof<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;
+pub(crate) type BPEncryptedScalar =
+    account_registration::EncryptedScalar<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;
+
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
@@ -569,8 +577,7 @@ pub struct AccountAssetRegistrationProof<T: DartLimits = ()> {
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
 
-    pub(crate) inner:
-        BoundedCanonical<account_registration::RegTxnProof<PallasA>, T::MaxInnerProofSize>,
+    pub(crate) inner: BoundedCanonical<BPRegTxnProof, T::MaxInnerProofSize>,
 }
 
 impl<T: DartLimits> AccountAssetRegistrationProof<T> {
@@ -692,7 +699,9 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
     }
 
     /// Returns the encrypted `rho`/`randomness` state, wrapped for opaque SCALE storage, if present.
-    pub fn get_encrypted_state(&self) -> Result<Option<WrappedCanonical<EncryptedAccountState>>, Error> {
+    pub fn get_encrypted_state(
+        &self,
+    ) -> Result<Option<WrappedCanonical<EncryptedAccountState>>, Error> {
         let proof = self.inner.decode()?;
         let Some(enc) = proof.partial.encryption_for_T else {
             return Ok(None);
@@ -710,13 +719,16 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
 /// Only the holder of the matching force-transfer secret key can decode and decrypt these values.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptedAccountState {
-    pub rho: account_registration::EncryptedScalar<PallasA>,
-    pub randomness: account_registration::EncryptedScalar<PallasA>,
+    pub rho: BPEncryptedScalar,
+    pub randomness: BPEncryptedScalar,
 }
 
 impl EncryptedAccountState {
     /// Decrypts the escrowed `(rho, randomness)` pair using the force-transfer secret key.
-    pub fn decrypt(&self, sk_t: &EncryptionSecretKey) -> Result<(PallasScalar, PallasScalar), Error> {
+    pub fn decrypt(
+        &self,
+        sk_t: &EncryptionSecretKey,
+    ) -> Result<(PallasScalar, PallasScalar), Error> {
         let enc_gen = dart_gens().force_transfer_enc_gen().into_group();
         let sk = &sk_t.inner().0;
         let rho = self.rho.decrypt(sk, enc_gen)?;
