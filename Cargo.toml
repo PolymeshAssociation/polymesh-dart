@@ -267,6 +267,9 @@ verifier_parallel = [
 asm = ["polymesh-dart-bp?/asm"]
 parallel = ["rayon", "polymesh-dart-bp?/parallel"]
 
+# Enable for dicrete_log and decrypt leg timings.
+bench_timings = []
+
 [profile.release]
 opt-level = 3
 
