@@ -112,6 +112,7 @@ impl DartUserAccountInner {
             0,
             self.address.ctx(),
             chain.account_tree.parameters(),
+            None,
         )?;
         chain.initialize_account_asset(&self.address, proof)?;
         asset_state.commit_pending_state()?;
@@ -2058,7 +2059,7 @@ impl DartChainState {
         // Verify the proof for the account and asset.
         let mut rng = new_rng();
         proof
-            .verify(caller.ctx(), self.account_tree.parameters(), &mut rng)
+            .verify(caller.ctx(), self.account_tree.parameters(), &mut rng, None)
             .with_context(|| {
                 format!(
                     "Invalid proof for account {:?} and asset ID {}",

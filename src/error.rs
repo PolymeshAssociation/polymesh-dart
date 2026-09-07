@@ -129,6 +129,10 @@ pub enum Error {
     #[error("Too many proofs in batched proof")]
     TooManyBatchedProofs,
 
+    /// Number of force-transfer keys doesn't match the number of proofs in the batch.
+    #[error("Number of force-transfer keys doesn't match the number of proofs in the batch")]
+    MismatchedAccountAssetRegProofAndKeyCount,
+
     /// RMC failed to verify.
     #[error("RMC failed to verify")]
     RMCVerifyError,

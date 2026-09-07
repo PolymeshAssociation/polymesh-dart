@@ -869,6 +869,7 @@ impl DartTestingDb {
                 0,
                 &did,
                 params,
+                None,
             )?;
 
             // Update the account state with the pending state change.
@@ -887,7 +888,7 @@ impl DartTestingDb {
         // Verify the proof
         eprintln!("signer_name: {}", signer_name);
         let now = std::time::Instant::now();
-        proof.verify(&did, params, rng)?;
+        proof.verify(&did, params, rng, None)?;
         let elapsed = now.elapsed();
         eprintln!("Proof verification took {:.2?}", elapsed);
 
