@@ -216,10 +216,10 @@ pub fn solve_discrete_log_brute_force<G: AdditiveGroup + CurveGroup>(
 /// one batch inversion via `normalize_batch` instead of one inversion per step.
 fn scan_single_strided<G: AdditiveGroup + CurveGroup>(
     baby_steps: &BabyStepsTable,
+    base_m: G,
     start: G,
     num_steps: u64,
 ) -> Option<u64> {
-    let base_m: G = baby_steps.base_m();
     let mut points: Vec<G> = Vec::with_capacity(NORMALIZE_STRIDE.min(num_steps) as usize);
     let mut cur = start;
     let mut steps_done = 0u64;
@@ -259,7 +259,7 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
         None => return solve_discrete_log_brute_force(max, base, target),
     };
     let num_steps = (max + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-    scan_single_strided(&baby_steps, target, num_steps)
+    scan_single_strided(&baby_steps, baby_steps.base_m(), target, num_steps)
 }
 
 #[cfg(feature = "parallel")]
@@ -283,13 +283,14 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
     const CHUNK_SIZE: u64 = u32::MAX as u64;
     let first_span = max.min(CHUNK_SIZE);
     let first_steps = (first_span + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-    if let Some(v) = scan_single_strided(&baby_steps, target, first_steps) {
+    let base_m: G = baby_steps.base_m();
+    if let Some(v) = scan_single_strided(&baby_steps, base_m, target, first_steps) {
         return Some(v);
     }
     if max <= CHUNK_SIZE {
         return None;
     }
-    solve_discrete_log_bsgs_tail(max, &baby_steps, target)
+    solve_discrete_log_bsgs_tail(max, &baby_steps, base_m, target)
 }
 
 /// Parallel scan of the chunks after the first `0..u32::MAX` range. `target` is the original (unshifted) target.
@@ -298,6 +299,7 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
 fn solve_discrete_log_bsgs_tail<G: AdditiveGroup + CurveGroup>(
     max: u64,
     baby_steps: &BabyStepsTable,
+    base_m: G,
     target: G,
 ) -> Option<u64> {
     use rayon::prelude::*;
@@ -321,6 +323,6 @@ fn solve_discrete_log_bsgs_tail<G: AdditiveGroup + CurveGroup>(
         .find_map_any(|(offset, starting_point)| {
             let span = CHUNK_SIZE.min(max - offset);
             let steps = (span + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-            scan_single_strided(baby_steps, starting_point, steps).map(|v| v + offset)
+            scan_single_strided(baby_steps, base_m, starting_point, steps).map(|v| v + offset)
         })
 }
