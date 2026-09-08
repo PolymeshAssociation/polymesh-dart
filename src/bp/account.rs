@@ -1,3 +1,7 @@
+use ark_pallas::Projective;
+use dock_crypto_utils::elgamal::Ciphertext;
+use polymesh_dart_bp::account_registration::powers_of_base;
+use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -7,6 +11,7 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
+use ark_ff::Zero;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
@@ -16,8 +21,7 @@ use bulletproofs::r1cs::VerificationTuple;
 use dock_crypto_utils::randomized_mult_checker::{
     RandomizedMultChecker, RandomizedMultCheckerGuard,
 };
-use rand_chacha::ChaChaRng;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
@@ -362,6 +366,8 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
+        use rand_chacha::ChaChaRng;
+        use rand_core::SeedableRng;
         let rngs: Vec<ChaChaRng> = (0..account_assets.len())
             .map(|_| {
                 let mut buf = [0_u8; 32];
@@ -708,10 +714,50 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
             return Ok(None);
         };
         let state = EncryptedAccountState {
-            rho: enc.encrypted_rho,
-            randomness: enc.encrypted_randomness,
+            rho: enc.encrypted_rho.into(),
+            randomness: enc.encrypted_randomness.into(),
         };
         Ok(Some(WrappedCanonical::wrap(&state)?))
+    }
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedScalar {
+    pub ciphertexts: [Ciphertext<PallasA>; ACCOUNT_NUM_CHUNKS],
+}
+
+impl EncryptedScalar {
+    pub fn decrypt(
+        &self,
+        sk: &EncryptionSecretKey,
+        enc_gen: Projective,
+    ) -> Result<PallasScalar, Error> {
+        let max = 1_u64 << ACCOUNT_CHUNK_BITS;
+        let chunks = self
+            .ciphertexts
+            .iter()
+            .enumerate()
+            .map(|(_i, c)| {
+                let e = c.decrypt(&sk.0.0).into_group();
+                solve_discrete_log_bsgs(max, enc_gen, e)
+                    .map(|d| PallasScalar::from(d))
+                    .ok_or(Error::CryptoError("Failed to decrypt scalar".into()))
+            })
+            .collect::<Vec<_>>();
+        let powers = powers_of_base::<PallasScalar, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>();
+        let mut reconstructed = PallasScalar::zero();
+        for (i, c) in chunks.into_iter().enumerate() {
+            reconstructed += c? * powers[i];
+        }
+        Ok(reconstructed)
+    }
+}
+
+impl From<BPEncryptedScalar> for EncryptedScalar {
+    fn from(enc: BPEncryptedScalar) -> Self {
+        Self {
+            ciphertexts: enc.ciphertexts,
+        }
     }
 }
 
@@ -720,9 +766,8 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
 /// Only the holder of the matching force-transfer secret key can decode and decrypt these values.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptedAccountState {
-    // TODO: Only store the inner `ciphertexts` chunks, not the full `BPEncryptedScalar` struct, to save space.  The `BPEncryptedScalar` struct is only needed for proof generation and verification, not for storage.
-    pub rho: BPEncryptedScalar,
-    pub randomness: BPEncryptedScalar,
+    pub rho: EncryptedScalar,
+    pub randomness: EncryptedScalar,
 }
 
 impl EncryptedAccountState {
@@ -732,9 +777,8 @@ impl EncryptedAccountState {
         sk_t: &EncryptionSecretKey,
     ) -> Result<(PallasScalar, PallasScalar), Error> {
         let enc_gen = dart_gens().force_transfer_enc_gen().into_group();
-        let sk = &sk_t.inner().0;
-        let rho = self.rho.decrypt(sk, enc_gen)?;
-        let randomness = self.randomness.decrypt(sk, enc_gen)?;
+        let rho = self.rho.decrypt(sk_t, enc_gen)?;
+        let randomness = self.randomness.decrypt(sk_t, enc_gen)?;
         Ok((rho, randomness))
     }
 }
