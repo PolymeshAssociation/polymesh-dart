@@ -2,7 +2,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::AdditiveGroup;
 // Use BTreeMap for no_std compatibility
 #[cfg(not(feature = "std"))]
-use ark_std::{collections::BTreeMap as HashMap, sync::Arc};
+use ark_std::{collections::BTreeMap as HashMap, sync::Arc, vec::Vec};
 #[cfg(feature = "std")]
 use std::{collections::HashMap, sync::Arc};
 
