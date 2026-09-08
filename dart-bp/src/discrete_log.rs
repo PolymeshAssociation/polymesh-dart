@@ -9,7 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 #[cfg(feature = "large_baby_steps")]
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 21;
 #[cfg(not(feature = "large_baby_steps"))]
-pub const MAX_NUM_BABY_STEPS: u64 = 1 << 16;
+pub const MAX_NUM_BABY_STEPS: u64 = 1 << 17;
 
 /// Lockstep giant steps per normalization window. Amortizes the batch inversion and (in
 /// parallel builds) the rayon fork-join overhead of `normalize_batch` over many steps.
@@ -19,6 +19,12 @@ pub struct BabyStepsTable {
     pub base_m: [u8; 32],
     pub base_u32_max: [u8; 32],
     pub table: HashMap<[u8; 32], u32>,
+}
+
+fn affine_to_bytes<A: AffineRepr>(target: &A) -> Option<[u8; 32]> {
+    let mut target_bytes = [0u8; 32];
+    target.serialize_compressed(&mut target_bytes[..]).ok()?;
+    Some(target_bytes)
 }
 
 fn group_element_to_bytes<G: AdditiveGroup + CurveGroup>(elem: &G) -> Option<[u8; 32]> {
@@ -38,35 +44,31 @@ impl BabyStepsTable {
 
         let chunk_count = 32u64;
         let chunk_size: u64 = MAX_NUM_BABY_STEPS / chunk_count;
-        let chunk_base = base * G::ScalarField::from(chunk_size);
-        let mut starting_point = base;
         let table = (0..chunk_count)
             .into_iter()
-            .map(|chunk_idx| {
-                let offset = 2 + chunk_idx * chunk_size;
-                if chunk_idx > 0 {
-                    starting_point = starting_point + chunk_base;
-                }
-                (offset, starting_point)
-            })
+            .map(|chunk_idx| chunk_idx * chunk_size + 1)
             .par_bridge()
-            .flat_map(|(offset, starting_point)| {
+            .flat_map(|first_step| {
+                let mut starting_point = base * G::ScalarField::from(first_step);
+                let mut projective_points = Vec::with_capacity(chunk_size as usize);
+                for _ in 0..chunk_size {
+                    projective_points.push(starting_point);
+                    starting_point = starting_point + base;
+                }
+                let affines = G::normalize_batch(&projective_points);
                 let mut points = Vec::new();
-                let mut cur = starting_point;
-                for i in 0..=chunk_size {
-                    cur = cur + base;
-                    let cur_bytes = group_element_to_bytes(&cur)
+                for (i, affine) in affines.iter().enumerate() {
+                    let bytes = affine_to_bytes(affine)
                         .expect("Serialization of group element should not fail");
-                    points.push((cur_bytes, (offset + i) as _));
+                    points.push((bytes, (first_step + i as u64) as u32));
                 }
                 points
             })
             .collect();
-        starting_point = starting_point + chunk_base - base;
 
         let base_u32_max = base * G::ScalarField::from(u32::MAX as u64);
         Some(Self {
-            base_m: group_element_to_bytes(&starting_point)?,
+            base_m: group_element_to_bytes(&(base * G::ScalarField::from(MAX_NUM_BABY_STEPS)))?,
             base_u32_max: group_element_to_bytes(&base_u32_max)?,
             table,
         })
@@ -74,18 +76,22 @@ impl BabyStepsTable {
 
     #[cfg(not(feature = "parallel"))]
     pub fn new<G: AdditiveGroup + CurveGroup>(base: G) -> Option<Self> {
-        let mut table = HashMap::new();
-        let base_bytes = group_element_to_bytes(&base)?;
-        table.insert(base_bytes, 1);
         let mut cur = base;
-        for i in 2..=MAX_NUM_BABY_STEPS {
+        let mut projective_points = Vec::with_capacity(MAX_NUM_BABY_STEPS as usize);
+        for _ in 0..MAX_NUM_BABY_STEPS {
+            projective_points.push(cur);
             cur = cur + base;
-            let cur_bytes = group_element_to_bytes(&cur)?;
-            table.insert(cur_bytes, i as u32);
+        }
+        let affines = G::normalize_batch(&projective_points);
+        let mut table = HashMap::new();
+        for (i, affine) in affines.iter().enumerate() {
+            let bytes =
+                affine_to_bytes(affine).expect("Serialization of group element should not fail");
+            table.insert(bytes, (i + 1) as u32);
         }
         let base_u32_max = base * G::ScalarField::from(u32::MAX as u64);
         Some(Self {
-            base_m: group_element_to_bytes(&cur)?,
+            base_m: group_element_to_bytes(&(base * G::ScalarField::from(MAX_NUM_BABY_STEPS)))?,
             base_u32_max: group_element_to_bytes(&base_u32_max)?,
             table,
         })
