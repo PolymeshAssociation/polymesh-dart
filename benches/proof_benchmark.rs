@@ -26,6 +26,11 @@ fn proof_benchmark(c: &mut Criterion) {
     let mediator_acct = mediator_keys.public_keys();
     let ctx = b"benchmark";
 
+    // Asset issuer's force-transfer key, used for account freezing/force-transfer support.
+    let force_transfer_keys =
+        EncryptionKeyPair::rand(&mut rng).expect("Failed to generate force-transfer keys");
+    let force_transfer_pk = force_transfer_keys.public;
+
     let asset_id = 0 as _;
     let asset_state =
         AssetState::new::<()>(asset_id, &[(mediator_acct.acct, mediator_acct.enc)], &[])
@@ -48,6 +53,23 @@ fn proof_benchmark(c: &mut Criterion) {
                 0,
                 ctx,
                 &account_params,
+                None,
+            )
+            .expect("Failed to generate proof");
+        })
+    });
+
+    // Benchmark: Generate account asset registration proof with a force-transfer key (pk_T).
+    c.bench_function("AccountAssetRegistrationProof generate (with pk_T)", |b| {
+        b.iter(|| {
+            let (_proof, mut _account_state) = AccountAssetRegistrationProof::<()>::new(
+                &mut rng,
+                black_box(&issuer_keys),
+                asset_id,
+                0,
+                ctx,
+                &account_params,
+                Some(force_transfer_pk),
             )
             .expect("Failed to generate proof");
         })
@@ -61,6 +83,7 @@ fn proof_benchmark(c: &mut Criterion) {
         0,
         ctx,
         &account_params,
+        None,
     )
     .expect("Failed to generate proof");
     account_state
@@ -80,8 +103,61 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AccountAssetRegistrationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(ctx), &account_params, &mut rng)
+                .verify(black_box(ctx), &account_params, &mut rng, None)
                 .expect("Failed to verify proof");
+        })
+    });
+
+    // Generate a proof (with pk_T) to benchmark verification and decryption.
+    let (proof_with_pk_t, mut account_state_with_pk_t) = AccountAssetRegistrationProof::<()>::new(
+        &mut rng,
+        black_box(&issuer_keys),
+        asset_id,
+        0,
+        ctx,
+        &account_params,
+        Some(force_transfer_pk),
+    )
+    .expect("Failed to generate proof");
+    account_state_with_pk_t
+        .commit_pending_state()
+        .expect("Failed to commit pending state");
+    let current_commitment_with_pk_t = account_state_with_pk_t
+        .current_commitment()
+        .expect("Failed to get current commitment");
+    let leaf_with_pk_t = current_commitment_with_pk_t
+        .as_leaf_value()
+        .expect("Failed to get leaf value from asset state commitment");
+    account_tree
+        .insert(leaf_with_pk_t)
+        .expect("Failed to insert asset state commitment into account tree");
+
+    // Benchmark: Verify account asset registration proof with a force-transfer key (pk_T).
+    c.bench_function("AccountAssetRegistrationProof verify (with pk_T)", |b| {
+        b.iter(|| {
+            proof_with_pk_t
+                .verify(
+                    black_box(ctx),
+                    &account_params,
+                    &mut rng,
+                    Some(force_transfer_pk),
+                )
+                .expect("Failed to verify proof");
+        })
+    });
+
+    // Benchmark: Decrypt the escrowed rho/randomness state using the force-transfer secret key.
+    let encrypted_state = proof_with_pk_t
+        .get_encrypted_state()
+        .expect("Failed to get encrypted state")
+        .expect("Proof registered with pk_T must have encrypted state")
+        .decode()
+        .expect("Failed to decode encrypted state");
+    c.bench_function("EncryptedAccountState decrypt", |b| {
+        b.iter(|| {
+            encrypted_state
+                .decrypt(black_box(&force_transfer_keys.secret))
+                .expect("Failed to decrypt encrypted state");
         })
     });
 
@@ -89,8 +165,23 @@ fn proof_benchmark(c: &mut Criterion) {
     for num_proofs in [1u32, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 100] {
         let mut account_assets = Vec::with_capacity(NUM_PROOFS);
         for idx in 0..num_proofs {
-            account_assets.push((issuer_keys.clone(), idx as AssetId, 0));
+            account_assets.push((issuer_keys.clone(), idx as AssetId, 0, None));
         }
+        let name = format!("BatchedAccountAssetRegistrationProof generate {num_proofs}");
+        c.bench_function(&name, |b| {
+            b.iter(|| {
+                let (_proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
+                    &mut rng,
+                    &account_assets,
+                    ctx,
+                    &account_params,
+                )
+                .expect("Failed to generate batched proof");
+            })
+        });
+
+        // Generate a batched proof to benchmark verification.
+        println!("BatchedAccountAssetRegistrationProof generate {num_proofs}");
         let (proof, _) = BatchedAccountAssetRegistrationProof::<()>::new(
             &mut rng,
             &account_assets,
@@ -98,13 +189,14 @@ fn proof_benchmark(c: &mut Criterion) {
             &account_params,
         )
         .expect("Failed to generate batched proof");
+        let pk_ts = vec![None; num_proofs as usize];
 
         // Benchmark: Verify batched account asset registration proof.
         let name = format!("BatchedAccountAssetRegistrationProof verify {num_proofs}");
         c.bench_function(&name, |b| {
             b.iter(|| {
                 proof
-                    .verify(black_box(ctx), &account_params, &mut rng)
+                    .verify(black_box(ctx), &account_params, &mut rng, &pk_ts)
                     .expect("Failed to verify proof");
             })
         });
@@ -114,7 +206,7 @@ fn proof_benchmark(c: &mut Criterion) {
         c.bench_function(&name, |b| {
             b.iter(|| {
                 proof
-                    .batched_verify(black_box(ctx), &account_params, &mut rng)
+                    .batched_verify(black_box(ctx), &account_params, &mut rng, &pk_ts)
                     .expect("Failed to verify proof");
             })
         });
@@ -128,6 +220,7 @@ fn proof_benchmark(c: &mut Criterion) {
         0,
         ctx,
         &account_params,
+        None,
     )
     .expect("Failed to generate proof");
     investor_account_state

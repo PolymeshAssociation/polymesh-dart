@@ -1,3 +1,7 @@
+use ark_pallas::Projective;
+use dock_crypto_utils::elgamal::Ciphertext;
+use polymesh_dart_bp::account_registration::powers_of_base;
+use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -7,6 +11,8 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
 use ark_ec::CurveConfig;
+use ark_ff::Zero;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::vec::Vec;
 
@@ -15,8 +21,7 @@ use bulletproofs::r1cs::VerificationTuple;
 use dock_crypto_utils::randomized_mult_checker::{
     RandomizedMultChecker, RandomizedMultCheckerGuard,
 };
-use rand_chacha::ChaChaRng;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, RngCore};
 
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_bp::{account as bp_account, account_registration, leg as bp_leg};
@@ -352,10 +357,17 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     #[cfg(feature = "parallel")]
     pub fn new<R: RngCore + CryptoRng + Sync + Send + Clone>(
         rng: &mut R,
-        account_assets: &[(AccountKeys, AssetId, NullifierSkGenCounter)],
+        account_assets: &[(
+            AccountKeys,
+            AssetId,
+            NullifierSkGenCounter,
+            Option<EncryptionPublicKey>,
+        )],
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
+        use rand_chacha::ChaChaRng;
+        use rand_core::SeedableRng;
         let rngs: Vec<ChaChaRng> = (0..account_assets.len())
             .map(|_| {
                 let mut buf = [0_u8; 32];
@@ -366,7 +378,8 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         let proofs_and_states = account_assets
             .par_iter()
             .zip(rngs.into_par_iter())
-            .map(|((account, asset_id, counter), mut rng)| {
+            .with_min_len(4)
+            .map(|((account, asset_id, counter, pk_t), mut rng)| {
                 AccountAssetRegistrationProof::new(
                     &mut rng,
                     account,
@@ -374,6 +387,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
                     *counter,
                     identity,
                     tree_params,
+                    *pk_t,
                 )
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -395,14 +409,19 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     #[cfg(not(feature = "parallel"))]
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
-        account_assets: &[(AccountKeys, AssetId, NullifierSkGenCounter)],
+        account_assets: &[(
+            AccountKeys,
+            AssetId,
+            NullifierSkGenCounter,
+            Option<EncryptionPublicKey>,
+        )],
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<(Self, Vec<AccountAssetState>), Error> {
         let mut proofs = BoundedVec::with_bounded_capacity(account_assets.len());
         let mut states = Vec::with_capacity(account_assets.len());
 
-        for (account, asset_id, counter) in account_assets {
+        for (account, asset_id, counter, pk_t) in account_assets {
             let (proof, state) = AccountAssetRegistrationProof::new(
                 rng,
                 account,
@@ -410,6 +429,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
                 *counter,
                 identity,
                 tree_params,
+                *pk_t,
             )?;
             proofs
                 .try_push(proof)
@@ -427,15 +447,20 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_ts: &[Option<EncryptionPublicKey>],
     ) -> Result<(), Error> {
         if self.proofs.len() == 0 {
             return Ok(());
         }
+        if pk_ts.len() != self.proofs.len() {
+            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
+        }
         self.proofs
             .par_iter()
+            .zip(pk_ts.par_iter())
             .map_init(
                 || rng.clone(),
-                |rng, proof| proof.verify(identity, tree_params, rng),
+                |rng, (proof, pk_t)| proof.verify(identity, tree_params, rng, *pk_t),
             )
             .collect::<Result<(), Error>>()?;
         Ok(())
@@ -448,9 +473,13 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_ts: &[Option<EncryptionPublicKey>],
     ) -> Result<(), Error> {
-        for proof in &self.proofs {
-            proof.verify(identity, tree_params, rng)?;
+        if pk_ts.len() != self.proofs.len() {
+            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
+        }
+        for (proof, pk_t) in self.proofs.iter().zip(pk_ts.iter()) {
+            proof.verify(identity, tree_params, rng, *pk_t)?;
         }
         Ok(())
     }
@@ -462,20 +491,25 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_ts: &[Option<EncryptionPublicKey>],
     ) -> Result<(), Error> {
+        if pk_ts.len() != self.proofs.len() {
+            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
+        }
         if self.proofs.len() < 2 {
-            return self.verify(identity, tree_params, rng);
+            return self.verify(identity, tree_params, rng, pk_ts);
         }
 
         let tuples = self
             .proofs
             .par_iter()
+            .zip(pk_ts.par_iter())
             .map_init(
                 || rng.clone(),
-                |rng, proof| {
+                |rng, (proof, pk_t)| {
                     let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
                     guard.with_err(Error::RMCVerifyError, |rmc| {
-                        proof.batched_verify(identity, tree_params, rng, rmc)
+                        proof.batched_verify(identity, tree_params, rng, *pk_t, rmc)
                     })
                 },
             )
@@ -498,16 +532,20 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_ts: &[Option<EncryptionPublicKey>],
     ) -> Result<(), Error> {
+        if pk_ts.len() != self.proofs.len() {
+            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
+        }
         if self.proofs.len() < 2 {
-            return self.verify(identity, tree_params, rng);
+            return self.verify(identity, tree_params, rng, pk_ts);
         }
         let mut tuples = Vec::with_capacity(self.proofs.len());
 
         let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
         guard.with_err(Error::RMCVerifyError, |rmc| {
-            for proof in &self.proofs {
-                let tuple = proof.batched_verify(identity, tree_params, rng, rmc)?;
+            for (proof, pk_t) in self.proofs.iter().zip(pk_ts.iter()) {
+                let tuple = proof.batched_verify(identity, tree_params, rng, *pk_t, rmc)?;
                 tuples.push(tuple);
             }
             Ok(())
@@ -529,6 +567,14 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
     }
 }
 
+pub const ACCOUNT_CHUNK_BITS: usize = 37;
+pub const ACCOUNT_NUM_CHUNKS: usize = 7;
+
+pub(crate) type BPRegTxnProof =
+    account_registration::RegTxnProof<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;
+pub(crate) type BPEncryptedScalar =
+    account_registration::EncryptedScalar<PallasA, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>;
+
 /// Account asset registration proof.  Report section 5.1.3 "Account Registration".
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
@@ -538,12 +584,14 @@ pub struct AccountAssetRegistrationProof<T: DartLimits = ()> {
     pub counter: NullifierSkGenCounter,
     pub account_state_commitment: AccountStateCommitment,
 
-    pub(crate) inner:
-        BoundedCanonical<account_registration::RegTxnProof<PallasA>, T::MaxInnerProofSize>,
+    pub(crate) inner: BoundedCanonical<BPRegTxnProof, T::MaxInnerProofSize>,
 }
 
 impl<T: DartLimits> AccountAssetRegistrationProof<T> {
     /// Generate a new account state for an asset and a registration proof for it.
+    ///
+    /// `pk_t` is the asset issuer's force-transfer encryption key, needed to support account
+    /// freezing and force transfers for regulatory compliance; pass `None` if not required.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         keys: &AccountKeys,
@@ -551,12 +599,19 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         counter: NullifierSkGenCounter,
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
+        pk_t: Option<EncryptionPublicKey>,
     ) -> Result<(Self, AccountAssetState), Error> {
         let gens = dart_gens();
         let (account_state, rho_randomness) = keys.init_asset_state(asset_id, counter, identity)?;
 
-        let (protocol, device_request) =
-            AccountRegHostProtocol::init(rng, &account_state, rho_randomness, counter, identity)?;
+        let (protocol, device_request) = AccountRegHostProtocol::init(
+            rng,
+            &account_state,
+            rho_randomness,
+            counter,
+            identity,
+            pk_t,
+        )?;
 
         let device_response = create_registration_auth_proof(
             rng,
@@ -571,16 +626,20 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
+    ///
+    /// `pk_t` must match the key (if any) passed to `new` when the proof was generated.
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_t: Option<EncryptionPublicKey>,
     ) -> Result<(), Error> {
         //*
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
+        let t = force_transfer_encryption_params(pk_t)?;
 
         RandomizedMultCheckerGuard::new(PallasScalar::rand(rng)).with_err(
             Error::RMCVerifyError,
@@ -598,7 +657,7 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
                     tree_params.even_parameters.pc_gens(),
                     tree_params.even_parameters.bp_gens(),
                     &params.params,
-                    None,
+                    t,
                     Some(rmc),
                 )?;
                 Ok(())
@@ -613,11 +672,13 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
+        pk_t: Option<EncryptionPublicKey>,
         rmc: &mut RandomizedMultChecker<PallasA>,
     ) -> Result<VerificationTuple<PallasA>, Error> {
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
+        let t = force_transfer_encryption_params(pk_t)?;
 
         let tuples = proof.verify_split_and_return_tuples(
             rng,
@@ -632,10 +693,92 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
             tree_params.even_parameters.pc_gens(),
             tree_params.even_parameters.bp_gens(),
             &params.params,
-            None,
+            t,
             Some(rmc),
         )?;
 
         Ok(tuples)
+    }
+
+    /// Whether this proof escrows `rho`/`randomness` to the asset issuer's force-transfer key.
+    pub fn has_encrypted_state(&self) -> Result<bool, Error> {
+        Ok(self.inner.decode()?.partial.encryption_for_T.is_some())
+    }
+
+    /// Returns the encrypted `rho`/`randomness` state, wrapped for opaque SCALE storage, if present.
+    pub fn get_encrypted_state(
+        &self,
+    ) -> Result<Option<WrappedCanonical<EncryptedAccountState>>, Error> {
+        let proof = self.inner.decode()?;
+        let Some(enc) = proof.partial.encryption_for_T else {
+            return Ok(None);
+        };
+        let state = EncryptedAccountState {
+            rho: enc.encrypted_rho.into(),
+            randomness: enc.encrypted_randomness.into(),
+        };
+        Ok(Some(WrappedCanonical::wrap(&state)?))
+    }
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedScalar {
+    pub ciphertexts: [Ciphertext<PallasA>; ACCOUNT_NUM_CHUNKS],
+}
+
+impl EncryptedScalar {
+    pub fn decrypt(
+        &self,
+        sk: &EncryptionSecretKey,
+        enc_gen: Projective,
+    ) -> Result<PallasScalar, Error> {
+        let max = 1_u64 << ACCOUNT_CHUNK_BITS;
+        let chunks = self
+            .ciphertexts
+            .iter()
+            .enumerate()
+            .map(|(_i, c)| {
+                let e = c.decrypt(&sk.0.0).into_group();
+                solve_discrete_log_bsgs(max, enc_gen, e)
+                    .map(|d| PallasScalar::from(d))
+                    .ok_or(Error::CryptoError("Failed to decrypt scalar".into()))
+            })
+            .collect::<Vec<_>>();
+        let powers = powers_of_base::<PallasScalar, ACCOUNT_CHUNK_BITS, ACCOUNT_NUM_CHUNKS>();
+        let mut reconstructed = PallasScalar::zero();
+        for (i, c) in chunks.into_iter().enumerate() {
+            reconstructed += c? * powers[i];
+        }
+        Ok(reconstructed)
+    }
+}
+
+impl From<BPEncryptedScalar> for EncryptedScalar {
+    fn from(enc: BPEncryptedScalar) -> Self {
+        Self {
+            ciphertexts: enc.ciphertexts,
+        }
+    }
+}
+
+/// The encrypted `rho`/`randomness` values escrowed to the asset issuer's force-transfer key `pk_T`.
+///
+/// Only the holder of the matching force-transfer secret key can decode and decrypt these values.
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptedAccountState {
+    pub rho: EncryptedScalar,
+    pub randomness: EncryptedScalar,
+}
+
+impl EncryptedAccountState {
+    /// Decrypts the escrowed `(rho, randomness)` pair using the force-transfer secret key.
+    pub fn decrypt(
+        &self,
+        sk_t: &EncryptionSecretKey,
+    ) -> Result<(PallasScalar, PallasScalar), Error> {
+        let enc_gen = dart_gens().force_transfer_enc_gen().into_group();
+        let rho = self.rho.decrypt(sk_t, enc_gen)?;
+        let randomness = self.randomness.decrypt(sk_t, enc_gen)?;
+        Ok((rho, randomness))
     }
 }

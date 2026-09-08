@@ -438,6 +438,13 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     pub fn decode(&self) -> Result<T, Error> {
         Ok(T::deserialize_compressed(&*self.wrapped)?)
     }
+
+    /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
+    ///
+    /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
+    pub fn convert_from<U: CanonicalDeserialize + Into<T>>(&self) -> Result<T, Error> {
+        Ok(U::deserialize_compressed(&*self.wrapped)?.into())
+    }
 }
 
 impl<T: 'static> TypeInfo for WrappedCanonical<T> {

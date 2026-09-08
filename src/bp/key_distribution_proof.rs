@@ -13,6 +13,9 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultCheckerGuard;
 use polymesh_dart_bp::key_distribution;
 use rand_core::{CryptoRng, RngCore};
 
+pub const KEY_DIST_CHUNK_BITS: usize = 37;
+pub const KEY_DIST_NUM_CHUNKS: usize = 7;
+
 /// Wraps [`key_distribution::KeyDistributionProof`], proving that a secret key has been
 /// correctly encrypted under each recipient's public key.
 ///
@@ -25,7 +28,10 @@ pub struct KeyDistributionProof<T: DartLimits = ()> {
     pub public_key: EncryptionPublicKey,
     /// The recipient public keys the secret was distributed to.
     pub recipient_pks: BoundedBTreeSet<EncryptionPublicKey, T::MaxKeysPerRegProof>,
-    inner: BoundedCanonical<key_distribution::KeyDistributionProof<PallasA>, T::MaxInnerProofSize>,
+    inner: BoundedCanonical<
+        key_distribution::KeyDistributionProof<PallasA, KEY_DIST_CHUNK_BITS, KEY_DIST_NUM_CHUNKS>,
+        T::MaxInnerProofSize,
+    >,
 }
 
 impl<T: DartLimits> KeyDistributionProof<T> {
