@@ -1,4 +1,4 @@
-use ark_ec::CurveGroup;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::AdditiveGroup;
 // Use BTreeMap for no_std compatibility
 #[cfg(not(feature = "std"))]
@@ -10,6 +10,10 @@ use std::{collections::HashMap, sync::Arc};
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 21;
 #[cfg(not(feature = "large_baby_steps"))]
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 16;
+
+/// Lockstep giant steps per normalization window. Amortizes the batch inversion and (in
+/// parallel builds) the rayon fork-join overhead of `normalize_batch` over many steps.
+const NORMALIZE_STRIDE: u64 = 2048;
 
 pub struct BabyStepsTable {
     pub base_m: [u8; 32],
@@ -90,6 +94,12 @@ impl BabyStepsTable {
     pub fn get<G: AdditiveGroup + CurveGroup>(&self, target: &G) -> Option<u64> {
         let target_bytes =
             group_element_to_bytes(target).expect("Serialization of group element should not fail");
+        self.table.get(&target_bytes).cloned().map(|v| v as u64)
+    }
+
+    pub fn get_affine<A: AffineRepr>(&self, target: &A) -> Option<u64> {
+        let mut target_bytes = [0u8; 32];
+        target.serialize_compressed(&mut target_bytes[..]).ok()?;
         self.table.get(&target_bytes).cloned().map(|v| v as u64)
     }
 
@@ -195,6 +205,36 @@ pub fn solve_discrete_log_brute_force<G: AdditiveGroup + CurveGroup>(
     None
 }
 
+/// Strided giant-step scan of one contiguous range starting at `start`. Returns the value
+/// relative to the range start. The points buffer is reused across windows; each window costs
+/// one batch inversion via `normalize_batch` instead of one inversion per step.
+fn scan_single_strided<G: AdditiveGroup + CurveGroup>(
+    baby_steps: &BabyStepsTable,
+    start: G,
+    num_steps: u64,
+) -> Option<u64> {
+    let base_m: G = baby_steps.base_m();
+    let mut points: Vec<G> = Vec::with_capacity(NORMALIZE_STRIDE.min(num_steps) as usize);
+    let mut cur = start;
+    let mut steps_done = 0u64;
+    while steps_done < num_steps {
+        let n = (num_steps - steps_done).min(NORMALIZE_STRIDE);
+        points.clear();
+        for _ in 0..n {
+            points.push(cur);
+            cur = cur - base_m;
+        }
+        let affines = G::normalize_batch(&points);
+        for (j, affine) in affines.iter().enumerate() {
+            if let Some(b) = baby_steps.get_affine(affine) {
+                return Some((steps_done + j as u64) * MAX_NUM_BABY_STEPS + b);
+            }
+        }
+        steps_done += n;
+    }
+    None
+}
+
 #[cfg(not(feature = "parallel"))]
 pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
     max: u64,
@@ -212,46 +252,8 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
         Some(b) => b,
         None => return solve_discrete_log_brute_force(max, base, target),
     };
-    if let Some(b) = baby_steps.get(&target) {
-        return Some(b);
-    }
-    let base_m: G = baby_steps.base_m();
-    let mut cur = target;
-    let num_giant_steps = (max + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-    for i in 0..num_giant_steps {
-        if let Some(b) = baby_steps.get(&cur) {
-            return Some(i * MAX_NUM_BABY_STEPS + b);
-        }
-        cur = cur - base_m;
-    }
-    None
-}
-
-#[cfg(feature = "parallel")]
-fn solve_discrete_log_bsgs_u32<G: AdditiveGroup + CurveGroup>(
-    max: u64,
-    baby_steps: &BabyStepsTable,
-    target: G,
-) -> Option<u64> {
-    if let Some(b) = baby_steps.get(&target) {
-        return Some(b);
-    }
-    let base_m: G = baby_steps.base_m();
-    let mut cur = target;
-    let mut cur_offset = 0u64;
-    const NUM_GIANT_STEPS_U32: u64 =
-        (u32::MAX as u64 + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
-    for _ in 0..NUM_GIANT_STEPS_U32 {
-        if let Some(b) = baby_steps.get(&cur) {
-            return Some(cur_offset + b);
-        }
-        cur_offset += MAX_NUM_BABY_STEPS;
-        if cur_offset >= max {
-            break;
-        }
-        cur = cur - base_m;
-    }
-    None
+    let num_steps = (max + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
+    scan_single_strided(&baby_steps, target, num_steps)
 }
 
 #[cfg(feature = "parallel")]
@@ -260,8 +262,6 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
     base: G,
     target: G,
 ) -> Option<u64> {
-    use rayon::prelude::*;
-
     if base == target {
         return Some(1);
     }
@@ -274,12 +274,28 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
         None => return solve_discrete_log_brute_force(max, base, target),
     };
     // Use a single thread to check the first 0-u32::MAX range.
-    if let Some(v) = solve_discrete_log_bsgs_u32(max, &baby_steps, target) {
+    const CHUNK_SIZE: u64 = u32::MAX as u64;
+    let first_span = max.min(CHUNK_SIZE);
+    let first_steps = (first_span + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
+    if let Some(v) = scan_single_strided(&baby_steps, target, first_steps) {
         return Some(v);
     }
-    if max <= u32::MAX as u64 {
+    if max <= CHUNK_SIZE {
         return None;
     }
+    solve_discrete_log_bsgs_tail(max, &baby_steps, target)
+}
+
+/// Parallel scan of the chunks after the first `0..u32::MAX` range. `target` is the original (unshifted) target.
+/// Chunks are produced lazily, so memory stays bounded for large `max`.
+#[cfg(feature = "parallel")]
+fn solve_discrete_log_bsgs_tail<G: AdditiveGroup + CurveGroup>(
+    max: u64,
+    baby_steps: &BabyStepsTable,
+    target: G,
+) -> Option<u64> {
+    use rayon::prelude::*;
+
     let base_u32_max: G = baby_steps.base_u32_max();
     let mut starting_point = target;
     const CHUNK_SIZE: u64 = u32::MAX as u64;
@@ -297,6 +313,8 @@ pub fn solve_discrete_log_bsgs<G: AdditiveGroup + CurveGroup>(
         })
         .par_bridge()
         .find_map_any(|(offset, starting_point)| {
-            solve_discrete_log_bsgs_u32(u64::MAX, &baby_steps, starting_point).map(|v| v + offset)
+            let span = CHUNK_SIZE.min(max - offset);
+            let steps = (span + MAX_NUM_BABY_STEPS - 1) / MAX_NUM_BABY_STEPS;
+            scan_single_strided(baby_steps, starting_point, steps).map(|v| v + offset)
         })
 }
