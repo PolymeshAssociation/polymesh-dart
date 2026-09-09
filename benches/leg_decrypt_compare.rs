@@ -20,9 +20,12 @@ use ark_ec::AffineRepr;
 use ark_pallas::{Fr, Projective};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_precomputed_with_table_size;
+use dock_crypto_utils::solve_discrete_log::{
+    solve_discrete_log_bsgs_precomputed_with_table_size,
+    solve_discrete_log_bsgs_precomputed_with_table_size_large,
+};
 use polymesh_dart::*;
 use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
 use polymesh_dart_bp::leg::LegEncConfig;
@@ -45,6 +48,16 @@ fn dart_solve(g: Projective, pt: Projective) -> Option<u64> {
 
 fn new_solve(g: Projective, pt: Projective) -> Option<u64> {
     solve_discrete_log_bsgs_precomputed_with_table_size::<Projective>(MAX_BALANCE, 0, T21, g, pt)
+}
+
+fn new_solve_large(g: Projective, pt: Projective) -> Option<u64> {
+    solve_discrete_log_bsgs_precomputed_with_table_size_large::<Projective>(
+        MAX_BALANCE,
+        0,
+        T21,
+        g,
+        pt,
+    )
 }
 
 // Full leg decryption (dart) next to the amount dl-solve alone (dart, new). The full decrypt uses
@@ -102,6 +115,11 @@ fn bench_decrypt_vs_solve(c: &mut Criterion) {
             &amount,
             |b, _| b.iter(|| assert_eq!(new_solve(g, black_box(pt)), Some(amount))),
         );
+        group.bench_with_input(
+            BenchmarkId::new("amount_dl/new_2^21_L", amount),
+            &amount,
+            |b, _| b.iter(|| assert_eq!(new_solve_large(g, black_box(pt)), Some(amount))),
+        );
     }
     group.finish();
 }
@@ -114,6 +132,7 @@ fn single_run(_c: &mut Criterion) {
     // Warm caches (dl != 0/1 so no early-return shortcut is timed).
     let _ = dart_solve(g, amount_pt(g, 100));
     let _ = new_solve(g, amount_pt(g, 100));
+    let _ = new_solve_large(g, amount_pt(g, 100));
 
     let amounts: Vec<(u64, &str)> = vec![
         (10, "10"),
@@ -144,7 +163,10 @@ fn single_run(_c: &mut Criterion) {
     };
 
     println!("\n=== (B) amount dl-solve, single run (max = MAX_BALANCE), cap {CAP_SECS:.0}s ===");
-    println!("{:>18} | {:>12} {:>12}", "amount", "dart", "new_2^21");
+    println!(
+        "{:>18} | {:>12} {:>12} {:>12}",
+        "amount", "dart", "new_2^21", "new_2^21_L"
+    );
     for (amount, label) in amounts {
         if amount >= MAX_BALANCE && label != "MAX_BALANCE" {
             continue;
@@ -152,9 +174,10 @@ fn single_run(_c: &mut Criterion) {
         let pt = amount_pt(g, amount);
         let (dt, ok_d) = time(&|| dart_solve(g, pt), amount);
         let (nt, ok_n) = time(&|| new_solve(g, pt), amount);
-        assert!(ok_d && ok_n, "wrong result at amount {label}");
-        println!("{:>18} | {:>11.4}s {:>11.4}s", label, dt, nt);
-        if dt.max(nt) > CAP_SECS {
+        let (lt, ok_l) = time(&|| new_solve_large(g, pt), amount);
+        assert!(ok_d && ok_n && ok_l, "wrong result at amount {label}");
+        println!("{:>18} | {:>11.4}s {:>11.4}s {:>11.4}s", label, dt, nt, lt);
+        if dt.max(nt).max(lt) > CAP_SECS {
             println!("(cap hit at amount {label}, stopping sweep)");
             break;
         }

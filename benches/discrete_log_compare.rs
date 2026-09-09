@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use dock_crypto_utils::solve_discrete_log::{
     BabyStepsTable, solve_discrete_log_bsgs_precomputed_with_table_size,
-    solve_discrete_log_given_table,
+    solve_discrete_log_bsgs_precomputed_with_table_size_large, solve_discrete_log_given_table,
 };
 use polymesh_dart_bp::discrete_log::{
     BabyStepsTable as OldBabyStepsTable, MAX_NUM_BABY_STEPS as OLD_TABLE_SIZE,
@@ -232,8 +232,8 @@ fn large_dl_scan(
         (secs, v == Some(dl))
     };
     println!(
-        "{:>12} | {:>10} {:>10} {:>10} {:>10}",
-        "dl", "old_2^21", "new_2^21", "new_2^18", "given_2^21"
+        "{:>12} | {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "dl", "old_2^21", "new_2^21", "new_2^18", "given_2^21", "new_2^21_L"
     );
     for (dl, label) in dls {
         if dl > MAX_BALANCE {
@@ -279,12 +279,27 @@ fn large_dl_scan(
             },
             dl,
         );
-        assert!(ok_o && ok_a && ok_b && ok_g, "wrong result at dl={label}");
-        println!(
-            "{:>12} | {:>9.3}s {:>9.3}s {:>9.3}s {:>9.3}s",
-            label, o, a, b, g
+        let (l, ok_l) = time(
+            &|| {
+                solve_discrete_log_bsgs_precomputed_with_table_size_large(
+                    MAX_BALANCE,
+                    0,
+                    T21,
+                    base_n21,
+                    target(base_n21, dl),
+                )
+            },
+            dl,
         );
-        if o.max(a).max(b).max(g) > CAP_SECS {
+        assert!(
+            ok_o && ok_a && ok_b && ok_g && ok_l,
+            "wrong result at dl={label}"
+        );
+        println!(
+            "{:>12} | {:>9.3}s {:>9.3}s {:>9.3}s {:>9.3}s {:>9.3}s",
+            label, o, a, b, g, l
+        );
+        if o.max(a).max(b).max(g).max(l) > CAP_SECS {
             println!("(cap hit at dl={label}, stopping)");
             break;
         }
