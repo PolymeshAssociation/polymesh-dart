@@ -1,5 +1,6 @@
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::AdditiveGroup;
+use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_precomputed_with_table_size;
 // Use BTreeMap for no_std compatibility
 #[cfg(not(feature = "std"))]
 use ark_std::{collections::BTreeMap as HashMap, sync::Arc, vec::Vec};
@@ -10,6 +11,15 @@ use std::{collections::HashMap, sync::Arc};
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 21;
 #[cfg(not(feature = "large_baby_steps"))]
 pub const MAX_NUM_BABY_STEPS: u64 = 1 << 17;
+
+/// Discrete log in `[0, max]` via a precomputed table of `MAX_NUM_BABY_STEPS` baby steps.
+pub fn solve_discrete_log_precomputed<G: CurveGroup + Send + Sync + 'static>(
+    max: u64,
+    base: G,
+    target: G,
+) -> Option<u64> {
+    solve_discrete_log_bsgs_precomputed_with_table_size(max, 0, MAX_NUM_BABY_STEPS, base, target)
+}
 
 /// Lockstep giant steps per normalization window. Amortizes the batch inversion and (in
 /// parallel builds) the rayon fork-join overhead of `normalize_batch` over many steps.
