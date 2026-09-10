@@ -199,14 +199,6 @@ harness = false
 name = "key_distribution"
 harness = false
 
-[[bench]]
-name = "discrete_log_compare"
-harness = false
-
-[[bench]]
-name = "leg_decrypt_compare"
-harness = false
-
 [features]
 default = [
     "std",

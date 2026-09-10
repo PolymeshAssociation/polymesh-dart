@@ -2,7 +2,7 @@ use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
-use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::discrete_log::solve_discrete_log_precomputed;
 use crate::dst;
 use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
@@ -1621,7 +1621,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .map(|(i, c)| {
                 let e = c.decrypt(sk_T).into_group();
                 // TODO: This can be optimized as discrete log with same base is being computed
-                solve_discrete_log_bsgs(max, enc_gen, e)
+                solve_discrete_log_precomputed(max, enc_gen, e)
                     .map(|d| G::ScalarField::from(d))
                     .ok_or_else(|| Error::SolvingDiscreteLogFailed(i))
             })

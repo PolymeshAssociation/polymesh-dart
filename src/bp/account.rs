@@ -1,7 +1,7 @@
 use ark_pallas::Projective;
 use dock_crypto_utils::elgamal::Ciphertext;
 use polymesh_dart_bp::account_registration::powers_of_base;
-use polymesh_dart_bp::discrete_log::solve_discrete_log_bsgs;
+use polymesh_dart_bp::discrete_log::solve_discrete_log_precomputed;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "serde")]
@@ -739,7 +739,7 @@ impl EncryptedScalar {
             .enumerate()
             .map(|(_i, c)| {
                 let e = c.decrypt(&sk.0.0).into_group();
-                solve_discrete_log_bsgs(max, enc_gen, e)
+                solve_discrete_log_precomputed(max, enc_gen, e)
                     .map(|d| PallasScalar::from(d))
                     .ok_or(Error::CryptoError("Failed to decrypt scalar".into()))
             })

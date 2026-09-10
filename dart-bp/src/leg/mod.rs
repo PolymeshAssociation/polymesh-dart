@@ -13,7 +13,7 @@ pub mod old;
 
 pub use self::leg_proof::LegCreationProof;
 pub use self::mediator::MediatorTxnProof;
-use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::discrete_log::solve_discrete_log_precomputed;
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -877,7 +877,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.leg_enc_core_and_eph_keys.core.ct_amount,
             self.leg_enc_core_and_eph_keys.eph_pk_s.r3,
         );
-        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
+        let amount = solve_discrete_log_precomputed::<G::Group>(max_amount, enc_gen, amount_pt)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
 
         let sender = Self::decrypt_element_with_sk_inv(
@@ -933,7 +933,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             self.leg_enc_core_and_eph_keys.core.ct_amount,
             self.leg_enc_core_and_eph_keys.eph_pk_r.r3,
         );
-        let amount = solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount_pt)
+        let amount = solve_discrete_log_precomputed::<G::Group>(max_amount, enc_gen, amount_pt)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
 
         let receiver = Self::decrypt_element_with_sk_inv(
@@ -1044,7 +1044,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             AssetIdEncryption::Ciphertext(ct) => {
                 let asset_id =
                     Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].r4.unwrap());
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
+                solve_discrete_log_precomputed::<G::Group>(max_asset_id as _, enc_gen, asset_id)
                     .map(|id| id as AssetId)
                     .ok_or_else(|| {
                         Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
@@ -1075,7 +1075,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             eph_keys[key_index].r3,
         );
 
-        solve_discrete_log_bsgs::<G::Group>(max_amount, enc_gen, amount)
+        solve_discrete_log_precomputed::<G::Group>(max_amount, enc_gen, amount)
             .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))
     }
 
@@ -1099,11 +1099,13 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
                 })?;
                 let asset_id_pt =
                     Self::decrypt_element_with_sk_inv(&sk_enc_inv, *ct, eph_pk_asset_id);
-                solve_discrete_log_bsgs::<G::Group>(max_asset_id as u64, enc_gen, asset_id_pt)
-                    .ok_or_else(|| {
-                        Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                    })
-                    .map(|id| id as AssetId)
+                solve_discrete_log_precomputed::<G::Group>(
+                    max_asset_id as u64,
+                    enc_gen,
+                    asset_id_pt,
+                )
+                .ok_or_else(|| Error::DecryptionFailed("Discrete log of `asset_id` failed.".into()))
+                .map(|id| id as AssetId)
             }
         }
     }
