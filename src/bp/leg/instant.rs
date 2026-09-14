@@ -85,9 +85,9 @@ impl<
         }
     }
 
-    /// Check leg references in affirmation proofs.
+    /// Check that all leg affirmations have correct references and all mediators have accepted.
     ///
-    /// Returns `true` if all leg references match the settlement legs.
+    /// Returns `true` if all leg references are correct and all mediators have accepted, `false` otherwise.
     pub fn check_leg_references(&self) -> bool {
         // Check that the number of legs in the settlement matches the number of leg affirmations.
         if self.settlement.legs.len() != self.leg_affirmations.len() {
@@ -122,6 +122,10 @@ impl<
             // Check all mediator leg references.
             for mediator in &leg_aff.mediators {
                 if mediator.leg_ref != leg_ref {
+                    return false;
+                }
+                // Instant settlement requires that all mediators have accepted.
+                if !mediator.accept {
                     return false;
                 }
             }
