@@ -133,8 +133,8 @@ macro_rules! impl_scale_and_type_info {
         impl $(< $( $impl_generics )* >)? Decode for $type $(< $( $generics )* >)? {
             fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
                 let buf = <Vec<u8>>::decode(input)?;
-                Ok(Self::deserialize_compressed(&*buf)
-                    .map_err(|_| CodecError::from("Failed to deserialize"))?)
+                deserialize_compressed_exact(&buf)
+                    .map_err(|_| CodecError::from("Failed to deserialize"))
             }
         }
     };
@@ -389,6 +389,18 @@ impl_scale_and_type_info!(AccountSecretKey as Array32);
 // TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
 
+/// Deserialize a type `T` object from given bytes. Error if the bytes cannot be deserialized
+/// or extra bytes are provided
+fn deserialize_compressed_exact<T: CanonicalSerialize + CanonicalDeserialize>(
+    bytes: &[u8],
+) -> Result<T, ark_serialize::SerializationError> {
+    let value = T::deserialize_compressed(bytes)?;
+    if value.compressed_size() != bytes.len() {
+        return Err(ark_serialize::SerializationError::InvalidData);
+    }
+    Ok(value)
+}
+
 /// A wrapper type for `CanonicalSerialize` and `CanonicalDeserialize` types.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -436,7 +448,7 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
 
     /// Decodes the wrapped value back into its original type `T`.
     pub fn decode(&self) -> Result<T, Error> {
-        Ok(T::deserialize_compressed(&*self.wrapped)?)
+        Ok(deserialize_compressed_exact(&self.wrapped)?)
     }
 }
 
@@ -537,7 +549,7 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize, S: Get<u32>> BoundedC
 
     /// Decodes the wrapped value back into its original type `T`.
     pub fn decode(&self) -> Result<T, Error> {
-        Ok(T::deserialize_compressed(self.wrapped.as_slice())?)
+        Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
     }
 }
 

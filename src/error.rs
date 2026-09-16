@@ -129,6 +129,10 @@ pub enum Error {
     #[error("Too many proofs in batched proof")]
     TooManyBatchedProofs,
 
+    /// Too many keys in a leg.
+    #[error("Too many keys in a leg")]
+    TooManyKeys,
+
     /// RMC failed to verify.
     #[error("RMC failed to verify")]
     RMCVerifyError,

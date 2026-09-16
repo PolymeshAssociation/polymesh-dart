@@ -21,7 +21,7 @@ use curve_tree_relations::curve_tree::Root;
 
 use rand_core::{CryptoRng, RngCore};
 
-use bounded_collections::BoundedVec;
+use bounded_collections::{BoundedVec, Get};
 
 use super::WrappedCanonical;
 use crate::curve_tree::*;
@@ -31,7 +31,9 @@ use dock_crypto_utils::randomized_mult_checker::{
 };
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
-use polymesh_dart_common::{LegId, MediatorId};
+use polymesh_dart_common::{
+    LegId, MAX_LEG_ENCRYPTION_SIZE, MAX_MEDIATOR_ENCRYPTION_SIZE, MediatorId,
+};
 
 pub mod proofs;
 pub use proofs::*;
@@ -293,7 +295,7 @@ impl Leg {
         asset_med_keys: Vec<PallasA>,
         public_enc_keys: Vec<PallasA>,
     ) -> Result<(bp_leg::Leg<PallasA>, LegEncrypted, LegEncryptionRandomness), Error> {
-        let (leg, leg_enc, leg_enc_rand) = self.encrypt_without_encoding(
+        let (leg, leg_enc, leg_enc_rand) = self.encrypt_without_encoding::<_, ()>(
             rng,
             config,
             asset_enc_keys,
@@ -307,7 +309,7 @@ impl Leg {
         ))
     }
 
-    pub fn encrypt_without_encoding<R: RngCore + CryptoRng>(
+    pub fn encrypt_without_encoding<R: RngCore + CryptoRng, T: DartLimits>(
         &self,
         rng: &mut R,
         config: bp_leg::LegEncConfig,
@@ -322,6 +324,12 @@ impl Leg {
         ),
         Error,
     > {
+        if asset_enc_keys.len() > T::MaxAssetEncryptionKeys::get() as usize
+            || asset_med_keys.len() > T::MaxAssetMediators::get() as usize
+            || public_enc_keys.len() > T::MaxPublicEncKeys::get() as usize
+        {
+            return Err(Error::TooManyKeys);
+        }
         let leg = bp_leg::Leg::new(
             self.sender.get_affine()?,
             self.receiver.get_affine()?,
@@ -484,7 +492,7 @@ impl LegBuilder {
             .iter()
             .map(|pk| pk.get_affine())
             .collect::<Result<_, _>>()?;
-        let (leg, leg_enc, leg_enc_rand) = leg.encrypt_without_encoding(
+        let (leg, leg_enc, leg_enc_rand) = leg.encrypt_without_encoding::<_, T>(
             rng,
             self.config.into(),
             enc_keys,
@@ -1320,9 +1328,11 @@ impl LegEncryptionRandomness {
     }
 }
 
-pub type WrappedLegEncryption = WrappedCanonical<bp_leg::LegEncryption<PallasA>>;
+pub type WrappedLegEncryption =
+    BoundedCanonical<bp_leg::LegEncryption<PallasA>, ConstSize<MAX_LEG_ENCRYPTION_SIZE>>;
 
-pub type WrappedMediatorEncryption = WrappedCanonical<bp_leg::MediatorEncryption<PallasA>>;
+pub type WrappedMediatorEncryption =
+    BoundedCanonical<bp_leg::MediatorEncryption<PallasA>, ConstSize<MAX_MEDIATOR_ENCRYPTION_SIZE>>;
 
 /// Represents an encrypted leg in the Dart BP protocol.  Stored onchain.
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq, TypeInfo)]
@@ -1342,7 +1352,7 @@ pub struct MediatorEncryption(WrappedMediatorEncryption);
 
 impl LegEncrypted {
     pub fn new(leg_enc: bp_leg::LegEncryption<PallasA>) -> Result<Self, Error> {
-        Ok(Self(WrappedCanonical::wrap(&leg_enc)?))
+        Ok(Self(WrappedLegEncryption::wrap(&leg_enc)?))
     }
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
@@ -1364,7 +1374,9 @@ impl LegEncrypted {
     ) -> Result<MediatorEncryption, Error> {
         let leg_enc = self.decode()?;
         let mediator = leg_enc.mediator_encryption(mediator_id as usize)?;
-        Ok(MediatorEncryption(WrappedCanonical::wrap(mediator)?))
+        Ok(MediatorEncryption(WrappedMediatorEncryption::wrap(
+            mediator,
+        )?))
     }
 
     pub fn get_mediator_ids(&self) -> Result<Vec<MediatorId>, Error> {
@@ -1556,7 +1568,7 @@ impl LegEncrypted {
 
 impl MediatorEncryption {
     pub fn new(mediators_enc: bp_leg::MediatorEncryption<PallasA>) -> Result<Self, Error> {
-        Ok(Self(WrappedCanonical::wrap(&mediators_enc)?))
+        Ok(Self(WrappedMediatorEncryption::wrap(&mediators_enc)?))
     }
 
     pub fn decode(&self) -> Result<bp_leg::MediatorEncryption<PallasA>, Error> {

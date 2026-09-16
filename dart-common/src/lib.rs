@@ -54,3 +54,23 @@ pub const MAX_FEE_ACCOUNT_REG_PROOFS: u32 = 10;
 pub const MAX_FEE_ACCOUNT_TOPUP_PROOFS: u32 = 10;
 
 pub const MAX_INNER_PROOF_SIZE: u32 = 10 * 1024;
+
+/// Pallas and Vesta points are 32 bytes when compressed. This should change if curves change
+pub const COMPRESSED_POINT_SIZE: u32 = 32;
+
+/// Maximum number of settlement creator-provided, always revealed public encryption (auditor)
+/// keys in a leg.
+pub const MAX_PUBLIC_ENC_KEYS: u32 = 2;
+
+/// Upper bound on the size of a `LegEncryption`. Curve points: 4 core + 8 sender/receiver ephemeral
+/// + 4 per auditor and per public key + one ephemeral per auditor key and one `ct_med` per
+/// mediator. Rest 40 bytes for approx. vec lengths and option/enum tags.
+pub const MAX_LEG_ENCRYPTION_SIZE: u32 = (12
+    + 4 * (MAX_ASSET_ENC_KEYS + MAX_PUBLIC_ENC_KEYS)
+    + MAX_ASSET_MEDIATORS * (MAX_ASSET_ENC_KEYS + 1))
+    * COMPRESSED_POINT_SIZE
+    + 40;
+
+/// Upper bound on the size of a single `MediatorEncryption`: one ephemeral public key per auditor
+/// key and one `ct_med`. Rest 4 bytes for the vec length.
+pub const MAX_MEDIATOR_ENCRYPTION_SIZE: u32 = (MAX_ASSET_ENC_KEYS + 1) * COMPRESSED_POINT_SIZE + 4;

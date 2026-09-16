@@ -17,7 +17,8 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::{
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS,
     MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
-    MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
+    MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MAX_PUBLIC_ENC_KEYS, MEMO_MAX_LENGTH,
+    SETTLEMENT_MAX_LEGS,
 };
 use scale_info::TypeInfo;
 
@@ -129,6 +130,9 @@ pub trait DartLimits:
     /// The maximum number of asset encryption keys (for both auditors and mediators) in the asset state.
     type MaxAssetEncryptionKeys: GetExtra<u32>;
 
+    /// The maximum number of creator-provided, always-revealed public encryption keys in a leg.
+    type MaxPublicEncKeys: GetExtra<u32>;
+
     /// The maximum inner proof size.
     type MaxInnerProofSize: GetExtra<u32>;
 }
@@ -144,6 +148,7 @@ impl DartLimits for () {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxPublicEncKeys = ConstSize<MAX_PUBLIC_ENC_KEYS>;
     type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
@@ -161,6 +166,7 @@ impl DartLimits for PolymeshLimits {
     type MaxAssetAuditors = ConstSize<MAX_ASSET_AUDITORS>;
     type MaxAssetMediators = ConstSize<MAX_ASSET_MEDIATORS>;
     type MaxAssetEncryptionKeys = ConstSize<MAX_ASSET_ENC_KEYS>;
+    type MaxPublicEncKeys = ConstSize<MAX_PUBLIC_ENC_KEYS>;
     type MaxInnerProofSize = ConstSize<MAX_INNER_PROOF_SIZE>;
 }
 
