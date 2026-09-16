@@ -487,6 +487,28 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_compressed_exact() {
+        use encode::deserialize_compressed_exact;
+
+        let point = dart_gens().sig_key_gen();
+        let mut bytes = Vec::new();
+        point.serialize_compressed(&mut bytes).unwrap();
+
+        // Exact bytes deserialize successfully.
+        let decoded: PallasA = deserialize_compressed_exact(&bytes).unwrap();
+        assert_eq!(point, decoded);
+
+        // Trailing bytes are rejected.
+        let mut with_trailing = bytes.clone();
+        with_trailing.push(0u8);
+        assert!(deserialize_compressed_exact::<PallasA>(&with_trailing).is_err());
+
+        // Truncated bytes are rejected.
+        let truncated = &bytes[..bytes.len() - 1];
+        assert!(deserialize_compressed_exact::<PallasA>(truncated).is_err());
+    }
+
+    #[test]
     fn key_distribution() {
         let mut rng = rand::thread_rng();
         let distributor = AccountKeys::rand(&mut rng).unwrap();

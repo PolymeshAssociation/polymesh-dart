@@ -390,12 +390,14 @@ impl_scale_and_type_info!(AccountSecretKey as Array32);
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
 
 /// Deserialize a type `T` object from given bytes. Error if the bytes cannot be deserialized
-/// or extra bytes are provided
-fn deserialize_compressed_exact<T: CanonicalSerialize + CanonicalDeserialize>(
+/// or extra bytes are provided. Consumes the buffer fully.
+pub(crate) fn deserialize_compressed_exact<T: CanonicalDeserialize>(
     bytes: &[u8],
 ) -> Result<T, ark_serialize::SerializationError> {
-    let value = T::deserialize_compressed(bytes)?;
-    if value.compressed_size() != bytes.len() {
+    let mut reader: &[u8] = bytes;
+    let value = T::deserialize_compressed(&mut reader)?;
+    // Error if extra bytes
+    if !reader.is_empty() {
         return Err(ark_serialize::SerializationError::InvalidData);
     }
     Ok(value)
@@ -448,7 +450,7 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
 
     /// Decodes the wrapped value back into its original type `T`.
     pub fn decode(&self) -> Result<T, Error> {
-        Ok(deserialize_compressed_exact(&self.wrapped)?)
+        Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
     }
 }
 
