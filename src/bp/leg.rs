@@ -1367,8 +1367,19 @@ impl LegEncrypted {
         self.0.decode()
     }
 
+    /// Check if the asset ID of the leg is revealed.
     pub fn is_asset_id_revealed(&self) -> Result<bool, Error> {
         Ok(self.decode()?.is_asset_id_revealed())
+    }
+
+    /// Get the asset ID of the leg, if it is revealed. Returns `None` if the asset ID is encrypted.
+    ///
+    /// Auditors/Mediators can use this to filter legs based on the asset ID, if it is revealed.
+    ///
+    /// If the asset ID is encrypted, auditors/mediators will need to call `try_decrypt_with_key` to attempt decryption.
+    pub fn asset_id(&self) -> Result<Option<AssetId>, Error> {
+        let leg_enc = self.decode()?;
+        Ok(leg_enc.asset_id())
     }
 
     pub fn mediator_count(&self) -> Result<usize, Error> {
@@ -1396,14 +1407,24 @@ impl LegEncrypted {
     }
 
     /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
+    ///
     /// Every mediator entry is encrypted to every asset encryption key, so an encryption key alone
     /// doesn't identify a mediator.
+    ///
+    /// It is recommended to provide the `max_amount` limit to prevent excessive decryption time.
+    ///
+    /// Auditors and mediators can use the maximum total supply of the assets they are responsible for as the `max_amount` limit.
+    ///
+    /// This call is for auditors/mediators to attempt decryption of the leg using their keys.
+    ///
+    /// Investors should use `try_decrypt` instead.
     pub fn try_decrypt_with_key(
         &self,
         keys: &EncryptionKeyPair,
         key_index: Option<usize>,
         affirmation_key: Option<&AccountPublicKey>,
         max_asset_id: Option<AssetId>,
+        max_amount: Option<Balance>,
     ) -> Result<(Leg, LegRole), Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let leg_enc = self.decode()?;
@@ -1417,7 +1438,7 @@ impl LegEncrypted {
                     key_index,
                     enc_gen,
                     max_asset_id,
-                    None,
+                    max_amount,
                 )?,
             )
         } else {
@@ -1431,7 +1452,7 @@ impl LegEncrypted {
                     idx,
                     enc_gen,
                     max_asset_id,
-                    None,
+                    max_amount,
                 ) {
                     break (idx, res);
                 }
