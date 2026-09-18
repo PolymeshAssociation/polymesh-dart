@@ -471,7 +471,7 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         rng: &mut R,
         asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
-        for proof in self.proofs {
+        for proof in &self.proofs {
             proof.verify(identity, tree_params, rng, asset_lookup)?;
         }
         Ok(())
@@ -521,20 +521,17 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_ts: &[Option<EncryptionPublicKey>],
+        asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
-        if pk_ts.len() != self.proofs.len() {
-            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
-        }
         if self.proofs.len() < 2 {
-            return self.verify(identity, tree_params, rng, pk_ts);
+            return self.verify(identity, tree_params, rng, asset_lookup);
         }
         let mut tuples = Vec::with_capacity(self.proofs.len());
 
         let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
         guard.with_err(Error::RMCVerifyError, |rmc| {
-            for (proof, pk_t) in self.proofs.iter().zip(pk_ts.iter()) {
-                let tuple = proof.batched_verify(identity, tree_params, rng, *pk_t, rmc)?;
+            for proof in &self.proofs {
+                let tuple = proof.batched_verify(identity, tree_params, rng, asset_lookup, rmc)?;
                 tuples.push(tuple);
             }
             Ok(())

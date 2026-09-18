@@ -9,13 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup, short_weierstrass::Affine};
 use ark_ff::Field;
-use ark_std::{
-    collections::BTreeSet,
-    format,
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
+use ark_std::{collections::BTreeSet, string::ToString, vec, vec::Vec};
 use bulletproofs::r1cs::{VerificationTuple, batch_verify_with_rng};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
