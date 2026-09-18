@@ -447,20 +447,16 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_ts: &[Option<EncryptionPublicKey>],
+        asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
         if self.proofs.len() == 0 {
             return Ok(());
         }
-        if pk_ts.len() != self.proofs.len() {
-            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
-        }
         self.proofs
             .par_iter()
-            .zip(pk_ts.par_iter())
             .map_init(
                 || rng.clone(),
-                |rng, (proof, pk_t)| proof.verify(identity, tree_params, rng, *pk_t),
+                |rng, proof| proof.verify(identity, tree_params, rng, asset_lookup),
             )
             .collect::<Result<(), Error>>()?;
         Ok(())
@@ -473,13 +469,10 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_ts: &[Option<EncryptionPublicKey>],
+        asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
-        if pk_ts.len() != self.proofs.len() {
-            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
-        }
-        for (proof, pk_t) in self.proofs.iter().zip(pk_ts.iter()) {
-            proof.verify(identity, tree_params, rng, *pk_t)?;
+        for proof in self.proofs {
+            proof.verify(identity, tree_params, rng, asset_lookup)?;
         }
         Ok(())
     }
@@ -491,25 +484,21 @@ impl<T: DartLimits> BatchedAccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_ts: &[Option<EncryptionPublicKey>],
+        asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
-        if pk_ts.len() != self.proofs.len() {
-            return Err(Error::MismatchedAccountAssetRegProofAndKeyCount);
-        }
         if self.proofs.len() < 2 {
-            return self.verify(identity, tree_params, rng, pk_ts);
+            return self.verify(identity, tree_params, rng, asset_lookup);
         }
 
         let tuples = self
             .proofs
             .par_iter()
-            .zip(pk_ts.par_iter())
             .map_init(
                 || rng.clone(),
-                |rng, (proof, pk_t)| {
+                |rng, proof| {
                     let guard = RandomizedMultCheckerGuard::new(PallasScalar::rand(rng));
                     guard.with_err(Error::RMCVerifyError, |rmc| {
-                        proof.batched_verify(identity, tree_params, rng, *pk_t, rmc)
+                        proof.batched_verify(identity, tree_params, rng, asset_lookup, rmc)
                     })
                 },
             )
@@ -633,9 +622,9 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_t: Option<EncryptionPublicKey>,
+        asset_lookup: &AssetPkTLookup,
     ) -> Result<(), Error> {
-        //*
+        let pk_t = asset_lookup.get(self.asset_id).cloned();
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);
@@ -672,9 +661,10 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         identity: &[u8],
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         rng: &mut R,
-        pk_t: Option<EncryptionPublicKey>,
+        asset_lookup: &AssetPkTLookup,
         rmc: &mut RandomizedMultChecker<PallasA>,
     ) -> Result<VerificationTuple<PallasA>, Error> {
+        let pk_t = asset_lookup.get(self.asset_id).cloned();
         let proof = self.inner.decode()?;
         let params = poseidon_params();
         let id = hash_identity::<PallasScalar>(identity);

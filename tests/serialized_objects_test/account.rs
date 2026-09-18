@@ -390,7 +390,9 @@ fn verify_v1_account_asset_registration_proof() {
     let mut rng = default_rng();
     let tree_params = AccountTreeConfig::parameters();
     let proof: AccountAssetRegistrationProof = load_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF);
-    proof.verify(IDENTITY, tree_params, &mut rng, None).unwrap();
+    proof
+        .verify(IDENTITY, tree_params, &mut rng, &AssetPkTLookup::default())
+        .unwrap();
 }
 
 #[test]
@@ -400,13 +402,10 @@ fn verify_v1_account_asset_registration_proof_with_pk_t() {
     let force_transfer_keys: EncryptionKeyPair = load_scale_v1(FORCE_TRANSFER_KEY_PAIR);
     let proof: AccountAssetRegistrationProof =
         load_scale_v1(ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T);
+    let mut asset_lookup = AssetPkTLookup::default();
+    asset_lookup.add(proof.asset_id, force_transfer_keys.public);
     proof
-        .verify(
-            IDENTITY,
-            tree_params,
-            &mut rng,
-            Some(force_transfer_keys.public),
-        )
+        .verify(IDENTITY, tree_params, &mut rng, &asset_lookup)
         .unwrap();
 
     let encrypted_state = proof
@@ -427,9 +426,9 @@ fn verify_v1_batched_account_asset_registration_proof() {
     let filename = batched_account_asset_registration_proof_file();
     let proof: BatchedAccountAssetRegistrationProof = load_scale_v1(&filename);
     assert_eq!(proof.proofs.len(), ASSET_BATCH_SIZE);
-    let pk_ts = vec![None; ASSET_BATCH_SIZE];
+    let asset_lookup = AssetPkTLookup::default();
     proof
-        .verify(IDENTITY, tree_params, &mut rng, &pk_ts)
+        .verify(IDENTITY, tree_params, &mut rng, &asset_lookup)
         .unwrap();
 }
 
@@ -441,10 +440,12 @@ fn verify_v1_batched_account_asset_registration_proof_with_pk_t() {
     let filename = batched_account_asset_registration_proof_with_pk_t_file();
     let proof: BatchedAccountAssetRegistrationProof = load_scale_v1(&filename);
     assert_eq!(proof.proofs.len(), ASSET_BATCH_SIZE);
-    let pk_ts: Vec<Option<EncryptionPublicKey>> =
-        force_transfer_keys.iter().map(|k| Some(k.public)).collect();
+    let mut asset_lookup = AssetPkTLookup::default();
+    for (reg_proof, ft_keys) in proof.proofs.iter().zip(force_transfer_keys.iter()) {
+        asset_lookup.add(reg_proof.asset_id, ft_keys.public);
+    }
     proof
-        .verify(IDENTITY, tree_params, &mut rng, &pk_ts)
+        .verify(IDENTITY, tree_params, &mut rng, &asset_lookup)
         .unwrap();
 
     for (reg_proof, ft_keys) in proof.proofs.iter().zip(force_transfer_keys.iter()) {

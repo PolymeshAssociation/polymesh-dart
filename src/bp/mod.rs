@@ -799,7 +799,9 @@ mod tests {
             .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
-        proof.verify(ctx, tree_params, &mut rng, None).unwrap();
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
     }
 
     #[test]
@@ -873,7 +875,7 @@ mod tests {
         };
 
         batched
-            .verify(ctx, tree_params, &mut rng, &[None, None])
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
             .unwrap();
     }
 
@@ -902,15 +904,24 @@ mod tests {
         .unwrap();
 
         // Verifying with the same pk_T succeeds.
+        let mut asset_lookup = AssetPkTLookup::default();
+        asset_lookup.add(asset_id, force_transfer_keys.public);
+
         proof
-            .verify(ctx, tree_params, &mut rng, Some(force_transfer_keys.public))
+            .verify(ctx, tree_params, &mut rng, &asset_lookup)
             .unwrap();
 
         // Verifying with no pk_T, or a different pk_T, must fail.
-        assert!(proof.verify(ctx, tree_params, &mut rng, None).is_err());
         assert!(
             proof
-                .verify(ctx, tree_params, &mut rng, Some(wrong_keys.public))
+                .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+                .is_err()
+        );
+        let mut wrong_asset_lookup = AssetPkTLookup::default();
+        wrong_asset_lookup.add(asset_id, wrong_keys.public);
+        assert!(
+            proof
+                .verify(ctx, tree_params, &mut rng, &wrong_asset_lookup)
                 .is_err()
         );
 
@@ -953,7 +964,9 @@ mod tests {
         )
         .unwrap();
 
-        proof.verify(ctx, tree_params, &mut rng, None).unwrap();
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
         assert!(!proof.has_encrypted_state().unwrap());
         assert!(proof.get_encrypted_state().unwrap().is_none());
     }

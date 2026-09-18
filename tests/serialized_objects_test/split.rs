@@ -322,7 +322,12 @@ fn verify_v1_account_reg_split() {
     let mut rng = default_rng();
     let proof: AccountAssetRegistrationProof = load_scale_v1(ACCOUNT_REG_SPLIT_PROOF);
     proof
-        .verify(IDENTITY, AccountTreeConfig::parameters(), &mut rng, None)
+        .verify(
+            IDENTITY,
+            AccountTreeConfig::parameters(),
+            &mut rng,
+            &AssetPkTLookup::default(),
+        )
         .unwrap();
 }
 

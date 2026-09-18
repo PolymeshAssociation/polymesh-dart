@@ -103,7 +103,12 @@ fn proof_benchmark(c: &mut Criterion) {
     c.bench_function("AccountAssetRegistrationProof verify", |b| {
         b.iter(|| {
             proof
-                .verify(black_box(ctx), &account_params, &mut rng, None)
+                .verify(
+                    black_box(ctx),
+                    &account_params,
+                    &mut rng,
+                    &AssetPkTLookup::default(),
+                )
                 .expect("Failed to verify proof");
         })
     });
@@ -134,14 +139,11 @@ fn proof_benchmark(c: &mut Criterion) {
 
     // Benchmark: Verify account asset registration proof with a force-transfer key (pk_T).
     c.bench_function("AccountAssetRegistrationProof verify (with pk_T)", |b| {
+        let mut asset_lookup = AssetPkTLookup::default();
+        asset_lookup.add(asset_id, force_transfer_pk);
         b.iter(|| {
             proof_with_pk_t
-                .verify(
-                    black_box(ctx),
-                    &account_params,
-                    &mut rng,
-                    Some(force_transfer_pk),
-                )
+                .verify(black_box(ctx), &account_params, &mut rng, &asset_lookup)
                 .expect("Failed to verify proof");
         })
     });
@@ -189,14 +191,14 @@ fn proof_benchmark(c: &mut Criterion) {
             &account_params,
         )
         .expect("Failed to generate batched proof");
-        let pk_ts = vec![None; num_proofs as usize];
+        let asset_lookup = AssetPkTLookup::default();
 
         // Benchmark: Verify batched account asset registration proof.
         let name = format!("BatchedAccountAssetRegistrationProof verify {num_proofs}");
         c.bench_function(&name, |b| {
             b.iter(|| {
                 proof
-                    .verify(black_box(ctx), &account_params, &mut rng, &pk_ts)
+                    .verify(black_box(ctx), &account_params, &mut rng, &asset_lookup)
                     .expect("Failed to verify proof");
             })
         });
@@ -206,7 +208,7 @@ fn proof_benchmark(c: &mut Criterion) {
         c.bench_function(&name, |b| {
             b.iter(|| {
                 proof
-                    .batched_verify(black_box(ctx), &account_params, &mut rng, &pk_ts)
+                    .batched_verify(black_box(ctx), &account_params, &mut rng, &asset_lookup)
                     .expect("Failed to verify proof");
             })
         });

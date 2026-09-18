@@ -2059,7 +2059,12 @@ impl DartChainState {
         // Verify the proof for the account and asset.
         let mut rng = new_rng();
         proof
-            .verify(caller.ctx(), self.account_tree.parameters(), &mut rng, None)
+            .verify(
+                caller.ctx(),
+                self.account_tree.parameters(),
+                &mut rng,
+                &AssetPkTLookup::default(),
+            )
             .with_context(|| {
                 format!(
                     "Invalid proof for account {:?} and asset ID {}",

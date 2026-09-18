@@ -888,7 +888,7 @@ impl DartTestingDb {
         // Verify the proof
         eprintln!("signer_name: {}", signer_name);
         let now = std::time::Instant::now();
-        proof.verify(&did, params, rng, None)?;
+        proof.verify(&did, params, rng, &Default::default())?;
         let elapsed = now.elapsed();
         eprintln!("Proof verification took {:.2?}", elapsed);
 
