@@ -135,10 +135,8 @@ impl LegRef {
     }
 
     /// The settlement/leg context to tie proofs to a leg.
-    pub fn context(&self) -> [u8; 33] {
-        let mut out = [0u8; 33];
-        (&self.settlement, self.leg_id).encode_to(&mut out.as_mut_slice());
-        out
+    pub fn context(&self) -> Vec<u8> {
+        (&self.settlement, self.leg_id).encode()
     }
 }
 
