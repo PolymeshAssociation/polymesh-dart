@@ -1638,8 +1638,13 @@ impl LegEncrypted {
                 index: Some(idx),
             } => {
                 match leg_enc.mediators.as_ref() {
-                    Some(_) => {
-                        let med_enc = leg_enc.mediator_encryption(idx as usize)?;
+                    Some(med_enc) => {
+                        let med_enc = med_enc.get(idx as usize).ok_or_else(|| {
+                            Error::LegDecryptionError(format!(
+                                "Mediator encryption not found for index {}",
+                                idx
+                            ))
+                        })?;
                         // The mediator's entry is encrypted to every asset encryption key. The index
                         // of the one it holds is found by trial decryption.
                         let i = med_enc.find_key_index(

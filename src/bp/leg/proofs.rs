@@ -195,6 +195,11 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         })
     }
 
+    /// Is the asset-id of the leg revealed?
+    pub fn is_asset_id_revealed(&self) -> bool {
+        matches!(self.inner, MediatorAffirmationInner::Revealed(_))
+    }
+
     /// Verify a leg whose asset-id is hidden.
     pub fn verify(&self, leg_enc: &MediatorEncryption) -> Result<(), Error> {
         let ctx = self.leg_ref.context();
