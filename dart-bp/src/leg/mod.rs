@@ -9,6 +9,8 @@ pub mod settlement_proof_chunked;
 #[cfg(test)]
 pub mod tests;
 
+pub mod old;
+
 pub use self::leg_proof::LegCreationProof;
 pub use self::mediator::MediatorTxnProof;
 use crate::discrete_log::solve_discrete_log_bsgs;
