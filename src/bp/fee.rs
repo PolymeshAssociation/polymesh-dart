@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use ark_ec::short_weierstrass::Affine;
+use ark_std::format;
 use ark_std::vec::Vec;
 use bulletproofs::r1cs::{ConstraintSystem as _, VerificationTuple};
 use curve_tree_relations::curve_tree::Root;
@@ -1060,6 +1061,11 @@ impl<
         identity: Option<&[u8]>,
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
+        if self.is_broadcast != identity.is_none() {
+            return Err(Error::CryptoError(format!(
+                "is_broadcast does not match identity presence"
+            )));
+        }
         let ctx = self.fee_payment_ctx(identity);
         self.fee_payment.verify(rng, &ctx.0, tree_roots)
     }
